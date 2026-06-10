@@ -1,0 +1,22 @@
+{
+  "name": "turtlekeeper-ios-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "壳友手账 iOS cloud build package",
+  "scripts": {
+    "build": "node scripts/build-web.js",
+    "cap:add:ios": "npm run build && npx cap add ios",
+    "cap:sync:ios": "npm run build && npx cap sync ios",
+    "cap:open:ios": "npm run build && npx cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "latest",
+    "@capacitor/ios": "latest"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "latest"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

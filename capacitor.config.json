@@ -1,0 +1,9 @@
+{
+  "appId": "com.turtlekeeper.app",
+  "appName": "\u58f3\u53cb\u624b\u8d26",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "ios": {
+    "scheme": "TurtleKeeper"
+  }
+}

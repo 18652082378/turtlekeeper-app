@@ -1,0 +1,8 @@
+node_modules/
+www/
+ios/
+build/
+dist/
+.DS_Store
+*.log
+.env
