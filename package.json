@@ -2,7 +2,7 @@
   "name": "turtlekeeper-ios-app",
   "version": "1.0.0",
   "private": true,
-  "description": "壳友手账 iOS cloud build package",
+  "description": "ShellNote iOS cloud build package",
   "scripts": {
     "build": "node scripts/build-web.js",
     "cap:add:ios": "npm run build && npx cap add ios",
@@ -10,11 +10,11 @@
     "cap:open:ios": "npm run build && npx cap open ios"
   },
   "dependencies": {
-    "@capacitor/core": "latest",
-    "@capacitor/ios": "latest"
+    "@capacitor/core": "8.4.0",
+    "@capacitor/ios": "8.4.0"
   },
   "devDependencies": {
-    "@capacitor/cli": "latest"
+    "@capacitor/cli": "8.4.0"
   },
   "engines": {
     "node": ">=20"
