@@ -6,6 +6,9 @@ on:
     branches:
       - main
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   ios-check:
     runs-on: macos-latest
@@ -25,16 +28,45 @@ jobs:
         run: npm run build
 
       - name: Generate iOS project
+        shell: bash
         run: |
-          test -d ios || npx cap add ios
+          set -euxo pipefail
+          node --version
+          npm --version
+          npx cap --version
+          ls -la
+
+          if [ -d "ios" ] && [ ! -f "ios/App/App.xcodeproj/project.pbxproj" ]; then
+            echo "Found incomplete ios directory; rebuilding it."
+            rm -rf ios
+          fi
+
+          if [ ! -d "ios" ]; then
+            npx cap add ios
+          fi
+
           npx cap sync ios
+          find ios -maxdepth 3 -type f | sort | sed -n '1,120p'
 
       - name: Compile unsigned iOS project
+        shell: bash
         run: |
-          xcodebuild \
-            -workspace ios/App/App.xcworkspace \
-            -scheme App \
-            -configuration Debug \
-            -sdk iphonesimulator \
-            CODE_SIGNING_ALLOWED=NO \
-            build
+          set -euxo pipefail
+
+          if [ -d "ios/App/App.xcworkspace" ]; then
+            xcodebuild \
+              -workspace ios/App/App.xcworkspace \
+              -scheme App \
+              -configuration Debug \
+              -sdk iphonesimulator \
+              CODE_SIGNING_ALLOWED=NO \
+              build
+          else
+            xcodebuild \
+              -project ios/App/App.xcodeproj \
+              -scheme App \
+              -configuration Debug \
+              -sdk iphonesimulator \
+              CODE_SIGNING_ALLOWED=NO \
+              build
+          fi
