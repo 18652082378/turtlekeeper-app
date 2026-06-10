@@ -6,7 +6,7 @@ workflows:
     integrations:
       app_store_connect: app_store_connect
     environment:
-      node: 20
+      node: 24
       xcode: latest
       ios_signing:
         distribution_type: app_store
