@@ -35,7 +35,9 @@ body {
   min-height: 100vh;
   background: #e6e4df;
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button, input, select, textarea { font: inherit; }
@@ -1353,7 +1355,13 @@ textarea {
   gap: 12px;
   margin: 12px 0;
 }
-.profile h2 { margin: 0 0 8px; font-size: 26px; }
+.profile h2 { margin: 0 0 4px; font-size: 26px; }
+.profile-phone {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 800;
+  opacity: .86;
+}
 .mine-list { margin-top: 16px; overflow: hidden; }
 .toast {
   position: fixed;
@@ -1829,7 +1837,13 @@ textarea:focus {
 
 .mine-row {
   min-height: 64px;
-  grid-template-columns: 42px 1fr 24px;
+  grid-template-columns: 42px 1fr;
+}
+
+.mine-row strong {
+  color: var(--text);
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 .mine-row span:first-child {
@@ -2104,7 +2118,6 @@ textarea {
 
 .memo-row strong,
 .breed-row strong,
-.mine-row strong,
 .activity-row strong {
   font-weight: 950;
   color: var(--night);
@@ -2938,6 +2951,18 @@ textarea {
   font-weight: 800;
 }
 
+.field-error {
+  display: block;
+  margin-top: 6px;
+  color: #e0485e;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.field-error[hidden] {
+  display: none;
+}
+
 .survey-record {
   padding: 14px;
   margin-bottom: 10px;
@@ -2966,6 +2991,11 @@ textarea {
 .code-row .secondary {
   min-height: 48px;
   margin-top: 12px;
+}
+
+.code-row .secondary:disabled {
+  cursor: not-allowed;
+  opacity: .62;
 }
 
 .auth-code-hint {
@@ -3928,4 +3958,554 @@ html[data-theme-color="dark"] .ledger-detail-card .ledger-inline-type {
   background: #202020 !important;
   color: #e7e7e7 !important;
   border-color: #2b2b2b !important;
+}
+
+/* Final typography pass: closer to the iOS/WeChat dark text tone. */
+body,
+button,
+input,
+select,
+textarea {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  letter-spacing: 0;
+}
+
+.nav-title h1 {
+  font-size: 21px;
+  line-height: 1.2;
+  font-weight: 800;
+}
+
+.page-intro h2,
+.home-hero h2 {
+  font-size: 28px;
+  line-height: 1.16;
+  font-weight: 800;
+}
+
+.section-title span,
+.section-title h3,
+.settings-title {
+  font-size: 20px;
+  line-height: 1.25;
+  font-weight: 800;
+}
+
+.fresh-profile h2,
+.profile h2 {
+  font-size: 32px;
+  line-height: 1.15;
+  font-weight: 750;
+}
+
+.mine-row strong {
+  font-size: 19px;
+  line-height: 1.25;
+}
+
+html[data-theme-color="dark"] {
+  --text: #d4d4d4;
+  --muted: #8f8f8f;
+  --wechat-title: #dedede;
+  --wechat-text: #d4d4d4;
+  --wechat-muted: #8f8f8f;
+  --wechat-faint: #676767;
+}
+
+html[data-theme-color="dark"],
+html[data-theme-color="dark"] body,
+html[data-theme-color="dark"] .phone-shell,
+html[data-theme-color="dark"] .content {
+  color: var(--wechat-text) !important;
+}
+
+html[data-theme-color="dark"] h1,
+html[data-theme-color="dark"] h2,
+html[data-theme-color="dark"] h3,
+html[data-theme-color="dark"] h4,
+html[data-theme-color="dark"] .nav-title h1,
+html[data-theme-color="dark"] .page-intro h2,
+html[data-theme-color="dark"] .home-hero h2,
+html[data-theme-color="dark"] .profile h2,
+html[data-theme-color="dark"] .fresh-profile h2,
+html[data-theme-color="dark"] .section-title span,
+html[data-theme-color="dark"] .section-title h3,
+html[data-theme-color="dark"] .settings-title,
+html[data-theme-color="dark"] .ledger-detail-card h2,
+html[data-theme-color="dark"] .ledger-detail-title,
+html[data-theme-color="dark"] .detail-summary-card h2,
+html[data-theme-color="dark"] .turtle-row strong,
+html[data-theme-color="dark"] .ledger-row-title,
+html[data-theme-color="dark"] .mine-row strong {
+  color: var(--wechat-title) !important;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+html[data-theme-color="dark"] body,
+html[data-theme-color="dark"] p,
+html[data-theme-color="dark"] span,
+html[data-theme-color="dark"] strong,
+html[data-theme-color="dark"] label,
+html[data-theme-color="dark"] button,
+html[data-theme-color="dark"] .detail-grid-card strong,
+html[data-theme-color="dark"] .ledger-detail-card .detail-grid strong,
+html[data-theme-color="dark"] .ledger-detail-head strong,
+html[data-theme-color="dark"] .memo-row p,
+html[data-theme-color="dark"] .breeding-row p,
+html[data-theme-color="dark"] .home-turtle-meta span {
+  color: var(--wechat-text) !important;
+}
+
+html[data-theme-color="dark"] small,
+html[data-theme-color="dark"] .muted,
+html[data-theme-color="dark"] .profile-phone,
+html[data-theme-color="dark"] .page-intro p,
+html[data-theme-color="dark"] .home-hero p,
+html[data-theme-color="dark"] .metric-strip span,
+html[data-theme-color="dark"] .archive-strip span,
+html[data-theme-color="dark"] .ledger-summary span,
+html[data-theme-color="dark"] .account-brief span,
+html[data-theme-color="dark"] .detail-grid-card span,
+html[data-theme-color="dark"] .ledger-detail-card .detail-grid span,
+html[data-theme-color="dark"] .species-row small,
+html[data-theme-color="dark"] .breeding-row small,
+html[data-theme-color="dark"] .activity-row small,
+html[data-theme-color="dark"] .memo-row small,
+html[data-theme-color="dark"] .field::placeholder,
+html[data-theme-color="dark"] textarea::placeholder,
+html[data-theme-color="dark"] input::placeholder {
+  color: var(--wechat-muted) !important;
+}
+
+html[data-theme-color="dark"] .status,
+html[data-theme-color="dark"] .bottom-nav button,
+html[data-theme-color="dark"] .species-alpha-nav button,
+html[data-theme-color="dark"] .mine-row span:first-child {
+  color: var(--wechat-muted) !important;
+}
+
+html[data-theme-color="dark"] .bottom-nav button.active,
+html[data-theme-color="dark"] .bottom-nav button.active span,
+html[data-theme-color="dark"] .primary,
+html[data-theme-color="dark"] .round-action,
+html[data-theme-color="dark"] .hero-add,
+html[data-theme-color="dark"] .species-add {
+  color: #f2f2f2 !important;
+}
+
+html[data-theme-color="dark"] .nav-title h1 {
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+html[data-theme-color="dark"] .page-intro h2,
+html[data-theme-color="dark"] .home-hero h2 {
+  font-size: 29px;
+  line-height: 1.16;
+}
+
+html[data-theme-color="dark"] .section-title span,
+html[data-theme-color="dark"] .section-title h3,
+html[data-theme-color="dark"] .settings-title {
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+html[data-theme-color="dark"] .mine-row strong {
+  font-size: 19px;
+  line-height: 1.25;
+}
+
+html[data-theme-color="dark"] .fresh-profile h2,
+html[data-theme-color="dark"] .profile h2 {
+  font-size: 32px;
+  line-height: 1.15;
+  font-weight: 750;
+}
+
+html[data-theme-color="dark"] .profile-phone {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+/* iOS/WeChat system typography lock: neutralize old heavy web-style text. */
+:root {
+  --app-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", Arial, sans-serif;
+}
+
+html,
+body,
+.phone-shell,
+.phone-shell *,
+.phone-shell *::before,
+.phone-shell *::after,
+button,
+input,
+select,
+textarea {
+  font-family: var(--app-font) !important;
+  letter-spacing: 0 !important;
+  text-shadow: none !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: geometricPrecision;
+  font-synthesis-weight: none;
+}
+
+.phone-shell,
+.content,
+p,
+span,
+small,
+label,
+input,
+select,
+textarea,
+.field,
+.select,
+.muted {
+  font-weight: 400 !important;
+}
+
+button,
+.primary,
+.secondary,
+.round-action,
+.hero-add,
+.species-add,
+.tag,
+.eyebrow,
+.eyebrow.dark,
+.theme-dot,
+.choice,
+.tab,
+.species-alpha-nav button,
+.bottom-nav button,
+.turtle-menu button,
+.detail-menu button,
+.section-title button {
+  font-weight: 500 !important;
+}
+
+strong,
+.mine-row strong,
+.activity-row strong,
+.memo-row strong,
+.breed-row strong,
+.soft-row strong,
+.ledger-row-title,
+.ledger-summary strong,
+.archive-strip strong,
+.metric-strip strong,
+.account-brief strong,
+.detail-grid-card strong,
+.ledger-detail-card .detail-grid strong,
+.empty strong,
+.small-empty strong {
+  font-weight: 600 !important;
+}
+
+h1,
+h2,
+h3,
+h4,
+.nav-title h1,
+.section-title span,
+.section-title h3,
+.settings-title,
+.page-intro h2,
+.home-hero h2,
+.profile h2,
+.fresh-profile h2,
+.detail-summary-card h2,
+.ledger-detail-card h2 {
+  font-family: var(--app-font) !important;
+  font-weight: 700 !important;
+  letter-spacing: 0 !important;
+}
+
+.nav-title h1 {
+  font-size: 22px !important;
+}
+
+.page-intro h2,
+.home-hero h2 {
+  font-size: 29px !important;
+}
+
+.fresh-profile h2,
+.profile h2 {
+  font-size: 34px !important;
+}
+
+.empty strong,
+.small-empty strong {
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.empty,
+.small-empty {
+  line-height: 1.45;
+}
+
+html[data-theme-color="dark"] {
+  --text: #d2d2d2;
+  --muted: #909090;
+  --wechat-title: #dadada;
+  --wechat-text: #d2d2d2;
+  --wechat-muted: #909090;
+}
+
+html[data-theme-color="dark"] h1,
+html[data-theme-color="dark"] h2,
+html[data-theme-color="dark"] h3,
+html[data-theme-color="dark"] h4,
+html[data-theme-color="dark"] .nav-title h1,
+html[data-theme-color="dark"] .page-intro h2,
+html[data-theme-color="dark"] .home-hero h2,
+html[data-theme-color="dark"] .profile h2,
+html[data-theme-color="dark"] .fresh-profile h2,
+html[data-theme-color="dark"] .section-title span,
+html[data-theme-color="dark"] .section-title h3,
+html[data-theme-color="dark"] .settings-title,
+html[data-theme-color="dark"] .mine-row strong,
+html[data-theme-color="dark"] .empty strong,
+html[data-theme-color="dark"] .small-empty strong {
+  color: var(--wechat-title) !important;
+}
+
+html[data-theme-color="dark"] body,
+html[data-theme-color="dark"] .phone-shell,
+html[data-theme-color="dark"] p,
+html[data-theme-color="dark"] span,
+html[data-theme-color="dark"] strong,
+html[data-theme-color="dark"] label,
+html[data-theme-color="dark"] button,
+html[data-theme-color="dark"] input,
+html[data-theme-color="dark"] select,
+html[data-theme-color="dark"] textarea {
+  color: var(--wechat-text) !important;
+}
+
+html[data-theme-color="dark"] small,
+html[data-theme-color="dark"] .muted,
+html[data-theme-color="dark"] .profile-phone,
+html[data-theme-color="dark"] .page-intro p,
+html[data-theme-color="dark"] .home-hero p,
+html[data-theme-color="dark"] .metric-strip span,
+html[data-theme-color="dark"] .archive-strip span,
+html[data-theme-color="dark"] .ledger-summary span,
+html[data-theme-color="dark"] .account-brief span,
+html[data-theme-color="dark"] .theme-dot,
+html[data-theme-color="dark"] .bottom-nav button,
+html[data-theme-color="dark"] .species-alpha-nav button {
+  color: var(--wechat-muted) !important;
+}
+
+/* iOS/WeChat form surface lock: softer cells, thinner borders, plain required stars. */
+.required {
+  display: inline !important;
+  margin-left: 2px !important;
+  padding: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: #ff3b30 !important;
+  font-size: 15px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  vertical-align: top !important;
+}
+
+.form-block,
+.memo-form,
+.ledger-form,
+.ledger-shell .form-block,
+.breeding-form,
+.survey-form,
+.settings-card,
+.fresh-card {
+  border-radius: 8px !important;
+}
+
+.label,
+.ledger-form-grid label span,
+.memo-form label span,
+.survey-field span,
+.breeding-form label span,
+.breeding-note span,
+.ledger-date-filter label span {
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  line-height: 1.35 !important;
+}
+
+.field,
+.select,
+textarea,
+.choice,
+.theme-dot,
+.secondary {
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+.field,
+.select,
+textarea {
+  min-height: 50px !important;
+  padding: 0 14px !important;
+  font-size: 16px !important;
+  font-weight: 400 !important;
+  appearance: auto;
+}
+
+textarea {
+  padding-top: 12px !important;
+  padding-bottom: 12px !important;
+}
+
+.photo-uploader,
+.photo-picker {
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+.choice {
+  min-height: 50px !important;
+  font-size: 16px !important;
+}
+
+.choice.active {
+  box-shadow: none !important;
+}
+
+html[data-theme-color="dark"] {
+  --ios-bg: #111111;
+  --ios-section: #181818;
+  --ios-cell: #1c1c1e;
+  --ios-cell-strong: #242426;
+  --ios-line: #2c2c2e;
+  --ios-line-soft: #242424;
+  --ios-green: #07c160;
+}
+
+html[data-theme-color="dark"] .form-block,
+html[data-theme-color="dark"] .memo-form,
+html[data-theme-color="dark"] .ledger-form,
+html[data-theme-color="dark"] .ledger-shell .form-block,
+html[data-theme-color="dark"] .breeding-form,
+html[data-theme-color="dark"] .survey-form,
+html[data-theme-color="dark"] .settings-card,
+html[data-theme-color="dark"] .fresh-card {
+  background: var(--ios-section) !important;
+  border: 1px solid var(--ios-line-soft) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-color="dark"] .field,
+html[data-theme-color="dark"] .select,
+html[data-theme-color="dark"] textarea,
+html[data-theme-color="dark"] input,
+html[data-theme-color="dark"] select {
+  background: var(--ios-cell) !important;
+  border: 1px solid var(--ios-line) !important;
+  color: var(--wechat-text) !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+html[data-theme-color="dark"] .field:focus,
+html[data-theme-color="dark"] .select:focus,
+html[data-theme-color="dark"] textarea:focus,
+html[data-theme-color="dark"] input:focus,
+html[data-theme-color="dark"] select:focus {
+  border-color: rgba(7, 193, 96, .72) !important;
+  box-shadow: 0 0 0 1px rgba(7, 193, 96, .18) !important;
+  outline: none !important;
+}
+
+html[data-theme-color="dark"] .photo-uploader,
+html[data-theme-color="dark"] .photo-picker {
+  background: #161616 !important;
+  border: 1px dashed var(--ios-line-soft) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-color="dark"] .choice,
+html[data-theme-color="dark"] .theme-dot,
+html[data-theme-color="dark"] .secondary,
+html[data-theme-color="dark"] .tab {
+  background: var(--ios-cell) !important;
+  border: 1px solid var(--ios-line-soft) !important;
+  color: var(--wechat-text) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-color="dark"] .choice.active,
+html[data-theme-color="dark"] .theme-dot.active,
+html[data-theme-color="dark"] .tab.active {
+  background: var(--ios-cell-strong) !important;
+  border-color: #3a3a3c !important;
+  color: #ededed !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-color="dark"] .label,
+html[data-theme-color="dark"] .ledger-form-grid label span,
+html[data-theme-color="dark"] .memo-form label span,
+html[data-theme-color="dark"] .survey-field span,
+html[data-theme-color="dark"] .breeding-form label span,
+html[data-theme-color="dark"] .breeding-note span,
+html[data-theme-color="dark"] .ledger-date-filter label span {
+  color: #d6d6d6 !important;
+}
+
+html[data-theme-color="dark"] .form-block h3,
+html[data-theme-color="dark"] .form-head h3,
+html[data-theme-color="dark"] .settings-title {
+  color: #dadada !important;
+}
+
+html[data-theme-color="dark"] .form-block h3::before,
+html[data-theme-color="dark"] .form-head h3::before,
+html[data-theme-color="dark"] .settings-title::before {
+  background: var(--ios-green) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-color="dark"] .required {
+  background: transparent !important;
+  color: #ff453a !important;
+}
+
+/* iOS/WeChat archive menu trigger: no white circular buttons in dark mode. */
+.more-btn,
+.detail-more {
+  font-family: var(--app-font) !important;
+  font-weight: 600 !important;
+  letter-spacing: 1px !important;
+}
+
+html[data-theme-color="dark"] .more-btn,
+html[data-theme-color="dark"] .detail-more {
+  background: #242426 !important;
+  color: #8e8e93 !important;
+  border: 1px solid #2c2c2e !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html[data-theme-color="dark"] .more-btn:active,
+html[data-theme-color="dark"] .detail-more:active,
+html[data-theme-color="dark"] .turtle-row.menu-open .more-btn,
+html[data-theme-color="dark"] .detail-summary-card.menu-open .detail-more {
+  background: #2c2c2e !important;
+  color: #d1d1d6 !important;
 }

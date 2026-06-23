@@ -1,6 +1,7 @@
 const $app = document.querySelector("#app");
 const STORAGE = "turtlekeeper-state-v1";
 const SERVER_SMS_CODE = "__SERVER_SMS__";
+const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
 const defaultPhoto = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
   <rect width="240" height="240" rx="28" fill="#edf7f1"/>
@@ -75,11 +76,18 @@ const initialState = {
   pendingAuthCode: "",
   pendingAuthPhone: "",
   authCodeExpiresAt: "",
+  accountCodeCooldownUntil: "",
   syncEnabled: false,
   activityLogs: []
 };
 
 let state = loadState();
+let accountCooldownTimer = null;
+
+if (CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE) {
+  state = { ...state, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" };
+  saveState();
+}
 
 if (!state.turtles.length && !localStorage.getItem(STORAGE)) {
   const seed = speciesByCode("GHG") || speciesList[0] || {};
@@ -190,6 +198,7 @@ function saveState() {
     pendingAuthCode: state.pendingAuthCode,
     pendingAuthPhone: state.pendingAuthPhone,
     authCodeExpiresAt: state.authCodeExpiresAt,
+    accountCodeCooldownUntil: state.accountCodeCooldownUntil,
     syncEnabled: state.syncEnabled,
     activityLogs: state.activityLogs,
     themeColor: state.themeColor
@@ -200,6 +209,12 @@ function setState(patch) {
   state = { ...state, ...patch };
   saveState();
   render();
+}
+
+function requireLogin() {
+  if (state.loggedInPhone) return true;
+  toast("请先登录账号");
+  return false;
 }
 
 function applyTheme() {
@@ -544,7 +559,7 @@ function pageHome() {
         <button data-page="breeds"><span>◎</span><strong>饲养品种</strong><small>管理常用品种</small></button>
       </section>
       <section class="home-turtles">
-        <div class="section-title"><span>全部新增档案</span><small data-page="add">新建</small></div>
+        <div class="section-title"><span>全部新增档案</span></div>
         <div class="home-turtle-grid">
           ${turtles.map(turtleCard).join("") || `<div class="empty"><div><strong>还没有乌龟档案</strong><br>点击新建开始记录</div></div>`}
         </div>
@@ -1231,9 +1246,11 @@ function pageBreedingDetail() {
 
 function pageMine() {
   const loggedIn = Boolean(state.loggedInPhone);
+  const profileTitle = loggedIn ? (state.accountName || maskPhone(state.loggedInPhone)) : "未登录用户";
+  const profileSub = loggedIn ? maskPhone(state.loggedInPhone) : "登录后同步你的档案和账本";
   return `
     ${topbar("我的空间")}
-    <section class="profile fresh-profile account-profile">${accountAvatarMarkup()}<div><h2>${state.accountName || "未登录用户"}</h2><p>${state.syncEnabled ? "数据同步已开启" : "当前使用本地模式"}</p><span class="tag">本地模式</span></div></section>
+    <section class="profile fresh-profile account-profile">${accountAvatarMarkup()}<div><h2>${profileTitle}</h2><p class="profile-phone">${profileSub}</p><span class="tag">本地模式</span></div></section>
     <main class="content page-fresh">
       <button class="primary account-login" data-page="account">${loggedIn ? "编辑资料" : "登录 / 注册账号"}</button>
       <section class="account-brief">
@@ -1248,12 +1265,12 @@ function pageMine() {
         </div>
       </section>
       <section class="fresh-card mine-list">
-        <button class="mine-row" data-page="calendar"><span>◷</span><strong>操作日志</strong><span>›</span></button>
-        <button class="mine-row" data-page="satisfaction"><span>☆</span><strong>满意度调查</strong><span>›</span></button>
-        <button class="mine-row" data-page="feedback"><span>✎</span><strong>意见反馈</strong><span>›</span></button>
-        <button class="mine-row" data-page="account"><span>⚙</span><strong>账号与安全</strong><span>›</span></button>
-        <button class="mine-row" data-page="sync"><span>⇄</span><strong>数据同步设置</strong><span>›</span></button>
-        <button class="mine-row" data-page="about"><span>i</span><strong>关于壳友手账</strong><span>›</span></button>
+        <button class="mine-row" data-page="calendar"><span>◷</span><strong>操作日志</strong></button>
+        <button class="mine-row" data-page="satisfaction"><span>☆</span><strong>满意度调查</strong></button>
+        <button class="mine-row" data-page="feedback"><span>✎</span><strong>意见反馈</strong></button>
+        <button class="mine-row" data-page="account"><span>⚙</span><strong>账号与安全</strong></button>
+        <button class="mine-row" data-page="sync"><span>⇄</span><strong>数据同步设置</strong></button>
+        <button class="mine-row" data-page="about"><span>i</span><strong>关于壳友手账</strong></button>
       </section>
     </main>
     ${bottomNav()}
@@ -1319,6 +1336,7 @@ function pageFeedback() {
 function pageAccount() {
   const loggedIn = Boolean(state.loggedInPhone);
   const maskedPhone = state.loggedInPhone ? `${state.loggedInPhone.slice(0, 3)}****${state.loggedInPhone.slice(7)}` : "";
+  const codeCooldown = accountCodeCooldownRemaining();
   return `
     ${topbar("账号与安全", true)}
     <main class="content page-fresh">
@@ -1352,19 +1370,19 @@ function pageAccount() {
           <label class="survey-field"><span>手机号</span><input class="field" name="phone" inputmode="tel" maxlength="11" placeholder="请输入 11 位手机号" value="${state.accountDraftPhone || ""}" required></label>
           <label class="survey-field"><span>${state.accountMode === "register" ? "创建密码" : "登录密码"}</span><input class="field" name="password" type="password" minlength="6" placeholder="至少 6 位密码" value="${state.accountDraftPassword || ""}" required></label>
           ${state.accountMode === "register" ? `
-            <label class="survey-field"><span>核对密码</span><input class="field" name="confirmPassword" type="password" minlength="6" placeholder="请再次输入密码" value="${state.accountDraftConfirmPassword || ""}" required></label>
+            <label class="survey-field"><span>核对密码</span><input class="field" name="confirmPassword" type="password" minlength="6" placeholder="请再次输入密码" value="${state.accountDraftConfirmPassword || ""}" required><small class="field-error" data-password-error hidden>密码不一致</small></label>
             <div class="code-row">
               <label class="survey-field"><span>验证码</span><input class="field" name="code" inputmode="numeric" maxlength="6" placeholder="6 位验证码" required></label>
-              <button class="secondary" type="button" data-send-code>获取验证码</button>
+              <button class="secondary" type="button" data-send-code ${codeCooldown > 0 ? "disabled" : ""}>${codeCooldown > 0 ? `${codeCooldown} 秒后重试` : "获取验证码"}</button>
             </div>
-            ${state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE ? `<p class="muted auth-code-hint">原型验证码：${state.pendingAuthCode}</p>` : ""}
+            ${!CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE ? `<p class="muted auth-code-hint">原型验证码：${state.pendingAuthCode}</p>` : ""}
           ` : ""}
           <button class="primary" type="submit">${state.accountMode === "register" ? "注册并登录" : "登录"}</button>
         </form>
       `}
       <section class="fresh-card settings-card">
         <div class="settings-title">安全状态</div>
-        <p class="muted">当前是本地原型，验证码为模拟发送；上线时可接入短信服务和后端账号系统。</p>
+        <p class="muted">${CONFIGURED_SMS_BACKEND ? "当前使用真实短信验证服务。" : "当前是本地原型，验证码为模拟发送；上线时可接入短信服务和后端账号系统。"}</p>
       </section>
     </main>
     ${bottomNav()}
@@ -1432,6 +1450,28 @@ function render() {
   $app.innerHTML = (pages[state.page] || pageHome)();
   bindEvents();
   hydrateSpeciesImages();
+  startAccountCodeCooldownTimer();
+}
+
+function accountCodeCooldownRemaining() {
+  return Math.max(0, Math.ceil((Number(state.accountCodeCooldownUntil || 0) - Date.now()) / 1000));
+}
+
+function startAccountCodeCooldownTimer() {
+  if (accountCooldownTimer) clearInterval(accountCooldownTimer);
+  const button = document.querySelector("[data-send-code]");
+  if (!button) return;
+  const syncButton = () => {
+    const remaining = accountCodeCooldownRemaining();
+    button.disabled = remaining > 0;
+    button.textContent = remaining > 0 ? `${remaining} 秒后重试` : "获取验证码";
+    if (remaining <= 0 && accountCooldownTimer) {
+      clearInterval(accountCooldownTimer);
+      accountCooldownTimer = null;
+    }
+  };
+  syncButton();
+  if (accountCodeCooldownRemaining() > 0) accountCooldownTimer = setInterval(syncButton, 1000);
 }
 
 function bindEvents() {
@@ -1446,7 +1486,10 @@ function bindEvents() {
       });
     }, { once: true });
   }
-  document.querySelectorAll("[data-page]").forEach(el => el.addEventListener("click", () => setState({ page: el.dataset.page, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
+  document.querySelectorAll("[data-page]").forEach(el => el.addEventListener("click", () => {
+    if (["add", "breedingAdd"].includes(el.dataset.page) && !requireLogin()) return;
+    setState({ page: el.dataset.page, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" });
+  }));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", () => setState({
     page: state.page === "turtleDetail" ? "list" : state.page === "ledgerDetail" ? "ledger" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : ["calendar", "satisfaction", "feedback", "account", "sync", "about"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "",
@@ -1467,6 +1510,7 @@ function bindEvents() {
   }));
   document.querySelectorAll("[data-update-turtle]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
+    if (!requireLogin()) return;
     const draft = captureTurtleDetailDraft();
     setState({
       updatingTurtleId: btn.dataset.updateTurtle,
@@ -1478,16 +1522,23 @@ function bindEvents() {
     });
     requestAnimationFrame(() => document.querySelector("#turtleDetailForm")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }));
-  document.querySelector("[data-clear-update-photo]")?.addEventListener("click", () => setState({
-    turtleDetailDraftId: state.selectedTurtleId,
-    turtleDetailDraft: captureTurtleDetailDraft(),
-    updateDraftPhoto: "__CLEAR__"
-  }));
-  document.querySelector("[data-update-photo-button]")?.addEventListener("click", () => document.querySelector("[data-update-photo-input]")?.click());
+  document.querySelector("[data-clear-update-photo]")?.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    setState({
+      turtleDetailDraftId: state.selectedTurtleId,
+      turtleDetailDraft: captureTurtleDetailDraft(),
+      updateDraftPhoto: "__CLEAR__"
+    });
+  });
+  document.querySelector("[data-update-photo-button]")?.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    document.querySelector("[data-update-photo-input]")?.click();
+  });
   document.querySelector("[data-update-photo-input]")?.addEventListener("change", readUpdatePhoto);
   document.querySelector("#turtleDetailForm")?.addEventListener("submit", submitTurtleDetail);
   document.querySelectorAll("[data-ledger-for-turtle]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
+    if (!requireLogin()) return;
     const [type, turtleId] = btn.dataset.ledgerForTurtle.split(":");
     openLedgerForm(type, turtleId);
   }));
@@ -1501,17 +1552,35 @@ function bindEvents() {
   document.querySelectorAll("[data-scroll-letter]").forEach(btn => btn.addEventListener("click", () => scrollToSpeciesLetter(btn.dataset.scrollLetter)));
   document.querySelectorAll("[data-add-species]").forEach(btn => btn.addEventListener("click", () => addKeptSpecies(btn.dataset.addSpecies)));
   document.querySelectorAll("[data-remove-species]").forEach(btn => btn.addEventListener("click", () => removeKeptSpecies(btn.dataset.removeSpecies)));
-  document.querySelectorAll("[data-gender]").forEach(btn => btn.addEventListener("click", () => setState({ formGender: btn.dataset.gender })));
-  document.querySelectorAll("[data-purchase-gender]").forEach(btn => btn.addEventListener("click", () => setState({ ledgerPurchaseGender: btn.dataset.purchaseGender })));
-  document.querySelector("[data-photo-input-button]")?.addEventListener("click", () => document.querySelector("[data-photo-input]")?.click());
-  document.querySelector("[data-photo-clear]")?.addEventListener("click", () => setState({ formPhoto: "" }));
+  document.querySelectorAll("[data-gender]").forEach(btn => btn.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    setState({ formGender: btn.dataset.gender });
+  }));
+  document.querySelectorAll("[data-purchase-gender]").forEach(btn => btn.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    setState({ ledgerPurchaseGender: btn.dataset.purchaseGender });
+  }));
+  document.querySelector("[data-photo-input-button]")?.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    document.querySelector("[data-photo-input]")?.click();
+  });
+  document.querySelector("[data-photo-clear]")?.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    setState({ formPhoto: "" });
+  });
   document.querySelector("[data-photo-input]")?.addEventListener("change", readPhoto);
   document.querySelector("#turtleForm")?.addEventListener("submit", submitTurtle);
-  document.querySelector("[data-new-memo]")?.addEventListener("click", () => setState({ memoDraftOpen: true, memoEditingId: "" }));
+  document.querySelector("[data-new-memo]")?.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    setState({ memoDraftOpen: true, memoEditingId: "" });
+  });
   document.querySelector("[data-cancel-memo]")?.addEventListener("click", () => setState({ memoDraftOpen: false, memoEditingId: "" }));
   document.querySelector("#memoForm")?.addEventListener("submit", submitMemoForm);
   document.querySelectorAll("[data-memo-tab]").forEach(btn => btn.addEventListener("click", () => setState({ memoTab: btn.dataset.memoTab })));
-  document.querySelectorAll("[data-edit-memo]").forEach(btn => btn.addEventListener("click", () => setState({ memoDraftOpen: true, memoEditingId: btn.dataset.editMemo })));
+  document.querySelectorAll("[data-edit-memo]").forEach(btn => btn.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    setState({ memoDraftOpen: true, memoEditingId: btn.dataset.editMemo });
+  }));
   document.querySelectorAll("[data-delete-memo]").forEach(btn => btn.addEventListener("click", () => deleteMemo(btn.dataset.deleteMemo)));
   document.querySelectorAll("[data-new-ledger]").forEach(btn => btn.addEventListener("click", () => openLedgerForm(btn.dataset.newLedger)));
   document.querySelectorAll("[data-ledger-tab]").forEach(btn => btn.addEventListener("click", () => setState({ ledgerTab: btn.dataset.ledgerTab })));
@@ -1524,48 +1593,82 @@ function bindEvents() {
     deleteLedgerRecord(btn.dataset.deleteLedger);
   }));
   document.querySelector("[data-cancel-ledger]")?.addEventListener("click", () => setState({ ledgerDraftType: "", ledgerDraftPhoto: "", ledgerDraftTurtleId: "", ledgerPurchaseGender: "未知" }));
-  document.querySelector("[data-ledger-photo-button]")?.addEventListener("click", () => document.querySelector("[data-ledger-photo-input]")?.click());
+  document.querySelector("[data-ledger-photo-button]")?.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    document.querySelector("[data-ledger-photo-input]")?.click();
+  });
   document.querySelector("[data-ledger-photo-input]")?.addEventListener("change", readLedgerPhoto);
   document.querySelector("#ledgerForm")?.addEventListener("submit", submitLedgerRecord);
-  document.querySelector("[data-breeding-photo-button]")?.addEventListener("click", () => document.querySelector("[data-breeding-photo-input]")?.click());
+  document.querySelector("[data-breeding-photo-button]")?.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    document.querySelector("[data-breeding-photo-input]")?.click();
+  });
   document.querySelector("[data-breeding-photo-input]")?.addEventListener("change", readBreedingPhoto);
   document.querySelectorAll("[data-view-breeding]").forEach(el => el.addEventListener("click", () => setState({ page: "breedingDetail", selectedBreedingId: el.dataset.viewBreeding, breedingEditPhoto: "" })));
-  document.querySelector("[data-breeding-edit-photo-button]")?.addEventListener("click", () => document.querySelector("[data-breeding-edit-photo-input]")?.click());
+  document.querySelector("[data-breeding-edit-photo-button]")?.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    document.querySelector("[data-breeding-edit-photo-input]")?.click();
+  });
   document.querySelector("[data-breeding-edit-photo-input]")?.addEventListener("change", readBreedingEditPhoto);
-  document.querySelector("[data-clear-breeding-edit-photo]")?.addEventListener("click", () => setState({ breedingEditPhoto: "__CLEAR__" }));
+  document.querySelector("[data-clear-breeding-edit-photo]")?.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    setState({ breedingEditPhoto: "__CLEAR__" });
+  });
   document.querySelector("#breedingDetailForm")?.addEventListener("submit", submitBreedingDetail);
-  document.querySelector("[data-breeding-mother]")?.addEventListener("change", e => setState({
-    ...readBreedingDraft(),
-    breedingMotherMode: e.target.value === "manual" ? "manual" : "archive",
-    breedingMotherValue: e.target.value
-  }));
+  document.querySelector("[data-breeding-mother]")?.addEventListener("change", e => {
+    if (!requireLogin()) return;
+    setState({
+      ...readBreedingDraft(),
+      breedingMotherMode: e.target.value === "manual" ? "manual" : "archive",
+      breedingMotherValue: e.target.value
+    });
+  });
   document.querySelectorAll("#breedingForm [name='date'], #breedingForm [name='manualMother'], #breedingForm [name='eggCount'], #breedingForm [name='fertileCount'], #breedingForm [name='hatchCount'], #breedingForm [name='note']").forEach(input => {
-    input.addEventListener("input", () => setState(readBreedingDraft()));
+    input.addEventListener("input", () => {
+      if (!requireLogin()) return;
+      setState(readBreedingDraft());
+    });
   });
   document.querySelector("#breedingForm")?.addEventListener("submit", submitBreedingRecord);
   document.querySelectorAll("[data-delete-breeding]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
     deleteBreedingRecord(btn.dataset.deleteBreeding);
   }));
-  document.querySelectorAll("[data-theme]").forEach(btn => btn.addEventListener("click", () => setState({ themeColor: btn.dataset.theme })));
-  document.querySelectorAll("[data-rating]").forEach(btn => btn.addEventListener("click", () => setState({ satisfactionRating: Number(btn.dataset.rating) })));
+  document.querySelectorAll("[data-theme]").forEach(btn => btn.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    setState({ themeColor: btn.dataset.theme });
+  }));
+  document.querySelectorAll("[data-rating]").forEach(btn => btn.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    setState({ satisfactionRating: Number(btn.dataset.rating) });
+  }));
   document.querySelector("#satisfactionForm")?.addEventListener("submit", submitSatisfaction);
   document.querySelector("#feedbackForm")?.addEventListener("submit", submitFeedback);
   document.querySelector("#accountForm")?.addEventListener("submit", submitAccount);
   document.querySelectorAll("[data-account-mode]").forEach(btn => btn.addEventListener("click", () => setState({ accountMode: btn.dataset.accountMode, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" })));
+  const passwordInput = document.querySelector("#accountForm [name='password']");
+  const confirmPasswordInput = document.querySelector("#accountForm [name='confirmPassword']");
+  [passwordInput, confirmPasswordInput].forEach(input => input?.addEventListener("input", validateAccountPasswordMatch));
   document.querySelector("[data-send-code]")?.addEventListener("click", sendAccountCode);
-  document.querySelector("[data-account-avatar-button]")?.addEventListener("click", () => document.querySelector("[data-account-avatar-input]")?.click());
+  document.querySelector("[data-account-avatar-button]")?.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    document.querySelector("[data-account-avatar-input]")?.click();
+  });
   document.querySelector("[data-account-avatar-input]")?.addEventListener("change", readAccountAvatar);
   document.querySelector("#profileForm")?.addEventListener("submit", submitProfile);
   document.querySelectorAll("[data-logout-account]").forEach(btn => btn.addEventListener("click", logoutAccount));
-  document.querySelector("[data-toggle-sync]")?.addEventListener("click", () => setState({
-    syncEnabled: !state.syncEnabled,
-    activityLogs: logActivity(`${state.syncEnabled ? "关闭" : "开启"}数据同步设置`, "空间")
-  }));
+  document.querySelector("[data-toggle-sync]")?.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    setState({
+      syncEnabled: !state.syncEnabled,
+      activityLogs: logActivity(`${state.syncEnabled ? "关闭" : "开启"}数据同步设置`, "空间")
+    });
+  });
 }
 
 function submitSatisfaction(event) {
   event.preventDefault();
+  if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const comment = String(form.get("comment") || "").trim();
   const rating = Number(form.get("rating") || state.satisfactionRating || 5);
@@ -1580,6 +1683,7 @@ function submitSatisfaction(event) {
 
 function submitFeedback(event) {
   event.preventDefault();
+  if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const type = String(form.get("type") || "其他");
   const content = String(form.get("content") || "").trim();
@@ -1620,8 +1724,9 @@ async function submitAccount(event) {
   }
 
   const code = String(form.get("code") || "").trim();
-  if (password !== confirmPassword) return toast("两次输入的密码不一致");
-  if ((state.registeredUsers || []).some(item => item.phone === phone)) return toast("这个手机号已经注册，请直接登录");
+  if (!confirmPassword) return toast("请先填写核对密码");
+  if (password !== confirmPassword) return toast("密码不一致");
+  if ((state.registeredUsers || []).some(item => item.phone === phone)) return toast("手机号已注册，请直接登录");
   if (!state.pendingAuthCode || state.pendingAuthPhone !== phone) return toast("请先获取验证码");
   if (Date.now() > Number(state.authCodeExpiresAt || 0)) return toast("验证码已过期，请重新获取");
   if (!(await verifyServerSmsCode(phone, code))) return toast("验证码不正确");
@@ -1635,6 +1740,7 @@ async function submitAccount(event) {
     pendingAuthCode: "",
     pendingAuthPhone: "",
     authCodeExpiresAt: "",
+    accountCodeCooldownUntil: "",
     accountDraftPhone: "",
     accountDraftPassword: "",
     accountDraftConfirmPassword: "",
@@ -1649,8 +1755,13 @@ async function sendAccountCode() {
   const phone = String(form?.querySelector("[name='phone']")?.value || "").trim();
   const password = String(form?.querySelector("[name='password']")?.value || "");
   const confirmPassword = String(form?.querySelector("[name='confirmPassword']")?.value || "");
+  const cooldownRemaining = accountCodeCooldownRemaining();
+  if (cooldownRemaining > 0) return toast(`请在 ${cooldownRemaining} 秒后再获取验证码`);
   if (!/^1[3-9]\d{9}$/.test(phone)) return toast("先填写正确的手机号");
-  if (password && confirmPassword && password !== confirmPassword) return toast("两次输入的密码不一致");
+  if (password.length < 6) return toast("请先创建至少 6 位密码");
+  if (!confirmPassword) return toast("请先填写核对密码");
+  if (password !== confirmPassword) return toast("密码不一致");
+  if ((state.registeredUsers || []).some(item => item.phone === phone)) return toast("手机号已注册，请直接登录");
   if (hasSmsBackend()) {
     try {
       const result = await apiPost("/api/sms/send", { phone, purpose: "register" });
@@ -1660,11 +1771,25 @@ async function sendAccountCode() {
         accountDraftConfirmPassword: confirmPassword,
         pendingAuthCode: result.code || SERVER_SMS_CODE,
         pendingAuthPhone: phone,
-        authCodeExpiresAt: String(Date.now() + 5 * 60 * 1000)
+        authCodeExpiresAt: String(Date.now() + 5 * 60 * 1000),
+        accountCodeCooldownUntil: String(Date.now() + 60 * 1000)
       });
       toast(result.code ? `验证码已发送：${result.code}` : "验证码已发送");
       return;
     } catch (error) {
+      if (CONFIGURED_SMS_BACKEND) {
+        setState({
+          accountDraftPhone: phone,
+          accountDraftPassword: password,
+          accountDraftConfirmPassword: confirmPassword,
+          pendingAuthCode: "",
+          pendingAuthPhone: "",
+          authCodeExpiresAt: "",
+          accountCodeCooldownUntil: ""
+        });
+        toast(error.message || "短信服务暂不可用，请稍后重试");
+        return;
+      }
       toast(`短信服务暂不可用，已切换原型验证码`);
     }
   }
@@ -1675,12 +1800,28 @@ async function sendAccountCode() {
     accountDraftConfirmPassword: confirmPassword,
     pendingAuthCode: code,
     pendingAuthPhone: phone,
-    authCodeExpiresAt: String(Date.now() + 5 * 60 * 1000)
+    authCodeExpiresAt: String(Date.now() + 5 * 60 * 1000),
+    accountCodeCooldownUntil: String(Date.now() + 60 * 1000)
   });
   toast(`验证码已发送：${code}`);
 }
 
+function validateAccountPasswordMatch() {
+  const form = document.querySelector("#accountForm");
+  const passwordInput = form?.querySelector("[name='password']");
+  const confirmInput = form?.querySelector("[name='confirmPassword']");
+  const error = form?.querySelector("[data-password-error]");
+  if (!confirmInput) return true;
+  const password = String(passwordInput?.value || "");
+  const confirmPassword = String(confirmInput.value || "");
+  const valid = !confirmPassword || password === confirmPassword;
+  confirmInput.setCustomValidity(valid ? "" : "密码不一致");
+  if (error) error.hidden = valid;
+  return valid;
+}
+
 function readAccountAvatar(event) {
+  if (!requireLogin()) return;
   const file = event.target.files?.[0];
   if (!file) return;
   const reader = new FileReader();
@@ -1690,6 +1831,7 @@ function readAccountAvatar(event) {
 
 function submitProfile(event) {
   event.preventDefault();
+  if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const nickname = String(form.get("nickname") || "").trim() || maskPhone(state.loggedInPhone);
   const registeredUsers = (state.registeredUsers || []).map(user => user.phone === state.loggedInPhone ? {
@@ -1728,7 +1870,7 @@ function accountAvatarMarkup(className = "avatar") {
 }
 
 function hasSmsBackend() {
-  return Boolean(window.TURTLE_API_BASE_URL) || location.protocol === "http:" || location.protocol === "https:";
+  return CONFIGURED_SMS_BACKEND || location.protocol === "http:" || location.protocol === "https:";
 }
 
 async function apiPost(path, payload) {
@@ -1744,7 +1886,7 @@ async function apiPost(path, payload) {
 }
 
 async function verifyServerSmsCode(phone, code) {
-  if (state.pendingAuthCode !== SERVER_SMS_CODE) return code === state.pendingAuthCode;
+  if (state.pendingAuthCode !== SERVER_SMS_CODE) return CONFIGURED_SMS_BACKEND ? false : code === state.pendingAuthCode;
   try {
     const result = await apiPost("/api/sms/verify", { phone, code });
     return Boolean(result.ok);
@@ -1755,6 +1897,7 @@ async function verifyServerSmsCode(phone, code) {
 }
 
 function addKeptSpecies(code) {
+  if (!requireLogin()) return;
   const species = speciesByCode(code);
   if (!species) return;
   const keptSpecies = state.keptSpecies.includes(code) ? state.keptSpecies : [...state.keptSpecies, code];
@@ -1763,11 +1906,13 @@ function addKeptSpecies(code) {
 }
 
 function removeKeptSpecies(code) {
+  if (!requireLogin()) return;
   if (!confirm("要把这个品种移出常用品种吗？已有档案会保留。")) return;
   setState({ keptSpecies: state.keptSpecies.filter(item => item !== code), activityLogs: logActivity(`移除常用品种：${speciesByCode(code)?.name || code}`, "品种") });
 }
 
 function deleteTurtle(id) {
+  if (!requireLogin()) return;
   const turtle = state.turtles.find(t => t.id === id);
   if (!turtle || !confirm("要删除这份乌龟档案吗？")) return;
   setState({
@@ -1779,6 +1924,7 @@ function deleteTurtle(id) {
 }
 
 function readPhoto(event) {
+  if (!requireLogin()) return;
   const file = event.target.files?.[0];
   if (!file) return;
   const reader = new FileReader();
@@ -1787,6 +1933,7 @@ function readPhoto(event) {
 }
 
 function readUpdatePhoto(event) {
+  if (!requireLogin()) return;
   const file = event.target.files?.[0];
   if (!file) return;
   const draft = captureTurtleDetailDraft();
@@ -1801,6 +1948,7 @@ function readUpdatePhoto(event) {
 
 function submitTurtleDetail(event) {
   event.preventDefault();
+  if (!requireLogin()) return;
   const turtle = state.turtles.find(t => t.id === state.selectedTurtleId);
   if (!turtle) return;
   const form = new FormData(event.currentTarget);
@@ -1869,6 +2017,7 @@ function submitTurtleDetail(event) {
 
 function submitTurtle(event) {
   event.preventDefault();
+  if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const species = speciesByCode(form.get("speciesCode"));
   if (!species) return toast("先选择一个品种，再保存档案");
@@ -1932,6 +2081,7 @@ function submitTurtle(event) {
 
 function submitMemoForm(event) {
   event.preventDefault();
+  if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const title = String(form.get("title") || "").trim();
   if (!title) return toast("先写一个护理事项名称");
@@ -1951,17 +2101,20 @@ function submitMemoForm(event) {
 }
 
 function deleteMemo(id) {
+  if (!requireLogin()) return;
   const memo = state.memos.find(m => m.id === id);
   if (!memo || !confirm("要删除这条护理提醒吗？")) return;
   setState({ memos: state.memos.filter(m => m.id !== id), activityLogs: logActivity(`删除护理：${memo.title}`, "护理") });
 }
 
 function openLedgerForm(type, turtleId = "") {
+  if (!requireLogin()) return;
   const turtle = state.turtles.find(t => t.id === turtleId);
   setState({ page: "ledger", ledgerDraftType: type, ledgerDraftPhoto: turtle?.photo || "", ledgerDraftTurtleId: turtleId, ledgerPurchaseGender: "未知", ledgerTab: type, openTurtleMenuId: "" });
 }
 
 function readLedgerPhoto(event) {
+  if (!requireLogin()) return;
   const file = event.target.files?.[0];
   if (!file) return;
   const reader = new FileReader();
@@ -1970,6 +2123,7 @@ function readLedgerPhoto(event) {
 }
 
 function readBreedingPhoto(event) {
+  if (!requireLogin()) return;
   const file = event.target.files?.[0];
   if (!file) return;
   const reader = new FileReader();
@@ -1978,6 +2132,7 @@ function readBreedingPhoto(event) {
 }
 
 function readBreedingEditPhoto(event) {
+  if (!requireLogin()) return;
   const file = event.target.files?.[0];
   if (!file) return;
   const reader = new FileReader();
@@ -2001,6 +2156,7 @@ function readBreedingDraft() {
 
 function submitBreedingDetail(event) {
   event.preventDefault();
+  if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const record = (state.breedingRecords || []).find(item => item.id === state.selectedBreedingId);
   if (!record) return;
@@ -2060,6 +2216,7 @@ function submitBreedingDetail(event) {
 
 function submitBreedingRecord(event) {
   event.preventDefault();
+  if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const motherId = form.get("mother");
   const mother = state.turtles.find(t => t.id === motherId);
@@ -2106,6 +2263,7 @@ function submitBreedingRecord(event) {
 }
 
 function deleteBreedingRecord(id) {
+  if (!requireLogin()) return;
   const record = (state.breedingRecords || []).find(item => item.id === id);
   if (!record || !confirm("要删除这条繁殖记录吗？")) return;
   setState({
@@ -2116,6 +2274,7 @@ function deleteBreedingRecord(id) {
 
 function submitLedgerRecord(event) {
   event.preventDefault();
+  if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const type = state.ledgerDraftType;
   let turtle = state.turtles.find(t => t.id === form.get("turtleId"));
@@ -2186,6 +2345,7 @@ function submitLedgerRecord(event) {
 }
 
 function deleteLedgerRecord(id) {
+  if (!requireLogin()) return;
   const record = state.ledgerRecords.find(item => item.id === id);
   if (!record || !confirm("要删除这条账本记录吗？")) return;
   setState({ ledgerRecords: state.ledgerRecords.filter(item => item.id !== id), activityLogs: logActivity(`删除账本记录：${record.title}`, "账本") });
