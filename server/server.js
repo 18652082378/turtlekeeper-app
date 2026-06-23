@@ -5,7 +5,27 @@ const https = require("https");
 const path = require("path");
 const { URL } = require("url");
 
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const content = fs.readFileSync(filePath, "utf8");
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (key && process.env[key] === undefined) process.env[key] = value;
+  }
+}
+
+loadEnvFile(path.resolve(__dirname, ".env"));
+
 const PORT = Number(process.env.PORT || 8787);
+const HOST = process.env.HOST || "127.0.0.1";
 const STATIC_ROOT = path.resolve(__dirname, "..");
 const smsCodes = new Map();
 
@@ -71,7 +91,7 @@ function percentEncode(value) {
     .replace(/%7E/g, "~");
 }
 
-function aliyunSignedUrl(params) {
+function aliyunSignedUrl(params, endpoint = "dysmsapi.aliyuncs.com") {
   const accessKeyId = process.env.ALIYUN_ACCESS_KEY_ID;
   const accessKeySecret = process.env.ALIYUN_ACCESS_KEY_SECRET;
   const allParams = {
@@ -93,7 +113,7 @@ function aliyunSignedUrl(params) {
     .createHmac("sha1", `${accessKeySecret}&`)
     .update(stringToSign)
     .digest("base64");
-  return `https://dysmsapi.aliyuncs.com/?Signature=${percentEncode(signature)}&${canonical}`;
+  return `https://${endpoint}/?Signature=${percentEncode(signature)}&${canonical}`;
 }
 
 function requestJson(url) {
@@ -123,6 +143,15 @@ function aliyunConfigured() {
   );
 }
 
+function aliyunPnvsConfigured() {
+  return Boolean(
+    process.env.ALIYUN_ACCESS_KEY_ID &&
+      process.env.ALIYUN_ACCESS_KEY_SECRET &&
+      process.env.ALIYUN_SMS_SIGN_NAME &&
+      process.env.ALIYUN_SMS_TEMPLATE_CODE
+  );
+}
+
 async function sendAliyunSms(phone, code) {
   const paramKey = process.env.ALIYUN_SMS_TEMPLATE_PARAM_KEY || "code";
   const url = aliyunSignedUrl({
@@ -139,6 +168,62 @@ async function sendAliyunSms(phone, code) {
   return result;
 }
 
+function pnvsCommonParams(phone) {
+  const params = {
+    PhoneNumber: phone,
+    CountryCode: process.env.ALIYUN_SMS_COUNTRY_CODE || "86"
+  };
+  if (process.env.ALIYUN_SMS_SCHEME_NAME) params.SchemeName = process.env.ALIYUN_SMS_SCHEME_NAME;
+  return params;
+}
+
+async function sendAliyunPnvsSms(phone) {
+  const paramKey = process.env.ALIYUN_SMS_TEMPLATE_PARAM_KEY || "code";
+  const minutes = process.env.ALIYUN_SMS_TEMPLATE_MINUTES || "5";
+  const templateParam = process.env.ALIYUN_SMS_TEMPLATE_PARAM_JSON
+    ? process.env.ALIYUN_SMS_TEMPLATE_PARAM_JSON
+    : JSON.stringify({ [paramKey]: "##code##", min: minutes });
+  const url = aliyunSignedUrl(
+    {
+      Action: "SendSmsVerifyCode",
+      ...pnvsCommonParams(phone),
+      SignName: process.env.ALIYUN_SMS_SIGN_NAME,
+      TemplateCode: process.env.ALIYUN_SMS_TEMPLATE_CODE,
+      TemplateParam: templateParam,
+      CodeType: Number(process.env.ALIYUN_SMS_CODE_TYPE || 1),
+      CodeLength: Number(process.env.ALIYUN_SMS_CODE_LENGTH || 6),
+      ValidTime: Number(process.env.ALIYUN_SMS_VALID_TIME || 300),
+      DuplicatePolicy: Number(process.env.ALIYUN_SMS_DUPLICATE_POLICY || 1),
+      Interval: Number(process.env.ALIYUN_SMS_INTERVAL || 60),
+      ReturnVerifyCode: process.env.ALIYUN_SMS_RETURN_VERIFY_CODE === "true",
+      AutoRetry: Number(process.env.ALIYUN_SMS_AUTO_RETRY || 1)
+    },
+    "dypnsapi.aliyuncs.com"
+  );
+  const result = await requestJson(url);
+  if (result.Code !== "OK" || result.Success === false) {
+    throw new Error(result.Message || "号码认证短信发送失败");
+  }
+  return result;
+}
+
+async function checkAliyunPnvsSms(phone, code) {
+  const url = aliyunSignedUrl(
+    {
+      Action: "CheckSmsVerifyCode",
+      ...pnvsCommonParams(phone),
+      VerifyCode: code,
+      CaseAuthPolicy: Number(process.env.ALIYUN_SMS_CASE_AUTH_POLICY || 1)
+    },
+    "dypnsapi.aliyuncs.com"
+  );
+  const result = await requestJson(url);
+  if (result.Code !== "OK" || result.Success === false) {
+    throw new Error(result.Message || "号码认证验证码核验失败");
+  }
+  return result.Model && result.Model.VerifyResult === "PASS";
+}
+
 async function handleSendSms(req, res) {
   const body = await readJson(req);
   const phone = String(body.phone || "").trim();
@@ -149,6 +234,12 @@ async function handleSendSms(req, res) {
   }
 
   const code = makeCode();
+  if (process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured() && process.env.SMS_MOCK !== "true") {
+    await sendAliyunPnvsSms(phone);
+    storeCode(phone, "__aliyun_pnvs__");
+    return sendJson(res, 200, { ok: true, mode: "aliyun-pnvs", expiresIn: Number(process.env.ALIYUN_SMS_VALID_TIME || 300) });
+  }
+
   if (process.env.SMS_PROVIDER === "aliyun" && aliyunConfigured() && process.env.SMS_MOCK !== "true") {
     await sendAliyunSms(phone, code);
     storeCode(phone, code);
@@ -163,6 +254,15 @@ async function handleVerifySms(req, res) {
   const body = await readJson(req);
   const phone = String(body.phone || "").trim();
   const code = String(body.code || "").trim();
+  if (process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured() && process.env.SMS_MOCK !== "true") {
+    if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
+    if (!code) return sendJson(res, 400, { ok: false, message: "请输入验证码" });
+    const passed = await checkAliyunPnvsSms(phone, code);
+    if (!passed) return sendJson(res, 400, { ok: false, message: "验证码不正确" });
+    smsCodes.delete(phone);
+    return sendJson(res, 200, { ok: true });
+  }
+
   const item = smsCodes.get(phone);
   if (!item) return sendJson(res, 400, { ok: false, message: "请先获取验证码" });
   if (Date.now() > item.expiresAt) {
@@ -207,7 +307,12 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`龟管家服务已启动：http://127.0.0.1:${PORT}`);
-  console.log(aliyunConfigured() ? "短信模式：阿里云" : "短信模式：本地模拟");
+server.listen(PORT, HOST, () => {
+  console.log(`龟管家服务已启动：http://${HOST}:${PORT}`);
+  const mode = process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured()
+    ? "阿里云号码认证"
+    : aliyunConfigured()
+      ? "阿里云短信服务"
+      : "本地模拟";
+  console.log(`短信模式：${mode}`);
 });
