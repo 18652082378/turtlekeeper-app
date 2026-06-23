@@ -81,43 +81,74 @@ const initialState = {
   activityLogs: []
 };
 
+function emptyAccountData() {
+  return {
+    turtles: [],
+    keptSpecies: [],
+    memos: [],
+    ledgerRecords: [],
+    breedingRecords: [],
+    satisfactionRating: 5,
+    satisfactionReviews: [],
+    feedbackItems: [],
+    syncEnabled: false,
+    activityLogs: [],
+    themeColor: "teal"
+  };
+}
+
+function normalizeAccountData(data = {}) {
+  const next = { ...emptyAccountData(), ...(data || {}) };
+  return {
+    turtles: Array.isArray(next.turtles) ? next.turtles : [],
+    keptSpecies: Array.isArray(next.keptSpecies) ? next.keptSpecies : [],
+    memos: Array.isArray(next.memos) ? next.memos : [],
+    ledgerRecords: Array.isArray(next.ledgerRecords) ? next.ledgerRecords : [],
+    breedingRecords: Array.isArray(next.breedingRecords) ? next.breedingRecords : [],
+    satisfactionRating: Number(next.satisfactionRating || 5),
+    satisfactionReviews: Array.isArray(next.satisfactionReviews) ? next.satisfactionReviews : [],
+    feedbackItems: Array.isArray(next.feedbackItems) ? next.feedbackItems : [],
+    syncEnabled: Boolean(next.syncEnabled),
+    activityLogs: Array.isArray(next.activityLogs) ? next.activityLogs : [],
+    themeColor: next.themeColor || "teal"
+  };
+}
+
+function accountDataSnapshot(source = state) {
+  return normalizeAccountData({
+    turtles: source.turtles,
+    keptSpecies: source.keptSpecies,
+    memos: source.memos,
+    ledgerRecords: source.ledgerRecords,
+    breedingRecords: source.breedingRecords,
+    satisfactionRating: source.satisfactionRating,
+    satisfactionReviews: source.satisfactionReviews,
+    feedbackItems: source.feedbackItems,
+    syncEnabled: source.syncEnabled,
+    activityLogs: source.activityLogs,
+    themeColor: source.themeColor
+  });
+}
+
+function syncRegisteredUsers(source = state) {
+  const users = (source.registeredUsers || []).map(user => ({
+    ...user,
+    data: normalizeAccountData(user.data || {})
+  }));
+  if (!source.loggedInPhone) return users;
+  return users.map(user => user.phone === source.loggedInPhone ? {
+    ...user,
+    accountName: source.accountName || user.accountName || maskPhone(source.loggedInPhone),
+    accountAvatar: source.accountAvatar || "",
+    data: accountDataSnapshot(source)
+  } : user);
+}
+
 let state = loadState();
 let accountCooldownTimer = null;
 
 if (CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE) {
   state = { ...state, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" };
-  saveState();
-}
-
-if (!state.turtles.length && !localStorage.getItem(STORAGE)) {
-  const seed = speciesByCode("GHG") || speciesList[0] || {};
-  const turtle = {
-    id: crypto.randomUUID(),
-    code: "GH-1",
-    speciesCode: seed.code || "GHG",
-    speciesName: seed.name || "果核蛋龟",
-    gender: "母",
-    weight: 202,
-    carapaceLength: 9.6,
-    carapaceWidth: "",
-    shellHeight: "",
-    plastronLength: "",
-    status: "正常饲养",
-    health: "健康",
-    acquiredDate: "2026-05-28",
-    source: "购买",
-    price: "",
-    note: "",
-    photo: speciesPhoto(seed),
-    createdAt: "2026-05-28T03:01:00.000Z",
-    measureHistory: []
-  };
-  state = {
-    ...state,
-    turtles: [turtle],
-    keptSpecies: [turtle.speciesCode],
-    activityLogs: [makeActivity(`新增档案：${turtleLabel(turtle)}`, "档案")]
-  };
   saveState();
 }
 
@@ -147,10 +178,27 @@ function cleanText(value) {
 }
 
 function normalizeState(next) {
-  return {
+  const registeredUsers = (next.registeredUsers || []).map(user => ({
+    ...user,
+    data: normalizeAccountData(user.data || {})
+  }));
+  const loggedInPhone = next.loggedInPhone && registeredUsers.some(user => user.phone === next.loggedInPhone)
+    ? next.loggedInPhone
+    : "";
+  const activeUser = registeredUsers.find(user => user.phone === loggedInPhone);
+  const accountData = loggedInPhone ? normalizeAccountData(activeUser?.data || {}) : emptyAccountData();
+  const base = {
     ...next,
-    formGender: cleanText(next.formGender),
-    turtles: (next.turtles || []).map(t => ({
+    ...accountData,
+    registeredUsers,
+    loggedInPhone,
+    accountName: loggedInPhone ? (activeUser?.accountName || next.accountName || maskPhone(loggedInPhone)) : "未登录用户",
+    accountAvatar: loggedInPhone ? (activeUser?.accountAvatar || next.accountAvatar || "") : ""
+  };
+  return {
+    ...base,
+    formGender: cleanText(base.formGender),
+    turtles: (base.turtles || []).map(t => ({
       ...t,
       measureHistory: Array.isArray(t.measureHistory) ? t.measureHistory : [],
       speciesName: cleanText(t.speciesName),
@@ -159,13 +207,13 @@ function normalizeState(next) {
       health: cleanText(t.health),
       source: cleanText(t.source)
     })),
-    breedingRecords: (next.breedingRecords || []).map(item => ({
+    breedingRecords: (base.breedingRecords || []).map(item => ({
       ...item,
       hatchCount: Number(item.hatchCount || 0),
       motherName: cleanText(item.motherName),
       editHistory: Array.isArray(item.editHistory) ? item.editHistory : []
     })),
-    ledgerRecords: (next.ledgerRecords || []).map(item => ({
+    ledgerRecords: (base.ledgerRecords || []).map(item => ({
       ...item,
       title: cleanText(item.title),
       turtleSnapshot: item.turtleSnapshot ? {
@@ -181,27 +229,21 @@ function normalizeState(next) {
 }
 
 function saveState() {
+  const registeredUsers = syncRegisteredUsers(state);
+  const accountData = state.loggedInPhone ? accountDataSnapshot(state) : emptyAccountData();
+  state.registeredUsers = registeredUsers;
   localStorage.setItem(STORAGE, JSON.stringify({
-    turtles: state.turtles,
-    keptSpecies: state.keptSpecies,
-    memos: state.memos,
-    ledgerRecords: state.ledgerRecords,
-    breedingRecords: state.breedingRecords,
-    satisfactionRating: state.satisfactionRating,
-    satisfactionReviews: state.satisfactionReviews,
-    feedbackItems: state.feedbackItems,
+    ...accountData,
     accountName: state.accountName,
     accountAvatar: state.accountAvatar,
     accountMode: state.accountMode,
     loggedInPhone: state.loggedInPhone,
-    registeredUsers: state.registeredUsers,
+    registeredUsers,
     pendingAuthCode: state.pendingAuthCode,
     pendingAuthPhone: state.pendingAuthPhone,
     authCodeExpiresAt: state.authCodeExpiresAt,
     accountCodeCooldownUntil: state.accountCodeCooldownUntil,
-    syncEnabled: state.syncEnabled,
-    activityLogs: state.activityLogs,
-    themeColor: state.themeColor
+    themeColor: accountData.themeColor
   }));
 }
 
@@ -677,7 +719,7 @@ function pageTurtleDetail() {
             <button class="danger-link" type="button" data-clear-update-photo>清除图片</button>
           </div>
         </div>
-        <input class="hidden-file" type="file" accept="image/*" data-update-photo-input>
+        <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-update-photo-input>
         <div class="breeding-form-grid">
           <label><span>品种代码</span><select class="select" name="speciesCode" required>${speciesList.map(item => `<option value="${item.code}" ${item.code === speciesCode ? "selected" : ""}>${item.code} · ${item.name}</option>`).join("")}</select></label>
           <label><span>龟龟昵称</span><input class="field" name="code" value="${nickname || ""}" placeholder="例如：小核桃、黑豆、将军"></label>
@@ -823,7 +865,7 @@ function pageAdd() {
             <img src="${state.formPhoto || defaultPhoto}" alt="乌龟照片">
             <div><button class="secondary" type="button" data-photo-input-button>上传照片</button><button class="danger-link" type="button" data-photo-clear>清除</button></div>
           </div>
-          <input class="hidden-file" type="file" accept="image/*" data-photo-input>
+          <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-photo-input>
           <div class="label">品种代码</div>
           <select class="select" name="speciesCode" required>
             <option value="">请选择品种</option>
@@ -969,7 +1011,7 @@ function ledgerForm() {
           ${state.ledgerDraftPhoto ? `<img src="${state.ledgerDraftPhoto}" alt="${ledgerTypeText(type)}照片">` : `<span>照片</span>`}
           <div><button class="secondary" type="button" data-ledger-photo-button>上传照片</button><p class="muted">和新建档案一样，可以上传这只龟当时的照片。</p></div>
         </div>
-        <input class="hidden-file" type="file" accept="image/*" data-ledger-photo-input>
+        <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-ledger-photo-input>
         <div class="label">关联档案</div>
         <select class="select" name="turtleId">
           <option value="">${isPurchase ? "收购后新建档案" : "不关联档案"}</option>
@@ -1150,7 +1192,7 @@ function pageBreedingAdd() {
             <p class="muted">可上传产蛋现场、蛋盒、标记卡等图片。</p>
           </div>
         </div>
-        <input class="hidden-file" type="file" accept="image/*" data-breeding-photo-input>
+        <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-breeding-photo-input>
         <div class="breeding-form-grid">
           <label><span>日期</span><input class="field" name="date" type="date" value="${today}" required></label>
           <label><span>种母</span>
@@ -1208,7 +1250,7 @@ function pageBreedingDetail() {
             <button class="danger-link" type="button" data-clear-breeding-edit-photo>清除图片</button>
           </div>
         </div>
-        <input class="hidden-file" type="file" accept="image/*" data-breeding-edit-photo-input>
+        <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-breeding-edit-photo-input>
         <div class="breeding-form-grid">
           <label><span>日期</span><input class="field" name="date" type="date" value="${record.date || formatDate(new Date())}" required></label>
           <label><span>种母</span>
@@ -1249,7 +1291,7 @@ function pageMine() {
   const profileSub = loggedIn ? maskPhone(state.loggedInPhone) : "登录后同步你的档案和账本";
   return `
     ${topbar("我的空间")}
-    <section class="profile fresh-profile account-profile">${accountAvatarMarkup()}<div><h2>${profileTitle}</h2><p class="profile-phone">${profileSub}</p><span class="tag">本地模式</span></div></section>
+    <section class="profile fresh-profile account-profile">${accountAvatarMarkup()}<div><h2>${profileTitle}</h2><p class="profile-phone">${profileSub}</p></div></section>
     <main class="content page-fresh">
       <button class="primary account-login" data-page="account">${loggedIn ? "编辑资料" : "登录 / 注册账号"}</button>
       <section class="account-brief">
@@ -1352,7 +1394,7 @@ function pageAccount() {
               <p class="muted">支持从本机上传头像</p>
             </div>
           </div>
-          <input class="hidden-file" type="file" accept="image/*" data-account-avatar-input>
+          <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-account-avatar-input>
           <form id="profileForm" class="profile-form-inner">
             <label class="survey-field"><span>昵称</span><input class="field" name="nickname" value="${state.accountName || ""}" placeholder="请输入昵称"></label>
             <button class="primary" type="submit">保存昵称和头像</button>
@@ -1708,7 +1750,9 @@ async function submitAccount(event) {
   if (mode === "login") {
     const user = (state.registeredUsers || []).find(item => item.phone === phone && item.password === password);
     if (!user) return toast("手机号或密码不正确");
+    const accountData = normalizeAccountData(user.data || {});
     setState({
+      ...accountData,
       loggedInPhone: phone,
       accountName: user.accountName || maskPhone(phone),
       accountAvatar: user.accountAvatar || "",
@@ -1716,7 +1760,7 @@ async function submitAccount(event) {
       accountDraftPassword: "",
       accountDraftConfirmPassword: "",
       page: "mine",
-      activityLogs: logActivity(`手机号登录：${maskPhone(phone)}`, "空间")
+      activityLogs: [makeActivity(`手机号登录：${maskPhone(phone)}`, "空间"), ...(accountData.activityLogs || [])]
     });
     toast("登录成功");
     return;
@@ -1730,8 +1774,10 @@ async function submitAccount(event) {
   if (Date.now() > Number(state.authCodeExpiresAt || 0)) return toast("验证码已过期，请重新获取");
   if (!(await verifyServerSmsCode(phone, code))) return toast("验证码不正确");
 
-  const user = { id: crypto.randomUUID(), phone, password, accountName: maskPhone(phone), accountAvatar: "", createdAt: new Date().toISOString() };
+  const accountData = emptyAccountData();
+  const user = { id: crypto.randomUUID(), phone, password, accountName: maskPhone(phone), accountAvatar: "", data: accountData, createdAt: new Date().toISOString() };
   setState({
+    ...accountData,
     registeredUsers: [user, ...(state.registeredUsers || [])],
     loggedInPhone: phone,
     accountName: user.accountName,
@@ -1744,7 +1790,7 @@ async function submitAccount(event) {
     accountDraftPassword: "",
     accountDraftConfirmPassword: "",
     page: "mine",
-    activityLogs: logActivity(`注册并登录：${maskPhone(phone)}`, "空间")
+    activityLogs: [makeActivity(`注册并登录：${maskPhone(phone)}`, "空间")]
   });
   toast("注册成功，已登录");
 }
@@ -1848,12 +1894,14 @@ function submitProfile(event) {
 
 function logoutAccount() {
   if (!confirm("确定要退出当前账号吗？")) return;
+  const registeredUsers = syncRegisteredUsers(state);
   setState({
+    ...emptyAccountData(),
+    registeredUsers,
     loggedInPhone: "",
     accountName: "未登录用户",
     accountAvatar: "",
-    page: "mine",
-    activityLogs: logActivity("退出账号登录", "空间")
+    page: "mine"
   });
   toast("已退出账号");
 }
