@@ -510,7 +510,6 @@ function describeBreedingSnapshot(snapshot = {}) {
 function topbar(title, back = false) {
   return `
     <div class="topbar">
-      <div class="status"><span>03:01</span><span>WiFi 46%</span></div>
       <div class="nav-title">
         ${back ? `<button class="icon-btn" data-back>‹</button>` : `<span></span>`}
         <h1>${title}</h1>

@@ -4509,3 +4509,56 @@ html[data-theme-color="dark"] .detail-summary-card.menu-open .detail-more {
   background: #2c2c2e !important;
   color: #d1d1d6 !important;
 }
+
+/* iPhone safe-area lock: use the native status bar and keep titles below Dynamic Island. */
+.status {
+  display: none !important;
+}
+
+.topbar {
+  min-height: calc(62px + max(env(safe-area-inset-top), 16px)) !important;
+  padding-top: max(env(safe-area-inset-top), 16px) !important;
+  position: sticky !important;
+  top: 0 !important;
+}
+
+.nav-title {
+  height: 62px !important;
+  min-height: 62px !important;
+  display: grid !important;
+  grid-template-columns: 54px minmax(0, 1fr) 54px !important;
+  align-items: center !important;
+}
+
+.nav-title h1 {
+  line-height: 1.2 !important;
+  align-self: center !important;
+}
+
+.hero-add,
+.round-action {
+  display: inline-grid !important;
+  place-items: center !important;
+  align-items: center !important;
+  justify-content: center !important;
+  align-content: center !important;
+  padding: 0 !important;
+  line-height: 1 !important;
+  text-align: center !important;
+}
+
+.hero-add {
+  width: 58px !important;
+  height: 58px !important;
+  font-size: 34px !important;
+}
+
+.round-action {
+  width: 58px !important;
+  height: 58px !important;
+  font-size: 34px !important;
+}
+
+.content {
+  padding-top: 16px !important;
+}
