@@ -4638,3 +4638,25 @@ html[data-theme-color="dark"] .mine-list {
 html[data-theme-color="dark"] .mine-row {
   border-bottom-color: #2c2c2e !important;
 }
+
+/* Center operation feedback and keep settings labels left-aligned. */
+.toast {
+  top: 50% !important;
+  bottom: auto !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  z-index: 5000 !important;
+}
+
+.mine-row {
+  display: grid !important;
+  grid-template-columns: 42px minmax(0, 1fr) auto !important;
+  column-gap: 14px !important;
+  justify-items: start !important;
+  text-align: left !important;
+}
+
+.mine-row strong {
+  justify-self: start !important;
+  text-align: left !important;
+}
