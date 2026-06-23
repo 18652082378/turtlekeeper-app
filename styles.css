@@ -4701,3 +4701,39 @@ html[data-theme-color="dark"] .mine-row {
 html[data-theme-color="dark"] .topbar {
   background: rgba(17, 17, 17, .94) !important;
 }
+
+/* Compact iOS tab bar: keep gesture safety, remove the oversized empty floor. */
+.phone-shell {
+  --fixed-tabbar-content-height: 56px;
+  --fixed-tabbar-safe: max(env(safe-area-inset-bottom), 8px);
+  --fixed-tabbar-height: calc(var(--fixed-tabbar-content-height) + var(--fixed-tabbar-safe));
+}
+
+.bottom-nav {
+  height: var(--fixed-tabbar-height) !important;
+  padding: 0 0 var(--fixed-tabbar-safe) !important;
+  align-items: start !important;
+  background: rgba(255, 255, 255, .96) !important;
+}
+
+.bottom-nav button {
+  min-height: var(--fixed-tabbar-content-height) !important;
+  height: var(--fixed-tabbar-content-height) !important;
+  padding: 4px 0 2px !important;
+  display: grid !important;
+  align-content: center !important;
+  justify-items: center !important;
+  gap: 1px !important;
+}
+
+.bottom-nav button span {
+  margin-bottom: 0 !important;
+}
+
+.content {
+  padding-bottom: calc(var(--fixed-tabbar-height) + 18px) !important;
+}
+
+html[data-theme-color="dark"] .bottom-nav {
+  background: rgba(17, 17, 17, .96) !important;
+}
