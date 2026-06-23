@@ -4660,3 +4660,44 @@ html[data-theme-color="dark"] .mine-row {
   justify-self: start !important;
   text-align: left !important;
 }
+
+/* iOS/WeChat fixed navigation: the title and back button never move while content scrolls. */
+.phone-shell {
+  --fixed-topbar-height: calc(62px + max(env(safe-area-inset-top), 16px));
+}
+
+.topbar {
+  position: fixed !important;
+  top: 0 !important;
+  left: 50% !important;
+  right: auto !important;
+  transform: translateX(-50%) !important;
+  width: min(430px, 100vw) !important;
+  min-height: var(--fixed-topbar-height) !important;
+  height: var(--fixed-topbar-height) !important;
+  padding-top: max(env(safe-area-inset-top), 16px) !important;
+  z-index: 6000 !important;
+  background: rgba(251, 250, 247, .94) !important;
+  backdrop-filter: blur(18px) saturate(1.2) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(1.2) !important;
+}
+
+.topbar + .content,
+.topbar + .profile,
+.topbar + .fresh-profile {
+  margin-top: var(--fixed-topbar-height) !important;
+}
+
+.nav-title {
+  height: 62px !important;
+  min-height: 62px !important;
+}
+
+.nav-title h1,
+.nav-title .icon-btn {
+  transform: translateY(0) !important;
+}
+
+html[data-theme-color="dark"] .topbar {
+  background: rgba(17, 17, 17, .94) !important;
+}
