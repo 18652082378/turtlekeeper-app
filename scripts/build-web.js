@@ -3,7 +3,7 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..");
 const outDir = path.join(root, "www");
-const files = ["index.html", "config.js", "species-data.js", "app.js", "styles.css"];
+const files = ["index.html", "config.js", "species-data.js", "app.js", "styles.css", "privacy.html", "support.html"];
 
 function copyDir(src, dest) {
   if (!fs.existsSync(src)) return;
@@ -20,6 +20,7 @@ fs.rmSync(outDir, { recursive: true, force: true });
 fs.mkdirSync(outDir, { recursive: true });
 
 for (const file of files) {
+  if (!fs.existsSync(path.join(root, file))) continue;
   fs.copyFileSync(path.join(root, file), path.join(outDir, file));
 }
 

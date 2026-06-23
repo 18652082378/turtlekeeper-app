@@ -4,6 +4,7 @@
   "private": true,
   "description": "ShellNote iOS cloud build package",
   "scripts": {
+    "start": "node server/server.js",
     "build": "node scripts/build-web.js",
     "cap:add:ios": "npm run build && npx cap add ios",
     "cap:sync:ios": "npm run build && npx cap sync ios",
