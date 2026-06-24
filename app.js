@@ -561,15 +561,54 @@ function topbar(title, back = false) {
   `;
 }
 
+function tabIcon(name) {
+  const icons = {
+    home: `
+      <svg viewBox="0 0 24 24" focusable="false">
+        <path d="M4 11.5 12 4l8 7.5"></path>
+        <path d="M6.5 10.5V20h11v-9.5"></path>
+        <path d="M10 20v-5.5h4V20"></path>
+      </svg>
+    `,
+    list: `
+      <svg viewBox="0 0 24 24" focusable="false">
+        <rect x="5" y="5" width="14" height="14" rx="2"></rect>
+        <rect x="9" y="9" width="6" height="6" rx="1"></rect>
+      </svg>
+    `,
+    breeding: `
+      <svg viewBox="0 0 24 24" focusable="false">
+        <circle cx="12" cy="12" r="8"></circle>
+        <circle cx="12" cy="12" r="4.5"></circle>
+      </svg>
+    `,
+    ledger: `
+      <svg viewBox="0 0 24 24" focusable="false">
+        <path d="m7 5 5 7 5-7"></path>
+        <path d="M12 12v7"></path>
+        <path d="M8 12h8"></path>
+        <path d="M8 16h8"></path>
+      </svg>
+    `,
+    mine: `
+      <svg viewBox="0 0 24 24" focusable="false">
+        <circle cx="12" cy="8" r="3.5"></circle>
+        <path d="M5.5 19c1.4-3 3.4-4.5 6.5-4.5S17.1 16 18.5 19"></path>
+      </svg>
+    `
+  };
+  return `<span class="tab-icon" aria-hidden="true">${icons[name] || ""}</span>`;
+}
+
 function bottomNav() {
   const minePages = ["mine", "calendar", "satisfaction", "feedback", "account", "sync", "about"];
   return `
     <nav class="bottom-nav">
-      <button class="${state.page === "home" ? "active" : ""}" data-page="home"><span>⌂</span>看板</button>
-      <button class="${state.page === "list" || state.page === "turtleDetail" ? "active" : ""}" data-page="list"><span>▣</span>档案</button>
-      <button class="${state.page === "breeding" || state.page === "breedingAdd" || state.page === "breedingDetail" ? "active" : ""}" data-page="breeding"><span>◎</span>繁殖</button>
-      <button class="${state.page === "ledger" || state.page === "ledgerDetail" ? "active" : ""}" data-page="ledger"><span>¥</span>账本</button>
-      <button class="${minePages.includes(state.page) ? "active" : ""}" data-page="mine"><span>●</span>空间</button>
+      <button class="${state.page === "home" ? "active" : ""}" data-page="home">${tabIcon("home")}看板</button>
+      <button class="${state.page === "list" || state.page === "turtleDetail" ? "active" : ""}" data-page="list">${tabIcon("list")}档案</button>
+      <button class="${state.page === "breeding" || state.page === "breedingAdd" || state.page === "breedingDetail" ? "active" : ""}" data-page="breeding">${tabIcon("breeding")}繁殖</button>
+      <button class="${state.page === "ledger" || state.page === "ledgerDetail" ? "active" : ""}" data-page="ledger">${tabIcon("ledger")}账本</button>
+      <button class="${minePages.includes(state.page) ? "active" : ""}" data-page="mine">${tabIcon("mine")}空间</button>
     </nav>
   `;
 }

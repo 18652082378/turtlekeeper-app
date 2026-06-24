@@ -4799,6 +4799,24 @@ html[data-theme-color="dark"] .bottom-nav {
   text-shadow: none !important;
 }
 
+.bottom-nav .tab-icon svg {
+  width: 25px !important;
+  height: 25px !important;
+  display: block !important;
+  overflow: visible !important;
+  stroke: currentColor !important;
+  stroke-width: 1.9 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+  fill: none !important;
+}
+
+.bottom-nav .tab-icon svg * {
+  fill: none !important;
+  stroke: currentColor !important;
+  vector-effect: non-scaling-stroke;
+}
+
 .bottom-nav button.active,
 .bottom-nav button.active span {
   border: 0 !important;
@@ -4824,7 +4842,7 @@ html[data-theme-color="dark"] .bottom-nav {
 html[data-theme-color="dark"] .phone-shell {
   --wechat-tabbar-bg: rgba(29, 29, 29, .96);
   --wechat-tabbar-border: rgba(255, 255, 255, .10);
-  --wechat-tabbar-text: #d1d1d6;
+  --wechat-tabbar-text: #a7a7aa;
   --wechat-tabbar-active: #07c160;
 }
 
