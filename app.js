@@ -2,6 +2,7 @@ const $app = document.querySelector("#app");
 const STORAGE = "turtlekeeper-state-v1";
 const SERVER_SMS_CODE = "__SERVER_SMS__";
 const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
+const CLOUD_SYNC_DEBOUNCE_MS = 900;
 const defaultPhoto = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
   <rect width="240" height="240" rx="28" fill="#edf7f1"/>
@@ -73,6 +74,7 @@ const initialState = {
   accountDraftConfirmPassword: "",
   loggedInPhone: "",
   registeredUsers: [],
+  cloudToken: "",
   pendingAuthCode: "",
   pendingAuthPhone: "",
   authCodeExpiresAt: "",
@@ -91,7 +93,7 @@ function emptyAccountData() {
     satisfactionRating: 5,
     satisfactionReviews: [],
     feedbackItems: [],
-    syncEnabled: false,
+    syncEnabled: true,
     activityLogs: [],
     themeColor: "teal"
   };
@@ -108,7 +110,7 @@ function normalizeAccountData(data = {}) {
     satisfactionRating: Number(next.satisfactionRating || 5),
     satisfactionReviews: Array.isArray(next.satisfactionReviews) ? next.satisfactionReviews : [],
     feedbackItems: Array.isArray(next.feedbackItems) ? next.feedbackItems : [],
-    syncEnabled: Boolean(next.syncEnabled),
+    syncEnabled: next.syncEnabled !== false,
     activityLogs: Array.isArray(next.activityLogs) ? next.activityLogs : [],
     themeColor: next.themeColor || "teal"
   };
@@ -140,12 +142,16 @@ function syncRegisteredUsers(source = state) {
     ...user,
     accountName: source.accountName || user.accountName || maskPhone(source.loggedInPhone),
     accountAvatar: source.accountAvatar || "",
+    cloudToken: source.cloudToken || user.cloudToken || "",
     data: accountDataSnapshot(source)
   } : user);
 }
 
 let state = loadState();
 let accountCooldownTimer = null;
+let cloudSyncTimer = null;
+let cloudSyncInFlight = false;
+let cloudSyncQueued = false;
 
 if (CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE) {
   state = { ...state, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" };
@@ -192,6 +198,7 @@ function normalizeState(next) {
     ...accountData,
     registeredUsers,
     loggedInPhone,
+    cloudToken: loggedInPhone ? (next.cloudToken || activeUser?.cloudToken || "") : "",
     accountName: loggedInPhone ? (activeUser?.accountName || next.accountName || maskPhone(loggedInPhone)) : "未登录用户",
     accountAvatar: loggedInPhone ? (activeUser?.accountAvatar || next.accountAvatar || "") : ""
   };
@@ -228,7 +235,7 @@ function normalizeState(next) {
   };
 }
 
-function saveState() {
+function saveState(options = {}) {
   const registeredUsers = syncRegisteredUsers(state);
   const accountData = state.loggedInPhone ? accountDataSnapshot(state) : emptyAccountData();
   state.registeredUsers = registeredUsers;
@@ -238,6 +245,7 @@ function saveState() {
     accountAvatar: state.accountAvatar,
     accountMode: state.accountMode,
     loggedInPhone: state.loggedInPhone,
+    cloudToken: state.cloudToken,
     registeredUsers,
     pendingAuthCode: state.pendingAuthCode,
     pendingAuthPhone: state.pendingAuthPhone,
@@ -245,11 +253,12 @@ function saveState() {
     accountCodeCooldownUntil: state.accountCodeCooldownUntil,
     themeColor: accountData.themeColor
   }));
+  if (!options.skipCloud) queueCloudSave();
 }
 
-function setState(patch) {
+function setState(patch, options = {}) {
   state = { ...state, ...patch };
-  saveState();
+  saveState(options);
   render();
 }
 
@@ -1474,10 +1483,10 @@ function pageSync() {
     ${topbar("数据同步设置", true)}
     <main class="content page-fresh">
       <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">同步</p><h2>${state.syncEnabled ? "已开启同步" : "本地保存"}</h2><p>当前版本先记录同步开关状态，后续可接入云端服务。</p></div>
+        <div><p class="eyebrow dark">同步</p><h2>${state.loggedInPhone ? "已开启云端同步" : "登录后同步"}</h2><p>登录账号后，档案、繁殖、账本和空间资料会保存到云端，同一账号可在不同设备查看。</p></div>
       </section>
       <section class="fresh-card settings-card">
-        <button class="mine-row sync-toggle" data-toggle-sync><span>⇄</span><strong>${state.syncEnabled ? "关闭数据同步" : "开启数据同步"}</strong><span>›</span></button>
+        <button class="mine-row sync-toggle" data-toggle-sync><span>⇄</span><strong>${state.syncEnabled ? "立即同步到云端" : "开启数据同步"}</strong><span>›</span></button>
       </section>
     </main>
     ${bottomNav()}
@@ -1740,9 +1749,10 @@ function bindEvents() {
   document.querySelector("[data-toggle-sync]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
     setState({
-      syncEnabled: !state.syncEnabled,
-      activityLogs: logActivity(`${state.syncEnabled ? "关闭" : "开启"}数据同步设置`, "空间")
+      syncEnabled: true,
+      activityLogs: logActivity("手动同步数据到云端", "空间")
     });
+    pushCloudDataNow(true).then(() => toast("已同步到云端")).catch(() => toast("同步失败，请稍后再试"));
   });
 }
 
@@ -1787,6 +1797,18 @@ async function submitAccount(event) {
   if (password.length < 6) return toast("密码至少需要 6 位");
 
   if (mode === "login") {
+    if (CONFIGURED_SMS_BACKEND) {
+      try {
+        const result = await apiPost("/api/account/login", { phone, password });
+        if (!result.user) throw new Error("登录失败，请稍后重试");
+        applyCloudUser(result.user, `手机号登录：${maskPhone(phone)}`);
+        toast("登录成功，云端数据已同步");
+        return;
+      } catch (error) {
+        toast(error.message || "手机号或密码不正确");
+        return;
+      }
+    }
     const user = (state.registeredUsers || []).find(item => item.phone === phone && item.password === password);
     if (!user) return toast("手机号或密码不正确");
     const accountData = normalizeAccountData(user.data || {});
@@ -1808,10 +1830,32 @@ async function submitAccount(event) {
   const code = String(form.get("code") || "").trim();
   if (!confirmPassword) return toast("请先填写核对密码");
   if (password !== confirmPassword) return toast("密码不一致");
-  if ((state.registeredUsers || []).some(item => item.phone === phone)) return toast("手机号已注册，请直接登录");
+  if (!CONFIGURED_SMS_BACKEND && (state.registeredUsers || []).some(item => item.phone === phone)) return toast("手机号已注册，请直接登录");
   if (!state.pendingAuthCode || state.pendingAuthPhone !== phone) return toast("请先获取验证码");
   if (Date.now() > Number(state.authCodeExpiresAt || 0)) return toast("验证码已过期，请重新获取");
   if (!(await verifyServerSmsCode(phone, code))) return toast("验证码不正确");
+
+  if (CONFIGURED_SMS_BACKEND) {
+    try {
+      const localAccount = (state.registeredUsers || []).find(item => item.phone === phone);
+      const initialCloudData = normalizeAccountData(
+        localAccount?.data || (state.loggedInPhone === phone ? accountDataSnapshot(state) : emptyAccountData())
+      );
+      const result = await apiPost("/api/account/register", {
+        phone,
+        password,
+        accountName: maskPhone(phone),
+        data: initialCloudData
+      });
+      if (!result.user) throw new Error("注册失败，请稍后重试");
+      applyCloudUser(result.user, `注册并登录：${maskPhone(phone)}`);
+      toast("注册成功，已登录并开启云端同步");
+      return;
+    } catch (error) {
+      toast(error.message || "注册失败，请稍后重试");
+      return;
+    }
+  }
 
   const accountData = emptyAccountData();
   const user = { id: crypto.randomUUID(), phone, password, accountName: maskPhone(phone), accountAvatar: "", data: accountData, createdAt: new Date().toISOString() };
@@ -1845,7 +1889,7 @@ async function sendAccountCode() {
   if (password.length < 6) return toast("请先创建至少 6 位密码");
   if (!confirmPassword) return toast("请先填写核对密码");
   if (password !== confirmPassword) return toast("密码不一致");
-  if ((state.registeredUsers || []).some(item => item.phone === phone)) return toast("手机号已注册，请直接登录");
+  if (!CONFIGURED_SMS_BACKEND && (state.registeredUsers || []).some(item => item.phone === phone)) return toast("手机号已注册，请直接登录");
   if (hasSmsBackend()) {
     try {
       const result = await apiPost("/api/sms/send", { phone, purpose: "register" });
@@ -1971,8 +2015,98 @@ async function apiPost(path, payload) {
   return data;
 }
 
+function currentCloudToken() {
+  const activeUser = (state.registeredUsers || []).find(user => user.phone === state.loggedInPhone);
+  return state.cloudToken || activeUser?.cloudToken || "";
+}
+
+function cloudUserToLocal(user, fallbackToken = "") {
+  const phone = String(user.phone || "");
+  return {
+    id: user.id || phone || crypto.randomUUID(),
+    phone,
+    password: "",
+    accountName: user.accountName || maskPhone(phone),
+    accountAvatar: user.accountAvatar || "",
+    cloudToken: user.token || fallbackToken || "",
+    data: normalizeAccountData(user.data || {}),
+    createdAt: user.createdAt || new Date().toISOString()
+  };
+}
+
+function applyCloudUser(user, activityText = "", options = {}) {
+  const localUser = cloudUserToLocal(user, currentCloudToken());
+  const accountData = normalizeAccountData(localUser.data || {});
+  const activityLogs = activityText
+    ? [makeActivity(activityText, "空间"), ...(accountData.activityLogs || [])]
+    : accountData.activityLogs;
+  setState({
+    ...accountData,
+    activityLogs,
+    registeredUsers: [localUser, ...(state.registeredUsers || []).filter(item => item.phone !== localUser.phone)],
+    loggedInPhone: localUser.phone,
+    cloudToken: localUser.cloudToken,
+    accountName: localUser.accountName,
+    accountAvatar: localUser.accountAvatar,
+    accountDraftPhone: "",
+    accountDraftPassword: "",
+    accountDraftConfirmPassword: "",
+    pendingAuthCode: "",
+    pendingAuthPhone: "",
+    authCodeExpiresAt: "",
+    accountCodeCooldownUntil: "",
+    page: "mine"
+  }, options);
+}
+
+function queueCloudSave() {
+  if (!CONFIGURED_SMS_BACKEND || !state.loggedInPhone || !currentCloudToken()) return;
+  if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(pushCloudDataNow, CLOUD_SYNC_DEBOUNCE_MS);
+}
+
+async function pushCloudDataNow(throwOnError = false) {
+  if (!CONFIGURED_SMS_BACKEND || !state.loggedInPhone || !currentCloudToken()) return;
+  if (cloudSyncInFlight) {
+    cloudSyncQueued = true;
+    return;
+  }
+  cloudSyncInFlight = true;
+  try {
+    await apiPost("/api/account/save", {
+      phone: state.loggedInPhone,
+      token: currentCloudToken(),
+      accountName: state.accountName,
+      accountAvatar: state.accountAvatar,
+      data: accountDataSnapshot(state)
+    });
+  } catch (error) {
+    console.warn(error.message || "云端同步失败");
+    if (throwOnError) throw error;
+  } finally {
+    cloudSyncInFlight = false;
+    if (cloudSyncQueued) {
+      cloudSyncQueued = false;
+      queueCloudSave();
+    }
+  }
+}
+
+async function refreshCloudAccountFromServer() {
+  if (!CONFIGURED_SMS_BACKEND || !state.loggedInPhone || !currentCloudToken()) return;
+  try {
+    const result = await apiPost("/api/account/load", {
+      phone: state.loggedInPhone,
+      token: currentCloudToken()
+    });
+    if (result.user) applyCloudUser(result.user, "", { skipCloud: true });
+  } catch (error) {
+    console.warn(error.message || "云端数据读取失败");
+  }
+}
+
 async function verifyServerSmsCode(phone, code) {
-  if (state.pendingAuthCode !== SERVER_SMS_CODE) return CONFIGURED_SMS_BACKEND ? false : code === state.pendingAuthCode;
+  if (!CONFIGURED_SMS_BACKEND && state.pendingAuthCode !== SERVER_SMS_CODE) return code === state.pendingAuthCode;
   try {
     const result = await apiPost("/api/sms/verify", { phone, code });
     return Boolean(result.ok);
@@ -2447,3 +2581,4 @@ function toast(text) {
 }
 
 render();
+refreshCloudAccountFromServer();

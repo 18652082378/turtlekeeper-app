@@ -27,7 +27,10 @@ loadEnvFile(path.resolve(__dirname, ".env"));
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
 const STATIC_ROOT = path.resolve(__dirname, "..");
+const DATA_DIR = path.resolve(__dirname, "data");
+const DATA_FILE = path.resolve(DATA_DIR, "app-data.json");
 const smsCodes = new Map();
+const verifiedPhones = new Map();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -55,7 +58,7 @@ function readJson(req) {
     let raw = "";
     req.on("data", chunk => {
       raw += chunk;
-      if (raw.length > 1024 * 1024) reject(new Error("请求内容过大"));
+      if (raw.length > 25 * 1024 * 1024) reject(new Error("请求内容过大"));
     });
     req.on("end", () => {
       try {
@@ -66,6 +69,111 @@ function readJson(req) {
     });
     req.on("error", reject);
   });
+}
+
+function emptyAccountData() {
+  return {
+    turtles: [],
+    keptSpecies: [],
+    memos: [],
+    ledgerRecords: [],
+    breedingRecords: [],
+    satisfactionRating: 5,
+    satisfactionReviews: [],
+    feedbackItems: [],
+    syncEnabled: true,
+    activityLogs: [],
+    themeColor: "teal"
+  };
+}
+
+function normalizeAccountData(data = {}) {
+  const next = { ...emptyAccountData(), ...(data || {}) };
+  return {
+    turtles: Array.isArray(next.turtles) ? next.turtles : [],
+    keptSpecies: Array.isArray(next.keptSpecies) ? next.keptSpecies : [],
+    memos: Array.isArray(next.memos) ? next.memos : [],
+    ledgerRecords: Array.isArray(next.ledgerRecords) ? next.ledgerRecords : [],
+    breedingRecords: Array.isArray(next.breedingRecords) ? next.breedingRecords : [],
+    satisfactionRating: Number(next.satisfactionRating || 5),
+    satisfactionReviews: Array.isArray(next.satisfactionReviews) ? next.satisfactionReviews : [],
+    feedbackItems: Array.isArray(next.feedbackItems) ? next.feedbackItems : [],
+    syncEnabled: Boolean(next.syncEnabled),
+    activityLogs: Array.isArray(next.activityLogs) ? next.activityLogs : [],
+    themeColor: next.themeColor || "teal"
+  };
+}
+
+function readDatabase() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) return { users: {} };
+    const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    return data && typeof data === "object" ? { users: data.users || {} } : { users: {} };
+  } catch {
+    return { users: {} };
+  }
+}
+
+function writeDatabase(db) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tempFile = `${DATA_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tempFile, JSON.stringify(db, null, 2), "utf8");
+  fs.renameSync(tempFile, DATA_FILE);
+}
+
+function hashValue(value) {
+  return crypto.createHash("sha256").update(String(value)).digest("hex");
+}
+
+function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
+  const hash = crypto.scryptSync(String(password), salt, 64).toString("hex");
+  return { salt, hash };
+}
+
+function verifyPassword(password, user) {
+  if (!user?.passwordSalt || !user?.passwordHash) return false;
+  const { hash } = hashPassword(password, user.passwordSalt);
+  return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(user.passwordHash, "hex"));
+}
+
+function makeAuthToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function rememberVerifiedPhone(phone) {
+  verifiedPhones.set(phone, Date.now() + 10 * 60 * 1000);
+}
+
+function hasVerifiedPhone(phone) {
+  const expiresAt = verifiedPhones.get(phone);
+  if (!expiresAt) return false;
+  if (Date.now() > expiresAt) {
+    verifiedPhones.delete(phone);
+    return false;
+  }
+  return true;
+}
+
+function publicUser(user, token = "") {
+  return {
+    phone: user.phone,
+    accountName: user.accountName || maskPhone(user.phone),
+    accountAvatar: user.accountAvatar || "",
+    data: normalizeAccountData(user.data || {}),
+    token
+  };
+}
+
+function maskPhone(phone) {
+  return phone ? `${phone.slice(0, 3)}****${phone.slice(7)}` : "未登录用户";
+}
+
+function authenticate(db, phone, token) {
+  const user = db.users[phone];
+  if (!user || !token) return null;
+  const tokenHash = hashValue(token);
+  const tokens = Array.isArray(user.tokens) ? user.tokens : [];
+  return tokens.some(item => item.hash === tokenHash) ? user : null;
 }
 
 function validPhone(phone) {
@@ -228,6 +336,10 @@ async function handleSendSms(req, res) {
   const body = await readJson(req);
   const phone = String(body.phone || "").trim();
   if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
+  if (body.purpose === "register") {
+    const db = readDatabase();
+    if (db.users[phone]) return sendJson(res, 409, { ok: false, message: "手机号已注册，请直接登录" });
+  }
   const previous = smsCodes.get(phone);
   if (previous && Date.now() - previous.lastSentAt < 60 * 1000) {
     return sendJson(res, 429, { ok: false, message: "验证码发送太频繁，请稍后再试" });
@@ -260,6 +372,7 @@ async function handleVerifySms(req, res) {
     const passed = await checkAliyunPnvsSms(phone, code);
     if (!passed) return sendJson(res, 400, { ok: false, message: "验证码不正确" });
     smsCodes.delete(phone);
+    rememberVerifiedPhone(phone);
     return sendJson(res, 200, { ok: true });
   }
 
@@ -271,7 +384,83 @@ async function handleVerifySms(req, res) {
   }
   if (item.code !== code) return sendJson(res, 400, { ok: false, message: "验证码不正确" });
   smsCodes.delete(phone);
+  rememberVerifiedPhone(phone);
   return sendJson(res, 200, { ok: true });
+}
+
+async function handleRegister(req, res) {
+  const body = await readJson(req);
+  const phone = String(body.phone || "").trim();
+  const password = String(body.password || "");
+  if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
+  if (password.length < 6) return sendJson(res, 400, { ok: false, message: "密码至少需要 6 位" });
+  if (!hasVerifiedPhone(phone)) return sendJson(res, 400, { ok: false, message: "请先完成短信验证码核对" });
+
+  const db = readDatabase();
+  if (db.users[phone]) return sendJson(res, 409, { ok: false, message: "手机号已注册，请直接登录" });
+
+  const passwordInfo = hashPassword(password);
+  const token = makeAuthToken();
+  const now = new Date().toISOString();
+  const user = {
+    id: crypto.randomUUID(),
+    phone,
+    passwordSalt: passwordInfo.salt,
+    passwordHash: passwordInfo.hash,
+    accountName: String(body.accountName || "").trim() || maskPhone(phone),
+    accountAvatar: "",
+    data: normalizeAccountData(body.data || {}),
+    tokens: [{ hash: hashValue(token), createdAt: now }],
+    createdAt: now,
+    updatedAt: now
+  };
+  db.users[phone] = user;
+  writeDatabase(db);
+  verifiedPhones.delete(phone);
+  return sendJson(res, 200, { ok: true, user: publicUser(user, token) });
+}
+
+async function handleLogin(req, res) {
+  const body = await readJson(req);
+  const phone = String(body.phone || "").trim();
+  const password = String(body.password || "");
+  if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
+  const db = readDatabase();
+  const user = db.users[phone];
+  if (!user || !verifyPassword(password, user)) {
+    return sendJson(res, 401, { ok: false, message: "手机号或密码不正确" });
+  }
+  const token = makeAuthToken();
+  const now = new Date().toISOString();
+  user.tokens = [...(Array.isArray(user.tokens) ? user.tokens : []), { hash: hashValue(token), createdAt: now }].slice(-5);
+  user.updatedAt = now;
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, user: publicUser(user, token) });
+}
+
+async function handleLoadAccount(req, res) {
+  const body = await readJson(req);
+  const phone = String(body.phone || "").trim();
+  const token = String(body.token || "");
+  const db = readDatabase();
+  const user = authenticate(db, phone, token);
+  if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
+  return sendJson(res, 200, { ok: true, user: publicUser(user, token) });
+}
+
+async function handleSaveAccount(req, res) {
+  const body = await readJson(req);
+  const phone = String(body.phone || "").trim();
+  const token = String(body.token || "");
+  const db = readDatabase();
+  const user = authenticate(db, phone, token);
+  if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
+  user.accountName = String(body.accountName || "").trim() || user.accountName || maskPhone(phone);
+  user.accountAvatar = String(body.accountAvatar || "");
+  user.data = normalizeAccountData(body.data || {});
+  user.updatedAt = new Date().toISOString();
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, user: publicUser(user, token) });
 }
 
 function serveStatic(req, res, url) {
@@ -300,6 +489,10 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "POST" && url.pathname === "/api/sms/send") return await handleSendSms(req, res);
     if (req.method === "POST" && url.pathname === "/api/sms/verify") return await handleVerifySms(req, res);
+    if (req.method === "POST" && url.pathname === "/api/account/register") return await handleRegister(req, res);
+    if (req.method === "POST" && url.pathname === "/api/account/login") return await handleLogin(req, res);
+    if (req.method === "POST" && url.pathname === "/api/account/load") return await handleLoadAccount(req, res);
+    if (req.method === "POST" && url.pathname === "/api/account/save") return await handleSaveAccount(req, res);
     if (req.method === "GET") return serveStatic(req, res, url);
     return sendJson(res, 405, { ok: false, message: "方法不支持" });
   } catch (error) {
