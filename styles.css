@@ -4737,3 +4737,76 @@ html[data-theme-color="dark"] .topbar {
 html[data-theme-color="dark"] .bottom-nav {
   background: rgba(17, 17, 17, .96) !important;
 }
+
+/* WeChat/iOS tab bar: one continuous plate through the Home Indicator area. */
+.phone-shell {
+  --wechat-tabbar-bg: rgba(247, 247, 247, .96);
+  --wechat-tabbar-border: rgba(31, 42, 51, .10);
+  --wechat-tabbar-text: #7f8c94;
+  --wechat-tabbar-active: #07c160;
+  --fixed-tabbar-content-height: 54px;
+  --fixed-tabbar-safe: max(env(safe-area-inset-bottom), 14px);
+  --fixed-tabbar-height: calc(var(--fixed-tabbar-content-height) + var(--fixed-tabbar-safe));
+}
+
+.bottom-nav {
+  height: var(--fixed-tabbar-height) !important;
+  padding: 0 0 var(--fixed-tabbar-safe) !important;
+  background: var(--wechat-tabbar-bg) !important;
+  border-top: 1px solid var(--wechat-tabbar-border) !important;
+  box-shadow: 0 -1px 0 rgba(31, 42, 51, .03) !important;
+  backdrop-filter: blur(22px) saturate(1.35) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(1.35) !important;
+  overflow: hidden !important;
+}
+
+.bottom-nav button {
+  min-height: var(--fixed-tabbar-content-height) !important;
+  height: var(--fixed-tabbar-content-height) !important;
+  padding: 4px 0 0 !important;
+  display: grid !important;
+  align-content: center !important;
+  justify-items: center !important;
+  gap: 1px !important;
+  background: transparent !important;
+  color: var(--wechat-tabbar-text) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 1.15 !important;
+}
+
+.bottom-nav button span {
+  width: auto !important;
+  height: auto !important;
+  margin: 0 !important;
+  display: block !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: inherit !important;
+  font-size: 24px !important;
+  line-height: 1 !important;
+}
+
+.bottom-nav button.active,
+.bottom-nav button.active span {
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--wechat-tabbar-active) !important;
+}
+
+.content {
+  padding-bottom: calc(var(--fixed-tabbar-height) + 14px) !important;
+}
+
+html[data-theme-color="dark"] .phone-shell {
+  --wechat-tabbar-bg: rgba(29, 29, 29, .96);
+  --wechat-tabbar-border: rgba(255, 255, 255, .10);
+  --wechat-tabbar-text: #d1d1d6;
+  --wechat-tabbar-active: #07c160;
+}
+
+html[data-theme-color="dark"] .bottom-nav {
+  background: var(--wechat-tabbar-bg) !important;
+  border-top-color: var(--wechat-tabbar-border) !important;
+}
