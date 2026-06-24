@@ -29,6 +29,7 @@ const HOST = process.env.HOST || "127.0.0.1";
 const STATIC_ROOT = path.resolve(__dirname, "..");
 const DATA_DIR = path.resolve(__dirname, "data");
 const DATA_FILE = path.resolve(DATA_DIR, "app-data.json");
+const REVIEW_ADMIN_PHONE = "18652082378";
 const smsCodes = new Map();
 const verifiedPhones = new Map();
 
@@ -106,11 +107,13 @@ function normalizeAccountData(data = {}) {
 
 function readDatabase() {
   try {
-    if (!fs.existsSync(DATA_FILE)) return { users: {} };
+    if (!fs.existsSync(DATA_FILE)) return { users: {}, reviews: [] };
     const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-    return data && typeof data === "object" ? { users: data.users || {} } : { users: {} };
+    return data && typeof data === "object"
+      ? { users: data.users || {}, reviews: Array.isArray(data.reviews) ? data.reviews : [] }
+      : { users: {}, reviews: [] };
   } catch {
-    return { users: {} };
+    return { users: {}, reviews: [] };
   }
 }
 
@@ -463,6 +466,127 @@ async function handleSaveAccount(req, res) {
   return sendJson(res, 200, { ok: true, user: publicUser(user, token) });
 }
 
+function trimPublicText(value, maxLength = 500) {
+  return String(value || "").trim().slice(0, maxLength);
+}
+
+function publicReviewAuthor(user) {
+  return {
+    name: user.accountName || maskPhone(user.phone),
+    phone: maskPhone(user.phone)
+  };
+}
+
+function publicReviews(db) {
+  return (Array.isArray(db.reviews) ? db.reviews : []).map(review => ({
+    id: review.id,
+    rating: Number(review.rating || 5),
+    comment: review.comment || "",
+    authorName: review.authorName || "壳友",
+    authorPhone: review.authorPhone || "",
+    createdAt: review.createdAt,
+    comments: (Array.isArray(review.comments) ? review.comments : []).map(item => ({
+      id: item.id,
+      content: item.content || "",
+      authorName: item.authorName || "壳友",
+      authorPhone: item.authorPhone || "",
+      createdAt: item.createdAt
+    }))
+  }));
+}
+
+function requireReviewUser(db, body, res) {
+  const phone = String(body.phone || "").trim();
+  const token = String(body.token || "");
+  const user = authenticate(db, phone, token);
+  if (!user) {
+    sendJson(res, 401, { ok: false, message: "请先登录账号" });
+    return null;
+  }
+  return user;
+}
+
+async function handleListReviews(req, res) {
+  const db = readDatabase();
+  return sendJson(res, 200, { ok: true, reviews: publicReviews(db) });
+}
+
+async function handleCreateReview(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const rating = Math.max(1, Math.min(5, Number(body.rating || 5)));
+  const comment = trimPublicText(body.comment, 800);
+  if (!comment) return sendJson(res, 400, { ok: false, message: "请填写评价内容" });
+  const author = publicReviewAuthor(user);
+  const review = {
+    id: crypto.randomUUID(),
+    rating,
+    comment,
+    authorName: author.name,
+    authorPhone: author.phone,
+    comments: [],
+    createdAt: new Date().toISOString()
+  };
+  db.reviews = [review, ...(Array.isArray(db.reviews) ? db.reviews : [])];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, review, reviews: publicReviews(db) });
+}
+
+async function handleCreateReviewComment(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const reviewId = String(body.reviewId || "");
+  const content = trimPublicText(body.content, 500);
+  if (!content) return sendJson(res, 400, { ok: false, message: "请填写评论内容" });
+  const reviews = Array.isArray(db.reviews) ? db.reviews : [];
+  const review = reviews.find(item => item.id === reviewId);
+  if (!review) return sendJson(res, 404, { ok: false, message: "评价不存在" });
+  const author = publicReviewAuthor(user);
+  review.comments = [
+    {
+      id: crypto.randomUUID(),
+      content,
+      authorName: author.name,
+      authorPhone: author.phone,
+      createdAt: new Date().toISOString()
+    },
+    ...(Array.isArray(review.comments) ? review.comments : [])
+  ];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, reviews: publicReviews(db) });
+}
+
+async function handleDeleteReview(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (user.phone !== REVIEW_ADMIN_PHONE) return sendJson(res, 403, { ok: false, message: "只有管理员可以删除" });
+  const reviewId = String(body.reviewId || "");
+  db.reviews = (Array.isArray(db.reviews) ? db.reviews : []).filter(item => item.id !== reviewId);
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, reviews: publicReviews(db) });
+}
+
+async function handleDeleteReviewComment(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (user.phone !== REVIEW_ADMIN_PHONE) return sendJson(res, 403, { ok: false, message: "只有管理员可以删除" });
+  const reviewId = String(body.reviewId || "");
+  const commentId = String(body.commentId || "");
+  const review = (Array.isArray(db.reviews) ? db.reviews : []).find(item => item.id === reviewId);
+  if (!review) return sendJson(res, 404, { ok: false, message: "评价不存在" });
+  review.comments = (Array.isArray(review.comments) ? review.comments : []).filter(item => item.id !== commentId);
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, reviews: publicReviews(db) });
+}
+
 function serveStatic(req, res, url) {
   const pathname = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
   const target = path.resolve(STATIC_ROOT, `.${pathname}`);
@@ -493,6 +617,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/account/login") return await handleLogin(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/load") return await handleLoadAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/save") return await handleSaveAccount(req, res);
+    if (req.method === "POST" && url.pathname === "/api/reviews/list") return await handleListReviews(req, res);
+    if (req.method === "POST" && url.pathname === "/api/reviews/create") return await handleCreateReview(req, res);
+    if (req.method === "POST" && url.pathname === "/api/reviews/comment") return await handleCreateReviewComment(req, res);
+    if (req.method === "POST" && url.pathname === "/api/reviews/delete") return await handleDeleteReview(req, res);
+    if (req.method === "POST" && url.pathname === "/api/reviews/comment/delete") return await handleDeleteReviewComment(req, res);
     if (req.method === "GET") return serveStatic(req, res, url);
     return sendJson(res, 405, { ok: false, message: "方法不支持" });
   } catch (error) {

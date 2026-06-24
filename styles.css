@@ -2977,6 +2977,84 @@ textarea {
   line-height: 1.6;
 }
 
+.public-review {
+  display: grid;
+  gap: 10px;
+}
+
+.review-head,
+.review-comment {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-stars {
+  display: inline-block;
+  letter-spacing: 1px;
+}
+
+.review-author,
+.review-empty-comment {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.review-comments {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--divider);
+}
+
+.review-comments-title {
+  margin-bottom: 8px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.review-comment {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.review-comment:last-of-type {
+  border-bottom: 0;
+}
+
+.review-comment strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.review-comment p {
+  margin: 4px 0;
+  color: var(--text);
+}
+
+.review-comment-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.review-comment-form .secondary {
+  min-height: 44px;
+}
+
+.review-delete,
+.comment-delete {
+  flex: 0 0 auto;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
 .auth-tabs {
   margin-bottom: 12px;
 }
@@ -3720,6 +3798,18 @@ html[data-theme-color="dark"] .auth-code-hint {
 html[data-theme-color="dark"] .rating-star.active {
   background: #2b2b2b !important;
   color: #e7e7e7 !important;
+}
+
+html[data-theme-color="dark"] .review-comments,
+html[data-theme-color="dark"] .review-comment {
+  border-color: #242424 !important;
+}
+
+html[data-theme-color="dark"] .review-delete,
+html[data-theme-color="dark"] .comment-delete {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
 }
 
 html[data-theme-color="dark"] .avatar,

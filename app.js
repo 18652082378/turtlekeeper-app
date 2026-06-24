@@ -3,6 +3,7 @@ const STORAGE = "turtlekeeper-state-v1";
 const SERVER_SMS_CODE = "__SERVER_SMS__";
 const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
 const CLOUD_SYNC_DEBOUNCE_MS = 900;
+const REVIEW_ADMIN_PHONE = "18652082378";
 const defaultPhoto = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
   <rect width="240" height="240" rx="28" fill="#edf7f1"/>
@@ -65,6 +66,7 @@ const initialState = {
   breedingRecords: [],
   satisfactionRating: 5,
   satisfactionReviews: [],
+  publicReviews: [],
   feedbackItems: [],
   accountName: "未登录用户",
   accountAvatar: "",
@@ -152,6 +154,8 @@ let accountCooldownTimer = null;
 let cloudSyncTimer = null;
 let cloudSyncInFlight = false;
 let cloudSyncQueued = false;
+let publicReviewsLoading = false;
+let publicReviewsLastLoadedAt = 0;
 
 if (CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE) {
   state = { ...state, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" };
@@ -204,6 +208,7 @@ function normalizeState(next) {
   };
   return {
     ...base,
+    publicReviews: Array.isArray(base.publicReviews) ? base.publicReviews : [],
     formGender: cleanText(base.formGender),
     turtles: (base.turtles || []).map(t => ({
       ...t,
@@ -502,6 +507,20 @@ function formatTime(value) {
 function formatDate(value) {
   if (!value) return new Date().toISOString().slice(0, 10);
   return new Date(value).toISOString().slice(0, 10);
+}
+
+function escapeHtml(value = "") {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function ratingStars(value) {
+  const rating = Math.max(0, Math.min(5, Number(value || 0)));
+  return `${"★".repeat(rating)}${"☆".repeat(5 - rating)}`;
 }
 
 function money(value) {
@@ -1396,6 +1415,60 @@ function pageSatisfaction() {
   `;
 }
 
+function pagePublicSatisfaction() {
+  const reviews = CONFIGURED_SMS_BACKEND ? (state.publicReviews || []) : (state.satisfactionReviews || []);
+  const isAdmin = state.loggedInPhone === REVIEW_ADMIN_PHONE;
+  return `
+    ${topbar("满意度调查", true)}
+    <main class="content page-fresh">
+      <section class="page-intro compact-intro">
+        <div><p class="eyebrow dark">体验评分</p><h2>给壳友手账打个分</h2><p>评价会进入公共历史评价，所有用户都可以看到并参与评论。</p></div>
+      </section>
+      <form class="fresh-card survey-form" id="satisfactionForm">
+        <div class="settings-title">软件满意度</div>
+        <div class="rating-row">
+          ${[1, 2, 3, 4, 5].map(score => `<button type="button" class="rating-star ${state.satisfactionRating >= score ? "active" : ""}" data-rating="${score}">★</button>`).join("")}
+        </div>
+        <input type="hidden" name="rating" value="${state.satisfactionRating}">
+        <label class="survey-field"><span>评价内容</span><textarea name="comment" required placeholder="写下你觉得好用、不顺手、希望新增的功能"></textarea></label>
+        <button class="primary" type="submit">提交评价</button>
+      </form>
+      <section class="section-title"><span>历史评价</span><small>${reviews.length} 条</small></section>
+      ${reviews.map(item => `
+        <article class="fresh-card survey-record public-review">
+          <div class="review-head">
+            <div>
+              <strong class="review-stars">${ratingStars(item.rating)}</strong>
+              <p class="review-author">${escapeHtml(item.authorName || "壳友")} · ${escapeHtml(item.authorPhone || "")}</p>
+            </div>
+            ${isAdmin ? `<button class="danger-link review-delete" type="button" data-delete-review="${item.id}">删除</button>` : ""}
+          </div>
+          <p>${escapeHtml(item.comment)}</p>
+          <small>${formatTime(item.createdAt)}</small>
+          <div class="review-comments">
+            <div class="review-comments-title">评论 ${Array.isArray(item.comments) ? item.comments.length : 0}</div>
+            ${(item.comments || []).map(comment => `
+              <div class="review-comment">
+                <div>
+                  <strong>${escapeHtml(comment.authorName || "壳友")}</strong>
+                  <p>${escapeHtml(comment.content)}</p>
+                  <small>${formatTime(comment.createdAt)}</small>
+                </div>
+                ${isAdmin ? `<button class="danger-link comment-delete" type="button" data-delete-review-comment="${item.id}:${comment.id}">删除</button>` : ""}
+              </div>
+            `).join("") || `<p class="muted review-empty-comment">还没有评论</p>`}
+            <form class="review-comment-form" data-review-comment-form data-review-id="${item.id}">
+              <input class="field" name="content" placeholder="写一条评论" maxlength="500">
+              <button class="secondary" type="submit">评论</button>
+            </form>
+          </div>
+        </article>
+      `).join("") || `<div class="empty small-empty"><div><strong>还没有评价</strong><br>提交后会显示在这里</div></div>`}
+    </main>
+    ${bottomNav()}
+  `;
+}
+
 function pageFeedback() {
   const items = state.feedbackItems || [];
   return `
@@ -1527,7 +1600,7 @@ function render() {
     ledgerDetail: pageLedgerDetail,
     calendar: pageCalendar,
     mine: pageMine,
-    satisfaction: pageSatisfaction,
+    satisfaction: pagePublicSatisfaction,
     feedback: pageFeedback,
     account: pageAccount,
     sync: pageSync,
@@ -1540,6 +1613,7 @@ function render() {
   bindEvents();
   hydrateSpeciesImages();
   startAccountCodeCooldownTimer();
+  if (state.page === "satisfaction") refreshPublicReviews();
 }
 
 function accountCodeCooldownRemaining() {
@@ -1731,7 +1805,13 @@ function bindEvents() {
     if (!requireLogin()) return;
     setState({ satisfactionRating: Number(btn.dataset.rating) });
   }));
-  document.querySelector("#satisfactionForm")?.addEventListener("submit", submitSatisfaction);
+  document.querySelector("#satisfactionForm")?.addEventListener("submit", submitPublicSatisfaction);
+  document.querySelectorAll("[data-review-comment-form]").forEach(form => form.addEventListener("submit", submitReviewComment));
+  document.querySelectorAll("[data-delete-review]").forEach(btn => btn.addEventListener("click", () => deletePublicReview(btn.dataset.deleteReview)));
+  document.querySelectorAll("[data-delete-review-comment]").forEach(btn => btn.addEventListener("click", () => {
+    const [reviewId, commentId] = btn.dataset.deleteReviewComment.split(":");
+    deletePublicReviewComment(reviewId, commentId);
+  }));
   document.querySelector("#feedbackForm")?.addEventListener("submit", submitFeedback);
   document.querySelector("#accountForm")?.addEventListener("submit", submitAccount);
   document.querySelectorAll("[data-account-mode]").forEach(btn => btn.addEventListener("click", () => setState({ accountMode: btn.dataset.accountMode, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" })));
@@ -1754,6 +1834,111 @@ function bindEvents() {
     });
     pushCloudDataNow(true).then(() => toast("已同步到云端")).catch(() => toast("同步失败，请稍后再试"));
   });
+}
+
+function reviewAuthPayload(extra = {}) {
+  return {
+    phone: state.loggedInPhone,
+    token: currentCloudToken(),
+    ...extra
+  };
+}
+
+function canUsePublicReviews() {
+  if (!CONFIGURED_SMS_BACKEND) {
+    toast("公共评价需要连接云端服务");
+    return false;
+  }
+  if (!requireLogin()) return false;
+  if (!currentCloudToken()) {
+    toast("请重新登录账号");
+    return false;
+  }
+  return true;
+}
+
+async function refreshPublicReviews(force = false) {
+  if (!CONFIGURED_SMS_BACKEND || publicReviewsLoading) return;
+  if (!force && Date.now() - publicReviewsLastLoadedAt < 10000 && (state.publicReviews || []).length) return;
+  publicReviewsLoading = true;
+  try {
+    const result = await apiPost("/api/reviews/list", {});
+    publicReviewsLastLoadedAt = Date.now();
+    setState({ publicReviews: Array.isArray(result.reviews) ? result.reviews : [] }, { skipCloud: true });
+  } catch (error) {
+    console.warn(error.message || "公共评价读取失败");
+  } finally {
+    publicReviewsLoading = false;
+  }
+}
+
+async function submitPublicSatisfaction(event) {
+  if (!CONFIGURED_SMS_BACKEND) return submitSatisfaction(event);
+  event.preventDefault();
+  if (!canUsePublicReviews()) return;
+  const form = new FormData(event.currentTarget);
+  const comment = String(form.get("comment") || "").trim();
+  const rating = Number(form.get("rating") || state.satisfactionRating || 5);
+  if (!comment) return toast("请填写评价内容");
+  try {
+    const result = await apiPost("/api/reviews/create", reviewAuthPayload({ rating, comment }));
+    publicReviewsLastLoadedAt = Date.now();
+    setState({
+      publicReviews: Array.isArray(result.reviews) ? result.reviews : state.publicReviews,
+      activityLogs: logActivity(`提交满意度评价：${rating} 分`, "空间")
+    });
+    toast("评价已提交");
+  } catch (error) {
+    toast(error.message || "评价提交失败");
+  }
+}
+
+async function submitReviewComment(event) {
+  event.preventDefault();
+  if (!canUsePublicReviews()) return;
+  const reviewId = event.currentTarget.dataset.reviewId;
+  const form = new FormData(event.currentTarget);
+  const content = String(form.get("content") || "").trim();
+  if (!content) return toast("请填写评论内容");
+  try {
+    const result = await apiPost("/api/reviews/comment", reviewAuthPayload({ reviewId, content }));
+    publicReviewsLastLoadedAt = Date.now();
+    setState({
+      publicReviews: Array.isArray(result.reviews) ? result.reviews : state.publicReviews,
+      activityLogs: logActivity("评论了一条满意度评价", "空间")
+    });
+    toast("评论已发布");
+  } catch (error) {
+    toast(error.message || "评论失败");
+  }
+}
+
+async function deletePublicReview(reviewId) {
+  if (!canUsePublicReviews()) return;
+  if (state.loggedInPhone !== REVIEW_ADMIN_PHONE) return toast("只有管理员可以删除");
+  if (!confirm("确定删除这条评价和下面的评论吗？")) return;
+  try {
+    const result = await apiPost("/api/reviews/delete", reviewAuthPayload({ reviewId }));
+    publicReviewsLastLoadedAt = Date.now();
+    setState({ publicReviews: Array.isArray(result.reviews) ? result.reviews : state.publicReviews }, { skipCloud: true });
+    toast("评价已删除");
+  } catch (error) {
+    toast(error.message || "删除失败");
+  }
+}
+
+async function deletePublicReviewComment(reviewId, commentId) {
+  if (!canUsePublicReviews()) return;
+  if (state.loggedInPhone !== REVIEW_ADMIN_PHONE) return toast("只有管理员可以删除");
+  if (!confirm("确定删除这条评论吗？")) return;
+  try {
+    const result = await apiPost("/api/reviews/comment/delete", reviewAuthPayload({ reviewId, commentId }));
+    publicReviewsLastLoadedAt = Date.now();
+    setState({ publicReviews: Array.isArray(result.reviews) ? result.reviews : state.publicReviews }, { skipCloud: true });
+    toast("评论已删除");
+  } catch (error) {
+    toast(error.message || "删除失败");
+  }
 }
 
 function submitSatisfaction(event) {
