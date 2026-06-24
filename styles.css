@@ -4740,12 +4740,12 @@ html[data-theme-color="dark"] .bottom-nav {
 
 /* WeChat/iOS tab bar: one continuous plate through the Home Indicator area. */
 .phone-shell {
-  --wechat-tabbar-bg: rgba(247, 247, 247, .96);
+  --wechat-tabbar-bg: rgba(247, 247, 247, .98);
   --wechat-tabbar-border: rgba(31, 42, 51, .10);
   --wechat-tabbar-text: #7f8c94;
   --wechat-tabbar-active: #07c160;
-  --fixed-tabbar-content-height: 54px;
-  --fixed-tabbar-safe: max(env(safe-area-inset-bottom), 14px);
+  --fixed-tabbar-content-height: 60px;
+  --fixed-tabbar-safe: max(env(safe-area-inset-bottom), 18px);
   --fixed-tabbar-height: calc(var(--fixed-tabbar-content-height) + var(--fixed-tabbar-safe));
 }
 
@@ -4763,12 +4763,18 @@ html[data-theme-color="dark"] .bottom-nav {
 .bottom-nav button {
   min-height: var(--fixed-tabbar-content-height) !important;
   height: var(--fixed-tabbar-content-height) !important;
-  padding: 4px 0 0 !important;
+  padding: 7px 0 0 !important;
   display: grid !important;
-  align-content: center !important;
+  align-content: start !important;
   justify-items: center !important;
-  gap: 1px !important;
+  gap: 2px !important;
+  border: 0 !important;
+  outline: 0 !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
   background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
   color: var(--wechat-tabbar-text) !important;
   font-size: 11px !important;
   font-weight: 600 !important;
@@ -4776,27 +4782,43 @@ html[data-theme-color="dark"] .bottom-nav {
 }
 
 .bottom-nav button span {
-  width: auto !important;
-  height: auto !important;
+  width: 32px !important;
+  height: 28px !important;
   margin: 0 !important;
-  display: block !important;
+  padding: 0 !important;
+  display: grid !important;
+  place-items: center !important;
   border-radius: 0 !important;
+  border: 0 !important;
   background: transparent !important;
+  background-image: none !important;
   box-shadow: none !important;
   color: inherit !important;
   font-size: 24px !important;
   line-height: 1 !important;
+  text-shadow: none !important;
 }
 
 .bottom-nav button.active,
 .bottom-nav button.active span {
+  border: 0 !important;
+  border-radius: 0 !important;
   background: transparent !important;
+  background-image: none !important;
   box-shadow: none !important;
+  filter: none !important;
   color: var(--wechat-tabbar-active) !important;
+  -webkit-text-fill-color: var(--wechat-tabbar-active) !important;
+}
+
+.bottom-nav button.active span::before,
+.bottom-nav button.active span::after {
+  display: none !important;
+  content: none !important;
 }
 
 .content {
-  padding-bottom: calc(var(--fixed-tabbar-height) + 14px) !important;
+  padding-bottom: calc(var(--fixed-tabbar-height) + 12px) !important;
 }
 
 html[data-theme-color="dark"] .phone-shell {
