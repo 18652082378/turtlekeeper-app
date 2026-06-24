@@ -107,13 +107,17 @@ function normalizeAccountData(data = {}) {
 
 function readDatabase() {
   try {
-    if (!fs.existsSync(DATA_FILE)) return { users: {}, reviews: [] };
+    if (!fs.existsSync(DATA_FILE)) return { users: {}, reviews: [], feedbacks: [] };
     const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     return data && typeof data === "object"
-      ? { users: data.users || {}, reviews: Array.isArray(data.reviews) ? data.reviews : [] }
-      : { users: {}, reviews: [] };
+      ? {
+          users: data.users || {},
+          reviews: Array.isArray(data.reviews) ? data.reviews : [],
+          feedbacks: Array.isArray(data.feedbacks) ? data.feedbacks : []
+        }
+      : { users: {}, reviews: [], feedbacks: [] };
   } catch {
-    return { users: {}, reviews: [] };
+    return { users: {}, reviews: [], feedbacks: [] };
   }
 }
 
@@ -473,26 +477,38 @@ function trimPublicText(value, maxLength = 500) {
 function publicReviewAuthor(user) {
   return {
     name: user.accountName || maskPhone(user.phone),
-    phone: maskPhone(user.phone)
+    phone: maskPhone(user.phone),
+    avatar: user.accountAvatar || ""
   };
 }
 
-function publicReviews(db) {
-  return (Array.isArray(db.reviews) ? db.reviews : []).map(review => ({
-    id: review.id,
-    rating: Number(review.rating || 5),
-    comment: review.comment || "",
-    authorName: review.authorName || "壳友",
-    authorPhone: review.authorPhone || "",
-    createdAt: review.createdAt,
-    comments: (Array.isArray(review.comments) ? review.comments : []).map(item => ({
-      id: item.id,
-      content: item.content || "",
-      authorName: item.authorName || "壳友",
-      authorPhone: item.authorPhone || "",
-      createdAt: item.createdAt
-    }))
-  }));
+function isAdminUser(user) {
+  return user?.phone === REVIEW_ADMIN_PHONE;
+}
+
+function publicReviews(db, viewer) {
+  const admin = isAdminUser(viewer);
+  return (Array.isArray(db.reviews) ? db.reviews : [])
+    .filter(review => admin || review.authorPhoneRaw === viewer?.phone)
+    .map(review => ({
+      id: review.id,
+      rating: Number(review.rating || 5),
+      comment: review.comment || "",
+      authorName: review.authorName || "壳友",
+      authorPhone: review.authorPhone || "",
+      authorAvatar: review.authorAvatar || "",
+      createdAt: review.createdAt,
+      canDelete: admin || review.authorPhoneRaw === viewer?.phone,
+      comments: (Array.isArray(review.comments) ? review.comments : []).map(item => ({
+        id: item.id,
+        content: item.content || "",
+        authorName: item.authorName || "壳友",
+        authorPhone: item.authorPhone || "",
+        authorAvatar: item.authorAvatar || "",
+        createdAt: item.createdAt,
+        canDelete: admin || item.authorPhoneRaw === viewer?.phone
+      }))
+    }));
 }
 
 function requireReviewUser(db, body, res) {
@@ -507,8 +523,11 @@ function requireReviewUser(db, body, res) {
 }
 
 async function handleListReviews(req, res) {
+  const body = await readJson(req);
   const db = readDatabase();
-  return sendJson(res, 200, { ok: true, reviews: publicReviews(db) });
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  return sendJson(res, 200, { ok: true, reviews: publicReviews(db, user), isAdmin: isAdminUser(user) });
 }
 
 async function handleCreateReview(req, res) {
@@ -526,12 +545,14 @@ async function handleCreateReview(req, res) {
     comment,
     authorName: author.name,
     authorPhone: author.phone,
+    authorPhoneRaw: user.phone,
+    authorAvatar: author.avatar,
     comments: [],
     createdAt: new Date().toISOString()
   };
   db.reviews = [review, ...(Array.isArray(db.reviews) ? db.reviews : [])];
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, review, reviews: publicReviews(db) });
+  return sendJson(res, 200, { ok: true, review, reviews: publicReviews(db, user) });
 }
 
 async function handleCreateReviewComment(req, res) {
@@ -545,6 +566,7 @@ async function handleCreateReviewComment(req, res) {
   const reviews = Array.isArray(db.reviews) ? db.reviews : [];
   const review = reviews.find(item => item.id === reviewId);
   if (!review) return sendJson(res, 404, { ok: false, message: "评价不存在" });
+  if (!isAdminUser(user) && review.authorPhoneRaw !== user.phone) return sendJson(res, 403, { ok: false, message: "没有权限评论这条评价" });
   const author = publicReviewAuthor(user);
   review.comments = [
     {
@@ -552,12 +574,14 @@ async function handleCreateReviewComment(req, res) {
       content,
       authorName: author.name,
       authorPhone: author.phone,
+      authorPhoneRaw: user.phone,
+      authorAvatar: author.avatar,
       createdAt: new Date().toISOString()
     },
     ...(Array.isArray(review.comments) ? review.comments : [])
   ];
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, reviews: publicReviews(db) });
+  return sendJson(res, 200, { ok: true, reviews: publicReviews(db, user) });
 }
 
 async function handleDeleteReview(req, res) {
@@ -565,11 +589,14 @@ async function handleDeleteReview(req, res) {
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
-  if (user.phone !== REVIEW_ADMIN_PHONE) return sendJson(res, 403, { ok: false, message: "只有管理员可以删除" });
   const reviewId = String(body.reviewId || "");
-  db.reviews = (Array.isArray(db.reviews) ? db.reviews : []).filter(item => item.id !== reviewId);
+  const reviews = Array.isArray(db.reviews) ? db.reviews : [];
+  const review = reviews.find(item => item.id === reviewId);
+  if (!review) return sendJson(res, 404, { ok: false, message: "评价不存在" });
+  if (!isAdminUser(user) && review.authorPhoneRaw !== user.phone) return sendJson(res, 403, { ok: false, message: "没有权限删除这条评价" });
+  db.reviews = reviews.filter(item => item.id !== reviewId);
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, reviews: publicReviews(db) });
+  return sendJson(res, 200, { ok: true, reviews: publicReviews(db, user) });
 }
 
 async function handleDeleteReviewComment(req, res) {
@@ -577,14 +604,159 @@ async function handleDeleteReviewComment(req, res) {
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
-  if (user.phone !== REVIEW_ADMIN_PHONE) return sendJson(res, 403, { ok: false, message: "只有管理员可以删除" });
   const reviewId = String(body.reviewId || "");
   const commentId = String(body.commentId || "");
   const review = (Array.isArray(db.reviews) ? db.reviews : []).find(item => item.id === reviewId);
   if (!review) return sendJson(res, 404, { ok: false, message: "评价不存在" });
+  const comment = (Array.isArray(review.comments) ? review.comments : []).find(item => item.id === commentId);
+  if (!comment) return sendJson(res, 404, { ok: false, message: "评论不存在" });
+  if (!isAdminUser(user) && comment.authorPhoneRaw !== user.phone) return sendJson(res, 403, { ok: false, message: "没有权限删除这条评论" });
   review.comments = (Array.isArray(review.comments) ? review.comments : []).filter(item => item.id !== commentId);
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, reviews: publicReviews(db) });
+  return sendJson(res, 200, { ok: true, reviews: publicReviews(db, user) });
+}
+
+function publicFeedbackAuthor(user) {
+  return {
+    name: user.accountName || maskPhone(user.phone),
+    phone: maskPhone(user.phone),
+    avatar: user.accountAvatar || ""
+  };
+}
+
+function publicFeedbackItems(db, viewer) {
+  const admin = isAdminUser(viewer);
+  return (Array.isArray(db.feedbacks) ? db.feedbacks : []).map(item => {
+    const likes = Array.isArray(item.likes) ? item.likes : [];
+    return {
+      id: item.id,
+      type: item.type || "反馈",
+      content: item.content || "",
+      authorName: item.authorName || "壳友",
+      authorPhone: item.authorPhone || "",
+      authorAvatar: item.authorAvatar || "",
+      createdAt: item.createdAt,
+      likeCount: likes.length,
+      liked: likes.includes(viewer?.phone),
+      canDelete: admin || item.authorPhoneRaw === viewer?.phone,
+      comments: (Array.isArray(item.comments) ? item.comments : []).map(comment => ({
+        id: comment.id,
+        content: comment.content || "",
+        authorName: comment.authorName || "壳友",
+        authorPhone: comment.authorPhone || "",
+        authorAvatar: comment.authorAvatar || "",
+        createdAt: comment.createdAt,
+        canDelete: admin || comment.authorPhoneRaw === viewer?.phone
+      }))
+    };
+  });
+}
+
+async function handleListFeedback(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  return sendJson(res, 200, { ok: true, feedbacks: publicFeedbackItems(db, user), isAdmin: isAdminUser(user) });
+}
+
+async function handleCreateFeedback(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const type = trimPublicText(body.type, 30) || "反馈";
+  const content = trimPublicText(body.content, 1200);
+  if (!content) return sendJson(res, 400, { ok: false, message: "请填写反馈内容" });
+  const author = publicFeedbackAuthor(user);
+  const feedback = {
+    id: crypto.randomUUID(),
+    type,
+    content,
+    authorName: author.name,
+    authorPhone: author.phone,
+    authorPhoneRaw: user.phone,
+    authorAvatar: author.avatar,
+    likes: [],
+    comments: [],
+    createdAt: new Date().toISOString()
+  };
+  db.feedbacks = [feedback, ...(Array.isArray(db.feedbacks) ? db.feedbacks : [])];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, feedbacks: publicFeedbackItems(db, user) });
+}
+
+async function handleToggleFeedbackLike(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const feedbackId = String(body.feedbackId || "");
+  const feedback = (Array.isArray(db.feedbacks) ? db.feedbacks : []).find(item => item.id === feedbackId);
+  if (!feedback) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
+  const likes = Array.isArray(feedback.likes) ? feedback.likes : [];
+  feedback.likes = likes.includes(user.phone) ? likes.filter(phone => phone !== user.phone) : [...likes, user.phone];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, feedbacks: publicFeedbackItems(db, user) });
+}
+
+async function handleCreateFeedbackComment(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const feedbackId = String(body.feedbackId || "");
+  const content = trimPublicText(body.content, 600);
+  if (!content) return sendJson(res, 400, { ok: false, message: "请填写评论内容" });
+  const feedback = (Array.isArray(db.feedbacks) ? db.feedbacks : []).find(item => item.id === feedbackId);
+  if (!feedback) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
+  const author = publicFeedbackAuthor(user);
+  feedback.comments = [
+    ...(Array.isArray(feedback.comments) ? feedback.comments : []),
+    {
+      id: crypto.randomUUID(),
+      content,
+      authorName: author.name,
+      authorPhone: author.phone,
+      authorPhoneRaw: user.phone,
+      authorAvatar: author.avatar,
+      createdAt: new Date().toISOString()
+    }
+  ];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, feedbacks: publicFeedbackItems(db, user) });
+}
+
+async function handleDeleteFeedback(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const feedbackId = String(body.feedbackId || "");
+  const feedbacks = Array.isArray(db.feedbacks) ? db.feedbacks : [];
+  const feedback = feedbacks.find(item => item.id === feedbackId);
+  if (!feedback) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
+  if (!isAdminUser(user) && feedback.authorPhoneRaw !== user.phone) return sendJson(res, 403, { ok: false, message: "没有权限删除这条反馈" });
+  db.feedbacks = feedbacks.filter(item => item.id !== feedbackId);
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, feedbacks: publicFeedbackItems(db, user) });
+}
+
+async function handleDeleteFeedbackComment(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const feedbackId = String(body.feedbackId || "");
+  const commentId = String(body.commentId || "");
+  const feedback = (Array.isArray(db.feedbacks) ? db.feedbacks : []).find(item => item.id === feedbackId);
+  if (!feedback) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
+  const comment = (Array.isArray(feedback.comments) ? feedback.comments : []).find(item => item.id === commentId);
+  if (!comment) return sendJson(res, 404, { ok: false, message: "评论不存在" });
+  if (!isAdminUser(user) && comment.authorPhoneRaw !== user.phone) return sendJson(res, 403, { ok: false, message: "没有权限删除这条评论" });
+  feedback.comments = (Array.isArray(feedback.comments) ? feedback.comments : []).filter(item => item.id !== commentId);
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, feedbacks: publicFeedbackItems(db, user) });
 }
 
 function serveStatic(req, res, url) {
@@ -622,6 +794,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/reviews/comment") return await handleCreateReviewComment(req, res);
     if (req.method === "POST" && url.pathname === "/api/reviews/delete") return await handleDeleteReview(req, res);
     if (req.method === "POST" && url.pathname === "/api/reviews/comment/delete") return await handleDeleteReviewComment(req, res);
+    if (req.method === "POST" && url.pathname === "/api/feedback/list") return await handleListFeedback(req, res);
+    if (req.method === "POST" && url.pathname === "/api/feedback/create") return await handleCreateFeedback(req, res);
+    if (req.method === "POST" && url.pathname === "/api/feedback/like") return await handleToggleFeedbackLike(req, res);
+    if (req.method === "POST" && url.pathname === "/api/feedback/comment") return await handleCreateFeedbackComment(req, res);
+    if (req.method === "POST" && url.pathname === "/api/feedback/delete") return await handleDeleteFeedback(req, res);
+    if (req.method === "POST" && url.pathname === "/api/feedback/comment/delete") return await handleDeleteFeedbackComment(req, res);
     if (req.method === "GET") return serveStatic(req, res, url);
     return sendJson(res, 405, { ok: false, message: "方法不支持" });
   } catch (error) {

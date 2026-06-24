@@ -49,8 +49,10 @@ const initialState = {
   selectedTurtleId: "",
   selectedLedgerId: "",
   selectedBreedingId: "",
+  selectedFeedbackId: "",
   selectedSpeciesCode: "",
   openTurtleMenuId: "",
+  openFeedbackMenuId: "",
   updatingTurtleId: "",
   turtleDetailDraftId: "",
   turtleDetailDraft: null,
@@ -67,6 +69,7 @@ const initialState = {
   satisfactionRating: 5,
   satisfactionReviews: [],
   publicReviews: [],
+  publicFeedbackItems: [],
   feedbackItems: [],
   accountName: "未登录用户",
   accountAvatar: "",
@@ -156,6 +159,8 @@ let cloudSyncInFlight = false;
 let cloudSyncQueued = false;
 let publicReviewsLoading = false;
 let publicReviewsLastLoadedAt = 0;
+let publicFeedbackLoading = false;
+let publicFeedbackLastLoadedAt = 0;
 
 if (CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE) {
   state = { ...state, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" };
@@ -209,6 +214,7 @@ function normalizeState(next) {
   return {
     ...base,
     publicReviews: Array.isArray(base.publicReviews) ? base.publicReviews : [],
+    publicFeedbackItems: Array.isArray(base.publicFeedbackItems) ? base.publicFeedbackItems : [],
     formGender: cleanText(base.formGender),
     turtles: (base.turtles || []).map(t => ({
       ...t,
@@ -1417,12 +1423,11 @@ function pageSatisfaction() {
 
 function pagePublicSatisfaction() {
   const reviews = CONFIGURED_SMS_BACKEND ? (state.publicReviews || []) : (state.satisfactionReviews || []);
-  const isAdmin = state.loggedInPhone === REVIEW_ADMIN_PHONE;
   return `
     ${topbar("满意度调查", true)}
     <main class="content page-fresh">
       <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">体验评分</p><h2>给壳友手账打个分</h2><p>评价会进入公共历史评价，所有用户都可以看到并参与评论。</p></div>
+        <div><p class="eyebrow dark">体验评分</p><h2>给壳友手账打个分</h2><p>普通用户只查看自己的历史评价，管理员账号可查看全部评价。</p></div>
       </section>
       <form class="fresh-card survey-form" id="satisfactionForm">
         <div class="settings-title">软件满意度</div>
@@ -1441,7 +1446,7 @@ function pagePublicSatisfaction() {
               <strong class="review-stars">${ratingStars(item.rating)}</strong>
               <p class="review-author">${escapeHtml(item.authorName || "壳友")} · ${escapeHtml(item.authorPhone || "")}</p>
             </div>
-            ${isAdmin ? `<button class="danger-link review-delete" type="button" data-delete-review="${item.id}">删除</button>` : ""}
+            ${item.canDelete ? `<button class="danger-link review-delete" type="button" data-delete-review="${item.id}">删除</button>` : ""}
           </div>
           <p>${escapeHtml(item.comment)}</p>
           <small>${formatTime(item.createdAt)}</small>
@@ -1454,7 +1459,7 @@ function pagePublicSatisfaction() {
                   <p>${escapeHtml(comment.content)}</p>
                   <small>${formatTime(comment.createdAt)}</small>
                 </div>
-                ${isAdmin ? `<button class="danger-link comment-delete" type="button" data-delete-review-comment="${item.id}:${comment.id}">删除</button>` : ""}
+                ${comment.canDelete ? `<button class="danger-link comment-delete" type="button" data-delete-review-comment="${item.id}:${comment.id}">删除</button>` : ""}
               </div>
             `).join("") || `<p class="muted review-empty-comment">还没有评论</p>`}
             <form class="review-comment-form" data-review-comment-form data-review-id="${item.id}">
@@ -1469,29 +1474,128 @@ function pagePublicSatisfaction() {
   `;
 }
 
+function feedbackAvatarMarkup(item, className = "feedback-avatar") {
+  const avatar = item.authorAvatar || "";
+  if (avatar) return `<img class="${className}" src="${avatar}" alt="头像">`;
+  const letter = String(item.authorName || "壳").trim().slice(0, 1) || "壳";
+  return `<div class="${className} fallback-avatar">${escapeHtml(letter)}</div>`;
+}
+
+function sortedPublicFeedbacks() {
+  const ownPhone = state.loggedInPhone ? maskPhone(state.loggedInPhone) : "";
+  return [...(state.publicFeedbackItems || [])].sort((a, b) => {
+    const aOwn = a.authorPhone === ownPhone ? 1 : 0;
+    const bOwn = b.authorPhone === ownPhone ? 1 : 0;
+    if (aOwn !== bOwn) return bOwn - aOwn;
+    return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+  });
+}
+
+function feedbackActionMenu(item) {
+  if (state.openFeedbackMenuId !== item.id) return "";
+  return `
+    <div class="feedback-action-popover">
+      <button type="button" data-like-feedback="${item.id}">${item.liked ? "已赞" : "赞"}</button>
+      <button type="button" data-comment-feedback="${item.id}">评论</button>
+    </div>
+  `;
+}
+
+function publicFeedbackCard(item, options = {}) {
+  const comments = Array.isArray(item.comments) ? item.comments : [];
+  const previewComments = options.detail ? comments : comments.slice(0, 2);
+  return `
+    <article class="feedback-post ${options.detail ? "detail" : ""}">
+      <div class="feedback-post-head">
+        ${feedbackAvatarMarkup(item)}
+        <div class="feedback-post-main">
+          <div class="feedback-author-line">
+            <strong>${escapeHtml(item.authorName || "壳友")}</strong>
+            <span>${escapeHtml(item.authorPhone || "")}</span>
+          </div>
+          <button class="feedback-body-button" type="button" data-view-feedback="${item.id}">
+            <p>${escapeHtml(item.content)}</p>
+            <small>${escapeHtml(item.type || "反馈")}</small>
+          </button>
+          <div class="feedback-post-meta">
+            <span>${formatTime(item.createdAt)}</span>
+            ${item.canDelete ? `<button class="feedback-delete" type="button" data-delete-feedback="${item.id}">删除</button>` : ""}
+            <div class="feedback-action-wrap">
+              <button class="feedback-more" type="button" data-feedback-action="${item.id}">••</button>
+              ${feedbackActionMenu(item)}
+            </div>
+          </div>
+          ${(item.likeCount || comments.length) ? `
+            <div class="feedback-social-line">
+              ${item.likeCount ? `<span>赞 ${item.likeCount}</span>` : ""}
+              ${comments.length ? `<span>评论 ${comments.length}</span>` : ""}
+            </div>
+          ` : ""}
+          ${previewComments.length ? `
+            <div class="feedback-comment-list">
+              ${previewComments.map(comment => `
+                <div class="feedback-comment-row">
+                  <span><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</span>
+                  ${comment.canDelete ? `<button type="button" data-delete-feedback-comment="${item.id}:${comment.id}">删除</button>` : ""}
+                </div>
+              `).join("")}
+              ${!options.detail && comments.length > previewComments.length ? `<button class="feedback-view-more" type="button" data-view-feedback="${item.id}">查看全部 ${comments.length} 条评论</button>` : ""}
+            </div>
+          ` : ""}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
 function pageFeedback() {
-  const items = state.feedbackItems || [];
+  const loggedIn = Boolean(state.loggedInPhone);
+  const items = sortedPublicFeedbacks();
   return `
     ${topbar("意见反馈", true)}
-    <main class="content page-fresh">
+    <main class="content page-fresh feedback-page">
       <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">反馈</p><h2>记录你的想法</h2><p>可以写问题、建议、页面调整或新功能需求。</p></div>
+        <div><p class="eyebrow dark">公开反馈</p><h2>把想法发出来</h2><p>反馈会保存到云端，所有登录用户都能查看、点赞和评论。</p></div>
       </section>
-      <form class="fresh-card survey-form" id="feedbackForm">
-        <label class="survey-field"><span>反馈类型</span><select class="select" name="type"><option>功能建议</option><option>界面问题</option><option>使用问题</option><option>其他</option></select></label>
-        <label class="survey-field"><span>反馈内容</span><textarea name="content" required placeholder="请描述你遇到的问题或希望调整的地方"></textarea></label>
-        <button class="primary" type="submit">提交反馈</button>
-      </form>
+      ${loggedIn ? `
+        <form class="fresh-card survey-form" id="feedbackForm">
+          <label class="survey-field"><span>反馈类型</span><select class="select" name="type"><option>功能建议</option><option>界面问题</option><option>使用问题</option><option>其他</option></select></label>
+          <label class="survey-field"><span>反馈内容</span><textarea name="content" required placeholder="写下你遇到的问题，或希望新增的功能"></textarea></label>
+          <button class="primary" type="submit">发布反馈</button>
+        </form>
+      ` : `
+        <section class="fresh-card settings-card">
+          <div class="settings-title">请先登录账号</div>
+          <p class="muted">登录后可以发布反馈、点赞和评论。</p>
+          <button class="primary" type="button" data-page="account">登录 / 注册账号</button>
+        </section>
+      `}
       <section class="section-title"><span>反馈记录</span><small>${items.length} 条</small></section>
-      ${items.map(item => `
-        <article class="fresh-card survey-record">
-          <strong>${item.type}</strong>
-          <p>${item.content}</p>
-          <small>${formatTime(item.createdAt)}</small>
-        </article>
-      `).join("") || `<div class="empty small-empty"><div><strong>还没有反馈</strong></div></div>`}
+      <section class="feedback-feed">
+        ${items.map(item => publicFeedbackCard(item)).join("") || `<div class="empty small-empty"><div><strong>还没有反馈</strong><br>发布后会显示在这里</div></div>`}
+      </section>
     </main>
     ${bottomNav()}
+  `;
+}
+
+function currentPublicFeedback() {
+  return (state.publicFeedbackItems || []).find(item => item.id === state.selectedFeedbackId);
+}
+
+function pageFeedbackDetail() {
+  const item = currentPublicFeedback();
+  return `
+    ${topbar("详情", true)}
+    <main class="content page-fresh feedback-page feedback-detail-page">
+      ${item ? `
+        ${publicFeedbackCard(item, { detail: true })}
+        <form class="feedback-detail-comment" id="feedbackCommentForm" data-feedback-id="${item.id}">
+          <input class="field" name="content" placeholder="发表评论：" maxlength="600">
+          <button class="secondary" type="submit">发送</button>
+        </form>
+      ` : `<div class="empty small-empty"><div><strong>这条反馈不存在</strong><br>可能已经被删除</div></div>`}
+    </main>
   `;
 }
 
@@ -1602,6 +1706,7 @@ function render() {
     mine: pageMine,
     satisfaction: pagePublicSatisfaction,
     feedback: pageFeedback,
+    feedbackDetail: pageFeedbackDetail,
     account: pageAccount,
     sync: pageSync,
     about: pageAbout,
@@ -1614,6 +1719,7 @@ function render() {
   hydrateSpeciesImages();
   startAccountCodeCooldownTimer();
   if (state.page === "satisfaction") refreshPublicReviews();
+  if (["feedback", "feedbackDetail"].includes(state.page)) refreshPublicFeedback();
 }
 
 function accountCodeCooldownRemaining() {
@@ -1649,13 +1755,20 @@ function bindEvents() {
       });
     }, { once: true });
   }
+  if (state.openFeedbackMenuId) {
+    $app.addEventListener("click", event => {
+      if (event.target.closest("[data-feedback-action], .feedback-action-popover")) return;
+      setState({ openFeedbackMenuId: "" }, { skipCloud: true });
+    }, { once: true });
+  }
   document.querySelectorAll("[data-page]").forEach(el => el.addEventListener("click", () => {
     if (["add", "breedingAdd"].includes(el.dataset.page) && !requireLogin()) return;
-    setState({ page: el.dataset.page, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" });
+    setState({ page: el.dataset.page, openTurtleMenuId: "", openFeedbackMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" });
   }));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", () => setState({
-    page: state.page === "turtleDetail" ? "list" : state.page === "ledgerDetail" ? "ledger" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : ["calendar", "satisfaction", "feedback", "account", "sync", "about"].includes(state.page) ? "mine" : "home",
+    page: state.page === "turtleDetail" ? "list" : state.page === "ledgerDetail" ? "ledger" : state.page === "feedbackDetail" ? "feedback" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : ["calendar", "satisfaction", "feedback", "account", "sync", "about"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "",
+    openFeedbackMenuId: "",
     updatingTurtleId: "",
     turtleDetailDraftId: "",
     turtleDetailDraft: null,
@@ -1812,7 +1925,33 @@ function bindEvents() {
     const [reviewId, commentId] = btn.dataset.deleteReviewComment.split(":");
     deletePublicReviewComment(reviewId, commentId);
   }));
-  document.querySelector("#feedbackForm")?.addEventListener("submit", submitFeedback);
+  document.querySelector("#feedbackForm")?.addEventListener("submit", submitPublicFeedback);
+  document.querySelectorAll("[data-view-feedback]").forEach(el => el.addEventListener("click", event => {
+    event.stopPropagation();
+    setState({ page: "feedbackDetail", selectedFeedbackId: el.dataset.viewFeedback, openFeedbackMenuId: "" }, { skipCloud: true });
+  }));
+  document.querySelectorAll("[data-feedback-action]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    setState({ openFeedbackMenuId: state.openFeedbackMenuId === btn.dataset.feedbackAction ? "" : btn.dataset.feedbackAction }, { skipCloud: true });
+  }));
+  document.querySelectorAll("[data-like-feedback]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    toggleFeedbackLike(btn.dataset.likeFeedback);
+  }));
+  document.querySelectorAll("[data-comment-feedback]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    setState({ page: "feedbackDetail", selectedFeedbackId: btn.dataset.commentFeedback, openFeedbackMenuId: "" }, { skipCloud: true });
+  }));
+  document.querySelector("#feedbackCommentForm")?.addEventListener("submit", submitFeedbackComment);
+  document.querySelectorAll("[data-delete-feedback]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    deletePublicFeedback(btn.dataset.deleteFeedback);
+  }));
+  document.querySelectorAll("[data-delete-feedback-comment]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    const [feedbackId, commentId] = btn.dataset.deleteFeedbackComment.split(":");
+    deletePublicFeedbackComment(feedbackId, commentId);
+  }));
   document.querySelector("#accountForm")?.addEventListener("submit", submitAccount);
   document.querySelectorAll("[data-account-mode]").forEach(btn => btn.addEventListener("click", () => setState({ accountMode: btn.dataset.accountMode, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" })));
   const passwordInput = document.querySelector("#accountForm [name='password']");
@@ -1859,10 +1998,14 @@ function canUsePublicReviews() {
 
 async function refreshPublicReviews(force = false) {
   if (!CONFIGURED_SMS_BACKEND || publicReviewsLoading) return;
+  if (!state.loggedInPhone || !currentCloudToken()) {
+    if ((state.publicReviews || []).length) setState({ publicReviews: [] }, { skipCloud: true });
+    return;
+  }
   if (!force && Date.now() - publicReviewsLastLoadedAt < 10000 && (state.publicReviews || []).length) return;
   publicReviewsLoading = true;
   try {
-    const result = await apiPost("/api/reviews/list", {});
+    const result = await apiPost("/api/reviews/list", reviewAuthPayload());
     publicReviewsLastLoadedAt = Date.now();
     setState({ publicReviews: Array.isArray(result.reviews) ? result.reviews : [] }, { skipCloud: true });
   } catch (error) {
@@ -1915,7 +2058,6 @@ async function submitReviewComment(event) {
 
 async function deletePublicReview(reviewId) {
   if (!canUsePublicReviews()) return;
-  if (state.loggedInPhone !== REVIEW_ADMIN_PHONE) return toast("只有管理员可以删除");
   if (!confirm("确定删除这条评价和下面的评论吗？")) return;
   try {
     const result = await apiPost("/api/reviews/delete", reviewAuthPayload({ reviewId }));
@@ -1929,12 +2071,134 @@ async function deletePublicReview(reviewId) {
 
 async function deletePublicReviewComment(reviewId, commentId) {
   if (!canUsePublicReviews()) return;
-  if (state.loggedInPhone !== REVIEW_ADMIN_PHONE) return toast("只有管理员可以删除");
   if (!confirm("确定删除这条评论吗？")) return;
   try {
     const result = await apiPost("/api/reviews/comment/delete", reviewAuthPayload({ reviewId, commentId }));
     publicReviewsLastLoadedAt = Date.now();
     setState({ publicReviews: Array.isArray(result.reviews) ? result.reviews : state.publicReviews }, { skipCloud: true });
+    toast("评论已删除");
+  } catch (error) {
+    toast(error.message || "删除失败");
+  }
+}
+
+function feedbackAuthPayload(extra = {}) {
+  return {
+    phone: state.loggedInPhone,
+    token: currentCloudToken(),
+    ...extra
+  };
+}
+
+function canUsePublicFeedback() {
+  if (!CONFIGURED_SMS_BACKEND) {
+    toast("公开反馈需要连接云端服务");
+    return false;
+  }
+  if (!requireLogin()) return false;
+  if (!currentCloudToken()) {
+    toast("请重新登录账号");
+    return false;
+  }
+  return true;
+}
+
+async function refreshPublicFeedback(force = false) {
+  if (!CONFIGURED_SMS_BACKEND || publicFeedbackLoading) return;
+  if (!state.loggedInPhone || !currentCloudToken()) {
+    if ((state.publicFeedbackItems || []).length) setState({ publicFeedbackItems: [] }, { skipCloud: true });
+    return;
+  }
+  if (!force && Date.now() - publicFeedbackLastLoadedAt < 10000 && (state.publicFeedbackItems || []).length) return;
+  publicFeedbackLoading = true;
+  try {
+    const result = await apiPost("/api/feedback/list", feedbackAuthPayload());
+    publicFeedbackLastLoadedAt = Date.now();
+    setState({ publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : [] }, { skipCloud: true });
+  } catch (error) {
+    console.warn(error.message || "反馈读取失败");
+  } finally {
+    publicFeedbackLoading = false;
+  }
+}
+
+async function submitPublicFeedback(event) {
+  event.preventDefault();
+  if (!canUsePublicFeedback()) return;
+  const form = new FormData(event.currentTarget);
+  const type = String(form.get("type") || "其他");
+  const content = String(form.get("content") || "").trim();
+  if (!content) return toast("请填写反馈内容");
+  try {
+    const result = await apiPost("/api/feedback/create", feedbackAuthPayload({ type, content }));
+    publicFeedbackLastLoadedAt = Date.now();
+    setState({
+      publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems,
+      activityLogs: logActivity(`发布意见反馈：${type}`, "空间")
+    });
+    toast("反馈已发布");
+  } catch (error) {
+    toast(error.message || "反馈发布失败");
+  }
+}
+
+async function toggleFeedbackLike(feedbackId) {
+  if (!canUsePublicFeedback()) return;
+  try {
+    const result = await apiPost("/api/feedback/like", feedbackAuthPayload({ feedbackId }));
+    publicFeedbackLastLoadedAt = Date.now();
+    setState({ publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems, openFeedbackMenuId: "" }, { skipCloud: true });
+  } catch (error) {
+    toast(error.message || "操作失败");
+  }
+}
+
+async function submitFeedbackComment(event) {
+  event.preventDefault();
+  if (!canUsePublicFeedback()) return;
+  const feedbackId = event.currentTarget.dataset.feedbackId;
+  const form = new FormData(event.currentTarget);
+  const content = String(form.get("content") || "").trim();
+  if (!content) return toast("请填写评论内容");
+  try {
+    const result = await apiPost("/api/feedback/comment", feedbackAuthPayload({ feedbackId, content }));
+    publicFeedbackLastLoadedAt = Date.now();
+    setState({
+      publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems,
+      activityLogs: logActivity("评论了一条意见反馈", "空间")
+    });
+    toast("评论已发布");
+  } catch (error) {
+    toast(error.message || "评论失败");
+  }
+}
+
+async function deletePublicFeedback(feedbackId) {
+  if (!canUsePublicFeedback()) return;
+  if (!confirm("确定删除这条反馈吗？")) return;
+  try {
+    const result = await apiPost("/api/feedback/delete", feedbackAuthPayload({ feedbackId }));
+    publicFeedbackLastLoadedAt = Date.now();
+    const remaining = Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems;
+    setState({
+      publicFeedbackItems: remaining,
+      page: state.page === "feedbackDetail" ? "feedback" : state.page,
+      openFeedbackMenuId: "",
+      selectedFeedbackId: state.selectedFeedbackId === feedbackId ? "" : state.selectedFeedbackId
+    }, { skipCloud: true });
+    toast("反馈已删除");
+  } catch (error) {
+    toast(error.message || "删除失败");
+  }
+}
+
+async function deletePublicFeedbackComment(feedbackId, commentId) {
+  if (!canUsePublicFeedback()) return;
+  if (!confirm("确定删除这条评论吗？")) return;
+  try {
+    const result = await apiPost("/api/feedback/comment/delete", feedbackAuthPayload({ feedbackId, commentId }));
+    publicFeedbackLastLoadedAt = Date.now();
+    setState({ publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems }, { skipCloud: true });
     toast("评论已删除");
   } catch (error) {
     toast(error.message || "删除失败");
