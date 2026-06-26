@@ -4,6 +4,14 @@ const SERVER_SMS_CODE = "__SERVER_SMS__";
 const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
 const CLOUD_SYNC_DEBOUNCE_MS = 900;
 const REVIEW_ADMIN_PHONE = "18652082378";
+const FREE_TURTLE_LIMIT = 10;
+const PLAN_LEVELS = { free: 0, member: 1, pro: 2 };
+const SUBSCRIPTION_PLANS = [
+  { key: "member", cycle: "monthly", title: "壳友会员", cycleName: "月度", price: "9.9", period: "月", months: 1, productId: "com.turtlekeeper.member.monthly", desc: "灵活体验，适合先试用完整记录能力" },
+  { key: "member", cycle: "quarterly", title: "壳友会员", cycleName: "季度", price: "23.9", period: "季", months: 3, productId: "com.turtlekeeper.member.quarterly", badge: "更划算", desc: "覆盖一个养护阶段，适合稳定记录" },
+  { key: "member", cycle: "yearly", title: "壳友会员", cycleName: "年度", price: "68", period: "年", months: 12, productId: "com.turtlekeeper.member.yearly", badge: "推荐", desc: "全年档案、照片和账本持续留存" },
+  { key: "pro", cycle: "yearly", title: "专业版", cycleName: "年度", price: "388", period: "年", months: 12, productId: "com.turtlekeeper.pro.yearly", badge: "经营首选" }
+];
 const defaultPhoto = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
   <rect width="240" height="240" rx="28" fill="#edf7f1"/>
@@ -21,6 +29,16 @@ const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 const SPECIES_IMAGE_CACHE = "turtlekeeper-species-image-cache-v1";
 let speciesImageObserver = null;
 let speciesImageCache = loadSpeciesImageCache();
+const WEEKDAY_OPTIONS = [
+  { value: "1", label: "一" },
+  { value: "2", label: "二" },
+  { value: "3", label: "三" },
+  { value: "4", label: "四" },
+  { value: "5", label: "五" },
+  { value: "6", label: "六" },
+  { value: "0", label: "日" }
+];
+let careReminderTimers = [];
 
 const initialState = {
   page: "home",
@@ -34,6 +52,7 @@ const initialState = {
   ledgerDraftType: "",
   ledgerDraftPhoto: "",
   ledgerDraftTurtleId: "",
+  ledgerDraftForm: {},
   ledgerPurchaseGender: "未知",
   ledgerDateFrom: "",
   ledgerDateTo: "",
@@ -60,6 +79,7 @@ const initialState = {
   breedingEditPhoto: "",
   formPhoto: "",
   formGender: "未知",
+  formDraft: {},
   themeColor: "teal",
   turtles: [],
   keptSpecies: [],
@@ -85,8 +105,46 @@ const initialState = {
   authCodeExpiresAt: "",
   accountCodeCooldownUntil: "",
   syncEnabled: false,
+  subscriptionPlan: "free",
+  subscriptionCycle: "",
+  subscriptionStartedAt: "",
+  subscriptionExpiresAt: "",
+  professionalOutput: "",
   activityLogs: []
 };
+
+const TURTLE_FORM_DRAFT_FIELDS = [
+  "speciesCode",
+  "code",
+  "weight",
+  "carapaceLength",
+  "carapaceWidth",
+  "shellHeight",
+  "plastronLength",
+  "status",
+  "health",
+  "acquiredDate",
+  "source",
+  "price",
+  "note"
+];
+
+const LEDGER_FORM_DRAFT_FIELDS = [
+  "turtleId",
+  "purchaseSpeciesCode",
+  "purchaseCode",
+  "purchaseGender",
+  "weight",
+  "carapaceLength",
+  "carapaceWidth",
+  "shellHeight",
+  "plastronLength",
+  "purchaseStatus",
+  "purchaseHealth",
+  "recordDate",
+  "amount",
+  "note"
+];
 
 function emptyAccountData() {
   return {
@@ -99,6 +157,11 @@ function emptyAccountData() {
     satisfactionReviews: [],
     feedbackItems: [],
     syncEnabled: true,
+    subscriptionPlan: "free",
+    subscriptionCycle: "",
+    subscriptionStartedAt: "",
+    subscriptionExpiresAt: "",
+    professionalOutput: "",
     activityLogs: [],
     themeColor: "teal"
   };
@@ -116,6 +179,11 @@ function normalizeAccountData(data = {}) {
     satisfactionReviews: Array.isArray(next.satisfactionReviews) ? next.satisfactionReviews : [],
     feedbackItems: Array.isArray(next.feedbackItems) ? next.feedbackItems : [],
     syncEnabled: next.syncEnabled !== false,
+    subscriptionPlan: ["free", "member", "pro"].includes(next.subscriptionPlan) ? next.subscriptionPlan : "free",
+    subscriptionCycle: next.subscriptionCycle || "",
+    subscriptionStartedAt: next.subscriptionStartedAt || "",
+    subscriptionExpiresAt: next.subscriptionExpiresAt || "",
+    professionalOutput: next.professionalOutput || "",
     activityLogs: Array.isArray(next.activityLogs) ? next.activityLogs : [],
     themeColor: next.themeColor || "teal"
   };
@@ -132,6 +200,11 @@ function accountDataSnapshot(source = state) {
     satisfactionReviews: source.satisfactionReviews,
     feedbackItems: source.feedbackItems,
     syncEnabled: source.syncEnabled,
+    subscriptionPlan: source.subscriptionPlan,
+    subscriptionCycle: source.subscriptionCycle,
+    subscriptionStartedAt: source.subscriptionStartedAt,
+    subscriptionExpiresAt: source.subscriptionExpiresAt,
+    professionalOutput: source.professionalOutput,
     activityLogs: source.activityLogs,
     themeColor: source.themeColor
   });
@@ -157,6 +230,8 @@ let accountCooldownTimer = null;
 let cloudSyncTimer = null;
 let cloudSyncInFlight = false;
 let cloudSyncQueued = false;
+let cloudHydrationStarted = false;
+let cloudImageMigrationInFlight = false;
 let publicReviewsLoading = false;
 let publicReviewsLastLoadedAt = 0;
 let publicFeedbackLoading = false;
@@ -246,24 +321,91 @@ function normalizeState(next) {
   };
 }
 
+function hasCloudSession() {
+  return Boolean(CONFIGURED_SMS_BACKEND && state.loggedInPhone && currentCloudToken());
+}
+
+function lightAccountUser(user) {
+  return {
+    id: user.id,
+    phone: user.phone,
+    accountName: user.accountName,
+    accountAvatar: user.accountAvatar || "",
+    cloudToken: user.cloudToken || "",
+    createdAt: user.createdAt,
+    data: emptyAccountData()
+  };
+}
+
+function accountHasContent(source = state) {
+  return Boolean(
+    (source.turtles || []).length ||
+    (source.keptSpecies || []).length ||
+    (source.memos || []).length ||
+    (source.ledgerRecords || []).length ||
+    (source.breedingRecords || []).length ||
+    (source.satisfactionReviews || []).length ||
+    (source.feedbackItems || []).length ||
+    (source.activityLogs || []).length
+  );
+}
+
+function turtleHasEmbeddedImages(turtle) {
+  return Boolean(
+    isMigratableImage(turtle?.photo) ||
+    (turtle?.measureHistory || []).some(item =>
+      isMigratableImage(item.photo) ||
+      isMigratableImage(item.oldPhoto) ||
+      isMigratableImage(item.newPhoto)
+    )
+  );
+}
+
+function accountHasEmbeddedImages(source = state) {
+  return Boolean(
+    isMigratableImage(source.accountAvatar) ||
+    (source.turtles || []).some(turtleHasEmbeddedImages) ||
+    (source.ledgerRecords || []).some(item =>
+      isMigratableImage(item.photo) || turtleHasEmbeddedImages(item.turtleSnapshot)
+    ) ||
+    (source.breedingRecords || []).some(item =>
+      isMigratableImage(item.photo) ||
+      (item.editHistory || []).some(history =>
+        isMigratableImage(history.photo) ||
+        isMigratableImage(history.oldPhoto) ||
+        isMigratableImage(history.newPhoto)
+      )
+    )
+  );
+}
+
 function saveState(options = {}) {
   const registeredUsers = syncRegisteredUsers(state);
-  const accountData = state.loggedInPhone ? accountDataSnapshot(state) : emptyAccountData();
+  const cloudSession = hasCloudSession();
+  const accountData = state.loggedInPhone && !cloudSession ? accountDataSnapshot(state) : emptyAccountData();
+  const storageUsers = cloudSession || CONFIGURED_SMS_BACKEND
+    ? registeredUsers.map(lightAccountUser)
+    : registeredUsers;
   state.registeredUsers = registeredUsers;
-  localStorage.setItem(STORAGE, JSON.stringify({
-    ...accountData,
-    accountName: state.accountName,
-    accountAvatar: state.accountAvatar,
-    accountMode: state.accountMode,
-    loggedInPhone: state.loggedInPhone,
-    cloudToken: state.cloudToken,
-    registeredUsers,
-    pendingAuthCode: state.pendingAuthCode,
-    pendingAuthPhone: state.pendingAuthPhone,
-    authCodeExpiresAt: state.authCodeExpiresAt,
-    accountCodeCooldownUntil: state.accountCodeCooldownUntil,
-    themeColor: accountData.themeColor
-  }));
+  try {
+    localStorage.setItem(STORAGE, JSON.stringify({
+      ...accountData,
+      accountName: state.accountName,
+      accountAvatar: state.accountAvatar,
+      accountMode: state.accountMode,
+      loggedInPhone: state.loggedInPhone,
+      cloudToken: state.cloudToken,
+      registeredUsers: storageUsers,
+      pendingAuthCode: state.pendingAuthCode,
+      pendingAuthPhone: state.pendingAuthPhone,
+      authCodeExpiresAt: state.authCodeExpiresAt,
+      accountCodeCooldownUntil: state.accountCodeCooldownUntil,
+      themeColor: state.themeColor || accountData.themeColor
+    }));
+  } catch (error) {
+    console.warn("保存本地数据失败", error);
+    toast("本地登录状态保存失败，请清理浏览器缓存后重试");
+  }
   if (!options.skipCloud) queueCloudSave();
 }
 
@@ -271,12 +413,118 @@ function setState(patch, options = {}) {
   state = { ...state, ...patch };
   saveState(options);
   render();
+  refreshCareReminderTimers();
 }
 
 function requireLogin() {
   if (state.loggedInPhone) return true;
   toast("请先登录账号");
   return false;
+}
+
+function addMonths(date, months) {
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+function subscriptionActive(source = state) {
+  if (!source.loggedInPhone || source.subscriptionPlan === "free") return false;
+  const expiresAt = Date.parse(source.subscriptionExpiresAt || "");
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
+function activePlanKey(source = state) {
+  return subscriptionActive(source) ? source.subscriptionPlan : "free";
+}
+
+function hasPlan(level) {
+  return PLAN_LEVELS[activePlanKey()] >= PLAN_LEVELS[level];
+}
+
+function currentPlanLabel() {
+  if (!state.loggedInPhone) return "未登录";
+  if (!subscriptionActive()) return "免费版";
+  return state.subscriptionPlan === "pro" ? "专业版" : "壳友会员";
+}
+
+function currentPlanBadge() {
+  if (!state.loggedInPhone || !subscriptionActive()) return "普通";
+  return state.subscriptionPlan === "pro" ? "专业版" : "会员";
+}
+
+function currentPlanDetail() {
+  if (!state.loggedInPhone) return "登录后可开通会员权益";
+  if (!subscriptionActive()) return `免费可记录 ${FREE_TURTLE_LIMIT} 只乌龟档案`;
+  return `${currentPlanLabel()} · 有效期至 ${formatDate(state.subscriptionExpiresAt)}`;
+}
+
+function planUsageText() {
+  if (hasPlan("member")) return "档案不限数量";
+  return `${state.turtles.length}/${FREE_TURTLE_LIMIT} 只档案`;
+}
+
+function freeArchiveBalanceText() {
+  if (!state.loggedInPhone) return "登录后可免费记录 10 只档案";
+  if (hasPlan("member")) return "档案不限数量";
+  const remaining = Math.max(0, FREE_TURTLE_LIMIT - state.turtles.length);
+  return `免费档案余额 ${remaining} 只`;
+}
+
+function freeUsagePercent() {
+  if (hasPlan("member")) return 100;
+  return Math.min(100, Math.round((state.turtles.length / FREE_TURTLE_LIMIT) * 100));
+}
+
+function requireEntitlement(level, message) {
+  if (!requireLogin()) return false;
+  if (hasPlan(level)) return true;
+  toast(message || (level === "pro" ? "专业版可使用这个功能" : "壳友会员可使用这个功能"));
+  setState({ page: "membership" });
+  return false;
+}
+
+function requireArchiveCapacity(extra = 1) {
+  if (!requireLogin()) return false;
+  if (hasPlan("member") || state.turtles.length + extra <= FREE_TURTLE_LIMIT) return true;
+  toast(`免费版最多记录 ${FREE_TURTLE_LIMIT} 只乌龟档案，请开通壳友会员`);
+  setState({ page: "membership" });
+  return false;
+}
+
+function activateSubscription(planKey, cycle) {
+  if (!requireLogin()) return;
+  const plan = SUBSCRIPTION_PLANS.find(item => item.key === planKey && item.cycle === cycle);
+  if (!plan) return;
+  const now = new Date();
+  setState({
+    subscriptionPlan: plan.key,
+    subscriptionCycle: plan.cycle,
+    subscriptionStartedAt: now.toISOString(),
+    subscriptionExpiresAt: addMonths(now, plan.months).toISOString(),
+    syncEnabled: true,
+    activityLogs: logActivity(`开通${plan.title}${plan.cycleName}权益`, "会员")
+  });
+  toast(`已开通${plan.title}${plan.cycleName}权益`);
+}
+
+function ledgerMoneyStats(records = state.ledgerRecords) {
+  return records.reduce((sum, item) => {
+    const amount = Number(item.amount || 0);
+    if (item.type === "purchase") sum.purchase += amount;
+    if (item.type === "sold") sum.sold += amount;
+    if (item.type === "loss") sum.loss += amount;
+    return sum;
+  }, { purchase: 0, sold: 0, loss: 0 });
+}
+
+function breedingStats() {
+  return (state.breedingRecords || []).reduce((sum, item) => {
+    sum.egg += Number(item.eggCount || 0);
+    sum.fertile += Number(item.fertileCount || 0);
+    sum.hatch += Number(item.hatchCount || 0);
+    return sum;
+  }, { egg: 0, fertile: 0, hatch: 0 });
 }
 
 function applyTheme() {
@@ -356,6 +604,38 @@ function speciesByCode(code) {
   return speciesList.find(item => item.code === code);
 }
 
+const SPECIES_IMPORT_ALIASES = {
+  "果核": "GHG",
+  "果核龟": "GHG",
+  "头盔": "TBG",
+  "头盔蛋龟": "TBG"
+};
+
+function compactSpeciesName(value) {
+  return String(value || "").trim().replace(/[龟龜]/g, "");
+}
+
+function speciesByImportName(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const code = raw.toUpperCase();
+  const aliasCode = SPECIES_IMPORT_ALIASES[raw] || SPECIES_IMPORT_ALIASES[compactSpeciesName(raw)];
+  const exact = speciesByCode(code) || speciesList.find(item => item.name === raw);
+  if (exact) return exact;
+  if (aliasCode) return speciesByCode(aliasCode);
+  const compact = compactSpeciesName(raw);
+  if (!compact) return null;
+  return speciesList.find(item => {
+    const name = compactSpeciesName(item.name);
+    return name === compact || name.includes(compact) || compact.includes(name);
+  }) || null;
+}
+
+function numberFromImport(value) {
+  const normalized = String(value || "").replace(/[^\d.-]/g, "");
+  return Number(normalized || 0);
+}
+
 function loadSpeciesImageCache() {
   try {
     return JSON.parse(localStorage.getItem(SPECIES_IMAGE_CACHE)) || {};
@@ -383,7 +663,7 @@ function speciesSearchCandidates(item) {
 
 function speciesPhoto(item) {
   if (!item) return defaultPhoto;
-  return speciesImageCache[item.code] || defaultPhoto;
+  return speciesImageCache[item.code] || item.image || defaultPhoto;
 }
 
 function wikimediaImageApi(query) {
@@ -447,6 +727,7 @@ async function resolveSpeciesImage(item) {
 
 function hydrateSpeciesImages() {
   document.querySelectorAll("[data-fallback-photo]").forEach(img => {
+    img.referrerPolicy = "no-referrer";
     img.addEventListener("error", () => {
       img.src = defaultPhoto;
     }, { once: true });
@@ -476,6 +757,146 @@ function hydrateSpeciesImages() {
   }, { root: null, rootMargin: "360px 0px" });
 
   images.forEach(img => speciesImageObserver.observe(img));
+}
+
+function memoWeekdays(memo) {
+  const values = Array.isArray(memo?.weekdays) ? memo.weekdays : [];
+  return values.map(String).filter(value => WEEKDAY_OPTIONS.some(item => item.value === value));
+}
+
+function nextCareReminderDate(memo, forcedWeekday = null) {
+  if (!memo?.remindTime) return null;
+  const [hourText, minuteText] = String(memo.remindTime).split(":");
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  const now = new Date();
+  const selectedDays = forcedWeekday === null ? memoWeekdays(memo) : [String(forcedWeekday)];
+  const candidateDays = memo.repeat && selectedDays.length ? selectedDays : ["single"];
+  let bestDate = null;
+
+  candidateDays.forEach(dayValue => {
+    const candidate = new Date(now);
+    candidate.setHours(hour, minute, 0, 0);
+    if (dayValue !== "single") {
+      const targetDay = Number(dayValue);
+      const diff = (targetDay - candidate.getDay() + 7) % 7;
+      candidate.setDate(candidate.getDate() + diff);
+      if (candidate <= now) candidate.setDate(candidate.getDate() + 7);
+    } else if (candidate <= now) {
+      candidate.setDate(candidate.getDate() + 1);
+    }
+    if (!bestDate || candidate < bestDate) bestDate = candidate;
+  });
+
+  return bestDate;
+}
+
+function showCareReminder(memo) {
+  const title = "壳友手账提醒您";
+  const body = memo?.title || "护理事项";
+  if ("Notification" in window && Notification.permission === "granted") {
+    try {
+      new Notification(title, { body });
+      return;
+    } catch {
+      // Some embedded WebViews expose Notification but still reject it.
+    }
+  }
+  toast(`${title}：${body}`);
+}
+
+function refreshCareReminderTimers() {
+  careReminderTimers.forEach(timer => clearTimeout(timer));
+  careReminderTimers = [];
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  (state.memos || []).forEach(memo => {
+    const nextDate = nextCareReminderDate(memo);
+    if (!nextDate) return;
+    const delay = Math.max(0, nextDate.getTime() - Date.now());
+    const timer = setTimeout(() => {
+      showCareReminder(memo);
+      if (memo.repeat) refreshCareReminderTimers();
+    }, Math.min(delay, 2147483647));
+    careReminderTimers.push(timer);
+  });
+}
+
+function careReminderBaseId(memo) {
+  return Math.abs(String(memo?.id || "").split("").reduce((sum, char) => ((sum * 31) + char.charCodeAt(0)) | 0, 910000));
+}
+
+async function requestCareReminderPermission() {
+  const localNotifications = window.Capacitor?.Plugins?.LocalNotifications;
+  if (localNotifications?.requestPermissions) {
+    try {
+      const result = await localNotifications.requestPermissions();
+      return result?.display === "granted" || result?.display === "prompt" || result?.granted;
+    } catch {
+      return false;
+    }
+  }
+  if (!("Notification" in window)) return false;
+  if (Notification.permission === "granted") return true;
+  if (Notification.permission === "denied") return false;
+  try {
+    return await Notification.requestPermission() === "granted";
+  } catch {
+    return false;
+  }
+}
+
+async function scheduleNativeCareReminder(memo) {
+  const localNotifications = window.Capacitor?.Plugins?.LocalNotifications;
+  if (!localNotifications?.schedule || !memo?.remindTime) return false;
+  const selectedDays = memo.repeat ? memoWeekdays(memo) : [];
+  const days = selectedDays.length ? selectedDays : [null];
+  const baseId = careReminderBaseId(memo);
+  const oldIds = Array.from({ length: 8 }, (_, index) => ({ id: baseId + index }));
+  try {
+    if (localNotifications.cancel) await localNotifications.cancel({ notifications: oldIds });
+    const notifications = days.map((dayValue, index) => {
+      const at = nextCareReminderDate(memo, dayValue);
+      return {
+        id: baseId + index,
+        title: "壳友手账提醒您",
+        body: memo.title || "护理事项",
+        schedule: memo.repeat
+          ? { at, repeats: true, every: dayValue === null ? "day" : "week" }
+          : { at, repeats: false }
+      };
+    }).filter(item => item.schedule.at);
+    if (!notifications.length) return false;
+    await localNotifications.schedule({ notifications });
+    return true;
+  } catch (error) {
+    console.warn("系统通知排程失败", error);
+    return false;
+  }
+}
+
+async function cancelNativeCareReminder(memo) {
+  const localNotifications = window.Capacitor?.Plugins?.LocalNotifications;
+  if (!localNotifications?.cancel || !memo?.id) return;
+  const baseId = careReminderBaseId(memo);
+  try {
+    await localNotifications.cancel({
+      notifications: Array.from({ length: 8 }, (_, index) => ({ id: baseId + index }))
+    });
+  } catch {
+    // The reminder may only be using the in-page fallback.
+  }
+}
+
+async function activateCareReminder(memo) {
+  if (!memo?.remindTime) return;
+  const permitted = await requestCareReminderPermission();
+  if (!permitted) {
+    toast("提醒已保存，系统通知权限未开启");
+    return;
+  }
+  await scheduleNativeCareReminder(memo);
+  refreshCareReminderTimers();
 }
 
 function turtleLabel(turtle) {
@@ -535,6 +956,278 @@ function money(value) {
 
 function valueOrFallback(value, fallback = "") {
   return value === undefined || value === null ? fallback : value;
+}
+
+function turtleFormDraft() {
+  return state.formDraft && typeof state.formDraft === "object" && !Array.isArray(state.formDraft) ? state.formDraft : {};
+}
+
+function turtleFormValue(key, fallback = "") {
+  const value = turtleFormDraft()[key];
+  return valueOrFallback(value, fallback);
+}
+
+function turtleFormSelected(key, option, fallback = "") {
+  return turtleFormValue(key, fallback) === option ? "selected" : "";
+}
+
+function captureTurtleFormDraft(form = document.querySelector("#turtleForm")) {
+  if (!form) return { ...turtleFormDraft() };
+  const data = new FormData(form);
+  return TURTLE_FORM_DRAFT_FIELDS.reduce((draft, key) => {
+    draft[key] = String(data.get(key) || "");
+    return draft;
+  }, {});
+}
+
+function preserveTurtleForm(extra = {}) {
+  setState({ formDraft: captureTurtleFormDraft(), ...extra });
+}
+
+function ledgerFormDraft() {
+  return state.ledgerDraftForm && typeof state.ledgerDraftForm === "object" && !Array.isArray(state.ledgerDraftForm) ? state.ledgerDraftForm : {};
+}
+
+function ledgerFormValue(key, fallback = "") {
+  const value = ledgerFormDraft()[key];
+  return valueOrFallback(value, fallback);
+}
+
+function ledgerFormSelected(key, option, fallback = "") {
+  return ledgerFormValue(key, fallback) === option ? "selected" : "";
+}
+
+function captureLedgerFormDraft(form = document.querySelector("#ledgerForm")) {
+  if (!form) return { ...ledgerFormDraft() };
+  const data = new FormData(form);
+  return LEDGER_FORM_DRAFT_FIELDS.reduce((draft, key) => {
+    draft[key] = String(data.get(key) || "");
+    return draft;
+  }, {});
+}
+
+function preserveLedgerForm(extra = {}) {
+  setState({ ledgerDraftForm: captureLedgerFormDraft(), ...extra });
+}
+
+function readImageAsDataUrl(file, maxSide = 960, quality = 0.66, maxLength = 260000) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      reject(new Error("请选择图片"));
+      return;
+    }
+    if (file.type && !file.type.startsWith("image/")) {
+      reject(new Error("请选择图片文件"));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.onload = () => {
+      const original = String(reader.result || "");
+      const image = new Image();
+      image.onload = () => {
+        const originalWidth = image.width || maxSide;
+        const originalHeight = image.height || maxSide;
+        let side = maxSide;
+        let currentQuality = quality;
+        let dataUrl = original;
+
+        for (let attempt = 0; attempt < 7; attempt += 1) {
+          const scale = Math.min(1, side / Math.max(originalWidth, originalHeight));
+          const width = Math.max(1, Math.round(originalWidth * scale));
+          const height = Math.max(1, Math.round(originalHeight * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const context = canvas.getContext("2d");
+          if (!context) break;
+          context.drawImage(image, 0, 0, width, height);
+          dataUrl = canvas.toDataURL("image/jpeg", currentQuality);
+          if (dataUrl.length <= maxLength || (side <= 480 && currentQuality <= 0.52)) break;
+          side = Math.max(480, Math.round(side * 0.82));
+          currentQuality = Math.max(0.52, currentQuality - 0.06);
+        }
+
+        resolve(dataUrl);
+      };
+      image.onerror = () => resolve(original);
+      image.src = original;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function apiAssetUrl(url) {
+  const value = String(url || "");
+  if (!value || /^(https?:|data:|blob:)/i.test(value)) return value;
+  const base = String(window.TURTLE_API_BASE_URL || "").replace(/\/+$/, "");
+  const pathValue = value.startsWith("/") ? value : `/${value}`;
+  return base ? `${base}${pathValue}` : pathValue;
+}
+
+function isEmbeddedImage(value) {
+  return /^data:image\//i.test(String(value || ""));
+}
+
+function compressImageDataUrl(source, maxSide = 960, quality = 0.66, maxLength = 260000) {
+  return new Promise(resolve => {
+    const original = String(source || "");
+    const image = new Image();
+    image.onload = () => {
+      const originalWidth = image.width || maxSide;
+      const originalHeight = image.height || maxSide;
+      let side = maxSide;
+      let currentQuality = quality;
+      let dataUrl = original;
+
+      for (let attempt = 0; attempt < 7; attempt += 1) {
+        const scale = Math.min(1, side / Math.max(originalWidth, originalHeight));
+        const width = Math.max(1, Math.round(originalWidth * scale));
+        const height = Math.max(1, Math.round(originalHeight * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        if (!context) break;
+        context.drawImage(image, 0, 0, width, height);
+        dataUrl = canvas.toDataURL("image/jpeg", currentQuality);
+        if (dataUrl.length <= maxLength || (side <= 480 && currentQuality <= 0.52)) break;
+        side = Math.max(480, Math.round(side * 0.82));
+        currentQuality = Math.max(0.52, currentQuality - 0.06);
+      }
+
+      resolve(dataUrl);
+    };
+    image.onerror = () => resolve(original);
+    image.src = original;
+  });
+}
+
+function requireCloudImageSession() {
+  if (!CONFIGURED_SMS_BACKEND) throw new Error("当前未连接云端服务，暂时无法上传图片");
+  if (!state.loggedInPhone || !currentCloudToken()) throw new Error("请先登录账号后再上传图片");
+}
+
+async function uploadDataUrlToCloud(image, kind = "image") {
+  requireCloudImageSession();
+  const uploadImage = isEmbeddedImage(image)
+    ? await compressImageDataUrl(image, kind === "avatar" ? 768 : 960, kind === "avatar" ? 0.78 : 0.66, 260000)
+    : image;
+  const result = await apiPost("/api/upload/image", {
+    phone: state.loggedInPhone,
+    token: currentCloudToken(),
+    kind,
+    image: uploadImage
+  });
+  if (!result.url) throw new Error("云端未返回图片地址");
+  return apiAssetUrl(result.url);
+}
+
+async function uploadImageToServer(file, kind = "image", options = {}) {
+  requireCloudImageSession();
+  const image = await readImageAsDataUrl(
+    file,
+    options.maxSide || 960,
+    options.quality || 0.66,
+    options.maxLength || 260000
+  );
+  try {
+    return await uploadDataUrlToCloud(image, kind);
+  } catch (error) {
+    console.warn("图片上传云端失败", error);
+    throw new Error(error.message || "图片需要上传到云端，请检查网络或服务器后重试");
+  }
+}
+
+function isMigratableImage(value) {
+  return isEmbeddedImage(value) && value !== defaultPhoto;
+}
+
+async function migrateImageField(target, field, kind) {
+  if (!target || !isMigratableImage(target[field])) return false;
+  target[field] = await uploadDataUrlToCloud(target[field], kind);
+  return true;
+}
+
+async function migrateTurtleImageSet(turtle, kind = "turtle") {
+  let changed = false;
+  changed = await migrateImageField(turtle, "photo", kind) || changed;
+  if (Array.isArray(turtle.measureHistory)) {
+    for (const item of turtle.measureHistory) {
+      changed = await migrateImageField(item, "photo", kind) || changed;
+      changed = await migrateImageField(item, "oldPhoto", kind) || changed;
+      changed = await migrateImageField(item, "newPhoto", kind) || changed;
+    }
+  }
+  return changed;
+}
+
+async function migrateEmbeddedImagesToCloud() {
+  if (cloudImageMigrationInFlight || !hasCloudSession()) return false;
+  cloudImageMigrationInFlight = true;
+  let changed = false;
+  try {
+    let accountAvatar = state.accountAvatar;
+    if (isMigratableImage(accountAvatar)) {
+      accountAvatar = await uploadDataUrlToCloud(accountAvatar, "avatar");
+      changed = true;
+    }
+
+    const turtles = (state.turtles || []).map(turtle => ({
+      ...turtle,
+      measureHistory: Array.isArray(turtle.measureHistory) ? turtle.measureHistory.map(item => ({ ...item })) : []
+    }));
+    for (const turtle of turtles) {
+      changed = await migrateTurtleImageSet(turtle, "turtle") || changed;
+    }
+
+    const ledgerRecords = (state.ledgerRecords || []).map(item => ({
+      ...item,
+      turtleSnapshot: item.turtleSnapshot ? {
+        ...item.turtleSnapshot,
+        measureHistory: Array.isArray(item.turtleSnapshot.measureHistory)
+          ? item.turtleSnapshot.measureHistory.map(history => ({ ...history }))
+          : []
+      } : item.turtleSnapshot
+    }));
+    for (const item of ledgerRecords) {
+      changed = await migrateImageField(item, "photo", "ledger") || changed;
+      if (item.turtleSnapshot) {
+        changed = await migrateTurtleImageSet(item.turtleSnapshot, "turtle") || changed;
+      }
+    }
+
+    const breedingRecords = (state.breedingRecords || []).map(item => ({
+      ...item,
+      editHistory: Array.isArray(item.editHistory) ? item.editHistory.map(history => ({ ...history })) : []
+    }));
+    for (const item of breedingRecords) {
+      changed = await migrateImageField(item, "photo", "breeding") || changed;
+      if (Array.isArray(item.editHistory)) {
+        for (const history of item.editHistory) {
+          changed = await migrateImageField(history, "photo", "breeding") || changed;
+          changed = await migrateImageField(history, "oldPhoto", "breeding") || changed;
+          changed = await migrateImageField(history, "newPhoto", "breeding") || changed;
+        }
+      }
+    }
+
+    if (changed) {
+      state = { ...state, accountAvatar, turtles, ledgerRecords, breedingRecords };
+      saveState({ skipCloud: true });
+      render();
+      refreshCareReminderTimers();
+      await pushCloudDataNow(true);
+      toast("旧照片已迁移到云端");
+    }
+    return changed;
+  } catch (error) {
+    console.warn("旧照片迁移云端失败", error);
+    toast(error.message || "旧照片迁移云端失败，请稍后重试");
+    return false;
+  } finally {
+    cloudImageMigrationInFlight = false;
+  }
 }
 
 function turtleDraftValue(turtle, key) {
@@ -635,7 +1328,7 @@ function tabIcon(name) {
 }
 
 function bottomNav() {
-  const minePages = ["mine", "calendar", "satisfaction", "feedback", "account", "sync", "about"];
+  const minePages = ["mine", "calendar", "satisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "sync", "about", "membership", "reports", "professional"];
   return `
     <nav class="bottom-nav">
       <button class="${state.page === "home" ? "active" : ""}" data-page="home">${tabIcon("home")}看板</button>
@@ -799,9 +1492,12 @@ function pageTurtleDetail() {
           <label><span>性别</span><select class="select" name="gender"><option ${turtleDraftValue(t, "gender") === "公" ? "selected" : ""}>公</option><option ${turtleDraftValue(t, "gender") === "母" ? "selected" : ""}>母</option><option ${turtleDraftValue(t, "gender") === "未知" ? "selected" : ""}>未知</option></select></label>
           <label><span>当前体重(g)</span><input class="field" name="weight" type="number" min="0" step="0.1" required value="${turtleDraftValue(t, "weight")}"></label>
           <label><span>背甲长度(cm)</span><input class="field" name="carapaceLength" type="number" min="0" step="0.1" required value="${turtleDraftValue(t, "carapaceLength")}"></label>
-          <label><span>背甲宽度(cm)</span><input class="field" name="carapaceWidth" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "carapaceWidth")}"></label>
-          <label><span>背高(cm)</span><input class="field" name="shellHeight" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "shellHeight")}"></label>
-          <label><span>腹甲长度(cm)</span><input class="field" name="plastronLength" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "plastronLength")}"></label>
+          <details class="measure-extra">
+            <summary><span>更多体测数据</span><small>背甲宽度、背高、腹甲长度</small></summary>
+            <label><span>背甲宽度(cm)</span><input class="field" name="carapaceWidth" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "carapaceWidth")}"></label>
+            <label><span>背高(cm)</span><input class="field" name="shellHeight" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "shellHeight")}"></label>
+            <label><span>腹甲长度(cm)</span><input class="field" name="plastronLength" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "plastronLength")}"></label>
+          </details>
           <label><span>饲养状态</span><select class="select" name="status"><option ${turtleDraftValue(t, "status") === "正常饲养" ? "selected" : ""}>正常饲养</option><option ${turtleDraftValue(t, "status") === "已转让" ? "selected" : ""}>已转让</option><option ${turtleDraftValue(t, "status") === "已死亡" ? "selected" : ""}>已死亡</option></select></label>
           <label><span>健康状态</span><select class="select" name="health"><option ${turtleDraftValue(t, "health") === "健康" ? "selected" : ""}>健康</option><option ${turtleDraftValue(t, "health") === "生病" ? "selected" : ""}>生病</option></select></label>
           <label><span>入手日期</span><input class="field" name="acquiredDate" type="date" value="${turtleDraftValue(t, "acquiredDate") || formatDate(t.acquiredDate || new Date())}"></label>
@@ -928,6 +1624,10 @@ function pageBreeds() {
 function pageAdd() {
   const kept = state.keptSpecies.length ? state.keptSpecies.map(code => speciesByCode(code)).filter(Boolean) : speciesList.slice(0, 8);
   const today = formatDate(new Date());
+  const draftSpeciesCode = turtleFormValue("speciesCode", state.selectedSpeciesCode);
+  const draftStatus = turtleFormValue("status", "正常饲养");
+  const draftHealth = turtleFormValue("health", "健康");
+  const draftSource = turtleFormValue("source", "购买");
   return `
     ${topbar("新建档案", true)}
     <main class="content page-fresh">
@@ -942,11 +1642,11 @@ function pageAdd() {
           <div class="label">品种代码</div>
           <select class="select" name="speciesCode" required>
             <option value="">请选择品种</option>
-            ${kept.map(s => `<option value="${s.code}" ${state.selectedSpeciesCode === s.code ? "selected" : ""}>${s.code} · ${s.name}</option>`).join("")}
+            ${kept.map(s => `<option value="${s.code}" ${draftSpeciesCode === s.code ? "selected" : ""}>${s.code} · ${s.name}</option>`).join("")}
           </select>
           <button class="text-green" type="button" data-page="species" style="margin-top:8px;">没有这个品种？去图鉴添加</button>
           <div class="label">龟龟昵称</div>
-          <input class="field" name="code" placeholder="例如：小核桃、黑豆、将军">
+          <input class="field" name="code" placeholder="例如：小核桃、黑豆、将军" value="${escapeHtml(turtleFormValue("code"))}">
           <div class="label">性别 <span class="required">*</span></div>
           <div class="radio-row">
             ${["公", "母", "未知"].map(g => `<button class="choice ${state.formGender === g ? "active" : ""}" type="button" data-gender="${g}">${g}</button>`).join("")}
@@ -955,27 +1655,30 @@ function pageAdd() {
         <section class="form-block fresh-card">
           <h3>体测数据</h3>
           <div class="label">当前体重(g) <span class="required">*</span></div>
-          <input class="field" name="weight" type="number" min="0" step="0.1" required>
+          <input class="field" name="weight" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("weight"))}" required>
           <div class="label">背甲长度(cm) <span class="required">*</span></div>
-          <input class="field" name="carapaceLength" type="number" min="0" step="0.1" required>
-          <div class="label">背甲宽度(cm)</div><input class="field" name="carapaceWidth" type="number" min="0" step="0.1">
-          <div class="label">背高(cm)</div><input class="field" name="shellHeight" type="number" min="0" step="0.1">
-          <div class="label">腹甲长度(cm)</div><input class="field" name="plastronLength" type="number" min="0" step="0.1">
+          <input class="field" name="carapaceLength" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("carapaceLength"))}" required>
+          <details class="measure-extra">
+            <summary><span>更多体测数据</span><small>背甲宽度、背高、腹甲长度</small></summary>
+            <label><span>背甲宽度(cm)</span><input class="field" name="carapaceWidth" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("carapaceWidth"))}"></label>
+            <label><span>背高(cm)</span><input class="field" name="shellHeight" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("shellHeight"))}"></label>
+            <label><span>腹甲长度(cm)</span><input class="field" name="plastronLength" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("plastronLength"))}"></label>
+          </details>
         </section>
         <section class="form-block fresh-card">
           <h3>当前状态</h3>
           <div class="label">饲养状态</div>
-          <select class="select" name="status"><option>正常饲养</option><option>已转让</option><option>已死亡</option></select>
+          <select class="select" name="status"><option ${turtleFormSelected("status", "正常饲养", "正常饲养")}>正常饲养</option><option ${draftStatus === "已转让" ? "selected" : ""}>已转让</option><option ${draftStatus === "已死亡" ? "selected" : ""}>已死亡</option></select>
           <div class="label">健康状态</div>
-          <select class="select" name="health"><option>健康</option><option>生病</option></select>
+          <select class="select" name="health"><option ${turtleFormSelected("health", "健康", "健康")}>健康</option><option ${draftHealth === "生病" ? "selected" : ""}>生病</option></select>
         </section>
         <section class="form-block fresh-card">
           <h3>入手记录</h3>
-          <div class="label">入手日期</div><input class="field" name="acquiredDate" type="date" value="${today}">
+          <div class="label">入手日期</div><input class="field" name="acquiredDate" type="date" value="${escapeHtml(turtleFormValue("acquiredDate", today))}">
           <div class="label">来到你家的方式</div>
-          <select class="select" name="source"><option>购买</option><option>孵化</option><option>其他</option></select>
-          <div class="label">花费(元)</div><input class="field" name="price" type="number" min="0" step="0.01">
-          <div class="label">备注</div><textarea name="note" placeholder="性格、食欲、卖家、到家表现等都可以写在这里"></textarea>
+          <select class="select" name="source"><option ${turtleFormSelected("source", "购买", "购买")}>购买</option><option ${draftSource === "孵化" ? "selected" : ""}>孵化</option><option ${draftSource === "其他" ? "selected" : ""}>其他</option></select>
+          <div class="label">花费(元)</div><input class="field" name="price" type="number" min="0" step="0.01" value="${escapeHtml(turtleFormValue("price"))}">
+          <div class="label">备注</div><textarea name="note" placeholder="性格、食欲、卖家、到家表现等都可以写在这里">${escapeHtml(turtleFormValue("note"))}</textarea>
         </section>
         <button class="primary" type="submit">保存档案</button>
       </form>
@@ -986,6 +1689,7 @@ function pageAdd() {
 function pageMemos() {
   const list = state.memoTab === "all" ? state.memos : state.memos.filter(m => state.memoTab === "repeat" ? m.repeat : !m.repeat);
   const editingMemo = state.memos.find(m => m.id === state.memoEditingId);
+  const selectedWeekdays = memoWeekdays(editingMemo);
   return `
     ${topbar("护理提醒", true)}
     <main class="content page-fresh">
@@ -996,9 +1700,21 @@ function pageMemos() {
       ${state.memoDraftOpen ? `
         <form class="memo-form fresh-card" id="memoForm">
           <div class="form-head"><div><p class="eyebrow dark">${editingMemo ? "调整护理" : "新增护理"}</p><h3>${editingMemo ? "更新这条护理事项" : "记下一件要照看的事"}</h3></div><button type="button" class="danger-link" data-cancel-memo>取消</button></div>
-          <label><span>事项名称</span><input class="field" name="title" required placeholder="例如：换水、喂食、晒背" value="${editingMemo?.title || ""}"></label>
-          <label><span>补充说明</span><textarea name="content" placeholder="可以写频率、用量、注意事项">${editingMemo?.content || ""}</textarea></label>
-          <label><span>提醒类型</span><select class="select" name="repeat"><option value="false" ${!editingMemo?.repeat ? "selected" : ""}>单次护理</option><option value="true" ${editingMemo?.repeat ? "selected" : ""}>循环护理</option></select></label>
+          <label><span>事项名称</span><input class="field" name="title" required placeholder="例如：换水、喂食、晒背" value="${escapeHtml(editingMemo?.title || "")}"></label>
+          <label><span>设定时间</span><input class="field" name="remindTime" type="time" value="${escapeHtml(editingMemo?.remindTime || "")}"></label>
+          <label><span>重复</span><select class="select" name="repeat"><option value="false" ${!editingMemo?.repeat ? "selected" : ""}>只执行一次</option><option value="true" ${editingMemo?.repeat ? "selected" : ""}>重复执行</option></select></label>
+          <div class="weekday-field">
+            <span>每周生效日（以开始时间为准）</span>
+            <div class="weekday-picker">
+              ${WEEKDAY_OPTIONS.map(day => `
+                <label class="weekday-chip ${selectedWeekdays.includes(day.value) ? "active" : ""}">
+                  <input type="checkbox" name="weekdays" value="${day.value}" ${selectedWeekdays.includes(day.value) ? "checked" : ""}>
+                  ${day.label}
+                </label>
+              `).join("")}
+            </div>
+          </div>
+          <label><span>补充说明</span><textarea name="content" placeholder="可以写频率、用量、注意事项">${escapeHtml(editingMemo?.content || "")}</textarea></label>
           <button class="primary" type="submit">${editingMemo ? "保存调整" : "添加护理"}</button>
         </form>
       ` : ""}
@@ -1010,7 +1726,7 @@ function pageMemos() {
       </section>
       ${list.map(m => `
         <article class="card memo-row">
-          <div><strong>${m.title}</strong><p>${m.content || "无备注"}</p><small class="muted">上次操作 ${formatTime(m.updatedAt)} · ${m.repeat ? "循环提醒" : "单次提醒"}</small></div>
+          <div><strong>${m.title}</strong><p>${m.content || "无备注"}</p><small class="muted">上次操作 ${formatTime(m.updatedAt)} · ${m.remindTime || "未设时间"} · ${m.repeat ? "重复执行" : "只执行一次"}</small></div>
           <div><button class="text-green" data-edit-memo="${m.id}">调整</button><button class="danger-link" data-delete-memo="${m.id}">移除</button></div>
         </article>
       `).join("") || `<div class="empty"><div><strong>还没有护理提醒</strong><br>点击加号新建一条</div></div>`}
@@ -1072,9 +1788,12 @@ function pageLedger() {
 
 function ledgerForm() {
   const type = state.ledgerDraftType;
-  const today = formatDate(new Date());
-  const turtle = state.turtles.find(t => t.id === state.ledgerDraftTurtleId);
+  const draftTurtleId = ledgerFormValue("turtleId", state.ledgerDraftTurtleId);
+  const turtle = state.turtles.find(t => t.id === draftTurtleId);
+  const today = ledgerFormValue("recordDate", formatDate(new Date()));
   const defaultAmount = type === "loss" && turtle?.price ? turtle.price : "";
+  const amountValue = ledgerFormValue("amount", defaultAmount);
+  const purchaseGender = ledgerFormValue("purchaseGender", state.ledgerPurchaseGender || "未知") || "未知";
   const isPurchase = type === "purchase";
   return `
     <form class="ledger-shell" id="ledgerForm">
@@ -1088,19 +1807,19 @@ function ledgerForm() {
         <div class="label">关联档案</div>
         <select class="select" name="turtleId">
           <option value="">${isPurchase ? "收购后新建档案" : "不关联档案"}</option>
-          ${state.turtles.map(t => `<option value="${t.id}" ${state.ledgerDraftTurtleId === t.id ? "selected" : ""}>${t.code} · ${t.speciesName}</option>`).join("")}
+          ${state.turtles.map(t => `<option value="${t.id}" ${draftTurtleId === t.id ? "selected" : ""}>${t.code} · ${t.speciesName}</option>`).join("")}
         </select>
         ${isPurchase ? `
           <div class="label">品种代码</div>
-          <select class="select" name="purchaseSpeciesCode" required><option value="">请选择品种</option>${speciesList.map(s => `<option value="${s.code}">${s.code} · ${s.name}</option>`).join("")}</select>
+          <select class="select" name="purchaseSpeciesCode" required><option value="">请选择品种</option>${speciesList.map(s => `<option value="${s.code}" ${ledgerFormSelected("purchaseSpeciesCode", s.code)}>${s.code} · ${s.name}</option>`).join("")}</select>
           <button class="text-green" type="button" data-page="species" style="margin-top:8px;">没有这个品种？去图鉴添加</button>
           <div class="label">龟龟昵称</div>
-          <input class="field" name="purchaseCode" placeholder="例如：小核桃、黑豆、将军">
+          <input class="field" name="purchaseCode" value="${escapeHtml(ledgerFormValue("purchaseCode"))}" placeholder="例如：小核桃、黑豆、将军">
           <div class="label">性别 <span class="required">*</span></div>
           <div class="radio-row">
-            ${["公", "母", "未知"].map(g => `<button class="choice ${state.ledgerPurchaseGender === g ? "active" : ""}" type="button" data-purchase-gender="${g}">${g}</button>`).join("")}
+            ${["公", "母", "未知"].map(g => `<button class="choice ${purchaseGender === g ? "active" : ""}" type="button" data-purchase-gender="${g}">${g}</button>`).join("")}
           </div>
-          <input type="hidden" name="purchaseGender" value="${state.ledgerPurchaseGender}">
+          <input type="hidden" name="purchaseGender" value="${purchaseGender}">
         ` : turtle ? `
           <div class="label">品种代码</div>
           <input class="field" value="${turtle.speciesCode} · ${turtle.speciesName}" readonly>
@@ -1116,21 +1835,24 @@ function ledgerForm() {
       <section class="form-block fresh-card">
         <h3>体测数据</h3>
         <div class="label">当前体重(g) ${isPurchase ? `<span class="required">*</span>` : ""}</div>
-        <input class="field" name="weight" type="number" min="0" step="0.1" value="${turtle?.weight || ""}" ${isPurchase ? "required" : ""}>
+        <input class="field" name="weight" type="number" min="0" step="0.1" value="${escapeHtml(ledgerFormValue("weight", turtle?.weight || ""))}" ${isPurchase ? "required" : ""}>
         <div class="label">背甲长度(cm) ${isPurchase ? `<span class="required">*</span>` : ""}</div>
-        <input class="field" name="carapaceLength" type="number" min="0" step="0.1" value="${turtle?.carapaceLength || ""}" ${isPurchase ? "required" : ""}>
-        <div class="label">背甲宽度(cm)</div><input class="field" name="carapaceWidth" type="number" min="0" step="0.1" value="${turtle?.carapaceWidth || ""}">
-        <div class="label">背高(cm)</div><input class="field" name="shellHeight" type="number" min="0" step="0.1" value="${turtle?.shellHeight || ""}">
-        <div class="label">腹甲长度(cm)</div><input class="field" name="plastronLength" type="number" min="0" step="0.1" value="${turtle?.plastronLength || ""}">
+        <input class="field" name="carapaceLength" type="number" min="0" step="0.1" value="${escapeHtml(ledgerFormValue("carapaceLength", turtle?.carapaceLength || ""))}" ${isPurchase ? "required" : ""}>
+        <details class="measure-extra">
+          <summary><span>更多体测数据</span><small>背甲宽度、背高、腹甲长度</small></summary>
+          <label><span>背甲宽度(cm)</span><input class="field" name="carapaceWidth" type="number" min="0" step="0.1" value="${escapeHtml(ledgerFormValue("carapaceWidth", turtle?.carapaceWidth || ""))}"></label>
+          <label><span>背高(cm)</span><input class="field" name="shellHeight" type="number" min="0" step="0.1" value="${escapeHtml(ledgerFormValue("shellHeight", turtle?.shellHeight || ""))}"></label>
+          <label><span>腹甲长度(cm)</span><input class="field" name="plastronLength" type="number" min="0" step="0.1" value="${escapeHtml(ledgerFormValue("plastronLength", turtle?.plastronLength || ""))}"></label>
+        </details>
       </section>
 
       ${isPurchase ? `
         <section class="form-block fresh-card">
           <h3>当前状态</h3>
           <div class="label">饲养状态</div>
-          <select class="select" name="purchaseStatus"><option>正常饲养</option><option>已转让</option><option>已死亡</option></select>
+          <select class="select" name="purchaseStatus"><option ${ledgerFormSelected("purchaseStatus", "正常饲养", "正常饲养")}>正常饲养</option><option ${ledgerFormSelected("purchaseStatus", "已转让", "正常饲养")}>已转让</option><option ${ledgerFormSelected("purchaseStatus", "已死亡", "正常饲养")}>已死亡</option></select>
           <div class="label">健康状态</div>
-          <select class="select" name="purchaseHealth"><option>健康</option><option>生病</option></select>
+          <select class="select" name="purchaseHealth"><option ${ledgerFormSelected("purchaseHealth", "健康", "健康")}>健康</option><option ${ledgerFormSelected("purchaseHealth", "生病", "健康")}>生病</option></select>
           <input type="hidden" name="purchaseSource" value="购买">
         </section>
       ` : ""}
@@ -1138,8 +1860,8 @@ function ledgerForm() {
       <section class="form-block fresh-card">
         <h3>${isPurchase ? "入手记录" : `${ledgerTypeText(type)}记录`}</h3>
         <div class="label">${isPurchase ? "入手日期" : "日期"}</div><input class="field" name="recordDate" type="date" value="${today}">
-        <div class="label">${isPurchase ? "花费(元)" : "金额(元)"}</div><input class="field" name="amount" type="number" min="0" step="0.01" required value="${defaultAmount}">
-        <div class="label">备注</div><textarea name="note" placeholder="${isPurchase ? "性格、食欲、卖家、到家表现等都可以写在这里" : "客户、损耗原因、交接情况等都可以写在这里"}"></textarea>
+        <div class="label">${isPurchase ? "花费(元)" : "金额(元)"}</div><input class="field" name="amount" type="number" min="0" step="0.01" required value="${escapeHtml(amountValue)}">
+        <div class="label">备注</div><textarea name="note" placeholder="${isPurchase ? "性格、食欲、卖家、到家表现等都可以写在这里" : "客户、损耗原因、交接情况等都可以写在这里"}">${escapeHtml(ledgerFormValue("note"))}</textarea>
       </section>
       <button class="primary" type="submit">保存${ledgerTypeText(type)}</button>
     </form>
@@ -1364,9 +2086,26 @@ function pageMine() {
   const profileSub = loggedIn ? maskPhone(state.loggedInPhone) : "登录后同步你的档案和账本";
   return `
     ${topbar("我的空间")}
-    <section class="profile fresh-profile account-profile">${accountAvatarMarkup()}<div><h2>${profileTitle}</h2><p class="profile-phone">${profileSub}</p></div></section>
+    <section class="profile fresh-profile account-profile space-profile-card">
+      ${accountAvatarMarkup()}
+      <div class="space-profile-main">
+        <div class="space-name-line">
+          <h2>${profileTitle}</h2>
+          <span class="profile-plan-badge ${activePlanKey()}">${currentPlanBadge()}</span>
+        </div>
+        <p class="profile-phone">${profileSub}</p>
+        <div class="space-profile-pills">
+          <button type="button" data-page="account">${loggedIn ? "编辑资料" : "登录 / 注册"}</button>
+          <button type="button" data-page="membership">升级权益</button>
+          <button type="button" data-page="account">账号安全</button>
+        </div>
+      </div>
+    </section>
     <main class="content page-fresh">
-      <button class="primary account-login" data-page="account">${loggedIn ? "编辑资料" : "登录 / 注册账号"}</button>
+      <button class="membership-ribbon" type="button" data-page="membership">
+        <strong>${hasPlan("member") ? currentPlanDetail() : "开通 VIP 会员"}</strong>
+        <span>${freeArchiveBalanceText()}</span>
+      </button>
       <section class="account-brief">
         <div><strong>${state.turtles.length}</strong><span>档案</span></div>
         <div><strong>${state.ledgerRecords.length}</strong><span>账本</span></div>
@@ -1379,6 +2118,9 @@ function pageMine() {
         </div>
       </section>
       <section class="fresh-card mine-list">
+        <button class="mine-row" data-page="membership"><span>冠</span><strong>会员订阅</strong><em>${currentPlanLabel()}</em></button>
+        <button class="mine-row" data-page="reports"><span>表</span><strong>高级报表</strong><em>${hasPlan("member") ? "已解锁" : "会员"}</em></button>
+        <button class="mine-row" data-page="professional"><span>专</span><strong>专业工具</strong><em>${hasPlan("pro") ? "已解锁" : "专业版"}</em></button>
         <button class="mine-row" data-page="calendar"><span>◷</span><strong>操作日志</strong></button>
         <button class="mine-row" data-page="satisfaction"><span>☆</span><strong>满意度调查</strong></button>
         <button class="mine-row" data-page="feedback"><span>✎</span><strong>意见反馈</strong></button>
@@ -1450,23 +2192,6 @@ function pagePublicSatisfaction() {
           </div>
           <p>${escapeHtml(item.comment)}</p>
           <small>${formatTime(item.createdAt)}</small>
-          <div class="review-comments">
-            <div class="review-comments-title">评论 ${Array.isArray(item.comments) ? item.comments.length : 0}</div>
-            ${(item.comments || []).map(comment => `
-              <div class="review-comment">
-                <div>
-                  <strong>${escapeHtml(comment.authorName || "壳友")}</strong>
-                  <p>${escapeHtml(comment.content)}</p>
-                  <small>${formatTime(comment.createdAt)}</small>
-                </div>
-                ${comment.canDelete ? `<button class="danger-link comment-delete" type="button" data-delete-review-comment="${item.id}:${comment.id}">删除</button>` : ""}
-              </div>
-            `).join("") || `<p class="muted review-empty-comment">还没有评论</p>`}
-            <form class="review-comment-form" data-review-comment-form data-review-id="${item.id}">
-              <input class="field" name="content" placeholder="写一条评论" maxlength="500">
-              <button class="secondary" type="submit">评论</button>
-            </form>
-          </div>
         </article>
       `).join("") || `<div class="empty small-empty"><div><strong>还没有评价</strong><br>提交后会显示在这里</div></div>`}
     </main>
@@ -1549,33 +2274,36 @@ function publicFeedbackCard(item, options = {}) {
 }
 
 function pageFeedback() {
-  const loggedIn = Boolean(state.loggedInPhone);
   const items = sortedPublicFeedbacks();
   return `
     ${topbar("意见反馈", true)}
     <main class="content page-fresh feedback-page">
-      <section class="page-intro compact-intro">
+      <section class="page-intro compact-intro feedback-intro">
         <div><p class="eyebrow dark">公开反馈</p><h2>把想法发出来</h2><p>反馈会保存到云端，所有登录用户都能查看、点赞和评论。</p></div>
+        <button class="intro-action feedback-suggest-link" type="button" data-page="feedbackAdd">提建议✏️</button>
       </section>
-      ${loggedIn ? `
-        <form class="fresh-card survey-form" id="feedbackForm">
-          <label class="survey-field"><span>反馈类型</span><select class="select" name="type"><option>功能建议</option><option>界面问题</option><option>使用问题</option><option>其他</option></select></label>
-          <label class="survey-field"><span>反馈内容</span><textarea name="content" required placeholder="写下你遇到的问题，或希望新增的功能"></textarea></label>
-          <button class="primary" type="submit">发布反馈</button>
-        </form>
-      ` : `
-        <section class="fresh-card settings-card">
-          <div class="settings-title">请先登录账号</div>
-          <p class="muted">登录后可以发布反馈、点赞和评论。</p>
-          <button class="primary" type="button" data-page="account">登录 / 注册账号</button>
-        </section>
-      `}
       <section class="section-title"><span>反馈记录</span><small>${items.length} 条</small></section>
       <section class="feedback-feed">
         ${items.map(item => publicFeedbackCard(item)).join("") || `<div class="empty small-empty"><div><strong>还没有反馈</strong><br>发布后会显示在这里</div></div>`}
       </section>
     </main>
     ${bottomNav()}
+  `;
+}
+
+function pageFeedbackAdd() {
+  return `
+    ${topbar("提建议", true)}
+    <main class="content page-fresh feedback-page">
+      <section class="page-intro compact-intro">
+        <div><p class="eyebrow dark">公开反馈</p><h2>写下你的想法</h2><p>发布后会进入反馈记录，大家可以点赞和评论。</p></div>
+      </section>
+      <form class="fresh-card survey-form" id="feedbackForm">
+        <label class="survey-field"><span>反馈类型</span><select class="select" name="type"><option>功能建议</option><option>界面问题</option><option>使用问题</option><option>其他</option></select></label>
+        <label class="survey-field"><span>反馈内容</span><textarea name="content" required placeholder="写下你遇到的问题，或希望新增的功能"></textarea></label>
+        <button class="primary" type="submit">发布反馈</button>
+      </form>
+    </main>
   `;
 }
 
@@ -1655,15 +2383,240 @@ function pageAccount() {
   `;
 }
 
+function pageMembership() {
+  const levels = [
+    {
+      key: "free",
+      tone: "free",
+      badge: "普通",
+      title: "普通用户",
+      line: `免费记录 ${FREE_TURTLE_LIMIT} 只档案`,
+      desc: "适合刚开始记录，基础档案、繁殖和账本都能先用起来。",
+      status: `${freeArchiveBalanceText()}剩余`,
+      rights: [
+        ["10只", "档案数量", "免费记录基础档案"],
+        ["基础", "成长记录", "记录体重背甲数据"],
+        ["本机", "数据保存", "当前设备本地查看"],
+        ["可用", "提醒事项", "记录护理备忘"],
+        ["可用", "繁殖记录", "记录产蛋孵化信息"],
+        ["基础", "经营账本", "记录收购售出损耗"],
+        ["可用", "意见反馈", "发布建议与评论"],
+        ["升级", "云端同步", "开通会员后使用"]
+      ]
+    },
+    {
+      key: "member",
+      tone: "member",
+      badge: "会员",
+      title: "壳友会员",
+      line: "档案不限量 · 云端同步",
+      desc: "适合长期养龟，档案、照片、成长更新和多设备查看都更稳定。",
+      status: "开通后不限档案",
+      rights: [
+        ["不限", "档案数量", "长期记录不受限制"],
+        ["云端", "账号同步", "手机网页同步查看"],
+        ["完整", "照片留存", "照片和更新完整保存"],
+        ["完整", "成长记录", "尺寸变化持续留痕"],
+        ["完整", "繁殖记录", "产蛋受精孵化统计"],
+        ["完整", "账本统计", "收售损耗集中整理"],
+        ["可用", "数据导出", "方便备份和整理"],
+        ["优先", "功能建议", "建议优先进入规划"]
+      ]
+    },
+    {
+      key: "pro",
+      tone: "pro",
+      badge: "专业",
+      title: "专业版",
+      line: "经营管理 · 团队留痕",
+      desc: "面向繁殖场和商家，重点解决批次、库存、利润、售后和团队协作。",
+      status: "经营工具包",
+      rights: [
+        ["不限", "档案库存", "适合批量繁殖收售"],
+        ["批次", "库存管理", "按窝批品种跟踪"],
+        ["利润", "经营报表", "核算成本收入损耗"],
+        ["繁殖", "繁殖成绩", "种母表现持续对比"],
+        ["团队", "操作日志", "关键操作可追溯"],
+        ["售后", "客户记录", "交付和跟进留存"],
+        ["标签", "笼位管理", "区域架号盒号清楚"],
+        ["优先", "专属支持", "经营问题优先处理"]
+      ]
+    }
+  ];
+  const previewKey = ["free", "member", "pro"].includes(state.membershipPreviewLevel) ? state.membershipPreviewLevel : activePlanKey();
+  const activeLevel = levels.find(item => item.key === previewKey) || levels[0];
+  const memberPlans = SUBSCRIPTION_PLANS.filter(plan => plan.key === "member");
+  const buySection = previewKey === "member" ? `
+      <section class="vip-buy-section member-buy-section">
+        <div class="section-title vip-section-title"><span>开通会员</span><small>个人养龟推荐</small></div>
+        <div class="vip-plan-list" aria-label="会员价格卡片">
+          ${memberPlans.map(plan => `
+            <article class="vip-price-card member-wide-card ${plan.badge ? "recommend" : ""}">
+              <div>
+                ${plan.badge ? `<span class="vip-price-badge">${plan.badge}</span>` : ""}
+                <h3>${plan.cycleName}会员</h3>
+                <p>${plan.desc}</p>
+              </div>
+              <p class="vip-price"><strong>¥${plan.price}</strong><span>/${plan.period}</span></p>
+              <button class="primary" type="button" data-subscribe-plan="${plan.key}:${plan.cycle}">${subscriptionActive() && state.subscriptionPlan === plan.key && state.subscriptionCycle === plan.cycle ? "已开通" : "开通会员"}</button>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+    ` : previewKey === "pro" ? `
+      <section class="fresh-card vip-pro-panel">
+        <div>
+          <span class="vip-price-badge">专业版</span>
+          <h3>给繁殖场和商家的经营工具</h3>
+          <p>批次库存、繁殖成绩、利润核算、售后记录和团队操作留痕，适合把龟场当成长期生意来管理。</p>
+          <p class="vip-price"><strong>¥388</strong><span>/年</span></p>
+        </div>
+        <button class="primary" type="button" data-subscribe-plan="pro:yearly">${hasPlan("pro") ? "已开通" : "开通专业版"}</button>
+      </section>
+    ` : "";
+  return `
+    ${topbar("壳友会员", true)}
+    <main class="content page-fresh membership-page member-benefit-page tone-${activeLevel.tone}">
+      <section class="member-tier-stage tone-${activeLevel.tone}">
+        <div class="member-stage-copy">
+          <span>会员权益</span>
+          <strong>${currentPlanBadge()}</strong>
+        </div>
+        <div class="member-orbit" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="member-tier-scroll" aria-label="会员等级卡片">
+          ${levels.map(level => `
+            <button class="member-tier-card ${level.tone} ${level.key === previewKey ? "active" : ""}" type="button" data-membership-preview="${level.key}" aria-pressed="${level.key === previewKey ? "true" : "false"}">
+              <span class="tier-chip">${level.badge}</span>
+              <span class="tier-medal"><i></i></span>
+              <h2>${level.title}</h2>
+              <p>${level.line}</p>
+              <small>${level.desc}</small>
+              <strong>${level.status}</strong>
+            </button>
+          `).join("")}
+        </div>
+      </section>
+      <section class="member-rights-section tone-${activeLevel.tone}">
+        <p>开通即代表您同意并接受《壳友手账会员服务协议》</p>
+        <div class="member-rights-title">
+          <h3>我的权益</h3>
+          <span>${activeLevel.title}</span>
+        </div>
+        <div class="member-right-grid">
+          ${activeLevel.rights.map(([value, title, desc]) => `
+            <article class="member-right-item ${activeLevel.tone}">
+              <div class="right-icon"><span>${title.slice(0, 1)}</span><em>${value}</em></div>
+              <h4>${title}</h4>
+              <p>${desc}</p>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+      ${buySection}
+      ${previewKey === "free" ? "" : `<p class="iap-note">订阅权益会绑定当前手机号。正式上线后，购买、续费和恢复权益将通过账号自动同步。</p>`}
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function pageReports() {
+  const s = stats();
+  const finance = ledgerMoneyStats();
+  const breed = breedingStats();
+  const profit = finance.sold - finance.purchase - finance.loss;
+  const fertileRate = breed.egg ? Math.round((breed.fertile / breed.egg) * 100) : 0;
+  const hatchRate = breed.fertile ? Math.round((breed.hatch / breed.fertile) * 100) : 0;
+  return `
+    ${topbar("高级报表", true)}
+    <main class="content page-fresh reports-page">
+      <section class="page-intro compact-intro">
+        <div><p class="eyebrow dark">会员报表</p><h2>看清饲养和经营数据</h2><p>会员可查看成长、繁殖、健康和账本统计，并导出数据。</p></div>
+      </section>
+      <section class="report-grid">
+        <article class="fresh-card report-card"><span>档案总数</span><strong>${s.total}</strong><small>${s.active} 只在养</small></article>
+        <article class="fresh-card report-card"><span>健康状态</span><strong>${s.healthy}</strong><small>${s.sick} 只需关注</small></article>
+        <article class="fresh-card report-card"><span>品种覆盖</span><strong>${s.species}</strong><small>常用品种 ${state.keptSpecies.length}</small></article>
+        <article class="fresh-card report-card"><span>经营利润</span><strong class="${profit >= 0 ? "good" : "bad"}">¥${money(profit)}</strong><small>售出 - 收购 - 损耗</small></article>
+      </section>
+      <section class="fresh-card chart-card">
+        <div class="settings-title">资金概览</div>
+        ${[
+          ["收购成本", finance.purchase, "#2f80ed"],
+          ["售出收入", finance.sold, "#2fa77f"],
+          ["损耗金额", finance.loss, "#d94b62"]
+        ].map(([label, value, color]) => {
+          const max = Math.max(finance.purchase, finance.sold, finance.loss, 1);
+          return `<div class="chart-row"><span>${label}</span><b><i style="width:${Math.round((value / max) * 100)}%;background:${color}"></i></b><em>¥${money(value)}</em></div>`;
+        }).join("")}
+      </section>
+      <section class="fresh-card chart-card">
+        <div class="settings-title">繁殖孵化</div>
+        <div class="breeding-report">
+          <div><strong>${breed.egg}</strong><span>产蛋</span></div>
+          <div><strong>${breed.fertile}</strong><span>受精</span></div>
+          <div><strong>${breed.hatch}</strong><span>孵化</span></div>
+        </div>
+        <p class="muted">受精率 ${fertileRate}% · 孵化率 ${hatchRate}%</p>
+      </section>
+      <section class="fresh-card export-card">
+        <div>
+          <div class="settings-title">数据导出</div>
+          <p class="muted">导出档案、账本和繁殖数据，便于留档或二次整理。</p>
+        </div>
+        <button class="secondary" type="button" data-export-data="account">导出 CSV</button>
+        <button class="secondary" type="button" data-export-data="business">经营报表</button>
+      </section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function pageProfessionalTools() {
+  const turtleOptions = state.turtles.map(turtle => `<option value="${turtle.id}">${escapeHtml(turtleLabel(turtle))}</option>`).join("");
+  return `
+    ${topbar("专业工具", true)}
+    <main class="content page-fresh professional-page">
+      <section class="page-intro compact-intro">
+        <div><p class="eyebrow dark">专业版</p><h2>批量经营工作台</h2><p>用于收购、售出、损耗和交付场景，提高重复记录效率。</p></div>
+      </section>
+      <section class="fresh-card survey-form">
+        <div class="settings-title">批量导入档案</div>
+        <p class="muted">每行一只龟，格式：昵称,品种代码或名称,性别,体重g,背甲cm,购入价。</p>
+        <form id="batchImportForm">
+          <textarea class="field batch-area" name="batchTurtles" placeholder="小核桃,GHG,母,202,9.6,300&#10;黑豆,ZDG,未知,180,8.4,"></textarea>
+          <button class="primary" type="submit">批量导入</button>
+        </form>
+      </section>
+      <section class="fresh-card survey-form">
+        <div class="settings-title">交付说明</div>
+        <p class="muted">售出时可快速生成给买家的龟龟信息和基础护理提醒。</p>
+        <form id="deliveryNoteForm">
+          <label class="survey-field"><span>选择档案</span><select class="select" name="turtleId">${turtleOptions || `<option value="">暂无档案</option>`}</select></label>
+          <label class="survey-field"><span>客户备注</span><textarea name="customerNote" placeholder="例如：已告知温度、开食情况、运输注意事项"></textarea></label>
+          <button class="primary" type="submit">生成交付说明</button>
+        </form>
+        ${state.professionalOutput ? `<pre class="professional-output">${escapeHtml(state.professionalOutput)}</pre>` : ""}
+      </section>
+      <section class="fresh-card feature-card">
+        <div class="settings-title">专业能力</div>
+        <div class="feature-list pro">
+          <span>批量收购记录</span><span>批量售出记录</span><span>损耗统计</span><span>利润报表</span><span>成长卡片</span><span>图片水印</span><span>团队协作预留</span><span>经营报表导出</span>
+        </div>
+      </section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
 function pageSync() {
   return `
     ${topbar("数据同步设置", true)}
     <main class="content page-fresh">
       <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">同步</p><h2>${state.loggedInPhone ? "已开启云端同步" : "登录后同步"}</h2><p>登录账号后，档案、繁殖、账本和空间资料会保存到云端，同一账号可在不同设备查看。</p></div>
+        <div><p class="eyebrow dark">同步</p><h2>账号云端保存</h2><p>登录后，档案、护理、繁殖、账本、空间资料和图片都会随账号保存到云端，同一账号可在不同设备查看。</p></div>
       </section>
       <section class="fresh-card settings-card">
-        <button class="mine-row sync-toggle" data-toggle-sync><span>⇄</span><strong>${state.syncEnabled ? "立即同步到云端" : "开启数据同步"}</strong><span>›</span></button>
+        <button class="mine-row sync-toggle" data-toggle-sync><span>⇄</span><strong>立即同步到云端</strong><span>›</span></button>
       </section>
     </main>
     ${bottomNav()}
@@ -1679,7 +2632,7 @@ function pageAbout() {
       </section>
       <section class="fresh-card settings-card">
         <div class="settings-title">当前能力</div>
-        <p class="muted">档案、繁殖、账本、护理、操作日志、满意度调查和意见反馈均可本地保存。</p>
+        <p class="muted">登录后，档案、繁殖、账本、护理、操作日志、满意度调查和意见反馈都会随账号保存到云端。</p>
       </section>
     </main>
     ${bottomNav()}
@@ -1706,8 +2659,12 @@ function render() {
     mine: pageMine,
     satisfaction: pagePublicSatisfaction,
     feedback: pageFeedback,
+    feedbackAdd: pageFeedbackAdd,
     feedbackDetail: pageFeedbackDetail,
     account: pageAccount,
+    membership: pageMembership,
+    reports: pageReports,
+    professional: pageProfessionalTools,
     sync: pageSync,
     about: pageAbout,
     breeding: pageBreeding,
@@ -1719,7 +2676,7 @@ function render() {
   hydrateSpeciesImages();
   startAccountCodeCooldownTimer();
   if (state.page === "satisfaction") refreshPublicReviews();
-  if (["feedback", "feedbackDetail"].includes(state.page)) refreshPublicFeedback();
+  if (["feedback", "feedbackAdd", "feedbackDetail"].includes(state.page)) refreshPublicFeedback();
 }
 
 function accountCodeCooldownRemaining() {
@@ -1762,11 +2719,15 @@ function bindEvents() {
     }, { once: true });
   }
   document.querySelectorAll("[data-page]").forEach(el => el.addEventListener("click", () => {
-    if (["add", "breedingAdd"].includes(el.dataset.page) && !requireLogin()) return;
+    const targetPage = el.dataset.page;
+    if (targetPage === "add" && !requireArchiveCapacity()) return;
+    if (["breedingAdd", "feedbackAdd"].includes(targetPage) && !requireLogin()) return;
+    if (targetPage === "reports" && !requireEntitlement("member", "开通壳友会员后可查看高级报表")) return;
+    if (targetPage === "professional" && !requireEntitlement("pro", "专业版可使用批量经营工具")) return;
     setState({ page: el.dataset.page, openTurtleMenuId: "", openFeedbackMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" });
   }));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", () => setState({
-    page: state.page === "turtleDetail" ? "list" : state.page === "ledgerDetail" ? "ledger" : state.page === "feedbackDetail" ? "feedback" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : ["calendar", "satisfaction", "feedback", "account", "sync", "about"].includes(state.page) ? "mine" : "home",
+    page: state.page === "turtleDetail" ? "list" : state.page === "ledgerDetail" ? "ledger" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : ["calendar", "satisfaction", "feedback", "account", "membership", "reports", "professional", "sync", "about"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "",
     openFeedbackMenuId: "",
     updatingTurtleId: "",
@@ -1808,7 +2769,10 @@ function bindEvents() {
   });
   document.querySelector("[data-update-photo-button]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
-    document.querySelector("[data-update-photo-input]")?.click();
+    const input = document.querySelector("[data-update-photo-input]");
+    if (!input) return;
+    input.value = "";
+    input.click();
   });
   document.querySelector("[data-update-photo-input]")?.addEventListener("change", readUpdatePhoto);
   document.querySelector("#turtleDetailForm")?.addEventListener("submit", submitTurtleDetail);
@@ -1830,19 +2794,26 @@ function bindEvents() {
   document.querySelectorAll("[data-remove-species]").forEach(btn => btn.addEventListener("click", () => removeKeptSpecies(btn.dataset.removeSpecies)));
   document.querySelectorAll("[data-gender]").forEach(btn => btn.addEventListener("click", () => {
     if (!requireLogin()) return;
-    setState({ formGender: btn.dataset.gender });
+    preserveTurtleForm({ formGender: btn.dataset.gender });
   }));
   document.querySelectorAll("[data-purchase-gender]").forEach(btn => btn.addEventListener("click", () => {
     if (!requireLogin()) return;
-    setState({ ledgerPurchaseGender: btn.dataset.purchaseGender });
+    const draft = captureLedgerFormDraft();
+    draft.purchaseGender = btn.dataset.purchaseGender;
+    setState({ ledgerDraftForm: draft, ledgerPurchaseGender: btn.dataset.purchaseGender });
   }));
   document.querySelector("[data-photo-input-button]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
-    document.querySelector("[data-photo-input]")?.click();
+    const input = document.querySelector("[data-photo-input]");
+    if (!input) return;
+    input.value = "";
+    input.click();
   });
   document.querySelector("[data-photo-clear]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
-    setState({ formPhoto: "" });
+    const input = document.querySelector("[data-photo-input]");
+    if (input) input.value = "";
+    preserveTurtleForm({ formPhoto: "" });
   });
   document.querySelector("[data-photo-input]")?.addEventListener("change", readPhoto);
   document.querySelector("#turtleForm")?.addEventListener("submit", submitTurtle);
@@ -1868,22 +2839,31 @@ function bindEvents() {
     event.stopPropagation();
     deleteLedgerRecord(btn.dataset.deleteLedger);
   }));
-  document.querySelector("[data-cancel-ledger]")?.addEventListener("click", () => setState({ ledgerDraftType: "", ledgerDraftPhoto: "", ledgerDraftTurtleId: "", ledgerPurchaseGender: "未知" }));
+  document.querySelector("[data-cancel-ledger]")?.addEventListener("click", () => setState({ ledgerDraftType: "", ledgerDraftPhoto: "", ledgerDraftTurtleId: "", ledgerDraftForm: {}, ledgerPurchaseGender: "未知" }));
   document.querySelector("[data-ledger-photo-button]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
-    document.querySelector("[data-ledger-photo-input]")?.click();
+    const input = document.querySelector("[data-ledger-photo-input]");
+    if (!input) return;
+    input.value = "";
+    input.click();
   });
   document.querySelector("[data-ledger-photo-input]")?.addEventListener("change", readLedgerPhoto);
   document.querySelector("#ledgerForm")?.addEventListener("submit", submitLedgerRecord);
   document.querySelector("[data-breeding-photo-button]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
-    document.querySelector("[data-breeding-photo-input]")?.click();
+    const input = document.querySelector("[data-breeding-photo-input]");
+    if (!input) return;
+    input.value = "";
+    input.click();
   });
   document.querySelector("[data-breeding-photo-input]")?.addEventListener("change", readBreedingPhoto);
   document.querySelectorAll("[data-view-breeding]").forEach(el => el.addEventListener("click", () => setState({ page: "breedingDetail", selectedBreedingId: el.dataset.viewBreeding, breedingEditPhoto: "" })));
   document.querySelector("[data-breeding-edit-photo-button]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
-    document.querySelector("[data-breeding-edit-photo-input]")?.click();
+    const input = document.querySelector("[data-breeding-edit-photo-input]");
+    if (!input) return;
+    input.value = "";
+    input.click();
   });
   document.querySelector("[data-breeding-edit-photo-input]")?.addEventListener("change", readBreedingEditPhoto);
   document.querySelector("[data-clear-breeding-edit-photo]")?.addEventListener("click", () => {
@@ -1919,12 +2899,7 @@ function bindEvents() {
     setState({ satisfactionRating: Number(btn.dataset.rating) });
   }));
   document.querySelector("#satisfactionForm")?.addEventListener("submit", submitPublicSatisfaction);
-  document.querySelectorAll("[data-review-comment-form]").forEach(form => form.addEventListener("submit", submitReviewComment));
   document.querySelectorAll("[data-delete-review]").forEach(btn => btn.addEventListener("click", () => deletePublicReview(btn.dataset.deleteReview)));
-  document.querySelectorAll("[data-delete-review-comment]").forEach(btn => btn.addEventListener("click", () => {
-    const [reviewId, commentId] = btn.dataset.deleteReviewComment.split(":");
-    deletePublicReviewComment(reviewId, commentId);
-  }));
   document.querySelector("#feedbackForm")?.addEventListener("submit", submitPublicFeedback);
   document.querySelectorAll("[data-view-feedback]").forEach(el => el.addEventListener("click", event => {
     event.stopPropagation();
@@ -1960,11 +2935,24 @@ function bindEvents() {
   document.querySelector("[data-send-code]")?.addEventListener("click", sendAccountCode);
   document.querySelector("[data-account-avatar-button]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
-    document.querySelector("[data-account-avatar-input]")?.click();
+    const input = document.querySelector("[data-account-avatar-input]");
+    if (!input) return;
+    input.value = "";
+    input.click();
   });
   document.querySelector("[data-account-avatar-input]")?.addEventListener("change", readAccountAvatar);
   document.querySelector("#profileForm")?.addEventListener("submit", submitProfile);
   document.querySelectorAll("[data-logout-account]").forEach(btn => btn.addEventListener("click", logoutAccount));
+  document.querySelectorAll("[data-subscribe-plan]").forEach(btn => btn.addEventListener("click", () => {
+    const [plan, cycle] = btn.dataset.subscribePlan.split(":");
+    activateSubscription(plan, cycle);
+  }));
+  document.querySelectorAll("[data-membership-preview]").forEach(btn => btn.addEventListener("click", () => {
+    setState({ membershipPreviewLevel: btn.dataset.membershipPreview }, { skipCloud: true });
+  }));
+  document.querySelectorAll("[data-export-data]").forEach(btn => btn.addEventListener("click", () => exportAccountData(btn.dataset.exportData)));
+  document.querySelector("#batchImportForm")?.addEventListener("submit", submitBatchImport);
+  document.querySelector("#deliveryNoteForm")?.addEventListener("submit", submitDeliveryNote);
   document.querySelector("[data-toggle-sync]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
     setState({
@@ -2133,6 +3121,7 @@ async function submitPublicFeedback(event) {
     const result = await apiPost("/api/feedback/create", feedbackAuthPayload({ type, content }));
     publicFeedbackLastLoadedAt = Date.now();
     setState({
+      page: "feedback",
       publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems,
       activityLogs: logActivity(`发布意见反馈：${type}`, "空间")
     });
@@ -2397,13 +3386,20 @@ function validateAccountPasswordMatch() {
   return valid;
 }
 
-function readAccountAvatar(event) {
+async function readAccountAvatar(event) {
   if (!requireLogin()) return;
-  const file = event.target.files?.[0];
+  const input = event.target;
+  const file = input.files?.[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => setState({ accountAvatar: reader.result });
-  reader.readAsDataURL(file);
+  try {
+    toast("图片正在上传...");
+    const photo = await uploadImageToServer(file, "avatar", { maxSide: 768, quality: 0.78 });
+    input.value = "";
+    setState({ accountAvatar: photo });
+  } catch (error) {
+    input.value = "";
+    toast(error.message || "图片上传失败");
+  }
 }
 
 function submitProfile(event) {
@@ -2460,6 +3456,12 @@ async function apiPost(path, payload) {
     body: JSON.stringify(payload)
   });
   const data = await response.json().catch(() => ({}));
+  if (path === "/api/upload/image" && response.status === 405) {
+    throw new Error("云端服务器未更新图片上传接口，请先部署最新版后端并重启服务");
+  }
+  if (path === "/api/upload/image" && data.message === "方法不支持") {
+    throw new Error("云端服务器未更新图片上传接口，请先部署最新版后端并重启服务");
+  }
   if (!response.ok || data.ok === false) throw new Error(data.message || "服务暂时不可用");
   return data;
 }
@@ -2506,6 +3508,9 @@ function applyCloudUser(user, activityText = "", options = {}) {
     accountCodeCooldownUntil: "",
     page: "mine"
   }, options);
+  if (CONFIGURED_SMS_BACKEND && localUser.cloudToken) {
+    setTimeout(() => migrateEmbeddedImagesToCloud(), 0);
+  }
 }
 
 function queueCloudSave() {
@@ -2554,6 +3559,23 @@ async function refreshCloudAccountFromServer() {
   }
 }
 
+async function startCloudSessionHydration() {
+  if (cloudHydrationStarted || !hasCloudSession()) return;
+  cloudHydrationStarted = true;
+  try {
+    if (accountHasContent(state)) {
+      const hadEmbeddedImages = accountHasEmbeddedImages(state);
+      const migratedImages = await migrateEmbeddedImagesToCloud();
+      if (hadEmbeddedImages && !migratedImages) return;
+      await pushCloudDataNow(true);
+    }
+    await refreshCloudAccountFromServer();
+    await migrateEmbeddedImagesToCloud();
+  } catch (error) {
+    console.warn(error.message || "云端数据初始化失败");
+  }
+}
+
 async function verifyServerSmsCode(phone, code) {
   if (!CONFIGURED_SMS_BACKEND && state.pendingAuthCode !== SERVER_SMS_CODE) return code === state.pendingAuthCode;
   try {
@@ -2580,6 +3602,153 @@ function removeKeptSpecies(code) {
   setState({ keptSpecies: state.keptSpecies.filter(item => item !== code), activityLogs: logActivity(`移除常用品种：${speciesByCode(code)?.name || code}`, "品种") });
 }
 
+function csvCell(value) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") {
+  const blob = new Blob([`\ufeff${content}`], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 800);
+}
+
+function exportAccountData(kind = "account") {
+  if (kind === "business") {
+    if (!requireEntitlement("pro", "专业版可导出经营报表")) return;
+  } else if (!requireEntitlement("member", "开通壳友会员后可导出数据")) {
+    return;
+  }
+  const lines = [];
+  lines.push(["类型", "名称", "日期", "品种", "金额", "体重", "背甲", "备注"].map(csvCell).join(","));
+  state.turtles.forEach(turtle => {
+    lines.push(["档案", turtleLabel(turtle), turtle.acquiredDate, turtle.speciesName, turtle.price, turtle.weight, turtle.carapaceLength, turtle.note].map(csvCell).join(","));
+  });
+  state.ledgerRecords.forEach(record => {
+    lines.push([ledgerTypeText(record.type), record.title, record.recordDate || record.createdAt, "", record.amount, record.weight, record.carapaceLength, record.note].map(csvCell).join(","));
+  });
+  state.breedingRecords.forEach(record => {
+    lines.push(["繁殖", record.motherName, record.date, "", "", "", "", `产蛋${record.eggCount || 0} 受精${record.fertileCount || 0} 孵化${record.hatchCount || 0} ${record.note || ""}`].map(csvCell).join(","));
+  });
+  const fileName = kind === "business" ? `壳友手账-经营报表-${formatDate(new Date())}.csv` : `壳友手账-数据导出-${formatDate(new Date())}.csv`;
+  downloadTextFile(fileName, lines.join("\n"), "text/csv;charset=utf-8");
+  toast("导出文件已生成");
+}
+
+function submitBatchImport(event) {
+  event.preventDefault();
+  if (!requireEntitlement("pro", "专业版可使用批量导入")) return;
+  const form = new FormData(event.currentTarget);
+  const rows = String(form.get("batchTurtles") || "").split(/\n+/).map(row => row.trim()).filter(Boolean);
+  if (!rows.length) return toast("请先填写要导入的档案");
+  const imported = [];
+  const ledgerRecords = [];
+  const keptSpecies = new Set(state.keptSpecies);
+  const skippedRows = [];
+  rows.forEach((row, index) => {
+    const parts = row.split(/[,，\t]/).map(part => part.trim());
+    const [code, speciesCodeRaw, genderRaw, weightRaw, lengthRaw, priceRaw] = parts;
+    const species = speciesByImportName(speciesCodeRaw);
+    const weight = numberFromImport(weightRaw);
+    const carapaceLength = numberFromImport(lengthRaw);
+    if (parts.length < 5) {
+      skippedRows.push(`第 ${index + 1} 行字段不完整`);
+      return;
+    }
+    if (!code) {
+      skippedRows.push(`第 ${index + 1} 行缺少昵称`);
+      return;
+    }
+    if (!species) {
+      skippedRows.push(`第 ${index + 1} 行品种未识别：${speciesCodeRaw || "-"}`);
+      return;
+    }
+    if (!weight || !carapaceLength) {
+      skippedRows.push(`第 ${index + 1} 行体重或背甲长度无效`);
+      return;
+    }
+    keptSpecies.add(species.code);
+    const price = numberFromImport(priceRaw);
+    const turtle = {
+      id: crypto.randomUUID(),
+      code,
+      speciesCode: species.code,
+      speciesName: species.name,
+      gender: ["公", "母", "未知"].includes(genderRaw) ? genderRaw : "未知",
+      weight,
+      carapaceLength,
+      carapaceWidth: "",
+      shellHeight: "",
+      plastronLength: "",
+      status: "正常饲养",
+      health: "健康",
+      acquiredDate: formatDate(new Date()),
+      source: price > 0 ? "购买" : "其他",
+      price: price > 0 ? price : "",
+      note: "专业版批量导入",
+      photo: speciesPhoto(species) || defaultPhoto,
+      createdAt: new Date().toISOString(),
+      measureHistory: []
+    };
+    imported.push(turtle);
+    if (price > 0) {
+      ledgerRecords.push({
+        id: crypto.randomUUID(),
+        type: "purchase",
+        turtleId: turtle.id,
+        title: turtleLabel(turtle),
+        amount: price,
+        recordDate: turtle.acquiredDate,
+        weight: turtle.weight,
+        carapaceLength: turtle.carapaceLength,
+        carapaceWidth: "",
+        shellHeight: "",
+        plastronLength: "",
+        note: turtle.note,
+        photo: turtle.photo,
+        turtleSnapshot: { ...turtle },
+        createdAt: new Date().toISOString()
+      });
+    }
+  });
+  if (!imported.length) return toast(skippedRows[0] || "没有可导入的数据，请检查格式");
+  setState({
+    turtles: [...imported, ...state.turtles],
+    keptSpecies: [...keptSpecies],
+    ledgerRecords: [...ledgerRecords, ...state.ledgerRecords],
+    activityLogs: logActivity(`专业版批量导入 ${imported.length} 只乌龟${skippedRows.length ? `，跳过 ${skippedRows.length} 行` : ""}`, "专业")
+  });
+  toast(`已导入 ${imported.length} 只乌龟${skippedRows.length ? `，${skippedRows.slice(0, 2).join("；")}` : ""}`);
+}
+
+function submitDeliveryNote(event) {
+  event.preventDefault();
+  if (!requireEntitlement("pro", "专业版可生成交付说明")) return;
+  const form = new FormData(event.currentTarget);
+  const turtle = state.turtles.find(item => item.id === form.get("turtleId"));
+  if (!turtle) return toast("请先选择一只乌龟");
+  const note = String(form.get("customerNote") || "").trim();
+  const output = [
+    `交付档案：${turtleLabel(turtle)}`,
+    `品种：${turtle.speciesName || "-"}`,
+    `体重：${turtle.weight || "-"}g，背甲：${turtle.carapaceLength || "-"}cm`,
+    `健康状态：${turtle.health || "-"}，饲养状态：${turtle.status || "-"}`,
+    `入手日期：${turtle.acquiredDate || "-"}`,
+    note ? `客户备注：${note}` : "",
+    "交付提醒：到家后先静养，保持水温稳定，观察开食和排便情况。"
+  ].filter(Boolean).join("\n");
+  setState({
+    professionalOutput: output,
+    activityLogs: logActivity(`生成交付说明：${turtleLabel(turtle)}`, "专业")
+  });
+  toast("交付说明已生成");
+}
+
 function deleteTurtle(id) {
   if (!requireLogin()) return;
   const turtle = state.turtles.find(t => t.id === id);
@@ -2592,27 +3761,42 @@ function deleteTurtle(id) {
   });
 }
 
-function readPhoto(event) {
+async function readPhoto(event) {
   if (!requireLogin()) return;
-  const file = event.target.files?.[0];
+  const input = event.target;
+  const file = input.files?.[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => setState({ formPhoto: reader.result });
-  reader.readAsDataURL(file);
+  const draft = captureTurtleFormDraft();
+  try {
+    toast("图片正在上传...");
+    const photo = await uploadImageToServer(file, "turtle");
+    input.value = "";
+    setState({ formDraft: draft, formPhoto: photo });
+  } catch (error) {
+    input.value = "";
+    toast(error.message || "图片上传失败");
+  }
 }
 
-function readUpdatePhoto(event) {
+async function readUpdatePhoto(event) {
   if (!requireLogin()) return;
-  const file = event.target.files?.[0];
+  const input = event.target;
+  const file = input.files?.[0];
   if (!file) return;
   const draft = captureTurtleDetailDraft();
-  const reader = new FileReader();
-  reader.onload = () => setState({
-    turtleDetailDraftId: state.selectedTurtleId,
-    turtleDetailDraft: draft,
-    updateDraftPhoto: reader.result
-  });
-  reader.readAsDataURL(file);
+  try {
+    toast("图片正在上传...");
+    const photo = await uploadImageToServer(file, "turtle");
+    input.value = "";
+    setState({
+      turtleDetailDraftId: state.selectedTurtleId,
+      turtleDetailDraft: draft,
+      updateDraftPhoto: photo
+    });
+  } catch (error) {
+    input.value = "";
+    toast(error.message || "图片上传失败");
+  }
 }
 
 function submitTurtleDetail(event) {
@@ -2686,7 +3870,7 @@ function submitTurtleDetail(event) {
 
 function submitTurtle(event) {
   event.preventDefault();
-  if (!requireLogin()) return;
+  if (!requireArchiveCapacity()) return;
   const form = new FormData(event.currentTarget);
   const species = speciesByCode(form.get("speciesCode"));
   if (!species) return toast("先选择一个品种，再保存档案");
@@ -2741,6 +3925,7 @@ function submitTurtle(event) {
     ledgerRecords,
     formPhoto: "",
     formGender: "未知",
+    formDraft: {},
     selectedSpeciesCode: "",
     page: "home",
     activityLogs: [...logs, ...(state.activityLogs || [])]
@@ -2755,58 +3940,88 @@ function submitMemoForm(event) {
   const title = String(form.get("title") || "").trim();
   if (!title) return toast("先写一个护理事项名称");
   const content = String(form.get("content") || "").trim();
+  const remindTime = String(form.get("remindTime") || "").trim();
   const repeat = form.get("repeat") === "true";
+  const weekdays = form.getAll("weekdays").map(String);
   const now = new Date().toISOString();
   const editingMemo = state.memos.find(m => m.id === state.memoEditingId);
+  const savedMemo = editingMemo
+    ? { ...editingMemo, title, content, remindTime, repeat, weekdays, updatedAt: now }
+    : { id: crypto.randomUUID(), title, content, remindTime, repeat, weekdays, updatedAt: now };
   const nextMemos = editingMemo
-    ? state.memos.map(m => m.id === editingMemo.id ? { ...m, title, content, repeat, updatedAt: now } : m)
-    : [{ id: crypto.randomUUID(), title, content, repeat, updatedAt: now }, ...state.memos];
+    ? state.memos.map(m => m.id === editingMemo.id ? savedMemo : m)
+    : [savedMemo, ...state.memos];
   setState({
     memos: nextMemos,
     memoDraftOpen: false,
     memoEditingId: "",
     activityLogs: logActivity(`${editingMemo ? "调整护理" : "新增护理"}：${title}`, "护理")
   });
+  activateCareReminder(savedMemo);
 }
 
 function deleteMemo(id) {
   if (!requireLogin()) return;
   const memo = state.memos.find(m => m.id === id);
   if (!memo || !confirm("要删除这条护理提醒吗？")) return;
+  cancelNativeCareReminder(memo);
   setState({ memos: state.memos.filter(m => m.id !== id), activityLogs: logActivity(`删除护理：${memo.title}`, "护理") });
 }
 
 function openLedgerForm(type, turtleId = "") {
   if (!requireLogin()) return;
   const turtle = state.turtles.find(t => t.id === turtleId);
-  setState({ page: "ledger", ledgerDraftType: type, ledgerDraftPhoto: turtle?.photo || "", ledgerDraftTurtleId: turtleId, ledgerPurchaseGender: "未知", ledgerTab: type, openTurtleMenuId: "" });
+  setState({ page: "ledger", ledgerDraftType: type, ledgerDraftPhoto: turtle?.photo || "", ledgerDraftTurtleId: turtleId, ledgerDraftForm: turtleId ? { turtleId } : {}, ledgerPurchaseGender: "未知", ledgerTab: type, openTurtleMenuId: "" });
 }
 
-function readLedgerPhoto(event) {
+async function readLedgerPhoto(event) {
   if (!requireLogin()) return;
-  const file = event.target.files?.[0];
+  const input = event.target;
+  const file = input.files?.[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => setState({ ledgerDraftPhoto: reader.result });
-  reader.readAsDataURL(file);
+  const draft = captureLedgerFormDraft();
+  try {
+    toast("图片正在上传...");
+    const photo = await uploadImageToServer(file, "ledger");
+    input.value = "";
+    setState({ ledgerDraftForm: draft, ledgerDraftPhoto: photo, ledgerDraftTurtleId: draft.turtleId || state.ledgerDraftTurtleId, ledgerPurchaseGender: draft.purchaseGender || state.ledgerPurchaseGender });
+  } catch (error) {
+    input.value = "";
+    toast(error.message || "图片上传失败");
+  }
 }
 
-function readBreedingPhoto(event) {
+async function readBreedingPhoto(event) {
   if (!requireLogin()) return;
-  const file = event.target.files?.[0];
+  const input = event.target;
+  const file = input.files?.[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => setState({ breedingDraftPhoto: reader.result });
-  reader.readAsDataURL(file);
+  const draft = readBreedingDraft();
+  try {
+    toast("图片正在上传...");
+    const photo = await uploadImageToServer(file, "breeding");
+    input.value = "";
+    setState({ ...draft, breedingDraftPhoto: photo });
+  } catch (error) {
+    input.value = "";
+    toast(error.message || "图片上传失败");
+  }
 }
 
-function readBreedingEditPhoto(event) {
+async function readBreedingEditPhoto(event) {
   if (!requireLogin()) return;
-  const file = event.target.files?.[0];
+  const input = event.target;
+  const file = input.files?.[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => setState({ breedingEditPhoto: reader.result });
-  reader.readAsDataURL(file);
+  try {
+    toast("图片正在上传...");
+    const photo = await uploadImageToServer(file, "breeding");
+    input.value = "";
+    setState({ breedingEditPhoto: photo });
+  } catch (error) {
+    input.value = "";
+    toast(error.message || "图片上传失败");
+  }
 }
 
 function readBreedingDraft() {
@@ -2952,6 +4167,7 @@ function submitLedgerRecord(event) {
   let nextTurtles = state.turtles;
   let nextKeptSpecies = state.keptSpecies;
   if (type === "purchase" && !turtle) {
+    if (!requireArchiveCapacity()) return;
     const species = speciesByCode(form.get("purchaseSpeciesCode"));
     if (!species) return toast("收购记录需要选择品种");
     const code = form.get("purchaseCode") || `${species.code}-${state.turtles.filter(t => t.speciesCode === species.code).length + 1}`;
@@ -3007,6 +4223,7 @@ function submitLedgerRecord(event) {
     ledgerDraftType: "",
     ledgerDraftPhoto: "",
     ledgerDraftTurtleId: "",
+    ledgerDraftForm: {},
     ledgerPurchaseGender: "未知",
     activityLogs: logActivity(`${ledgerTypeText(type)}记录：${title}，金额 ${money(amount)} 元${movedText}`, "账本")
   });
@@ -3030,4 +4247,5 @@ function toast(text) {
 }
 
 render();
-refreshCloudAccountFromServer();
+refreshCareReminderTimers();
+startCloudSessionHydration();

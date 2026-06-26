@@ -29,6 +29,8 @@ const HOST = process.env.HOST || "127.0.0.1";
 const STATIC_ROOT = path.resolve(__dirname, "..");
 const DATA_DIR = path.resolve(__dirname, "data");
 const DATA_FILE = path.resolve(DATA_DIR, "app-data.json");
+const UPLOAD_DIR = path.resolve(__dirname, "uploads");
+const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
 const REVIEW_ADMIN_PHONE = "18652082378";
 const smsCodes = new Map();
 const verifiedPhones = new Map();
@@ -41,6 +43,7 @@ const mimeTypes = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
   ".svg": "image/svg+xml; charset=utf-8"
 };
 
@@ -83,6 +86,11 @@ function emptyAccountData() {
     satisfactionReviews: [],
     feedbackItems: [],
     syncEnabled: true,
+    subscriptionPlan: "free",
+    subscriptionCycle: "",
+    subscriptionStartedAt: "",
+    subscriptionExpiresAt: "",
+    professionalOutput: "",
     activityLogs: [],
     themeColor: "teal"
   };
@@ -100,6 +108,11 @@ function normalizeAccountData(data = {}) {
     satisfactionReviews: Array.isArray(next.satisfactionReviews) ? next.satisfactionReviews : [],
     feedbackItems: Array.isArray(next.feedbackItems) ? next.feedbackItems : [],
     syncEnabled: Boolean(next.syncEnabled),
+    subscriptionPlan: ["free", "member", "pro"].includes(next.subscriptionPlan) ? next.subscriptionPlan : "free",
+    subscriptionCycle: next.subscriptionCycle || "",
+    subscriptionStartedAt: next.subscriptionStartedAt || "",
+    subscriptionExpiresAt: next.subscriptionExpiresAt || "",
+    professionalOutput: next.professionalOutput || "",
     activityLogs: Array.isArray(next.activityLogs) ? next.activityLogs : [],
     themeColor: next.themeColor || "teal"
   };
@@ -522,6 +535,55 @@ function requireReviewUser(db, body, res) {
   return user;
 }
 
+function parseImageDataUrl(value) {
+  const dataUrl = String(value || "");
+  const match = dataUrl.match(/^data:image\/(png|jpe?g|webp);base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (!match) return null;
+  const type = match[1].toLowerCase();
+  const ext = type === "jpeg" || type === "jpg" ? "jpg" : type;
+  const base64 = match[2].replace(/\s/g, "");
+  if (!base64) return null;
+  const buffer = Buffer.from(base64, "base64");
+  const mime = mimeTypes[`.${ext}`] || "application/octet-stream";
+  return { buffer, ext, mime };
+}
+
+function cleanUploadKind(value) {
+  return String(value || "image")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "")
+    .slice(0, 24) || "image";
+}
+
+async function handleUploadImage(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+
+  const image = parseImageDataUrl(body.image);
+  if (!image) return sendJson(res, 400, { ok: false, message: "图片格式不正确" });
+  if (image.buffer.length > MAX_UPLOAD_BYTES) {
+    return sendJson(res, 413, { ok: false, message: "图片太大，请重新选择较小图片" });
+  }
+
+  const now = new Date();
+  const year = String(now.getFullYear());
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const kind = cleanUploadKind(body.kind);
+  const folder = path.resolve(UPLOAD_DIR, year, month);
+  const filename = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}-${kind}.${image.ext}`;
+  const target = path.resolve(folder, filename);
+
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(target, image.buffer);
+
+  return sendJson(res, 200, {
+    ok: true,
+    url: `/uploads/${year}/${month}/${filename}`
+  });
+}
+
 async function handleListReviews(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
@@ -779,6 +841,31 @@ function serveStatic(req, res, url) {
   });
 }
 
+function serveUpload(req, res, url) {
+  const pathname = decodeURIComponent(url.pathname).replace(/^\/uploads\/?/, "");
+  const target = path.resolve(UPLOAD_DIR, pathname);
+  const relative = path.relative(UPLOAD_DIR, target);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    res.writeHead(403);
+    res.end("Forbidden");
+    return;
+  }
+  fs.readFile(target, (error, content) => {
+    if (error) {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
+    const ext = path.extname(target).toLowerCase();
+    res.writeHead(200, {
+      "Content-Type": mimeTypes[ext] || "application/octet-stream",
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "Access-Control-Allow-Origin": "*"
+    });
+    res.end(content);
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (req.method === "OPTIONS") return sendJson(res, 200, { ok: true });
@@ -789,6 +876,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/account/login") return await handleLogin(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/load") return await handleLoadAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/save") return await handleSaveAccount(req, res);
+    if (req.method === "POST" && url.pathname === "/api/upload/image") return await handleUploadImage(req, res);
     if (req.method === "POST" && url.pathname === "/api/reviews/list") return await handleListReviews(req, res);
     if (req.method === "POST" && url.pathname === "/api/reviews/create") return await handleCreateReview(req, res);
     if (req.method === "POST" && url.pathname === "/api/reviews/comment") return await handleCreateReviewComment(req, res);
@@ -800,6 +888,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/feedback/comment") return await handleCreateFeedbackComment(req, res);
     if (req.method === "POST" && url.pathname === "/api/feedback/delete") return await handleDeleteFeedback(req, res);
     if (req.method === "POST" && url.pathname === "/api/feedback/comment/delete") return await handleDeleteFeedbackComment(req, res);
+    if (req.method === "GET" && url.pathname.startsWith("/uploads/")) return serveUpload(req, res, url);
     if (req.method === "GET") return serveStatic(req, res, url);
     return sendJson(res, 405, { ok: false, message: "方法不支持" });
   } catch (error) {
