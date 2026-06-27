@@ -1,16 +1,17 @@
 const $app = document.querySelector("#app");
 const STORAGE = "turtlekeeper-state-v1";
+const AUTH_TOKEN_STORAGE = "turtlekeeper-cloud-auth-v1";
+const PENDING_CLOUD_DATA_STORAGE = "turtlekeeper-pending-cloud-data-v1";
 const SERVER_SMS_CODE = "__SERVER_SMS__";
 const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
 const CLOUD_SYNC_DEBOUNCE_MS = 900;
 const REVIEW_ADMIN_PHONE = "18652082378";
 const FREE_TURTLE_LIMIT = 10;
-const PLAN_LEVELS = { free: 0, member: 1, pro: 2 };
+const PLAN_LEVELS = { free: 0, member: 1 };
 const SUBSCRIPTION_PLANS = [
   { key: "member", cycle: "monthly", title: "壳友会员", cycleName: "月度", price: "9.9", period: "月", months: 1, productId: "com.turtlekeeper.member.monthly", desc: "灵活体验，适合先试用完整记录能力" },
   { key: "member", cycle: "quarterly", title: "壳友会员", cycleName: "季度", price: "23.9", period: "季", months: 3, productId: "com.turtlekeeper.member.quarterly", badge: "更划算", desc: "覆盖一个养护阶段，适合稳定记录" },
-  { key: "member", cycle: "yearly", title: "壳友会员", cycleName: "年度", price: "68", period: "年", months: 12, productId: "com.turtlekeeper.member.yearly", badge: "推荐", desc: "全年档案、照片和账本持续留存" },
-  { key: "pro", cycle: "yearly", title: "专业版", cycleName: "年度", price: "388", period: "年", months: 12, productId: "com.turtlekeeper.pro.yearly", badge: "经营首选" }
+  { key: "member", cycle: "yearly", title: "壳友会员", cycleName: "年度", price: "68", period: "年", months: 12, productId: "com.turtlekeeper.member.yearly", badge: "推荐", desc: "全年档案、照片和账本持续留存" }
 ];
 const defaultPhoto = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
@@ -56,6 +57,7 @@ const initialState = {
   ledgerPurchaseGender: "未知",
   ledgerDateFrom: "",
   ledgerDateTo: "",
+  ledgerDatePreset: "all",
   breedingDraftPhoto: "",
   breedingMotherMode: "archive",
   breedingMotherValue: "",
@@ -179,7 +181,7 @@ function normalizeAccountData(data = {}) {
     satisfactionReviews: Array.isArray(next.satisfactionReviews) ? next.satisfactionReviews : [],
     feedbackItems: Array.isArray(next.feedbackItems) ? next.feedbackItems : [],
     syncEnabled: next.syncEnabled !== false,
-    subscriptionPlan: ["free", "member", "pro"].includes(next.subscriptionPlan) ? next.subscriptionPlan : "free",
+    subscriptionPlan: next.subscriptionPlan === "pro" ? "member" : (["free", "member"].includes(next.subscriptionPlan) ? next.subscriptionPlan : "free"),
     subscriptionCycle: next.subscriptionCycle || "",
     subscriptionStartedAt: next.subscriptionStartedAt || "",
     subscriptionExpiresAt: next.subscriptionExpiresAt || "",
@@ -232,6 +234,11 @@ let cloudSyncInFlight = false;
 let cloudSyncQueued = false;
 let cloudHydrationStarted = false;
 let cloudImageMigrationInFlight = false;
+let cloudImageMigrationTimer = null;
+let cloudImageMigrationQueued = false;
+let accountSubmitInFlight = false;
+let lastToastText = "";
+let lastToastAt = 0;
 let publicReviewsLoading = false;
 let publicReviewsLastLoadedAt = 0;
 let publicFeedbackLoading = false;
@@ -242,6 +249,44 @@ if (CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !==
   saveState();
 }
 
+function loadCloudAuthTokens() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(AUTH_TOKEN_STORAGE));
+    return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+  } catch {
+    return {};
+  }
+}
+
+function readSavedCloudToken(phone) {
+  if (!phone) return "";
+  const tokens = loadCloudAuthTokens();
+  return typeof tokens[phone] === "string" ? tokens[phone] : "";
+}
+
+function rememberCloudToken(phone, token) {
+  if (!phone || !token) return;
+  try {
+    localStorage.setItem(AUTH_TOKEN_STORAGE, JSON.stringify({
+      ...loadCloudAuthTokens(),
+      [phone]: token
+    }));
+  } catch (error) {
+    console.warn("保存云端登录凭证失败", error);
+  }
+}
+
+function forgetCloudToken(phone) {
+  if (!phone) return;
+  try {
+    const tokens = loadCloudAuthTokens();
+    delete tokens[phone];
+    localStorage.setItem(AUTH_TOKEN_STORAGE, JSON.stringify(tokens));
+  } catch (error) {
+    console.warn("清理云端登录凭证失败", error);
+  }
+}
+
 function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE));
@@ -249,6 +294,54 @@ function loadState() {
   } catch {
     return { ...initialState };
   }
+}
+
+function readPendingCloudData() {
+  try {
+    const pending = JSON.parse(localStorage.getItem(PENDING_CLOUD_DATA_STORAGE));
+    return pending && typeof pending === "object" && !Array.isArray(pending) ? pending : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistPendingCloudData(source = state) {
+  if (!source.loggedInPhone || !currentCloudToken()) return false;
+  try {
+    localStorage.setItem(PENDING_CLOUD_DATA_STORAGE, JSON.stringify({
+      phone: source.loggedInPhone,
+      accountName: source.accountName,
+      accountAvatar: source.accountAvatar || "",
+      data: accountDataSnapshot(source),
+      updatedAt: new Date().toISOString()
+    }));
+    return true;
+  } catch (error) {
+    console.warn("保存待同步数据失败", error);
+    return false;
+  }
+}
+
+function clearPendingCloudData(phone = state.loggedInPhone) {
+  const pending = readPendingCloudData();
+  if (!pending || !phone || pending.phone !== phone) return;
+  try {
+    localStorage.removeItem(PENDING_CLOUD_DATA_STORAGE);
+  } catch (error) {
+    console.warn("清理待同步数据失败", error);
+  }
+}
+
+function restorePendingCloudData() {
+  const pending = readPendingCloudData();
+  if (!pending || pending.phone !== state.loggedInPhone || !currentCloudToken()) return false;
+  state = {
+    ...state,
+    ...normalizeAccountData(pending.data || {}),
+    accountName: pending.accountName || state.accountName,
+    accountAvatar: pending.accountAvatar || state.accountAvatar
+  };
+  return true;
 }
 
 function cleanText(value) {
@@ -272,7 +365,8 @@ function normalizeState(next) {
     ...user,
     data: normalizeAccountData(user.data || {})
   }));
-  const loggedInPhone = next.loggedInPhone && registeredUsers.some(user => user.phone === next.loggedInPhone)
+  const savedCloudToken = readSavedCloudToken(next.loggedInPhone);
+  const loggedInPhone = next.loggedInPhone && (registeredUsers.some(user => user.phone === next.loggedInPhone) || savedCloudToken)
     ? next.loggedInPhone
     : "";
   const activeUser = registeredUsers.find(user => user.phone === loggedInPhone);
@@ -282,7 +376,7 @@ function normalizeState(next) {
     ...accountData,
     registeredUsers,
     loggedInPhone,
-    cloudToken: loggedInPhone ? (next.cloudToken || activeUser?.cloudToken || "") : "",
+    cloudToken: loggedInPhone ? (next.cloudToken || activeUser?.cloudToken || savedCloudToken || "") : "",
     accountName: loggedInPhone ? (activeUser?.accountName || next.accountName || maskPhone(loggedInPhone)) : "未登录用户",
     accountAvatar: loggedInPhone ? (activeUser?.accountAvatar || next.accountAvatar || "") : ""
   };
@@ -386,6 +480,8 @@ function saveState(options = {}) {
   const storageUsers = cloudSession || CONFIGURED_SMS_BACKEND
     ? registeredUsers.map(lightAccountUser)
     : registeredUsers;
+  const activeCloudToken = state.cloudToken || registeredUsers.find(user => user.phone === state.loggedInPhone)?.cloudToken || readSavedCloudToken(state.loggedInPhone);
+  if (state.loggedInPhone && activeCloudToken) rememberCloudToken(state.loggedInPhone, activeCloudToken);
   state.registeredUsers = registeredUsers;
   try {
     localStorage.setItem(STORAGE, JSON.stringify({
@@ -394,7 +490,7 @@ function saveState(options = {}) {
       accountAvatar: state.accountAvatar,
       accountMode: state.accountMode,
       loggedInPhone: state.loggedInPhone,
-      cloudToken: state.cloudToken,
+      cloudToken: activeCloudToken,
       registeredUsers: storageUsers,
       pendingAuthCode: state.pendingAuthCode,
       pendingAuthPhone: state.pendingAuthPhone,
@@ -435,7 +531,8 @@ function subscriptionActive(source = state) {
 }
 
 function activePlanKey(source = state) {
-  return subscriptionActive(source) ? source.subscriptionPlan : "free";
+  if (!subscriptionActive(source)) return "free";
+  return source.subscriptionPlan === "pro" ? "member" : source.subscriptionPlan;
 }
 
 function hasPlan(level) {
@@ -444,13 +541,13 @@ function hasPlan(level) {
 
 function currentPlanLabel() {
   if (!state.loggedInPhone) return "未登录";
-  if (!subscriptionActive()) return "免费版";
-  return state.subscriptionPlan === "pro" ? "专业版" : "壳友会员";
+  if (!subscriptionActive()) return "普通用户";
+  return "壳友会员";
 }
 
 function currentPlanBadge() {
   if (!state.loggedInPhone || !subscriptionActive()) return "普通";
-  return state.subscriptionPlan === "pro" ? "专业版" : "会员";
+  return "会员";
 }
 
 function currentPlanDetail() {
@@ -478,8 +575,9 @@ function freeUsagePercent() {
 
 function requireEntitlement(level, message) {
   if (!requireLogin()) return false;
-  if (hasPlan(level)) return true;
-  toast(message || (level === "pro" ? "专业版可使用这个功能" : "壳友会员可使用这个功能"));
+  const requiredLevel = level === "pro" ? "member" : level;
+  if (hasPlan(requiredLevel)) return true;
+  toast(message || "壳友会员可使用这个功能");
   setState({ page: "membership" });
   return false;
 }
@@ -1110,7 +1208,7 @@ function requireCloudImageSession() {
 
 async function uploadDataUrlToCloud(image, kind = "image") {
   requireCloudImageSession();
-  const uploadImage = isEmbeddedImage(image)
+  const uploadImage = isEmbeddedImage(image) && String(image).length > 260000
     ? await compressImageDataUrl(image, kind === "avatar" ? 768 : 960, kind === "avatar" ? 0.78 : 0.66, 260000)
     : image;
   const result = await apiPost("/api/upload/image", {
@@ -1127,15 +1225,53 @@ async function uploadImageToServer(file, kind = "image", options = {}) {
   requireCloudImageSession();
   const image = await readImageAsDataUrl(
     file,
-    options.maxSide || 960,
-    options.quality || 0.66,
-    options.maxLength || 260000
+    options.maxSide || 760,
+    options.quality || 0.62,
+    options.maxLength || 180000
   );
   try {
-    return await uploadDataUrlToCloud(image, kind);
+    const result = await apiPost("/api/upload/image", {
+      phone: state.loggedInPhone,
+      token: currentCloudToken(),
+      kind,
+      image
+    });
+    if (!result.url) throw new Error("云端未返回图片地址");
+    return apiAssetUrl(result.url);
   } catch (error) {
     console.warn("图片上传云端失败", error);
     throw new Error(error.message || "图片需要上传到云端，请检查网络或服务器后重试");
+  }
+}
+
+function readImageForLocalUse(file, kind = "image", options = {}) {
+  return readImageAsDataUrl(
+    file,
+    options.maxSide || (kind === "avatar" ? 640 : 720),
+    options.quality || (kind === "avatar" ? 0.72 : 0.58),
+    options.maxLength || (kind === "avatar" ? 140000 : 150000)
+  );
+}
+
+function scheduleCloudImageMigration(delay = 500) {
+  if (!hasCloudSession()) return;
+  if (cloudImageMigrationInFlight) {
+    cloudImageMigrationQueued = true;
+    return;
+  }
+  if (cloudImageMigrationTimer) clearTimeout(cloudImageMigrationTimer);
+  cloudImageMigrationTimer = setTimeout(() => {
+    cloudImageMigrationTimer = null;
+    migrateEmbeddedImagesToCloud({ silent: true });
+  }, delay);
+}
+
+function saveWithDeferredImages(patch, images = [], options = {}) {
+  const shouldDeferCloud = hasCloudSession() && images.some(isMigratableImage);
+  setState(patch, { ...options, skipCloud: shouldDeferCloud || options.skipCloud });
+  if (shouldDeferCloud) {
+    persistPendingCloudData();
+    scheduleCloudImageMigration();
   }
 }
 
@@ -1143,33 +1279,41 @@ function isMigratableImage(value) {
   return isEmbeddedImage(value) && value !== defaultPhoto;
 }
 
-async function migrateImageField(target, field, kind) {
+async function migrateImageField(target, field, kind, cache = new Map()) {
   if (!target || !isMigratableImage(target[field])) return false;
-  target[field] = await uploadDataUrlToCloud(target[field], kind);
+  const image = target[field];
+  if (!cache.has(image)) cache.set(image, uploadDataUrlToCloud(image, kind));
+  target[field] = await cache.get(image);
   return true;
 }
 
-async function migrateTurtleImageSet(turtle, kind = "turtle") {
+async function migrateTurtleImageSet(turtle, kind = "turtle", cache = new Map()) {
   let changed = false;
-  changed = await migrateImageField(turtle, "photo", kind) || changed;
+  changed = await migrateImageField(turtle, "photo", kind, cache) || changed;
   if (Array.isArray(turtle.measureHistory)) {
     for (const item of turtle.measureHistory) {
-      changed = await migrateImageField(item, "photo", kind) || changed;
-      changed = await migrateImageField(item, "oldPhoto", kind) || changed;
-      changed = await migrateImageField(item, "newPhoto", kind) || changed;
+      changed = await migrateImageField(item, "photo", kind, cache) || changed;
+      changed = await migrateImageField(item, "oldPhoto", kind, cache) || changed;
+      changed = await migrateImageField(item, "newPhoto", kind, cache) || changed;
     }
   }
   return changed;
 }
 
-async function migrateEmbeddedImagesToCloud() {
-  if (cloudImageMigrationInFlight || !hasCloudSession()) return false;
+async function migrateEmbeddedImagesToCloud(options = {}) {
+  if (cloudImageMigrationInFlight) {
+    cloudImageMigrationQueued = true;
+    return false;
+  }
+  if (!hasCloudSession()) return false;
   cloudImageMigrationInFlight = true;
   let changed = false;
+  const uploadCache = new Map();
   try {
     let accountAvatar = state.accountAvatar;
     if (isMigratableImage(accountAvatar)) {
-      accountAvatar = await uploadDataUrlToCloud(accountAvatar, "avatar");
+      if (!uploadCache.has(accountAvatar)) uploadCache.set(accountAvatar, uploadDataUrlToCloud(accountAvatar, "avatar"));
+      accountAvatar = await uploadCache.get(accountAvatar);
       changed = true;
     }
 
@@ -1178,7 +1322,7 @@ async function migrateEmbeddedImagesToCloud() {
       measureHistory: Array.isArray(turtle.measureHistory) ? turtle.measureHistory.map(item => ({ ...item })) : []
     }));
     for (const turtle of turtles) {
-      changed = await migrateTurtleImageSet(turtle, "turtle") || changed;
+      changed = await migrateTurtleImageSet(turtle, "turtle", uploadCache) || changed;
     }
 
     const ledgerRecords = (state.ledgerRecords || []).map(item => ({
@@ -1191,9 +1335,9 @@ async function migrateEmbeddedImagesToCloud() {
       } : item.turtleSnapshot
     }));
     for (const item of ledgerRecords) {
-      changed = await migrateImageField(item, "photo", "ledger") || changed;
+      changed = await migrateImageField(item, "photo", "ledger", uploadCache) || changed;
       if (item.turtleSnapshot) {
-        changed = await migrateTurtleImageSet(item.turtleSnapshot, "turtle") || changed;
+        changed = await migrateTurtleImageSet(item.turtleSnapshot, "turtle", uploadCache) || changed;
       }
     }
 
@@ -1202,12 +1346,12 @@ async function migrateEmbeddedImagesToCloud() {
       editHistory: Array.isArray(item.editHistory) ? item.editHistory.map(history => ({ ...history })) : []
     }));
     for (const item of breedingRecords) {
-      changed = await migrateImageField(item, "photo", "breeding") || changed;
+      changed = await migrateImageField(item, "photo", "breeding", uploadCache) || changed;
       if (Array.isArray(item.editHistory)) {
         for (const history of item.editHistory) {
-          changed = await migrateImageField(history, "photo", "breeding") || changed;
-          changed = await migrateImageField(history, "oldPhoto", "breeding") || changed;
-          changed = await migrateImageField(history, "newPhoto", "breeding") || changed;
+          changed = await migrateImageField(history, "photo", "breeding", uploadCache) || changed;
+          changed = await migrateImageField(history, "oldPhoto", "breeding", uploadCache) || changed;
+          changed = await migrateImageField(history, "newPhoto", "breeding", uploadCache) || changed;
         }
       }
     }
@@ -1218,15 +1362,18 @@ async function migrateEmbeddedImagesToCloud() {
       render();
       refreshCareReminderTimers();
       await pushCloudDataNow(true);
-      toast("旧照片已迁移到云端");
     }
     return changed;
   } catch (error) {
     console.warn("旧照片迁移云端失败", error);
-    toast(error.message || "旧照片迁移云端失败，请稍后重试");
+    if (!options.silent) toast(error.message || "旧照片迁移云端失败，请稍后重试");
     return false;
   } finally {
     cloudImageMigrationInFlight = false;
+    if (cloudImageMigrationQueued) {
+      cloudImageMigrationQueued = false;
+      scheduleCloudImageMigration(250);
+    }
   }
 }
 
@@ -1328,7 +1475,7 @@ function tabIcon(name) {
 }
 
 function bottomNav() {
-  const minePages = ["mine", "calendar", "satisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "sync", "about", "membership", "reports", "professional"];
+  const minePages = ["mine", "calendar", "satisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "sync", "about", "membership", "reports"];
   return `
     <nav class="bottom-nav">
       <button class="${state.page === "home" ? "active" : ""}" data-page="home">${tabIcon("home")}看板</button>
@@ -1741,11 +1888,27 @@ function ledgerTypeText(type) {
   return "记录";
 }
 
+function ledgerDateRange(preset = state.ledgerDatePreset || "all") {
+  const today = formatDate(new Date());
+  if (preset === "week") {
+    const from = new Date();
+    from.setDate(from.getDate() - 6);
+    return { from: formatDate(from), to: today, label: "近七天" };
+  }
+  if (preset === "month") {
+    const from = new Date();
+    from.setDate(from.getDate() - 29);
+    return { from: formatDate(from), to: today, label: "一个月" };
+  }
+  return { from: "", to: "", label: "全部" };
+}
+
 function pageLedger() {
+  const dateRange = ledgerDateRange();
   const inDateRange = item => {
     const date = item.recordDate || formatDate(item.createdAt);
-    if (state.ledgerDateFrom && date < state.ledgerDateFrom) return false;
-    if (state.ledgerDateTo && date > state.ledgerDateTo) return false;
+    if (dateRange.from && date < dateRange.from) return false;
+    if (dateRange.to && date > dateRange.to) return false;
     return true;
   };
   const allRecords = (state.ledgerRecords || []).filter(inDateRange);
@@ -1753,7 +1916,7 @@ function pageLedger() {
   const purchaseTotal = allRecords.filter(item => item.type === "purchase").reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const soldTotal = allRecords.filter(item => item.type === "sold").reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const lossTotal = allRecords.filter(item => item.type === "loss").reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const dateText = state.ledgerDateFrom || state.ledgerDateTo ? `${state.ledgerDateFrom || "不限"} 至 ${state.ledgerDateTo || "不限"}` : "全部日期";
+  const dateText = dateRange.label;
   return `
     ${topbar("经营账本")}
     <main class="content page-fresh">
@@ -1763,15 +1926,21 @@ function pageLedger() {
         <div><span>售出收入</span><strong>¥${money(soldTotal)}</strong><small>${allRecords.filter(item => item.type === "sold").length} 条</small></div>
         <div><span>损耗金额</span><strong>-¥${money(lossTotal)}</strong><small>${allRecords.filter(item => item.type === "loss").length} 条</small></div>
       </section>
-      <section class="ledger-date-filter fresh-card">
-        <label><span>开始日期</span><input class="field" type="date" data-ledger-date-from value="${state.ledgerDateFrom}"></label>
-        <label><span>结束日期</span><input class="field" type="date" data-ledger-date-to value="${state.ledgerDateTo}"></label>
-        <button class="secondary" type="button" data-ledger-date-clear>全部日期</button>
-      </section>
-      <section class="ledger-actions">
-        <button class="secondary" data-new-ledger="purchase">记录收购</button>
-        <button class="secondary" data-new-ledger="sold">记录售出</button>
-        <button class="secondary" data-new-ledger="loss">记录损耗</button>
+      <section class="fresh-card ledger-command-panel" aria-label="账本操作">
+        <div class="ledger-command-grid" aria-label="账本日期筛选">
+          ${[
+            ["week", "近七天"],
+            ["month", "一个月"],
+            ["all", "全部"]
+          ].map(([key, label]) => `<button class="ledger-command-button ${state.ledgerDatePreset === key || (!state.ledgerDatePreset && key === "all") ? "active" : ""}" type="button" data-ledger-date-preset="${key}">${label}</button>`).join("")}
+        </div>
+        <div class="ledger-command-grid" aria-label="新增账本记录">
+          ${[
+            ["purchase", "记录收购"],
+            ["sold", "记录售出"],
+            ["loss", "记录损耗"]
+          ].map(([key, label]) => `<button class="ledger-command-button ${state.ledgerDraftType === key ? "active" : ""}" type="button" data-new-ledger="${key}">${label}</button>`).join("")}
+        </div>
       </section>
       ${state.ledgerDraftType ? ledgerForm() : ""}
       <section class="memo-tabs">
@@ -2120,7 +2289,6 @@ function pageMine() {
       <section class="fresh-card mine-list">
         <button class="mine-row" data-page="membership"><span>冠</span><strong>会员订阅</strong><em>${currentPlanLabel()}</em></button>
         <button class="mine-row" data-page="reports"><span>表</span><strong>高级报表</strong><em>${hasPlan("member") ? "已解锁" : "会员"}</em></button>
-        <button class="mine-row" data-page="professional"><span>专</span><strong>专业工具</strong><em>${hasPlan("pro") ? "已解锁" : "专业版"}</em></button>
         <button class="mine-row" data-page="calendar"><span>◷</span><strong>操作日志</strong></button>
         <button class="mine-row" data-page="satisfaction"><span>☆</span><strong>满意度调查</strong></button>
         <button class="mine-row" data-page="feedback"><span>✎</span><strong>意见反馈</strong></button>
@@ -2391,17 +2559,17 @@ function pageMembership() {
       badge: "普通",
       title: "普通用户",
       line: `免费记录 ${FREE_TURTLE_LIMIT} 只档案`,
-      desc: "适合刚开始记录，基础档案、繁殖和账本都能先用起来。",
-      status: `${freeArchiveBalanceText()}剩余`,
+      desc: "适合日常养护，核心记录功能均可使用。",
+      status: freeArchiveBalanceText(),
       rights: [
-        ["10只", "档案数量", "免费记录基础档案"],
-        ["基础", "成长记录", "记录体重背甲数据"],
-        ["本机", "数据保存", "当前设备本地查看"],
-        ["可用", "提醒事项", "记录护理备忘"],
-        ["可用", "繁殖记录", "记录产蛋孵化信息"],
-        ["基础", "经营账本", "记录收购售出损耗"],
-        ["可用", "意见反馈", "发布建议与评论"],
-        ["升级", "云端同步", "开通会员后使用"]
+        ["10只", "档案管理", "免费创建十只龟档案"],
+        ["完整", "成长记录", "记录体重与背甲变化"],
+        ["可用", "照片留存", "保存档案与更新照片"],
+        ["可用", "护理提醒", "设置护理事项和通知"],
+        ["完整", "繁殖记录", "记录产蛋受精与孵化"],
+        ["完整", "经营账本", "记录收购售出与损耗"],
+        ["可用", "账号同步", "登录后同步账号数据"],
+        ["可用", "意见反馈", "发布建议并参与交流"]
       ]
     },
     {
@@ -2409,41 +2577,22 @@ function pageMembership() {
       tone: "member",
       badge: "会员",
       title: "壳友会员",
-      line: "档案不限量 · 云端同步",
-      desc: "适合长期养龟，档案、照片、成长更新和多设备查看都更稳定。",
+      line: "不限档案 · 高级报表 · 完整导出",
+      desc: "适合长期记录与经营整理，解除数量限制并开放进阶数据能力。",
       status: "开通后不限档案",
       rights: [
-        ["不限", "档案数量", "长期记录不受限制"],
-        ["云端", "账号同步", "手机网页同步查看"],
-        ["完整", "照片留存", "照片和更新完整保存"],
-        ["完整", "成长记录", "尺寸变化持续留痕"],
-        ["完整", "繁殖记录", "产蛋受精孵化统计"],
-        ["完整", "账本统计", "收售损耗集中整理"],
-        ["可用", "数据导出", "方便备份和整理"],
-        ["优先", "功能建议", "建议优先进入规划"]
-      ]
-    },
-    {
-      key: "pro",
-      tone: "pro",
-      badge: "专业",
-      title: "专业版",
-      line: "经营管理 · 团队留痕",
-      desc: "面向繁殖场和商家，重点解决批次、库存、利润、售后和团队协作。",
-      status: "经营工具包",
-      rights: [
-        ["不限", "档案库存", "适合批量繁殖收售"],
-        ["批次", "库存管理", "按窝批品种跟踪"],
-        ["利润", "经营报表", "核算成本收入损耗"],
-        ["繁殖", "繁殖成绩", "种母表现持续对比"],
-        ["团队", "操作日志", "关键操作可追溯"],
-        ["售后", "客户记录", "交付和跟进留存"],
-        ["标签", "笼位管理", "区域架号盒号清楚"],
-        ["优先", "专属支持", "经营问题优先处理"]
+        ["不限", "档案管理", "长期记录不受数量限制"],
+        ["完整", "成长记录", "持续查看历史变化轨迹"],
+        ["完整", "照片留存", "档案和更新照片完整保存"],
+        ["完整", "繁殖统计", "汇总产蛋受精孵化数据"],
+        ["完整", "账本统计", "集中分析收购售出损耗"],
+        ["高级", "数据报表", "查看饲养和经营概览"],
+        ["完整", "数据导出", "导出档案账本繁殖数据"],
+        ["优先", "功能建议", "建议优先进入产品规划"]
       ]
     }
   ];
-  const previewKey = ["free", "member", "pro"].includes(state.membershipPreviewLevel) ? state.membershipPreviewLevel : activePlanKey();
+  const previewKey = ["free", "member"].includes(state.membershipPreviewLevel) ? state.membershipPreviewLevel : activePlanKey();
   const activeLevel = levels.find(item => item.key === previewKey) || levels[0];
   const memberPlans = SUBSCRIPTION_PLANS.filter(plan => plan.key === "member");
   const buySection = previewKey === "member" ? `
@@ -2462,16 +2611,6 @@ function pageMembership() {
             </article>
           `).join("")}
         </div>
-      </section>
-    ` : previewKey === "pro" ? `
-      <section class="fresh-card vip-pro-panel">
-        <div>
-          <span class="vip-price-badge">专业版</span>
-          <h3>给繁殖场和商家的经营工具</h3>
-          <p>批次库存、繁殖成绩、利润核算、售后记录和团队操作留痕，适合把龟场当成长期生意来管理。</p>
-          <p class="vip-price"><strong>¥388</strong><span>/年</span></p>
-        </div>
-        <button class="primary" type="button" data-subscribe-plan="pro:yearly">${hasPlan("pro") ? "已开通" : "开通专业版"}</button>
       </section>
     ` : "";
   return `
@@ -2520,87 +2659,70 @@ function pageMembership() {
 }
 
 function pageReports() {
-  const s = stats();
   const finance = ledgerMoneyStats();
   const breed = breedingStats();
   const profit = finance.sold - finance.purchase - finance.loss;
   const fertileRate = breed.egg ? Math.round((breed.fertile / breed.egg) * 100) : 0;
   const hatchRate = breed.fertile ? Math.round((breed.hatch / breed.fertile) * 100) : 0;
+  const financeMax = Math.max(finance.purchase, finance.sold, finance.loss, 1);
   return `
     ${topbar("高级报表", true)}
     <main class="content page-fresh reports-page">
-      <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">会员报表</p><h2>看清饲养和经营数据</h2><p>会员可查看成长、繁殖、健康和账本统计，并导出数据。</p></div>
+      <section class="page-intro compact-intro report-intro">
+        <div>
+          <p class="eyebrow dark">数据中心</p>
+          <h2>饲养经营，一眼看清</h2>
+          <p>汇总经营、繁殖与账本数据，帮助你快速掌握当前状态。</p>
+        </div>
+        <span class="report-scope">全部记录</span>
       </section>
-      <section class="report-grid">
-        <article class="fresh-card report-card"><span>档案总数</span><strong>${s.total}</strong><small>${s.active} 只在养</small></article>
-        <article class="fresh-card report-card"><span>健康状态</span><strong>${s.healthy}</strong><small>${s.sick} 只需关注</small></article>
-        <article class="fresh-card report-card"><span>品种覆盖</span><strong>${s.species}</strong><small>常用品种 ${state.keptSpecies.length}</small></article>
-        <article class="fresh-card report-card"><span>经营利润</span><strong class="${profit >= 0 ? "good" : "bad"}">¥${money(profit)}</strong><small>售出 - 收购 - 损耗</small></article>
+      <section class="fresh-card report-profit-card ${profit >= 0 ? "positive" : "negative"}">
+        <div class="report-profit-copy">
+          <span>经营结余</span>
+          <strong>¥${money(profit)}</strong>
+          <small>售出收入减去收购与损耗</small>
+        </div>
+        <div class="report-profit-breakdown">
+          <div><span>收入</span><b>¥${money(finance.sold)}</b></div>
+          <div><span>收购</span><b>¥${money(finance.purchase)}</b></div>
+          <div><span>损耗</span><b>¥${money(finance.loss)}</b></div>
+        </div>
       </section>
-      <section class="fresh-card chart-card">
-        <div class="settings-title">资金概览</div>
+      <section class="fresh-card chart-card report-section">
+        <div class="report-section-head">
+          <div><span class="report-section-mark">¥</span><div><h3>资金流向</h3><p>收入与支出构成</p></div></div>
+          <em>共 ${state.ledgerRecords.length} 笔</em>
+        </div>
         ${[
-          ["收购成本", finance.purchase, "#2f80ed"],
-          ["售出收入", finance.sold, "#2fa77f"],
-          ["损耗金额", finance.loss, "#d94b62"]
+          ["售出收入", finance.sold, "income"],
+          ["收购成本", finance.purchase, "purchase"],
+          ["损耗金额", finance.loss, "loss"]
         ].map(([label, value, color]) => {
-          const max = Math.max(finance.purchase, finance.sold, finance.loss, 1);
-          return `<div class="chart-row"><span>${label}</span><b><i style="width:${Math.round((value / max) * 100)}%;background:${color}"></i></b><em>¥${money(value)}</em></div>`;
+          return `<div class="chart-row ${color}"><div><span>${label}</span><em>¥${money(value)}</em></div><b><i style="width:${Math.round((value / financeMax) * 100)}%"></i></b></div>`;
         }).join("")}
       </section>
-      <section class="fresh-card chart-card">
-        <div class="settings-title">繁殖孵化</div>
+      <section class="fresh-card chart-card report-section breeding-section">
+        <div class="report-section-head">
+          <div><span class="report-section-mark">繁</span><div><h3>繁殖进度</h3><p>从产蛋到孵化的转化</p></div></div>
+          <em>${state.breedingRecords.length} 条记录</em>
+        </div>
         <div class="breeding-report">
-          <div><strong>${breed.egg}</strong><span>产蛋</span></div>
-          <div><strong>${breed.fertile}</strong><span>受精</span></div>
-          <div><strong>${breed.hatch}</strong><span>孵化</span></div>
+          <div><span>产蛋</span><strong>${breed.egg}</strong><small>枚</small></div>
+          <div><span>受精</span><strong>${breed.fertile}</strong><small>枚</small></div>
+          <div><span>孵化</span><strong>${breed.hatch}</strong><small>只</small></div>
         </div>
-        <p class="muted">受精率 ${fertileRate}% · 孵化率 ${hatchRate}%</p>
-      </section>
-      <section class="fresh-card export-card">
-        <div>
-          <div class="settings-title">数据导出</div>
-          <p class="muted">导出档案、账本和繁殖数据，便于留档或二次整理。</p>
+        <div class="report-rate-list">
+          <div><span>受精率</span><b><i style="width:${fertileRate}%"></i></b><em>${fertileRate}%</em></div>
+          <div><span>孵化率</span><b><i style="width:${hatchRate}%"></i></b><em>${hatchRate}%</em></div>
         </div>
-        <button class="secondary" type="button" data-export-data="account">导出 CSV</button>
-        <button class="secondary" type="button" data-export-data="business">经营报表</button>
       </section>
-    </main>
-    ${bottomNav()}
-  `;
-}
-
-function pageProfessionalTools() {
-  const turtleOptions = state.turtles.map(turtle => `<option value="${turtle.id}">${escapeHtml(turtleLabel(turtle))}</option>`).join("");
-  return `
-    ${topbar("专业工具", true)}
-    <main class="content page-fresh professional-page">
-      <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">专业版</p><h2>批量经营工作台</h2><p>用于收购、售出、损耗和交付场景，提高重复记录效率。</p></div>
-      </section>
-      <section class="fresh-card survey-form">
-        <div class="settings-title">批量导入档案</div>
-        <p class="muted">每行一只龟，格式：昵称,品种代码或名称,性别,体重g,背甲cm,购入价。</p>
-        <form id="batchImportForm">
-          <textarea class="field batch-area" name="batchTurtles" placeholder="小核桃,GHG,母,202,9.6,300&#10;黑豆,ZDG,未知,180,8.4,"></textarea>
-          <button class="primary" type="submit">批量导入</button>
-        </form>
-      </section>
-      <section class="fresh-card survey-form">
-        <div class="settings-title">交付说明</div>
-        <p class="muted">售出时可快速生成给买家的龟龟信息和基础护理提醒。</p>
-        <form id="deliveryNoteForm">
-          <label class="survey-field"><span>选择档案</span><select class="select" name="turtleId">${turtleOptions || `<option value="">暂无档案</option>`}</select></label>
-          <label class="survey-field"><span>客户备注</span><textarea name="customerNote" placeholder="例如：已告知温度、开食情况、运输注意事项"></textarea></label>
-          <button class="primary" type="submit">生成交付说明</button>
-        </form>
-        ${state.professionalOutput ? `<pre class="professional-output">${escapeHtml(state.professionalOutput)}</pre>` : ""}
-      </section>
-      <section class="fresh-card feature-card">
-        <div class="settings-title">专业能力</div>
-        <div class="feature-list pro">
-          <span>批量收购记录</span><span>批量售出记录</span><span>损耗统计</span><span>利润报表</span><span>成长卡片</span><span>图片水印</span><span>团队协作预留</span><span>经营报表导出</span>
+      <section class="fresh-card export-card report-section">
+        <div class="report-section-head">
+          <div><span class="report-section-mark">导</span><div><h3>数据导出</h3><p>保存完整数据，方便备份整理</p></div></div>
+        </div>
+        <div class="report-export-actions">
+          <button class="secondary" type="button" data-export-data="account"><span>档</span><div><strong>全部数据</strong><small>档案、账本和繁殖</small></div></button>
+          <button class="secondary" type="button" data-export-data="business"><span>表</span><div><strong>经营报表</strong><small>收购、售出与损耗</small></div></button>
         </div>
       </section>
     </main>
@@ -2628,11 +2750,15 @@ function pageAbout() {
     ${topbar("关于壳友手账", true)}
     <main class="content page-fresh">
       <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">关于</p><h2>壳友手账</h2><p>面向养龟、繁殖和经营记录的本地原型应用。</p></div>
+        <div><p class="eyebrow dark">关于</p><h2>壳友手账</h2><p>为养龟、繁殖和日常经营提供清晰可靠的记录工具。</p></div>
       </section>
       <section class="fresh-card settings-card">
         <div class="settings-title">当前能力</div>
         <p class="muted">登录后，档案、繁殖、账本、护理、操作日志、满意度调查和意见反馈都会随账号保存到云端。</p>
+      </section>
+      <section class="fresh-card settings-card about-contact-card">
+        <div class="settings-title">交流与商务合作</div>
+        <div class="about-contact-row"><span>微信号</span><strong>Czjxcw</strong></div>
       </section>
     </main>
     ${bottomNav()}
@@ -2664,7 +2790,6 @@ function render() {
     account: pageAccount,
     membership: pageMembership,
     reports: pageReports,
-    professional: pageProfessionalTools,
     sync: pageSync,
     about: pageAbout,
     breeding: pageBreeding,
@@ -2723,11 +2848,10 @@ function bindEvents() {
     if (targetPage === "add" && !requireArchiveCapacity()) return;
     if (["breedingAdd", "feedbackAdd"].includes(targetPage) && !requireLogin()) return;
     if (targetPage === "reports" && !requireEntitlement("member", "开通壳友会员后可查看高级报表")) return;
-    if (targetPage === "professional" && !requireEntitlement("pro", "专业版可使用批量经营工具")) return;
     setState({ page: el.dataset.page, openTurtleMenuId: "", openFeedbackMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" });
   }));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", () => setState({
-    page: state.page === "turtleDetail" ? "list" : state.page === "ledgerDetail" ? "ledger" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : ["calendar", "satisfaction", "feedback", "account", "membership", "reports", "professional", "sync", "about"].includes(state.page) ? "mine" : "home",
+    page: state.page === "turtleDetail" ? "list" : state.page === "ledgerDetail" ? "ledger" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : ["calendar", "satisfaction", "feedback", "account", "membership", "reports", "sync", "about"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "",
     openFeedbackMenuId: "",
     updatingTurtleId: "",
@@ -2831,9 +2955,11 @@ function bindEvents() {
   document.querySelectorAll("[data-delete-memo]").forEach(btn => btn.addEventListener("click", () => deleteMemo(btn.dataset.deleteMemo)));
   document.querySelectorAll("[data-new-ledger]").forEach(btn => btn.addEventListener("click", () => openLedgerForm(btn.dataset.newLedger)));
   document.querySelectorAll("[data-ledger-tab]").forEach(btn => btn.addEventListener("click", () => setState({ ledgerTab: btn.dataset.ledgerTab })));
-  document.querySelector("[data-ledger-date-from]")?.addEventListener("change", e => setState({ ledgerDateFrom: e.target.value }));
-  document.querySelector("[data-ledger-date-to]")?.addEventListener("change", e => setState({ ledgerDateTo: e.target.value }));
-  document.querySelector("[data-ledger-date-clear]")?.addEventListener("click", () => setState({ ledgerDateFrom: "", ledgerDateTo: "" }));
+  document.querySelectorAll("[data-ledger-date-preset]").forEach(btn => btn.addEventListener("click", () => setState({
+    ledgerDatePreset: btn.dataset.ledgerDatePreset,
+    ledgerDateFrom: "",
+    ledgerDateTo: ""
+  })));
   document.querySelectorAll("[data-view-ledger]").forEach(el => el.addEventListener("click", () => setState({ page: "ledgerDetail", selectedLedgerId: el.dataset.viewLedger })));
   document.querySelectorAll("[data-delete-ledger]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
@@ -3226,6 +3352,17 @@ function submitFeedback(event) {
 
 async function submitAccount(event) {
   event.preventDefault();
+  if (accountSubmitInFlight) return;
+  accountSubmitInFlight = true;
+  try {
+    await submitAccountInner(event);
+  } finally {
+    accountSubmitInFlight = false;
+  }
+}
+
+async function submitAccountInner(event) {
+  event.preventDefault();
   const form = new FormData(event.currentTarget);
   const mode = event.currentTarget.dataset.authForm || state.accountMode;
   const phone = String(form.get("phone") || "").trim();
@@ -3239,8 +3376,8 @@ async function submitAccount(event) {
       try {
         const result = await apiPost("/api/account/login", { phone, password });
         if (!result.user) throw new Error("登录失败，请稍后重试");
-        applyCloudUser(result.user, `手机号登录：${maskPhone(phone)}`);
-        toast("登录成功，云端数据已同步");
+        applyCloudUser(result.user, `手机号登录：${maskPhone(phone)}`, { skipCloud: true, skipMigration: true });
+        toast("登录成功");
         return;
       } catch (error) {
         toast(error.message || "手机号或密码不正确");
@@ -3286,8 +3423,8 @@ async function submitAccount(event) {
         data: initialCloudData
       });
       if (!result.user) throw new Error("注册失败，请稍后重试");
-      applyCloudUser(result.user, `注册并登录：${maskPhone(phone)}`);
-      toast("注册成功，已登录并开启云端同步");
+      applyCloudUser(result.user, `注册并登录：${maskPhone(phone)}`, { skipCloud: true, skipMigration: true });
+      toast("注册成功，已登录");
       return;
     } catch (error) {
       toast(error.message || "注册失败，请稍后重试");
@@ -3392,13 +3529,13 @@ async function readAccountAvatar(event) {
   const file = input.files?.[0];
   if (!file) return;
   try {
-    toast("图片正在上传...");
-    const photo = await uploadImageToServer(file, "avatar", { maxSide: 768, quality: 0.78 });
+    const photo = await readImageForLocalUse(file, "avatar");
     input.value = "";
-    setState({ accountAvatar: photo });
+    setState({ accountAvatar: photo }, { skipCloud: true });
+    scheduleCloudImageMigration();
   } catch (error) {
     input.value = "";
-    toast(error.message || "图片上传失败");
+    toast(error.message || "图片读取失败");
   }
 }
 
@@ -3422,6 +3559,7 @@ function submitProfile(event) {
 
 function logoutAccount() {
   if (!confirm("确定要退出当前账号吗？")) return;
+  forgetCloudToken(state.loggedInPhone);
   const registeredUsers = syncRegisteredUsers(state);
   setState({
     ...emptyAccountData(),
@@ -3456,6 +3594,11 @@ async function apiPost(path, payload) {
     body: JSON.stringify(payload)
   });
   const data = await response.json().catch(() => ({}));
+  if (path === "/api/upload/image" && response.status === 401) {
+    forgetCloudToken(state.loggedInPhone);
+    state.cloudToken = "";
+    throw new Error("登录状态已过期，请重新登录后再上传图片");
+  }
   if (path === "/api/upload/image" && response.status === 405) {
     throw new Error("云端服务器未更新图片上传接口，请先部署最新版后端并重启服务");
   }
@@ -3468,7 +3611,7 @@ async function apiPost(path, payload) {
 
 function currentCloudToken() {
   const activeUser = (state.registeredUsers || []).find(user => user.phone === state.loggedInPhone);
-  return state.cloudToken || activeUser?.cloudToken || "";
+  return state.cloudToken || activeUser?.cloudToken || readSavedCloudToken(state.loggedInPhone) || "";
 }
 
 function cloudUserToLocal(user, fallbackToken = "") {
@@ -3487,6 +3630,7 @@ function cloudUserToLocal(user, fallbackToken = "") {
 
 function applyCloudUser(user, activityText = "", options = {}) {
   const localUser = cloudUserToLocal(user, currentCloudToken());
+  if (localUser.phone && localUser.cloudToken) rememberCloudToken(localUser.phone, localUser.cloudToken);
   const accountData = normalizeAccountData(localUser.data || {});
   const activityLogs = activityText
     ? [makeActivity(activityText, "空间"), ...(accountData.activityLogs || [])]
@@ -3508,13 +3652,18 @@ function applyCloudUser(user, activityText = "", options = {}) {
     accountCodeCooldownUntil: "",
     page: "mine"
   }, options);
-  if (CONFIGURED_SMS_BACKEND && localUser.cloudToken) {
-    setTimeout(() => migrateEmbeddedImagesToCloud(), 0);
+  if (!options.skipMigration && CONFIGURED_SMS_BACKEND && localUser.cloudToken) {
+    scheduleCloudImageMigration(600);
   }
 }
 
 function queueCloudSave() {
   if (!CONFIGURED_SMS_BACKEND || !state.loggedInPhone || !currentCloudToken()) return;
+  if (accountHasEmbeddedImages(state)) {
+    persistPendingCloudData();
+    scheduleCloudImageMigration();
+    return;
+  }
   if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
   cloudSyncTimer = setTimeout(pushCloudDataNow, CLOUD_SYNC_DEBOUNCE_MS);
 }
@@ -3534,6 +3683,7 @@ async function pushCloudDataNow(throwOnError = false) {
       accountAvatar: state.accountAvatar,
       data: accountDataSnapshot(state)
     });
+    if (!accountHasEmbeddedImages(state)) clearPendingCloudData();
   } catch (error) {
     console.warn(error.message || "云端同步失败");
     if (throwOnError) throw error;
@@ -3565,12 +3715,12 @@ async function startCloudSessionHydration() {
   try {
     if (accountHasContent(state)) {
       const hadEmbeddedImages = accountHasEmbeddedImages(state);
-      const migratedImages = await migrateEmbeddedImagesToCloud();
+      const migratedImages = await migrateEmbeddedImagesToCloud({ silent: true });
       if (hadEmbeddedImages && !migratedImages) return;
       await pushCloudDataNow(true);
     }
     await refreshCloudAccountFromServer();
-    await migrateEmbeddedImagesToCloud();
+    await migrateEmbeddedImagesToCloud({ silent: true });
   } catch (error) {
     console.warn(error.message || "云端数据初始化失败");
   }
@@ -3606,6 +3756,10 @@ function csvCell(value) {
   return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
+function exportNickname(value) {
+  return String(value ?? "").split("·")[0].trim();
+}
+
 function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") {
   const blob = new Blob([`\ufeff${content}`], { type });
   const url = URL.createObjectURL(blob);
@@ -3619,21 +3773,19 @@ function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") 
 }
 
 function exportAccountData(kind = "account") {
-  if (kind === "business") {
-    if (!requireEntitlement("pro", "专业版可导出经营报表")) return;
-  } else if (!requireEntitlement("member", "开通壳友会员后可导出数据")) {
+  if (!requireEntitlement("member", kind === "business" ? "开通壳友会员后可导出经营报表" : "开通壳友会员后可导出数据")) {
     return;
   }
   const lines = [];
   lines.push(["类型", "名称", "日期", "品种", "金额", "体重", "背甲", "备注"].map(csvCell).join(","));
   state.turtles.forEach(turtle => {
-    lines.push(["档案", turtleLabel(turtle), turtle.acquiredDate, turtle.speciesName, turtle.price, turtle.weight, turtle.carapaceLength, turtle.note].map(csvCell).join(","));
+    lines.push(["档案", exportNickname(turtle.code || "未命名"), turtle.acquiredDate, turtle.speciesName, turtle.price, turtle.weight, turtle.carapaceLength, turtle.note].map(csvCell).join(","));
   });
   state.ledgerRecords.forEach(record => {
-    lines.push([ledgerTypeText(record.type), record.title, record.recordDate || record.createdAt, "", record.amount, record.weight, record.carapaceLength, record.note].map(csvCell).join(","));
+    lines.push([ledgerTypeText(record.type), exportNickname(record.title), record.recordDate || record.createdAt, "", record.amount, record.weight, record.carapaceLength, record.note].map(csvCell).join(","));
   });
   state.breedingRecords.forEach(record => {
-    lines.push(["繁殖", record.motherName, record.date, "", "", "", "", `产蛋${record.eggCount || 0} 受精${record.fertileCount || 0} 孵化${record.hatchCount || 0} ${record.note || ""}`].map(csvCell).join(","));
+    lines.push(["繁殖", exportNickname(record.motherName), record.date, "", "", "", "", `产蛋${record.eggCount || 0} 受精${record.fertileCount || 0} 孵化${record.hatchCount || 0} ${record.note || ""}`].map(csvCell).join(","));
   });
   const fileName = kind === "business" ? `壳友手账-经营报表-${formatDate(new Date())}.csv` : `壳友手账-数据导出-${formatDate(new Date())}.csv`;
   downloadTextFile(fileName, lines.join("\n"), "text/csv;charset=utf-8");
@@ -3642,7 +3794,7 @@ function exportAccountData(kind = "account") {
 
 function submitBatchImport(event) {
   event.preventDefault();
-  if (!requireEntitlement("pro", "专业版可使用批量导入")) return;
+  if (!requireEntitlement("member", "壳友会员可使用批量导入")) return;
   const form = new FormData(event.currentTarget);
   const rows = String(form.get("batchTurtles") || "").split(/\n+/).map(row => row.trim()).filter(Boolean);
   if (!rows.length) return toast("请先填写要导入的档案");
@@ -3690,7 +3842,7 @@ function submitBatchImport(event) {
       acquiredDate: formatDate(new Date()),
       source: price > 0 ? "购买" : "其他",
       price: price > 0 ? price : "",
-      note: "专业版批量导入",
+      note: "会员批量导入",
       photo: speciesPhoto(species) || defaultPhoto,
       createdAt: new Date().toISOString(),
       measureHistory: []
@@ -3721,14 +3873,14 @@ function submitBatchImport(event) {
     turtles: [...imported, ...state.turtles],
     keptSpecies: [...keptSpecies],
     ledgerRecords: [...ledgerRecords, ...state.ledgerRecords],
-    activityLogs: logActivity(`专业版批量导入 ${imported.length} 只乌龟${skippedRows.length ? `，跳过 ${skippedRows.length} 行` : ""}`, "专业")
+    activityLogs: logActivity(`会员批量导入 ${imported.length} 只乌龟${skippedRows.length ? `，跳过 ${skippedRows.length} 行` : ""}`, "会员")
   });
   toast(`已导入 ${imported.length} 只乌龟${skippedRows.length ? `，${skippedRows.slice(0, 2).join("；")}` : ""}`);
 }
 
 function submitDeliveryNote(event) {
   event.preventDefault();
-  if (!requireEntitlement("pro", "专业版可生成交付说明")) return;
+  if (!requireEntitlement("member", "壳友会员可生成交付说明")) return;
   const form = new FormData(event.currentTarget);
   const turtle = state.turtles.find(item => item.id === form.get("turtleId"));
   if (!turtle) return toast("请先选择一只乌龟");
@@ -3744,7 +3896,7 @@ function submitDeliveryNote(event) {
   ].filter(Boolean).join("\n");
   setState({
     professionalOutput: output,
-    activityLogs: logActivity(`生成交付说明：${turtleLabel(turtle)}`, "专业")
+    activityLogs: logActivity(`生成交付说明：${turtleLabel(turtle)}`, "会员")
   });
   toast("交付说明已生成");
 }
@@ -3768,13 +3920,12 @@ async function readPhoto(event) {
   if (!file) return;
   const draft = captureTurtleFormDraft();
   try {
-    toast("图片正在上传...");
-    const photo = await uploadImageToServer(file, "turtle");
+    const photo = await readImageForLocalUse(file, "turtle");
     input.value = "";
-    setState({ formDraft: draft, formPhoto: photo });
+    setState({ formDraft: draft, formPhoto: photo }, { skipCloud: true });
   } catch (error) {
     input.value = "";
-    toast(error.message || "图片上传失败");
+    toast(error.message || "图片读取失败");
   }
 }
 
@@ -3785,17 +3936,16 @@ async function readUpdatePhoto(event) {
   if (!file) return;
   const draft = captureTurtleDetailDraft();
   try {
-    toast("图片正在上传...");
-    const photo = await uploadImageToServer(file, "turtle");
+    const photo = await readImageForLocalUse(file, "turtle");
     input.value = "";
     setState({
       turtleDetailDraftId: state.selectedTurtleId,
       turtleDetailDraft: draft,
       updateDraftPhoto: photo
-    });
+    }, { skipCloud: true });
   } catch (error) {
     input.value = "";
-    toast(error.message || "图片上传失败");
+    toast(error.message || "图片读取失败");
   }
 }
 
@@ -3853,7 +4003,7 @@ function submitTurtleDetail(event) {
     updatedAt: new Date().toISOString()
   };
   const keptSpecies = state.keptSpecies.includes(species.code) ? state.keptSpecies : [...state.keptSpecies, species.code];
-  setState({
+  saveWithDeferredImages({
     turtles: state.turtles.map(t => t.id === turtle.id ? {
       ...updated,
       measureHistory: [historyItem, ...(t.measureHistory || [])]
@@ -3864,7 +4014,7 @@ function submitTurtleDetail(event) {
     turtleDetailDraft: null,
     updateDraftPhoto: "",
     activityLogs: logActivity(`更新档案：${turtleLabel(updated)}，背甲 ${historyItem.oldLength}cm → ${carapaceLength}cm${state.updateDraftPhoto ? "，并更换照片" : ""}`, "档案")
-  });
+  }, [updated.photo, historyItem.newPhoto]);
   toast("档案已更新，旧记录已经留存");
 }
 
@@ -3919,7 +4069,7 @@ function submitTurtle(event) {
     });
     logs.unshift(makeActivity(`购买入账：${turtleLabel(turtle)}，金额 ${money(turtle.price)} 元`, "账本"));
   }
-  setState({
+  saveWithDeferredImages({
     turtles: [turtle, ...state.turtles],
     keptSpecies,
     ledgerRecords,
@@ -3929,7 +4079,7 @@ function submitTurtle(event) {
     selectedSpeciesCode: "",
     page: "home",
     activityLogs: [...logs, ...(state.activityLogs || [])]
-  });
+  }, [turtle.photo]);
   toast(turtle.source === "购买" ? "档案已保存，并已同步到收购账本" : "档案已保存");
 }
 
@@ -3981,13 +4131,12 @@ async function readLedgerPhoto(event) {
   if (!file) return;
   const draft = captureLedgerFormDraft();
   try {
-    toast("图片正在上传...");
-    const photo = await uploadImageToServer(file, "ledger");
+    const photo = await readImageForLocalUse(file, "ledger");
     input.value = "";
-    setState({ ledgerDraftForm: draft, ledgerDraftPhoto: photo, ledgerDraftTurtleId: draft.turtleId || state.ledgerDraftTurtleId, ledgerPurchaseGender: draft.purchaseGender || state.ledgerPurchaseGender });
+    setState({ ledgerDraftForm: draft, ledgerDraftPhoto: photo, ledgerDraftTurtleId: draft.turtleId || state.ledgerDraftTurtleId, ledgerPurchaseGender: draft.purchaseGender || state.ledgerPurchaseGender }, { skipCloud: true });
   } catch (error) {
     input.value = "";
-    toast(error.message || "图片上传失败");
+    toast(error.message || "图片读取失败");
   }
 }
 
@@ -3998,13 +4147,12 @@ async function readBreedingPhoto(event) {
   if (!file) return;
   const draft = readBreedingDraft();
   try {
-    toast("图片正在上传...");
-    const photo = await uploadImageToServer(file, "breeding");
+    const photo = await readImageForLocalUse(file, "breeding");
     input.value = "";
-    setState({ ...draft, breedingDraftPhoto: photo });
+    setState({ ...draft, breedingDraftPhoto: photo }, { skipCloud: true });
   } catch (error) {
     input.value = "";
-    toast(error.message || "图片上传失败");
+    toast(error.message || "图片读取失败");
   }
 }
 
@@ -4014,13 +4162,12 @@ async function readBreedingEditPhoto(event) {
   const file = input.files?.[0];
   if (!file) return;
   try {
-    toast("图片正在上传...");
-    const photo = await uploadImageToServer(file, "breeding");
+    const photo = await readImageForLocalUse(file, "breeding");
     input.value = "";
-    setState({ breedingEditPhoto: photo });
+    setState({ breedingEditPhoto: photo }, { skipCloud: true });
   } catch (error) {
     input.value = "";
-    toast(error.message || "图片上传失败");
+    toast(error.message || "图片读取失败");
   }
 }
 
@@ -4089,12 +4236,12 @@ function submitBreedingDetail(event) {
     updatedAt: historyItem.updatedAt,
     editHistory: [historyItem, ...(record.editHistory || [])]
   };
-  setState({
+  saveWithDeferredImages({
     breedingRecords: (state.breedingRecords || []).map(item => item.id === record.id ? updated : item),
     breedingEditPhoto: "",
     page: "breedingDetail",
     activityLogs: logActivity(`修改繁殖记录：${updated.motherName}，产蛋 ${eggCount} 枚，受精 ${fertileCount} 枚，孵化 ${hatchCount} 只`, "繁殖")
-  });
+  }, [photo, historyItem.newPhoto]);
   toast("繁殖记录已更新");
 }
 
@@ -4129,7 +4276,7 @@ function submitBreedingRecord(event) {
     createdAt: new Date().toISOString(),
     editHistory: []
   };
-  setState({
+  saveWithDeferredImages({
     breedingRecords: [record, ...(state.breedingRecords || [])],
     breedingDraftPhoto: "",
     breedingMotherMode: "archive",
@@ -4142,7 +4289,7 @@ function submitBreedingRecord(event) {
     breedingNote: "",
     page: "breeding",
     activityLogs: logActivity(`新增繁殖记录：${record.motherName}，产蛋 ${eggCount} 枚，受精 ${fertileCount} 枚，孵化 ${hatchCount} 只`, "繁殖")
-  });
+  }, [record.photo]);
   toast("繁殖记录已保存");
 }
 
@@ -4215,7 +4362,7 @@ function submitLedgerRecord(event) {
     createdAt: new Date().toISOString()
   };
   const movedText = (type === "sold" || type === "loss") && turtle ? "，已从档案移出" : "";
-  setState({
+  saveWithDeferredImages({
     turtles: nextTurtles,
     keptSpecies: nextKeptSpecies,
     ledgerRecords: [record, ...state.ledgerRecords],
@@ -4226,7 +4373,7 @@ function submitLedgerRecord(event) {
     ledgerDraftForm: {},
     ledgerPurchaseGender: "未知",
     activityLogs: logActivity(`${ledgerTypeText(type)}记录：${title}，金额 ${money(amount)} 元${movedText}`, "账本")
-  });
+  }, [record.photo, turtle?.photo]);
   toast(`${ledgerTypeText(type)}记录已保存`);
 }
 
@@ -4238,6 +4385,10 @@ function deleteLedgerRecord(id) {
 }
 
 function toast(text) {
+  const now = Date.now();
+  if (text === lastToastText && now - lastToastAt < 1500) return;
+  lastToastText = text;
+  lastToastAt = now;
   document.querySelector(".toast")?.remove();
   const el = document.createElement("div");
   el.className = "toast";
@@ -4246,6 +4397,7 @@ function toast(text) {
   setTimeout(() => el.remove(), 2200);
 }
 
+restorePendingCloudData();
 render();
 refreshCareReminderTimers();
 startCloudSessionHydration();
