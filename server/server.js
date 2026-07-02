@@ -29,11 +29,44 @@ const HOST = process.env.HOST || "127.0.0.1";
 const STATIC_ROOT = path.resolve(__dirname, "..");
 const DATA_DIR = path.resolve(__dirname, "data");
 const DATA_FILE = path.resolve(DATA_DIR, "app-data.json");
+const SMS_STATE_FILE = path.resolve(DATA_DIR, "sms-state.json");
 const UPLOAD_DIR = path.resolve(__dirname, "uploads");
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
+const MAX_MEDIA_UPLOAD_BYTES = Number(process.env.MAX_MEDIA_UPLOAD_BYTES || 10 * 1024 * 1024);
 const REVIEW_ADMIN_PHONE = "18652082378";
 const smsCodes = new Map();
 const verifiedPhones = new Map();
+
+function persistSmsState() {
+  const now = Date.now();
+  for (const [phone, item] of smsCodes) {
+    if (!item || now > Number(item.expiresAt || 0)) smsCodes.delete(phone);
+  }
+  for (const [phone, expiresAt] of verifiedPhones) {
+    if (now > Number(expiresAt || 0)) verifiedPhones.delete(phone);
+  }
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tempFile = `${SMS_STATE_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tempFile, JSON.stringify({
+    codes: Object.fromEntries(smsCodes),
+    verifiedPhones: Object.fromEntries(verifiedPhones)
+  }), "utf8");
+  fs.renameSync(tempFile, SMS_STATE_FILE);
+}
+
+function loadSmsState() {
+  try {
+    if (!fs.existsSync(SMS_STATE_FILE)) return;
+    const saved = JSON.parse(fs.readFileSync(SMS_STATE_FILE, "utf8"));
+    for (const [phone, item] of Object.entries(saved.codes || {})) smsCodes.set(phone, item);
+    for (const [phone, expiresAt] of Object.entries(saved.verifiedPhones || {})) verifiedPhones.set(phone, Number(expiresAt));
+    persistSmsState();
+  } catch (error) {
+    console.warn("读取短信验证状态失败，将使用新的验证状态", error.message);
+  }
+}
+
+loadSmsState();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -44,7 +77,10 @@ const mimeTypes = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
-  ".svg": "image/svg+xml; charset=utf-8"
+  ".svg": "image/svg+xml; charset=utf-8",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime"
 };
 
 function sendJson(res, status, body) {
@@ -120,17 +156,21 @@ function normalizeAccountData(data = {}) {
 
 function readDatabase() {
   try {
-    if (!fs.existsSync(DATA_FILE)) return { users: {}, reviews: [], feedbacks: [] };
+    if (!fs.existsSync(DATA_FILE)) return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [] };
     const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     return data && typeof data === "object"
       ? {
           users: data.users || {},
           reviews: Array.isArray(data.reviews) ? data.reviews : [],
-          feedbacks: Array.isArray(data.feedbacks) ? data.feedbacks : []
+          feedbacks: Array.isArray(data.feedbacks) ? data.feedbacks : [],
+          communityPosts: Array.isArray(data.communityPosts) ? data.communityPosts : [],
+          marketListings: Array.isArray(data.marketListings) ? data.marketListings : [],
+          friendships: Array.isArray(data.friendships) ? data.friendships : [],
+          messages: Array.isArray(data.messages) ? data.messages : []
         }
-      : { users: {}, reviews: [], feedbacks: [] };
+      : { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [] };
   } catch {
-    return { users: {}, reviews: [], feedbacks: [] };
+    return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [] };
   }
 }
 
@@ -162,6 +202,7 @@ function makeAuthToken() {
 
 function rememberVerifiedPhone(phone) {
   verifiedPhones.set(phone, Date.now() + 10 * 60 * 1000);
+  persistSmsState();
 }
 
 function hasVerifiedPhone(phone) {
@@ -169,6 +210,7 @@ function hasVerifiedPhone(phone) {
   if (!expiresAt) return false;
   if (Date.now() > expiresAt) {
     verifiedPhones.delete(phone);
+    persistSmsState();
     return false;
   }
   return true;
@@ -205,11 +247,24 @@ function makeCode() {
 }
 
 function storeCode(phone, code) {
+  const salt = crypto.randomBytes(16).toString("hex");
   smsCodes.set(phone, {
-    code,
+    codeHash: hashValue(`${salt}:${phone}:${code}`),
+    salt,
     expiresAt: Date.now() + 5 * 60 * 1000,
     lastSentAt: Date.now()
   });
+  persistSmsState();
+}
+
+function forgetCode(phone) {
+  smsCodes.delete(phone);
+  persistSmsState();
+}
+
+function storedCodeMatches(phone, item, code) {
+  if (!item?.codeHash || !item?.salt) return false;
+  return item.codeHash === hashValue(`${item.salt}:${phone}:${code}`);
 }
 
 function percentEncode(value) {
@@ -391,7 +446,7 @@ async function handleVerifySms(req, res) {
     if (!code) return sendJson(res, 400, { ok: false, message: "请输入验证码" });
     const passed = await checkAliyunPnvsSms(phone, code);
     if (!passed) return sendJson(res, 400, { ok: false, message: "验证码不正确" });
-    smsCodes.delete(phone);
+    forgetCode(phone);
     rememberVerifiedPhone(phone);
     return sendJson(res, 200, { ok: true });
   }
@@ -399,25 +454,50 @@ async function handleVerifySms(req, res) {
   const item = smsCodes.get(phone);
   if (!item) return sendJson(res, 400, { ok: false, message: "请先获取验证码" });
   if (Date.now() > item.expiresAt) {
-    smsCodes.delete(phone);
+    forgetCode(phone);
     return sendJson(res, 400, { ok: false, message: "验证码已过期" });
   }
-  if (item.code !== code) return sendJson(res, 400, { ok: false, message: "验证码不正确" });
-  smsCodes.delete(phone);
+  if (!storedCodeMatches(phone, item, code)) return sendJson(res, 400, { ok: false, message: "验证码不正确" });
+  forgetCode(phone);
   rememberVerifiedPhone(phone);
   return sendJson(res, 200, { ok: true });
+}
+
+async function verifyRegistrationCode(phone, code) {
+  if (hasVerifiedPhone(phone)) return;
+  if (!code) throw new Error("请输入验证码");
+
+  const item = smsCodes.get(phone);
+  if (!item) throw new Error("请先获取验证码");
+  if (Date.now() > Number(item.expiresAt || 0)) {
+    forgetCode(phone);
+    throw new Error("验证码已过期，请重新获取");
+  }
+
+  if (process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured() && process.env.SMS_MOCK !== "true") {
+    const passed = await checkAliyunPnvsSms(phone, code);
+    if (!passed) throw new Error("验证码不正确");
+    return;
+  }
+
+  if (!storedCodeMatches(phone, item, code)) throw new Error("验证码不正确");
 }
 
 async function handleRegister(req, res) {
   const body = await readJson(req);
   const phone = String(body.phone || "").trim();
   const password = String(body.password || "");
+  const code = String(body.code || "").trim();
   if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
   if (password.length < 6) return sendJson(res, 400, { ok: false, message: "密码至少需要 6 位" });
-  if (!hasVerifiedPhone(phone)) return sendJson(res, 400, { ok: false, message: "请先完成短信验证码核对" });
 
   const db = readDatabase();
   if (db.users[phone]) return sendJson(res, 409, { ok: false, message: "手机号已注册，请直接登录" });
+  try {
+    await verifyRegistrationCode(phone, code);
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, message: error.message || "验证码核对失败" });
+  }
 
   const passwordInfo = hashPassword(password);
   const token = makeAuthToken();
@@ -437,6 +517,7 @@ async function handleRegister(req, res) {
   db.users[phone] = user;
   writeDatabase(db);
   verifiedPhones.delete(phone);
+  forgetCode(phone);
   return sendJson(res, 200, { ok: true, user: publicUser(user, token) });
 }
 
@@ -535,6 +616,12 @@ function requireReviewUser(db, body, res) {
   return user;
 }
 
+function optionalReviewUser(db, body) {
+  const phone = String(body.phone || "").trim();
+  const token = String(body.token || "");
+  return phone && token ? authenticate(db, phone, token) : null;
+}
+
 function parseImageDataUrl(value) {
   const dataUrl = String(value || "");
   const match = dataUrl.match(/^data:image\/(png|jpe?g|webp);base64,([A-Za-z0-9+/=\s]+)$/i);
@@ -582,6 +669,35 @@ async function handleUploadImage(req, res) {
     ok: true,
     url: `/uploads/${year}/${month}/${filename}`
   });
+}
+
+function parseMediaDataUrl(value) {
+  const dataUrl = String(value || "");
+  const match = dataUrl.match(/^data:(image\/(?:png|jpe?g|webp)|video\/(?:mp4|webm|quicktime));base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (!match) return null;
+  const mime = match[1].toLowerCase();
+  const base64 = match[2].replace(/\s/g, "");
+  if (!base64) return null;
+  const ext = mime.includes("jpeg") || mime.includes("jpg") ? "jpg" : mime.includes("quicktime") ? "mov" : mime.split("/")[1];
+  return { buffer: Buffer.from(base64, "base64"), ext, mime, mediaType: mime.startsWith("video/") ? "video" : "image" };
+}
+
+async function handleUploadMedia(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const media = parseMediaDataUrl(body.media);
+  if (!media) return sendJson(res, 400, { ok: false, message: "仅支持 JPG、PNG、WebP、MP4、WebM 或 MOV" });
+  if (media.buffer.length > MAX_MEDIA_UPLOAD_BYTES) return sendJson(res, 413, { ok: false, message: "媒体文件不能超过 10MB" });
+  const now = new Date();
+  const year = String(now.getFullYear());
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const folder = path.resolve(UPLOAD_DIR, year, month);
+  const filename = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}-community.${media.ext}`;
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.resolve(folder, filename), media.buffer);
+  return sendJson(res, 200, { ok: true, url: `/uploads/${year}/${month}/${filename}`, mediaType: media.mediaType });
 }
 
 async function handleListReviews(req, res) {
@@ -821,6 +937,311 @@ async function handleDeleteFeedbackComment(req, res) {
   return sendJson(res, 200, { ok: true, feedbacks: publicFeedbackItems(db, user) });
 }
 
+function communityUserId(phone) {
+  return hashValue(`community:${phone}`).slice(0, 20);
+}
+
+function communityUserById(db, id) {
+  return Object.values(db.users || {}).find(user => communityUserId(user.phone) === String(id || ""));
+}
+
+function friendshipKey(phoneA, phoneB) {
+  return [String(phoneA), String(phoneB)].sort().join(":");
+}
+
+function communityFriends(db, viewer) {
+  const links = Array.isArray(db.friendships) ? db.friendships : [];
+  return links
+    .filter(item => item.phones?.includes(viewer.phone))
+    .map(item => {
+      const phone = item.phones.find(value => value !== viewer.phone);
+      const user = db.users?.[phone];
+      return user ? {
+        id: communityUserId(phone),
+        name: user.accountName || maskPhone(phone),
+        avatar: user.accountAvatar || "",
+        phone: maskPhone(phone),
+        createdAt: item.createdAt
+      } : null;
+    })
+    .filter(Boolean);
+}
+
+function isCommunityFriend(db, phoneA, phoneB) {
+  const key = friendshipKey(phoneA, phoneB);
+  return (Array.isArray(db.friendships) ? db.friendships : []).some(item => item.key === key);
+}
+
+function publicCommunityPosts(db, viewer = null) {
+  const viewerPhone = viewer?.phone || "";
+  return (Array.isArray(db.communityPosts) ? db.communityPosts : [])
+    .slice()
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    .map(item => {
+      const author = db.users?.[item.authorPhoneRaw];
+      const likes = Array.isArray(item.likes) ? item.likes : [];
+      return {
+        id: item.id,
+        content: item.content || "",
+        mediaUrl: item.mediaUrl || "",
+        mediaType: item.mediaType || "",
+        location: item.location || "",
+        mentions: item.mentions || "",
+        visibility: item.visibility || "public",
+        authorId: communityUserId(item.authorPhoneRaw),
+        authorName: author?.accountName || item.authorName || "壳友",
+        authorAvatar: author?.accountAvatar || item.authorAvatar || "",
+        createdAt: item.createdAt,
+        likeCount: likes.length,
+        liked: Boolean(viewerPhone && likes.includes(viewerPhone)),
+        isOwn: Boolean(viewerPhone && item.authorPhoneRaw === viewerPhone),
+        isFriend: Boolean(viewerPhone && item.authorPhoneRaw !== viewerPhone && isCommunityFriend(db, viewerPhone, item.authorPhoneRaw)),
+        comments: (Array.isArray(item.comments) ? item.comments : []).map(comment => ({
+          id: comment.id,
+          content: comment.content || "",
+          authorName: db.users?.[comment.authorPhoneRaw]?.accountName || comment.authorName || "壳友",
+          authorAvatar: db.users?.[comment.authorPhoneRaw]?.accountAvatar || comment.authorAvatar || "",
+          createdAt: comment.createdAt
+        }))
+      };
+    });
+}
+
+async function handleCommunityList(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = optionalReviewUser(db, body);
+  return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user), friends: user ? communityFriends(db, user) : [] });
+}
+
+async function handleCommunityCreate(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const content = trimPublicText(body.content, 1200);
+  const mediaUrl = trimPublicText(body.mediaUrl, 800);
+  const mediaType = ["image", "video"].includes(body.mediaType) ? body.mediaType : "";
+  const location = trimPublicText(body.location, 100);
+  const mentions = trimPublicText(body.mentions, 200);
+  const visibility = "public";
+  if (!content && !mediaUrl) return sendJson(res, 400, { ok: false, message: "请填写内容或选择图片、视频" });
+  const post = {
+    id: crypto.randomUUID(),
+    content,
+    mediaUrl,
+    mediaType,
+    location,
+    mentions,
+    visibility,
+    authorPhoneRaw: user.phone,
+    authorName: user.accountName || maskPhone(user.phone),
+    authorAvatar: user.accountAvatar || "",
+    likes: [],
+    comments: [],
+    createdAt: new Date().toISOString()
+  };
+  db.communityPosts = [post, ...(Array.isArray(db.communityPosts) ? db.communityPosts : [])];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user), friends: communityFriends(db, user) });
+}
+
+async function handleCommunityLike(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const post = (Array.isArray(db.communityPosts) ? db.communityPosts : []).find(item => item.id === String(body.postId || ""));
+  if (!post) return sendJson(res, 404, { ok: false, message: "动态不存在" });
+  const likes = Array.isArray(post.likes) ? post.likes : [];
+  post.likes = likes.includes(user.phone) ? likes.filter(phone => phone !== user.phone) : [...likes, user.phone];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
+}
+
+async function handleCommunityComment(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const post = (Array.isArray(db.communityPosts) ? db.communityPosts : []).find(item => item.id === String(body.postId || ""));
+  const content = trimPublicText(body.content, 500);
+  if (!post) return sendJson(res, 404, { ok: false, message: "动态不存在" });
+  if (!content) return sendJson(res, 400, { ok: false, message: "请输入评论" });
+  post.comments = [...(Array.isArray(post.comments) ? post.comments : []), {
+    id: crypto.randomUUID(),
+    content,
+    authorPhoneRaw: user.phone,
+    authorName: user.accountName || maskPhone(user.phone),
+    authorAvatar: user.accountAvatar || "",
+    createdAt: new Date().toISOString()
+  }];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
+}
+
+async function handleCommunityDelete(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const postId = String(body.postId || "");
+  const post = (Array.isArray(db.communityPosts) ? db.communityPosts : []).find(item => item.id === postId);
+  if (!post) return sendJson(res, 404, { ok: false, message: "动态不存在" });
+  if (post.authorPhoneRaw !== user.phone && !isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "只能删除自己的动态" });
+  db.communityPosts = db.communityPosts.filter(item => item.id !== postId);
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
+}
+
+async function handleCommunityAddFriend(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const target = communityUserById(db, body.userId);
+  if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "无法添加该用户" });
+  const key = friendshipKey(user.phone, target.phone);
+  db.friendships = Array.isArray(db.friendships) ? db.friendships : [];
+  if (!db.friendships.some(item => item.key === key)) db.friendships.push({ key, phones: [user.phone, target.phone], createdAt: new Date().toISOString() });
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user), friends: communityFriends(db, user) });
+}
+
+async function handleCommunityChatList(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const target = communityUserById(db, body.userId);
+  if (!target || !isCommunityFriend(db, user.phone, target.phone)) return sendJson(res, 403, { ok: false, message: "请先添加对方为好友" });
+  const messages = (Array.isArray(db.messages) ? db.messages : [])
+    .filter(item => [item.fromPhone, item.toPhone].includes(user.phone) && [item.fromPhone, item.toPhone].includes(target.phone))
+    .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
+    .map(item => ({ id: item.id, content: item.content, mine: item.fromPhone === user.phone, createdAt: item.createdAt }));
+  return sendJson(res, 200, { ok: true, friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "" }, messages });
+}
+
+async function handleCommunityChatSend(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const target = communityUserById(db, body.userId);
+  const content = trimPublicText(body.content, 1000);
+  if (!target || !isCommunityFriend(db, user.phone, target.phone)) return sendJson(res, 403, { ok: false, message: "请先添加对方为好友" });
+  if (!content) return sendJson(res, 400, { ok: false, message: "请输入消息" });
+  db.messages = [...(Array.isArray(db.messages) ? db.messages : []), { id: crypto.randomUUID(), fromPhone: user.phone, toPhone: target.phone, content, createdAt: new Date().toISOString() }].slice(-5000);
+  writeDatabase(db);
+  const messages = db.messages
+    .filter(item => [item.fromPhone, item.toPhone].includes(user.phone) && [item.fromPhone, item.toPhone].includes(target.phone))
+    .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
+    .map(item => ({ id: item.id, content: item.content, mine: item.fromPhone === user.phone, createdAt: item.createdAt }));
+  return sendJson(res, 200, { ok: true, friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "" }, messages });
+}
+
+function publicMarketListings(db, viewer = null) {
+  const viewerPhone = viewer?.phone || "";
+  return (Array.isArray(db.marketListings) ? db.marketListings : [])
+    .slice()
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    .map(item => {
+      const seller = db.users?.[item.sellerPhoneRaw];
+      return {
+        id: item.id,
+        turtleId: item.turtleId || "",
+        title: item.title || "",
+        speciesName: item.speciesName || "",
+        stage: item.stage || "hatchling",
+        gender: item.gender || "未知",
+        weight: item.weight || "",
+        shellLength: item.shellLength || "",
+        price: Number(item.price || 0),
+        negotiable: Boolean(item.negotiable),
+        city: item.city || "",
+        delivery: item.delivery || "",
+        description: item.description || "",
+        photoUrl: item.photoUrl || "",
+        status: item.status === "sold" ? "sold" : "active",
+        sellerId: communityUserId(item.sellerPhoneRaw),
+        sellerName: seller?.accountName || item.sellerName || "壳友卖家",
+        sellerAvatar: seller?.accountAvatar || item.sellerAvatar || "",
+        isOwn: Boolean(viewerPhone && item.sellerPhoneRaw === viewerPhone),
+        isFriend: Boolean(viewerPhone && item.sellerPhoneRaw !== viewerPhone && isCommunityFriend(db, viewerPhone, item.sellerPhoneRaw)),
+        createdAt: item.createdAt
+      };
+    });
+}
+
+async function handleMarketList(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = optionalReviewUser(db, body);
+  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user) });
+}
+
+async function handleMarketCreate(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const title = trimPublicText(body.title, 40);
+  const speciesName = trimPublicText(body.speciesName, 30);
+  const price = Number(body.price || 0);
+  if (!title || !speciesName || !Number.isFinite(price) || price < 0) return sendJson(res, 400, { ok: false, message: "请填写正确的标题、品种和价格" });
+  const listing = {
+    id: crypto.randomUUID(),
+    turtleId: trimPublicText(body.turtleId, 100),
+    title,
+    speciesName,
+    stage: ["hatchling", "juvenile", "adult"].includes(body.stage) ? body.stage : "hatchling",
+    gender: ["公", "母", "未知"].includes(body.gender) ? body.gender : "未知",
+    weight: trimPublicText(body.weight, 20),
+    shellLength: trimPublicText(body.shellLength, 20),
+    price,
+    negotiable: Boolean(body.negotiable),
+    city: trimPublicText(body.city, 24),
+    delivery: ["可快递", "仅自提", "可面交"].includes(body.delivery) ? body.delivery : "双方协商",
+    description: trimPublicText(body.description, 600),
+    photoUrl: trimPublicText(body.photoUrl, 800),
+    status: "active",
+    sellerPhoneRaw: user.phone,
+    sellerName: user.accountName || maskPhone(user.phone),
+    sellerAvatar: user.accountAvatar || "",
+    createdAt: new Date().toISOString()
+  };
+  db.marketListings = [listing, ...(Array.isArray(db.marketListings) ? db.marketListings : [])];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user) });
+}
+
+async function handleMarketStatus(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const listing = (Array.isArray(db.marketListings) ? db.marketListings : []).find(item => item.id === String(body.listingId || ""));
+  if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
+  if (listing.sellerPhoneRaw !== user.phone && !isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "只能修改自己的商品" });
+  listing.status = body.status === "sold" ? "sold" : "active";
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user) });
+}
+
+async function handleMarketDelete(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const listingId = String(body.listingId || "");
+  const listing = (Array.isArray(db.marketListings) ? db.marketListings : []).find(item => item.id === listingId);
+  if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
+  if (listing.sellerPhoneRaw !== user.phone && !isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "只能删除自己的商品" });
+  db.marketListings = db.marketListings.filter(item => item.id !== listingId);
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user) });
+}
+
 function serveStatic(req, res, url) {
   const pathname = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
   const target = path.resolve(STATIC_ROOT, `.${pathname}`);
@@ -877,6 +1298,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/account/load") return await handleLoadAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/save") return await handleSaveAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/upload/image") return await handleUploadImage(req, res);
+    if (req.method === "POST" && url.pathname === "/api/upload/media") return await handleUploadMedia(req, res);
     if (req.method === "POST" && url.pathname === "/api/reviews/list") return await handleListReviews(req, res);
     if (req.method === "POST" && url.pathname === "/api/reviews/create") return await handleCreateReview(req, res);
     if (req.method === "POST" && url.pathname === "/api/reviews/comment") return await handleCreateReviewComment(req, res);
@@ -888,6 +1310,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/feedback/comment") return await handleCreateFeedbackComment(req, res);
     if (req.method === "POST" && url.pathname === "/api/feedback/delete") return await handleDeleteFeedback(req, res);
     if (req.method === "POST" && url.pathname === "/api/feedback/comment/delete") return await handleDeleteFeedbackComment(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/list") return await handleCommunityList(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/create") return await handleCommunityCreate(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/like") return await handleCommunityLike(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/comment") return await handleCommunityComment(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/delete") return await handleCommunityDelete(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/friend/add") return await handleCommunityAddFriend(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/chat/list") return await handleCommunityChatList(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/chat/send") return await handleCommunityChatSend(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/list") return await handleMarketList(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/create") return await handleMarketCreate(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/status") return await handleMarketStatus(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/delete") return await handleMarketDelete(req, res);
     if (req.method === "GET" && url.pathname.startsWith("/uploads/")) return serveUpload(req, res, url);
     if (req.method === "GET") return serveStatic(req, res, url);
     return sendJson(res, 405, { ok: false, message: "方法不支持" });
