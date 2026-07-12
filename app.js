@@ -5,14 +5,10 @@ const PENDING_CLOUD_DATA_STORAGE = "turtlekeeper-pending-cloud-data-v1";
 const SERVER_SMS_CODE = "__SERVER_SMS__";
 const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
 const CLOUD_SYNC_DEBOUNCE_MS = 900;
+const CHINA_TIME_ZONE = "Asia/Shanghai";
 const REVIEW_ADMIN_PHONE = "18652082378";
-const FREE_TURTLE_LIMIT = 10;
-const PLAN_LEVELS = { free: 0, member: 1 };
-const SUBSCRIPTION_PLANS = [
-  { key: "member", cycle: "monthly", title: "壳友会员", cycleName: "月度", price: "9.9", period: "月", months: 1, productId: "com.turtlekeeper.member.monthly", desc: "灵活体验，适合先试用完整记录能力" },
-  { key: "member", cycle: "quarterly", title: "壳友会员", cycleName: "季度", price: "23.9", period: "季", months: 3, productId: "com.turtlekeeper.member.quarterly", badge: "更划算", desc: "覆盖一个养护阶段，适合稳定记录" },
-  { key: "member", cycle: "yearly", title: "壳友会员", cycleName: "年度", price: "68", period: "年", months: 12, productId: "com.turtlekeeper.member.yearly", badge: "推荐", desc: "全年档案、照片和账本持续留存" }
-];
+// 龟集市的购买咨询统一由平台客服承接；修改此处即可同步更新商品页和“关于”页。
+const PLATFORM_SERVICE_WECHAT = "Czjxcw";
 const defaultPhoto = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
   <rect width="240" height="240" rx="28" fill="#edf7f1"/>
@@ -45,6 +41,7 @@ const initialState = {
   page: "home",
   search: "",
   turtleFilter: "all",
+  turtlePoolFilter: "all",
   turtleSort: "default",
   memoTab: "all",
   memoDraftOpen: false,
@@ -61,6 +58,7 @@ const initialState = {
   breedingDraftPhoto: "",
   breedingMotherMode: "archive",
   breedingMotherValue: "",
+  breedingPoolId: "",
   breedingDraftDate: "",
   breedingManualMother: "",
   breedingEggCount: "",
@@ -72,7 +70,9 @@ const initialState = {
   selectedBreedingId: "",
   selectedFeedbackId: "",
   selectedSpeciesCode: "",
+  speciesPickerForAdd: false,
   openTurtleMenuId: "",
+  openBreedingMenuId: "",
   openFeedbackMenuId: "",
   updatingTurtleId: "",
   turtleDetailDraftId: "",
@@ -92,6 +92,36 @@ const initialState = {
   satisfactionReviews: [],
   publicReviews: [],
   publicFeedbackItems: [],
+  communityPosts: [],
+  communityFriends: [],
+  communityFollowingUsers: [],
+  communityFollowingPosts: [],
+  communityFollowingListings: [],
+  selectedFollowingUserId: "",
+  communityChatMessages: [],
+  communityChatListing: null,
+  messageUnreadCount: 0,
+  selectedCommunityFriendId: "",
+  selectedCommunityFriend: null,
+  selectedCommunityPostId: "",
+  openCommunityActionId: "",
+  communityCommentPostId: "",
+  marketListings: [],
+  myMarketListings: [],
+  marketSearch: "",
+  marketStage: "all",
+  marketMyTab: "active",
+  selectedMarketListingId: "",
+  marketDraftPhoto: "",
+  marketDraftMedia: [],
+  marketDraftTurtleId: "",
+  marketDraftCity: "",
+  marketLocationStatus: "idle",
+  editingMarketListingId: "",
+  marketFavoriteIds: [],
+  marketHistoryIds: [],
+  turtlePools: [],
+  editingTurtlePoolId: "",
   feedbackItems: [],
   accountName: "未登录用户",
   accountAvatar: "",
@@ -107,16 +137,13 @@ const initialState = {
   authCodeExpiresAt: "",
   accountCodeCooldownUntil: "",
   syncEnabled: false,
-  subscriptionPlan: "free",
-  subscriptionCycle: "",
-  subscriptionStartedAt: "",
-  subscriptionExpiresAt: "",
   professionalOutput: "",
   activityLogs: []
 };
 
 const TURTLE_FORM_DRAFT_FIELDS = [
   "speciesCode",
+  "poolId",
   "code",
   "weight",
   "carapaceLength",
@@ -158,11 +185,10 @@ function emptyAccountData() {
     satisfactionRating: 5,
     satisfactionReviews: [],
     feedbackItems: [],
+    marketFavoriteIds: [],
+    marketHistoryIds: [],
+    turtlePools: [],
     syncEnabled: true,
-    subscriptionPlan: "free",
-    subscriptionCycle: "",
-    subscriptionStartedAt: "",
-    subscriptionExpiresAt: "",
     professionalOutput: "",
     activityLogs: [],
     themeColor: "teal"
@@ -180,11 +206,19 @@ function normalizeAccountData(data = {}) {
     satisfactionRating: Number(next.satisfactionRating || 5),
     satisfactionReviews: Array.isArray(next.satisfactionReviews) ? next.satisfactionReviews : [],
     feedbackItems: Array.isArray(next.feedbackItems) ? next.feedbackItems : [],
+    marketFavoriteIds: Array.isArray(next.marketFavoriteIds) ? next.marketFavoriteIds.map(String).slice(0, 500) : [],
+    marketHistoryIds: Array.isArray(next.marketHistoryIds) ? next.marketHistoryIds.map(String).slice(0, 100) : [],
+    turtlePools: Array.isArray(next.turtlePools) ? next.turtlePools.map(pool => ({
+      ...pool,
+      name: cleanText(String(pool?.name || "")),
+      type: cleanText(String(pool?.type || "")),
+      length: String(pool?.length ?? ""),
+      width: String(pool?.width ?? ""),
+      height: String(pool?.height ?? ""),
+      count: Math.max(0, Number(pool?.count || 0)),
+      note: cleanText(String(pool?.note || ""))
+    })) : [],
     syncEnabled: next.syncEnabled !== false,
-    subscriptionPlan: next.subscriptionPlan === "pro" ? "member" : (["free", "member"].includes(next.subscriptionPlan) ? next.subscriptionPlan : "free"),
-    subscriptionCycle: next.subscriptionCycle || "",
-    subscriptionStartedAt: next.subscriptionStartedAt || "",
-    subscriptionExpiresAt: next.subscriptionExpiresAt || "",
     professionalOutput: next.professionalOutput || "",
     activityLogs: Array.isArray(next.activityLogs) ? next.activityLogs : [],
     themeColor: next.themeColor || "teal"
@@ -201,11 +235,10 @@ function accountDataSnapshot(source = state) {
     satisfactionRating: source.satisfactionRating,
     satisfactionReviews: source.satisfactionReviews,
     feedbackItems: source.feedbackItems,
+    marketFavoriteIds: source.marketFavoriteIds,
+    marketHistoryIds: source.marketHistoryIds,
+    turtlePools: source.turtlePools,
     syncEnabled: source.syncEnabled,
-    subscriptionPlan: source.subscriptionPlan,
-    subscriptionCycle: source.subscriptionCycle,
-    subscriptionStartedAt: source.subscriptionStartedAt,
-    subscriptionExpiresAt: source.subscriptionExpiresAt,
     professionalOutput: source.professionalOutput,
     activityLogs: source.activityLogs,
     themeColor: source.themeColor
@@ -243,6 +276,29 @@ let publicReviewsLoading = false;
 let publicReviewsLastLoadedAt = 0;
 let publicFeedbackLoading = false;
 let publicFeedbackLastLoadedAt = 0;
+let communityLoading = false;
+let communityLastLoadedAt = 0;
+let communityChatLoading = false;
+let communityChatLoadedKey = "";
+let followingLoading = false;
+let followingLastLoadedAt = 0;
+let messageUnreadLoading = false;
+let messageUnreadLastLoadedAt = 0;
+let marketNetworkType = "unknown";
+let marketNetworkMonitoringStarted = false;
+let messageUnreadTimer = null;
+let communityDraftMedia = "";
+let communityDraftMediaType = "";
+let communityDraftMediaFile = null;
+let communityDraftMediaDuration = 0;
+let communityDraftText = "";
+let marketLoading = false;
+let marketLastLoadedAt = 0;
+let marketChatDraft = "";
+let pendingCommunityChatLatestScroll = false;
+let pendingPageEnterMotion = false;
+let pageEnterMotionTimer = null;
+let pendingPageScrollReset = false;
 
 if (CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE) {
   state = { ...state, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" };
@@ -384,6 +440,12 @@ function normalizeState(next) {
     ...base,
     publicReviews: Array.isArray(base.publicReviews) ? base.publicReviews : [],
     publicFeedbackItems: Array.isArray(base.publicFeedbackItems) ? base.publicFeedbackItems : [],
+    communityPosts: Array.isArray(base.communityPosts) ? base.communityPosts : [],
+    communityFriends: Array.isArray(base.communityFriends) ? base.communityFriends : [],
+    communityFollowingUsers: Array.isArray(base.communityFollowingUsers) ? base.communityFollowingUsers : [],
+    communityFollowingPosts: Array.isArray(base.communityFollowingPosts) ? base.communityFollowingPosts : [],
+    communityFollowingListings: Array.isArray(base.communityFollowingListings) ? base.communityFollowingListings : [],
+    marketListings: Array.isArray(base.marketListings) ? base.marketListings : [],
     formGender: cleanText(base.formGender),
     turtles: (base.turtles || []).map(t => ({
       ...t,
@@ -403,8 +465,11 @@ function normalizeState(next) {
     ledgerRecords: (base.ledgerRecords || []).map(item => ({
       ...item,
       title: cleanText(item.title),
+      saleMethod: cleanText(item.saleMethod),
+      photo: item.photo ? apiAssetUrl(item.photo) : "",
       turtleSnapshot: item.turtleSnapshot ? {
         ...item.turtleSnapshot,
+        photo: item.turtleSnapshot.photo ? apiAssetUrl(item.turtleSnapshot.photo) : "",
         speciesName: cleanText(item.turtleSnapshot.speciesName),
         gender: cleanText(item.turtleSnapshot.gender),
         status: cleanText(item.turtleSnapshot.status),
@@ -440,6 +505,9 @@ function accountHasContent(source = state) {
     (source.breedingRecords || []).length ||
     (source.satisfactionReviews || []).length ||
     (source.feedbackItems || []).length ||
+    (source.marketFavoriteIds || []).length ||
+    (source.marketHistoryIds || []).length ||
+    (source.turtlePools || []).length ||
     (source.activityLogs || []).length
   );
 }
@@ -496,6 +564,11 @@ function saveState(options = {}) {
       pendingAuthPhone: state.pendingAuthPhone,
       authCodeExpiresAt: state.authCodeExpiresAt,
       accountCodeCooldownUntil: state.accountCodeCooldownUntil,
+      communityPosts: state.communityPosts || [],
+      communityFriends: state.communityFriends || [],
+      communityFollowingUsers: state.communityFollowingUsers || [],
+      messageUnreadCount: Number(state.messageUnreadCount || 0),
+      marketListings: state.marketListings || [],
       themeColor: state.themeColor || accountData.themeColor
     }));
   } catch (error) {
@@ -506,6 +579,16 @@ function saveState(options = {}) {
 }
 
 function setState(patch, options = {}) {
+  const pageChanged = Object.prototype.hasOwnProperty.call(patch, "page") && patch.page && patch.page !== state.page;
+  if (pageChanged) {
+    pendingPageEnterMotion = options.pageMotion !== "none";
+    pendingPageScrollReset = options.pageScroll !== "preserve";
+    if (!pendingPageEnterMotion) {
+      if (pageEnterMotionTimer) window.clearTimeout(pageEnterMotionTimer);
+      pageEnterMotionTimer = null;
+      $app.classList.remove("page-enter-motion");
+    }
+  }
   state = { ...state, ...patch };
   saveState(options);
   render();
@@ -518,92 +601,8 @@ function requireLogin() {
   return false;
 }
 
-function addMonths(date, months) {
-  const next = new Date(date);
-  next.setMonth(next.getMonth() + months);
-  return next;
-}
-
-function subscriptionActive(source = state) {
-  if (!source.loggedInPhone || source.subscriptionPlan === "free") return false;
-  const expiresAt = Date.parse(source.subscriptionExpiresAt || "");
-  return Number.isFinite(expiresAt) && expiresAt > Date.now();
-}
-
-function activePlanKey(source = state) {
-  if (!subscriptionActive(source)) return "free";
-  return source.subscriptionPlan === "pro" ? "member" : source.subscriptionPlan;
-}
-
-function hasPlan(level) {
-  return PLAN_LEVELS[activePlanKey()] >= PLAN_LEVELS[level];
-}
-
-function currentPlanLabel() {
-  if (!state.loggedInPhone) return "未登录";
-  if (!subscriptionActive()) return "普通用户";
-  return "壳友会员";
-}
-
-function currentPlanBadge() {
-  if (!state.loggedInPhone || !subscriptionActive()) return "普通";
-  return "会员";
-}
-
-function currentPlanDetail() {
-  if (!state.loggedInPhone) return "登录后可开通会员权益";
-  if (!subscriptionActive()) return `免费可记录 ${FREE_TURTLE_LIMIT} 只乌龟档案`;
-  return `${currentPlanLabel()} · 有效期至 ${formatDate(state.subscriptionExpiresAt)}`;
-}
-
-function planUsageText() {
-  if (hasPlan("member")) return "档案不限数量";
-  return `${state.turtles.length}/${FREE_TURTLE_LIMIT} 只档案`;
-}
-
-function freeArchiveBalanceText() {
-  if (!state.loggedInPhone) return "登录后可免费记录 10 只档案";
-  if (hasPlan("member")) return "档案不限数量";
-  const remaining = Math.max(0, FREE_TURTLE_LIMIT - state.turtles.length);
-  return `免费档案余额 ${remaining} 只`;
-}
-
-function freeUsagePercent() {
-  if (hasPlan("member")) return 100;
-  return Math.min(100, Math.round((state.turtles.length / FREE_TURTLE_LIMIT) * 100));
-}
-
-function requireEntitlement(level, message) {
-  if (!requireLogin()) return false;
-  const requiredLevel = level === "pro" ? "member" : level;
-  if (hasPlan(requiredLevel)) return true;
-  toast(message || "壳友会员可使用这个功能");
-  setState({ page: "membership" });
-  return false;
-}
-
 function requireArchiveCapacity(extra = 1) {
-  if (!requireLogin()) return false;
-  if (hasPlan("member") || state.turtles.length + extra <= FREE_TURTLE_LIMIT) return true;
-  toast(`免费版最多记录 ${FREE_TURTLE_LIMIT} 只乌龟档案，请开通壳友会员`);
-  setState({ page: "membership" });
-  return false;
-}
-
-function activateSubscription(planKey, cycle) {
-  if (!requireLogin()) return;
-  const plan = SUBSCRIPTION_PLANS.find(item => item.key === planKey && item.cycle === cycle);
-  if (!plan) return;
-  const now = new Date();
-  setState({
-    subscriptionPlan: plan.key,
-    subscriptionCycle: plan.cycle,
-    subscriptionStartedAt: now.toISOString(),
-    subscriptionExpiresAt: addMonths(now, plan.months).toISOString(),
-    syncEnabled: true,
-    activityLogs: logActivity(`开通${plan.title}${plan.cycleName}权益`, "会员")
-  });
-  toast(`已开通${plan.title}${plan.cycleName}权益`);
+  return requireLogin();
 }
 
 function ledgerMoneyStats(records = state.ledgerRecords) {
@@ -1024,14 +1023,37 @@ function stats() {
   };
 }
 
+function chinaDateParts(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CHINA_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  return Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
+}
+
 function formatTime(value) {
   if (!value) return "-";
-  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: CHINA_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).format(date);
 }
 
 function formatDate(value) {
-  if (!value) return new Date().toISOString().slice(0, 10);
-  return new Date(value).toISOString().slice(0, 10);
+  const parts = chinaDateParts(value);
+  return parts ? `${parts.year}-${parts.month}-${parts.day}` : "";
 }
 
 function escapeHtml(value = "") {
@@ -1386,8 +1408,10 @@ function captureTurtleDetailDraft() {
   const form = document.querySelector("#turtleDetailForm");
   if (!form) return null;
   const data = new FormData(form);
+  const turtle = state.turtles.find(item => item.id === state.selectedTurtleId);
   return {
     speciesCode: String(data.get("speciesCode") || ""),
+    poolId: String(data.get("poolId") || ""),
     code: String(data.get("code") || ""),
     gender: String(data.get("gender") || "未知"),
     weight: String(data.get("weight") || ""),
@@ -1395,10 +1419,10 @@ function captureTurtleDetailDraft() {
     carapaceWidth: String(data.get("carapaceWidth") || ""),
     shellHeight: String(data.get("shellHeight") || ""),
     plastronLength: String(data.get("plastronLength") || ""),
-    status: String(data.get("status") || "正常饲养"),
+    status: String(data.get("status") || turtle?.status || "正常饲养"),
     health: String(data.get("health") || "健康"),
     acquiredDate: String(data.get("acquiredDate") || ""),
-    source: String(data.get("source") || "购买"),
+    source: String(data.get("source") || turtle?.source || "购买"),
     price: String(data.get("price") || ""),
     note: String(data.get("note") || "")
   };
@@ -1413,6 +1437,56 @@ function describeTurtleSnapshot(snapshot = {}) {
   ].join(" · ");
 }
 
+function renderTurtleGrowthSnapshot(snapshot = {}, photo, label, isNew = false) {
+  const nickname = escapeHtml(String(snapshot.code || "未命名"));
+  const weight = snapshot.weight !== undefined && snapshot.weight !== "" ? `${escapeHtml(String(snapshot.weight))}g` : "-";
+  const length = snapshot.carapaceLength !== undefined && snapshot.carapaceLength !== "" ? `${escapeHtml(String(snapshot.carapaceLength))}cm` : "-";
+  const status = escapeHtml(String(snapshot.status || "-"));
+  const health = escapeHtml(String(snapshot.health || "-"));
+  const pool = escapeHtml(String(snapshot.poolName || turtlePoolName(snapshot.poolId)));
+  return `
+    <section class="growth-snapshot-card ${isNew ? "is-new" : ""}">
+      <div class="growth-snapshot-head">
+        <span>${label}</span>
+        <img class="growth-preview-photo" src="${photo || defaultPhoto}" alt="${label}照片" data-growth-photo-preview role="button" tabindex="0" title="点击放大">
+      </div>
+      <strong>${nickname}</strong>
+      <div class="growth-snapshot-meta">
+        <span>体重 <b>${weight}</b></span>
+        <span>背甲 <b>${length}</b></span>
+        <span>状态 <b>${status}</b></span>
+        <span>健康 <b>${health}</b></span>
+        <span>龟池 <b>${pool}</b></span>
+      </div>
+    </section>
+  `;
+}
+
+function renderBreedingHistorySnapshot(snapshot = {}, photo, label, isNew = false) {
+  const motherName = escapeHtml(String(snapshot.motherName || "未填写种母"));
+  const date = escapeHtml(String(snapshot.date || "-"));
+  const eggCount = escapeHtml(String(snapshot.eggCount ?? 0));
+  const fertileCount = escapeHtml(String(snapshot.fertileCount ?? 0));
+  const hatchCount = escapeHtml(String(snapshot.hatchCount ?? 0));
+  const poolName = escapeHtml(String(snapshot.poolName || turtlePoolName(snapshot.poolId)));
+  return `
+    <section class="growth-snapshot-card breeding-history-snapshot ${isNew ? "is-new" : ""}">
+      <div class="growth-snapshot-head">
+        <span>${label}</span>
+        ${photo ? `<img class="growth-preview-photo" src="${photo}" alt="${label}附图" data-growth-photo-preview role="button" tabindex="0" title="点击放大">` : `<i class="breeding-history-photo" aria-hidden="true">繁</i>`}
+      </div>
+      <strong>${motherName}</strong>
+      <div class="growth-snapshot-meta">
+        <span>日期 <b>${date}</b></span>
+        <span>产蛋 <b>${eggCount} 枚</b></span>
+        <span>受精 <b>${fertileCount} 枚</b></span>
+        <span>孵化 <b>${hatchCount} 只</b></span>
+        <span>龟池 <b>${poolName}</b></span>
+      </div>
+    </section>
+  `;
+}
+
 function describeBreedingSnapshot(snapshot = {}) {
   return [
     snapshot.date || "-",
@@ -1423,13 +1497,13 @@ function describeBreedingSnapshot(snapshot = {}) {
   ].join(" · ");
 }
 
-function topbar(title, back = false) {
+function topbar(title, back = false, action = "", leading = "") {
   return `
     <div class="topbar">
       <div class="nav-title">
-        ${back ? `<button class="icon-btn" data-back>‹</button>` : `<span></span>`}
+        ${back ? `<button class="icon-btn" data-back>‹</button>` : (leading || `<span></span>`)}
         <h1>${title}</h1>
-        <span></span>
+        ${action || `<span></span>`}
       </div>
     </div>
   `;
@@ -1464,6 +1538,20 @@ function tabIcon(name) {
         <path d="M8 16h8"></path>
       </svg>
     `,
+    messages: `
+      <svg viewBox="0 0 24 24" focusable="false">
+        <path d="M5 6.5h14v9H10l-4.5 3v-3H5z"></path>
+        <path d="M8.5 10h7"></path>
+      </svg>
+    `,
+    market: `
+      <svg viewBox="0 0 24 24" focusable="false">
+        <path d="M4 9h16l-1.2-4H5.2z"></path>
+        <path d="M5.5 9v10h13V9"></path>
+        <path d="M9 19v-5h6v5"></path>
+        <path d="M4 9c0 1.4 1 2.4 2.3 2.4S8.7 10.4 8.7 9c0 1.4 1 2.4 2.3 2.4s2.3-1 2.3-2.4c0 1.4 1 2.4 2.4 2.4S20 10.4 20 9"></path>
+      </svg>
+    `,
     mine: `
       <svg viewBox="0 0 24 24" focusable="false">
         <circle cx="12" cy="8" r="3.5"></circle>
@@ -1475,21 +1563,672 @@ function tabIcon(name) {
 }
 
 function bottomNav() {
-  const minePages = ["mine", "calendar", "satisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "sync", "about", "membership", "reports"];
+  const dashboardPages = ["home", "list", "turtleDetail", "species", "breeds", "add", "memos", "breeding", "breedingAdd", "breedingDetail", "pools", "poolAdd"];
+  const ledgerPages = ["ledger", "ledgerDetail"];
+  const marketPages = ["market", "marketAdd", "marketDetail"];
+  const messagePages = ["messages", "community", "communityAdd", "communityFriends", "communityChat", "communityPostDetail"];
+  const minePages = ["mine", "calendar", "satisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "sync", "about", "reports", "marketFavorites", "marketHistory", "following", "followingProfile"];
+  const unreadCount = Math.max(0, Number(state.messageUnreadCount || 0));
+  const unreadText = unreadCount > 99 ? "99+" : String(unreadCount);
   return `
     <nav class="bottom-nav">
-      <button class="${state.page === "home" ? "active" : ""}" data-page="home">${tabIcon("home")}看板</button>
-      <button class="${state.page === "list" || state.page === "turtleDetail" ? "active" : ""}" data-page="list">${tabIcon("list")}档案</button>
-      <button class="${state.page === "breeding" || state.page === "breedingAdd" || state.page === "breedingDetail" ? "active" : ""}" data-page="breeding">${tabIcon("breeding")}繁殖</button>
-      <button class="${state.page === "ledger" || state.page === "ledgerDetail" ? "active" : ""}" data-page="ledger">${tabIcon("ledger")}账本</button>
+      <button class="${dashboardPages.includes(state.page) ? "active" : ""}" data-page="home">${tabIcon("home")}看板</button>
+      <button class="${ledgerPages.includes(state.page) ? "active" : ""}" data-page="ledger">${tabIcon("ledger")}账本</button>
+      <button class="${marketPages.includes(state.page) ? "active" : ""}" data-page="market">${tabIcon("market")}龟集市</button>
+      <button class="nav-message-tab ${messagePages.includes(state.page) ? "active" : ""}" data-page="messages">${tabIcon("messages")}${unreadCount ? `<i class="nav-unread-badge">${unreadText}</i>` : ""}消息</button>
       <button class="${minePages.includes(state.page) ? "active" : ""}" data-page="mine">${tabIcon("mine")}空间</button>
     </nav>
   `;
 }
 
+function communityAvatar(item, className = "community-avatar") {
+  if (item.authorAvatar || item.avatar) return `<img class="${className}" src="${item.authorAvatar || item.avatar}" alt="头像">`;
+  return `<span class="${className} fallback-avatar">${escapeHtml(String(item.authorName || item.name || "壳").slice(0, 1))}</span>`;
+}
+
+function marketSellerAvatar(item, className) {
+  if (item.sellerAvatar) return `<img class="${className}" src="${item.sellerAvatar}" alt="卖家头像">`;
+  return `<span class="${className} market-default-avatar">龟</span>`;
+}
+
+function communityMedia(item, compact = false) {
+  if (!item.mediaUrl) return `<div class="community-media-placeholder"><span>壳友动态</span></div>`;
+  if (item.mediaType === "video") return `<video class="community-media" src="${item.mediaUrl}" ${compact ? "muted playsinline preload=\"metadata\"" : "controls playsinline preload=\"metadata\""}></video>`;
+  return `<img class="community-media" src="${item.mediaUrl}" alt="动态图片" loading="lazy">`;
+}
+
+function communityCompactCard(item) {
+  return `
+    <article class="community-tile">
+      <button class="community-tile-media" type="button" data-page="community">${communityMedia(item, true)}${item.mediaType === "video" ? `<span class="community-video-mark">▶</span>` : ""}</button>
+      <div class="community-tile-body">
+        <p>${escapeHtml(item.content || "分享了一条新动态")}</p>
+        <div class="community-tile-author">${communityAvatar(item, "community-mini-avatar")}<span>${escapeHtml(item.authorName || "壳友")}</span><b>♡ ${item.likeCount || 0}</b></div>
+      </div>
+    </article>
+  `;
+}
+
+function communityFeedCard(item) {
+  const comments = Array.isArray(item.comments) ? item.comments : [];
+  const isOwn = Boolean(item.isOwn || item.pendingLocal);
+  return `
+    <article class="community-moment" data-view-community-post="${item.id}" tabindex="0" role="button" aria-label="查看${escapeHtml(item.authorName || "壳友")}发布的动态">
+      ${communityAvatar(item)}
+      <div class="community-moment-main">
+        <div class="community-moment-author"><strong>${escapeHtml(item.authorName || "壳友")}</strong>${!isOwn ? `<span class="community-author-actions"><button class="community-follow-button ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button>${item.isFriend ? `<button type="button" data-open-community-chat="${item.authorId}">聊天</button>` : `<button type="button" data-add-community-friend="${item.authorId}">加好友</button>`}</span>` : ""}</div>
+        ${item.content ? `<p class="community-post-copy">${escapeHtml(item.content)}</p>` : ""}
+        ${item.mediaUrl ? `<div class="community-post-media">${communityMedia(item, true)}${item.mediaType === "video" ? `<i class="community-detail-play-mark">▶</i>` : ""}</div>` : ""}
+        ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
+        <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? `<div class="community-moment-popover"><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "取消" : "赞"}</button><button type="button" data-show-community-comment="${item.id}">评论</button></div>` : ""}</div></div>
+        ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</div>` : ""}
+        ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="评论" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function findCommunityPost(postId) {
+  const id = String(postId || "");
+  return [...(state.communityPosts || []), ...(state.communityFollowingPosts || [])]
+    .find(item => String(item.id) === id) || null;
+}
+
+function communityDetailMedia(item) {
+  if (!item?.mediaUrl) return "";
+  const label = item.mediaType === "video" ? "放大播放视频" : "放大查看图片";
+  return `
+    <button class="community-detail-media-button" type="button" data-preview-community-media="${item.id}" aria-label="${label}">
+      ${communityMedia(item, true)}
+      ${item.mediaType === "video" ? `<i class="community-detail-play-mark">▶</i>` : `<i class="community-detail-zoom-mark">⤢</i>`}
+    </button>
+  `;
+}
+
+function pageCommunityPostDetail() {
+  const item = findCommunityPost(state.selectedCommunityPostId);
+  if (!item) return `${topbar("动态详情", true)}<main class="content page-fresh"><div class="empty small-empty"><div><strong>这条动态不存在</strong></div></div></main>${bottomNav()}`;
+  const comments = Array.isArray(item.comments) ? item.comments : [];
+  const isOwn = Boolean(item.isOwn || item.pendingLocal);
+  return `
+    ${topbar("动态详情", true)}
+    <main class="content page-fresh community-detail-page">
+      <article class="community-detail-card fresh-card">
+        <header class="community-detail-head">
+          ${communityAvatar(item)}
+          <div><strong>${escapeHtml(item.authorName || "壳友")}</strong><span>${formatTime(item.createdAt)}</span></div>
+          ${!isOwn ? `<div class="community-author-actions"><button class="${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button>${item.isFriend ? `<button type="button" data-open-community-chat="${item.authorId}">聊天</button>` : `<button type="button" data-add-community-friend="${item.authorId}">加好友</button>`}</div>` : ""}
+        </header>
+        ${item.content ? `<p class="community-detail-copy">${escapeHtml(item.content)}</p>` : ""}
+        ${communityDetailMedia(item)}
+        ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
+        <div class="community-detail-actions">
+          <button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "已赞" : "♡ 赞"}${item.likeCount ? ` ${item.likeCount}` : ""}</button>
+          <button type="button" data-show-community-comment="${item.id}">评论${comments.length ? ` ${comments.length}` : ""}</button>
+          ${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}
+        </div>
+        ${(item.likeCount || comments.length) ? `<section class="community-detail-social">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</section>` : ""}
+        ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="写下评论" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
+      </article>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function pageMessages() {
+  const latestPost = (state.communityPosts || [])[0];
+  const chatPreview = latestCommunityMessagePreview(state.communityChatMessages || []);
+  const friends = (() => {
+    const rows = [...(state.communityFriends || [])];
+    if (state.selectedCommunityFriendId && chatPreview?.lastMessage) {
+      const index = rows.findIndex(item => item.id === state.selectedCommunityFriendId);
+      const previewPatch = { lastMessage: chatPreview.lastMessage, lastMessageAt: chatPreview.lastMessageAt };
+      if (index >= 0 && !rows[index].lastMessage) rows[index] = { ...rows[index], ...previewPatch };
+      if (index < 0 && state.selectedCommunityFriend) rows.unshift({ ...state.selectedCommunityFriend, ...previewPatch });
+    }
+    return rows;
+  })();
+  return `
+    ${topbar("消息")}
+    <main class="content page-fresh message-page">
+      <section class="message-discover-list">
+        <button class="message-discover-row" type="button" data-page="community"><span class="message-community-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2.8c2.5 0 3.9 3 2.2 4.8M21.2 12c0 2.5-3 3.9-4.8 2.2M12 21.2c-2.5 0-3.9-3-2.2-4.8M2.8 12c0-2.5 3-3.9 4.8-2.2"></path></svg></span><strong>壳友圈</strong><span class="message-discover-preview">${latestPost?.mediaUrl ? (latestPost.mediaType === "video" ? `<span class="message-video-thumb">▶</span>` : `<img src="${latestPost.mediaUrl}" alt="最新动态">`) : ""}</span><b>›</b></button>
+      </section>
+      <section class="message-friend-list">${friends.map(friend => `<button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div><strong>${escapeHtml(friend.name || "壳友")}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><b>›</b></button>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>进入壳友圈添加好友后即可聊天</span></div>`}</section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function pageCommunity() {
+  const posts = state.communityPosts || [];
+  return `
+    ${topbar("壳友圈", true, `<button class="community-camera-button" type="button" data-community-camera-button aria-label="拍摄或从相册选择"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"></path><circle cx="12" cy="13.5" r="3.5"></circle></svg></button>`)}
+    <main class="content page-fresh community-page community-moments-page">
+      <input class="hidden-file" type="file" accept="image/*,video/*" data-community-quick-media>
+      <section class="community-feed">${posts.map(communityFeedCard).join("") || `<div class="empty small-empty"><div><strong>暂时还没有动态</strong><br>点击右上角相机发布第一条内容</div></div>`}</section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function pageCommunityAdd() {
+  const canPublish = Boolean(communityDraftText.trim() || communityDraftMedia);
+  return `
+    <div class="community-compose-nav"><button type="button" data-back>取消</button><button class="community-compose-submit ${canPublish ? "is-ready" : ""}" type="submit" form="communityPostForm" data-ready="${canPublish ? "true" : "false"}" aria-disabled="${canPublish ? "false" : "true"}" ${canPublish ? "" : "disabled"}>发表</button></div>
+    <main class="community-compose-page">
+      <form class="community-publish-form" id="communityPostForm">
+        <textarea name="content" maxlength="1200" placeholder="这一刻的想法…">${escapeHtml(communityDraftText)}</textarea>
+        <button class="community-media-preview" type="button" data-community-media-button>${communityDraftMedia ? (communityDraftMediaType === "video" ? `<video src="${communityDraftMedia}" muted playsinline></video><i>▶</i>` : `<img src="${communityDraftMedia}" alt="待发布图片">`) : `<span>＋<small>添加图片或视频</small></span>`}</button>
+        <input class="hidden-file" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime" data-community-media-input>
+      </form>
+    </main>
+  `;
+}
+
+function pageCommunityFriends() {
+  const friends = state.communityFriends || [];
+  return `
+    ${topbar("我的好友", true)}
+    <main class="content page-fresh community-page">
+      <section class="section-title"><span>好友</span><small>${friends.length} 位</small></section>
+      <section class="community-friend-list">${friends.map(friend => `<article class="community-friend-row fresh-card">${communityAvatar(friend)}<div><strong>${escapeHtml(friend.name || "壳友")}</strong><small>${escapeHtml(friend.phone || "")}</small></div><button type="button" data-open-community-chat="${friend.id}">聊天</button></article>`).join("") || `<div class="empty small-empty"><div><strong>还没有好友</strong><br>在动态里点击“加好友”即可开始聊天</div></div>`}</section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function shouldShowCommunityMessageTime(messages, index) {
+  if (index === 0) return true;
+  const currentTime = Date.parse(messages[index]?.createdAt || "");
+  const previousTime = Date.parse(messages[index - 1]?.createdAt || "");
+  if (!Number.isFinite(currentTime) || !Number.isFinite(previousTime)) return true;
+  return Math.abs(currentTime - previousTime) > 60 * 1000;
+}
+
+function normalizeCommunityChatListing(listing) {
+  if (!listing || typeof listing !== "object") return null;
+  return {
+    ...listing,
+    price: Math.max(0, Number(listing.price || 0)),
+    mediaUrl: apiAssetUrl(listing.mediaUrl || listing.photoUrl || ""),
+    photoUrl: apiAssetUrl(listing.photoUrl || listing.mediaUrl || ""),
+    mediaType: listing.mediaType === "video" ? "video" : "image",
+    mediaItems: Array.isArray(listing.mediaItems) ? listing.mediaItems.slice(0, 9).map(media => ({
+      ...media,
+      url: apiAssetUrl(media?.url || ""),
+      type: media?.type === "video" ? "video" : "image"
+    })).filter(media => media.url) : []
+  };
+}
+
+function communityChatListingCard(listing) {
+  if (!listing) return "";
+  const title = listing.title || listing.speciesName || "龟集市商品";
+  const meta = [listing.city || "全国", listing.delivery].filter(Boolean).join(" · ");
+  const preview = listing.mediaUrl
+    ? (listing.mediaType === "video"
+      ? `<span class="community-chat-product-media is-video"><video src="${escapeHtml(listing.mediaUrl)}" muted playsinline preload="metadata"></video><i>▶</i></span>`
+      : `<span class="community-chat-product-media"><img src="${escapeHtml(listing.mediaUrl)}" alt="${escapeHtml(title)}"></span>`)
+    : `<span class="community-chat-product-media is-placeholder">龟</span>`;
+  return `
+    <button class="community-chat-product-strip" type="button" data-view-chat-market="${escapeHtml(listing.id || "")}" aria-label="查看商品详情：${escapeHtml(title)}">
+      ${preview}
+      <div class="community-chat-product-info">
+        <strong>${escapeHtml(title)}</strong>
+        <b><i>¥</i>${money(listing.price)}</b>
+        <span>${escapeHtml(meta || "商品信息" )}</span>
+      </div>
+      <span class="community-chat-product-link">查看商品</span>
+    </button>
+  `;
+}
+
+function pageCommunityChat() {
+  const friend = state.selectedCommunityFriend || (state.communityFriends || []).find(item => item.id === state.selectedCommunityFriendId);
+  const messages = state.communityChatMessages || [];
+  const visibleMessages = messages.filter(message => !message.marketReferenceOnly);
+  const marketListing = normalizeCommunityChatListing(state.communityChatListing);
+  const chatHeader = marketListing ? `
+    <div class="topbar community-chat-topbar">
+      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><h1>${escapeHtml(friend?.name || "聊天")}</h1><span aria-hidden="true">···</span></div>
+      ${communityChatListingCard(marketListing)}
+    </div>
+  ` : topbar(friend?.name || "聊天", true);
+  return `
+    ${chatHeader}
+    <main class="content page-fresh community-chat-page">
+      <section class="community-chat-list">${visibleMessages.map((message, index) => `<div class="community-message ${message.mine ? "mine" : "theirs"}">${shouldShowCommunityMessageTime(visibleMessages, index) ? `<small>${formatTime(message.createdAt)}</small>` : ""}<p>${escapeHtml(message.content)}</p></div>`).join("") || (marketListing ? "" : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`)}</section>
+      <form class="community-chat-form" id="communityChatForm"><input name="content" maxlength="1000" value="${escapeHtml(marketChatDraft)}" placeholder="输入消息…" autocomplete="off"><button type="submit">发送</button></form>
+    </main>
+  `;
+}
+
+function pageFollowing() {
+  const users = state.communityFollowingUsers || [];
+  return `
+    ${topbar("我的关注", true)}
+    <main class="content page-fresh following-page">
+      <section class="section-title"><span>关注的壳友</span><small>${users.length} 人</small></section>
+      <section class="following-user-list">
+        ${users.map(user => `<button class="following-user-card fresh-card" type="button" data-view-following-user="${user.id}">${communityAvatar(user, "following-user-avatar")}<div><strong>${escapeHtml(user.name || "壳友")}</strong><span>${Number(user.postCount || 0)} 条动态 · ${Number(user.listingCount || 0)} 件在售</span></div><b>›</b></button>`).join("") || `<div class="empty small-empty"><div><strong>${followingLoading ? "正在加载关注" : "还没有关注壳友"}</strong><br>可以在壳友圈或商品详情中关注对方</div></div>`}
+      </section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function pageFollowingProfile() {
+  const user = (state.communityFollowingUsers || []).find(item => item.id === state.selectedFollowingUserId);
+  const posts = (state.communityFollowingPosts || []).filter(item => item.authorId === state.selectedFollowingUserId);
+  const listings = (state.communityFollowingListings || []).filter(item => item.sellerId === state.selectedFollowingUserId);
+  if (!user) return `${topbar("关注详情", true)}<main class="content page-fresh"><div class="empty"><strong>没有找到这位壳友</strong></div></main>${bottomNav()}`;
+  return `
+    ${topbar(user.name || "关注详情", true)}
+    <main class="content page-fresh following-profile-page">
+      <section class="following-profile-head fresh-card">${communityAvatar(user, "following-profile-avatar")}<div><h2>${escapeHtml(user.name || "壳友")}</h2><p>${posts.length} 条动态 · ${listings.length} 件在售商品</p></div><button class="active" type="button" data-toggle-community-follow="${user.id}">已关注</button></section>
+      <section class="section-title"><span>壳友圈</span><small>${posts.length} 条</small></section>
+      <section class="community-feed following-posts">${posts.map(communityFeedCard).join("") || `<div class="empty small-empty"><div><strong>暂时没有动态</strong></div></div>`}</section>
+      <section class="section-title"><span>在售商品</span><small>${listings.length} 件</small></section>
+      <section class="market-grid following-market-grid">${listings.map(marketListingCard).join("") || `<div class="empty small-empty"><div><strong>暂时没有在售商品</strong></div></div>`}</section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function pageSavedMarket(title, ids, emptyTitle) {
+  const listingsById = new Map((state.marketListings || []).map(item => [item.id, item]));
+  const listings = (ids || []).map(id => listingsById.get(id)).filter(Boolean);
+  return `
+    ${topbar(title, true)}
+    <main class="content page-fresh saved-market-page">
+      <section class="market-grid">${listings.map(marketListingCard).join("") || `<div class="empty small-empty"><div><strong>${emptyTitle}</strong></div></div>`}</section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function pageMarketFavorites() {
+  return pageSavedMarket("我的收藏", state.marketFavoriteIds || [], "还没有收藏商品");
+}
+
+function pageMarketHistory() {
+  return pageSavedMarket("历史浏览", state.marketHistoryIds || [], "还没有浏览记录");
+}
+
+function marketStageLabel(stage) {
+  return ({ hatchling: "苗子", juvenile: "亚成", adult: "种龟" })[stage] || "未标注";
+}
+
+function marketListingPhoto(item) {
+  return item.mediaItems?.[0]?.url || item.photoUrl || item.photo || defaultPhoto;
+}
+
+function marketListingMediaItems(item) {
+  if (Array.isArray(item.mediaItems) && item.mediaItems.length) return item.mediaItems.slice(0, 9);
+  const url = item.photoUrl || item.photo || "";
+  return url ? [{ url, type: "image" }] : [];
+}
+
+function marketDraftMediaMarkup() {
+  const mediaItems = Array.isArray(state.marketDraftMedia) ? state.marketDraftMedia : [];
+  return `${mediaItems.map((item, index) => `
+    <div class="market-media-item" draggable="true" data-market-media-index="${index}">
+      ${item.type === "video" ? `<video src="${item.dataUrl || item.url}" muted playsinline preload="metadata"></video><i>▶</i>` : `<img src="${item.dataUrl || item.url}" alt="实拍图 ${index + 1}">`}
+      <span class="market-media-drag-handle" title="长按拖动调整顺序" aria-hidden="true">⠿</span>
+      <button type="button" data-remove-market-media="${index}" aria-label="删除第 ${index + 1} 个媒体">×</button>
+    </div>
+  `).join("")}${mediaItems.length < 9 ? `<button class="market-media-add" type="button" data-market-media-button><b>＋</b><small>图片/视频</small></button>` : ""}`;
+}
+
+function marketTitleTemplates(species) {
+  const name = String(species?.name || "").trim();
+  if (!name) return [];
+  return [
+    `${name}诚意出售`,
+    `自家饲养${name}，状态好`,
+    `实拍${name}，欢迎交流`,
+    `精品${name}在售`
+  ];
+}
+
+function marketSpeciesMatches(query) {
+  const keyword = String(query || "").trim().toLowerCase();
+  return speciesList
+    .map(item => {
+      const name = String(item.name || "").toLowerCase();
+      const code = String(item.code || "").toLowerCase();
+      let rank = 99;
+      if (!keyword) rank = 4;
+      else if (name.startsWith(keyword)) rank = 0;
+      else if (code.startsWith(keyword)) rank = 1;
+      else if (name.includes(keyword)) rank = 2;
+      else if (code.includes(keyword)) rank = 3;
+      return { item, rank };
+    })
+    .filter(entry => entry.rank < 99)
+    .sort((left, right) => left.rank - right.rank || left.item.name.localeCompare(right.item.name, "zh-CN"))
+    .slice(0, 30)
+    .map(entry => entry.item);
+}
+
+function marketTitleTemplatesMarkup(species) {
+  const templates = marketTitleTemplates(species);
+  if (!templates.length) return "";
+  return `<small>快捷模板</small><span>${templates.map((title, index) => `<button type="button" data-market-title-template="${index}" data-market-title-value="${escapeHtml(title)}">${escapeHtml(title)}</button>`).join("")}</span>`;
+}
+
+function renderMarketTitleTemplates(species, autoFill = false) {
+  const titleInput = document.querySelector("[data-market-title]");
+  const templates = marketTitleTemplates(species);
+  const container = document.querySelector("[data-market-title-templates]");
+  if (!titleInput || !container) return;
+  container.innerHTML = marketTitleTemplatesMarkup(species);
+  if (autoFill && templates[0]) titleInput.value = templates[0];
+  container.querySelectorAll("[data-market-title-template]").forEach(button => {
+    button.addEventListener("click", () => {
+      titleInput.value = button.dataset.marketTitleValue || "";
+      titleInput.focus();
+    });
+  });
+}
+
+function normalizeMarketListings(listings = []) {
+  return listings.map(item => ({
+    ...item,
+    price: Number(item.price || 0),
+    viewCount: Math.max(0, Number(item.viewCount || 0)),
+    wantCount: Math.max(0, Number(item.wantCount || 0)),
+    photoUrl: item.photoUrl ? apiAssetUrl(item.photoUrl) : "",
+    mediaItems: Array.isArray(item.mediaItems) ? item.mediaItems.slice(0, 9).map(media => ({
+      ...media,
+      url: media.url ? apiAssetUrl(media.url) : ""
+    })) : []
+  }));
+}
+
+function isMarketFavorite(listingId) {
+  return (state.marketFavoriteIds || []).includes(String(listingId || ""));
+}
+
+function marketFavoriteButton(item, className = "market-favorite-button") {
+  const active = isMarketFavorite(item.id);
+  return `<button class="${className} ${active ? "active" : ""}" type="button" data-market-favorite="${item.id}" aria-label="${active ? "取消收藏" : "收藏商品"}" aria-pressed="${active ? "true" : "false"}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9Z"></path></svg></button>`;
+}
+
+function webNetworkConnectionType() {
+  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  return String(connection?.type || "unknown").toLowerCase();
+}
+
+function shouldAutoplayMarketVideo() {
+  // 仅当原生插件或浏览器明确报告 Wi-Fi 时才自动播放，未知网络一律按非 Wi-Fi 处理。
+  const connectionType = marketNetworkType !== "unknown" ? marketNetworkType : webNetworkConnectionType();
+  return connectionType === "wifi";
+}
+
+function syncMarketWifiVideos() {
+  if (!shouldAutoplayMarketVideo()) return;
+  document.querySelectorAll("[data-market-wifi-video]").forEach(video => {
+    video.muted = true;
+    video.defaultMuted = true;
+    video.play().catch(() => {});
+  });
+}
+
+function updateMarketNetworkType(status) {
+  const nextType = String(status?.connectionType || "unknown").toLowerCase();
+  if (nextType === marketNetworkType) return;
+  marketNetworkType = nextType;
+  if (state.page === "market") render();
+}
+
+function startMarketNetworkMonitoring() {
+  if (marketNetworkMonitoringStarted) return;
+  marketNetworkMonitoringStarted = true;
+
+  const browserConnection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  browserConnection?.addEventListener?.("change", () => {
+    if (marketNetworkType === "unknown" && state.page === "market") render();
+  });
+
+  const capacitor = window.Capacitor;
+  const network = capacitor?.Plugins?.Network || capacitor?.registerPlugin?.("Network");
+  if (!network?.getStatus) return;
+  network.getStatus()
+    .then(updateMarketNetworkType)
+    .catch(() => {});
+  network.addListener?.("networkStatusChange", updateMarketNetworkType)
+    ?.catch?.(() => {});
+}
+
+function marketListingCard(item) {
+  const sold = item.status === "sold";
+  const firstMedia = marketListingMediaItems(item)[0];
+  const wifiAutoplay = firstMedia?.type === "video" && shouldAutoplayMarketVideo();
+  return `
+    <article class="market-card-wrap">
+    <button class="market-card ${sold ? "is-sold" : ""}" type="button" data-view-market="${item.id}">
+      <span class="market-card-photo ${wifiAutoplay ? "wifi-video-autoplay" : ""}">
+        ${firstMedia?.type === "video" ? `<video src="${firstMedia.url}" muted playsinline ${wifiAutoplay ? "autoplay loop preload=\"auto\" data-market-wifi-video" : "preload=\"metadata\""}></video>${wifiAutoplay ? "" : `<b class="market-video-mark">▶</b>`}` : `<img src="${marketListingPhoto(item)}" alt="${escapeHtml(item.title || item.speciesName || "在售乌龟")}" loading="lazy">`}
+        ${sold ? `<i>已售出</i>` : item.negotiable ? `<i class="negotiable">可议价</i>` : ""}
+      </span>
+      <span class="market-card-body">
+        <strong>${escapeHtml(item.title || `${item.speciesName || "乌龟"}在售`)}</strong>
+        <small>${escapeHtml(item.speciesName || "品种未填写")} · ${marketStageLabel(item.stage)}${item.gender ? ` · ${escapeHtml(item.gender)}` : ""}</small>
+        <span class="market-card-price"><b><i>¥</i>${money(item.price)}</b><small>${Math.max(0, Number(item.wantCount || 0))}人想要</small></span>
+        ${item.delivery ? `<span class="market-card-service"><em>${escapeHtml(item.delivery)}</em></span>` : ""}
+        <span class="market-card-seller">${marketSellerAvatar(item, "market-seller-avatar")}<i>${escapeHtml(item.sellerName || "壳友卖家")}</i><em>${escapeHtml(item.city || "全国")}</em></span>
+      </span>
+    </button>
+    ${marketFavoriteButton(item)}
+    </article>
+  `;
+}
+
+function pageMarket() {
+  const keyword = String(state.marketSearch || "").trim().toLowerCase();
+  const stage = state.marketStage || "all";
+  const listings = (state.marketListings || []).filter(item => {
+    if (item.status === "sold") return false;
+    const matchesStage = stage === "all" || item.stage === stage;
+    const haystack = `${item.title || ""} ${item.speciesName || ""} ${item.city || ""}`.toLowerCase();
+    return matchesStage && (!keyword || haystack.includes(keyword));
+  });
+  return `
+    ${topbar("龟集市", false, `<button class="market-top-add" type="button" data-page="marketAdd" aria-label="发布出售">＋</button>`, `<button class="market-top-service" type="button" data-market-top-service aria-label="联系平台客服"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.2v-1.1a7.5 7.5 0 0 1 15 0v1.1"></path><path d="M4.5 12.6H3.8a1.8 1.8 0 0 0-1.8 1.8v2.1a1.8 1.8 0 0 0 1.8 1.8h1.7v-5.7ZM19.5 12.6h.7a1.8 1.8 0 0 1 1.8 1.8v2.1a1.8 1.8 0 0 1-1.8 1.8h-1.7v-5.7ZM19.5 18.1c0 1.3-1.2 2.4-2.7 2.4h-1.5"></path><path d="M13.2 20.5h2.4"></path></svg></button>`)}
+    <main class="content page-fresh market-page">
+      <form class="market-search-wrap" role="search" data-market-search-form>
+        <input type="search" name="keyword" value="${escapeHtml(state.marketSearch || "")}" placeholder="搜索品种、标题或城市" aria-label="搜索龟集市商品" data-market-search>
+        <button type="submit" aria-label="查找">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"></circle><path d="m15.5 15.5 4.2 4.2"></path></svg>
+        </button>
+      </form>
+      <section class="market-promise-strip">
+        <span><b>实拍</b> 一龟一图</span><span><b>直聊</b> 买卖双方沟通</span><span><b>透明</b> 状态尺寸清晰</span>
+      </section>
+      <section class="market-stage-tabs">
+        ${[["all", "全部"], ["hatchling", "苗子"], ["juvenile", "亚成"], ["adult", "种龟"]].map(([value, label]) => `<button class="${stage === value ? "active" : ""}" type="button" data-market-stage="${value}">${label}</button>`).join("")}
+      </section>
+      <section class="market-grid">
+        ${listings.map(marketListingCard).join("") || `<div class="market-empty"><span>龟</span><strong>${keyword || stage !== "all" ? "没有找到合适的商品" : "龟集市还没有商品"}</strong><p>从自己的乌龟档案一键发布，尺寸和状态会自动带入。</p><button type="button" data-page="marketAdd">发布第一只</button></div>`}
+      </section>
+    </main>
+    <button class="market-floating-add" type="button" data-page="marketAdd"><span>＋</span>发布出售</button>
+    ${bottomNav()}
+  `;
+}
+
+const MARKET_REFRESH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function marketRefreshMeta(item = {}) {
+  const refreshedAt = Date.parse(item.refreshedAt || item.createdAt || "");
+  const elapsed = Number.isFinite(refreshedAt) ? Math.max(0, Date.now() - refreshedAt) : MARKET_REFRESH_WINDOW_MS;
+  const remainingDays = Math.max(0, Math.ceil((MARKET_REFRESH_WINDOW_MS - elapsed) / (24 * 60 * 60 * 1000)));
+  if (item.status === "inactive") return { label: "已下架", hint: "超过 7 天未刷新，已自动下架" };
+  return { label: "已发布", hint: `距自动下架还有 ${remainingDays} 天` };
+}
+
+function myMarketListingRow(item) {
+  const media = marketListingMediaItems(item)[0];
+  const meta = marketRefreshMeta(item);
+  const preview = media?.type === "video"
+    ? `<span class="my-market-media is-video"><video src="${media.url}" muted playsinline preload="metadata"></video><i>▶</i></span>`
+    : `<span class="my-market-media"><img src="${marketListingPhoto(item)}" alt="${escapeHtml(item.title || "出售乌龟")}"></span>`;
+  return `
+    <article class="my-market-listing fresh-card ${item.status === "inactive" ? "is-inactive" : ""}">
+      ${preview}
+      <div class="my-market-listing-main">
+        <div><strong>${escapeHtml(item.title || `${item.speciesName || "乌龟"}在售`)}</strong><em>${meta.label}</em></div>
+        <span>${escapeHtml(item.speciesName || "品种未填写")} · ${marketStageLabel(item.stage)}</span>
+        <b><i>¥</i>${money(item.price)}</b>
+        <small>${meta.hint}</small>
+      </div>
+      <div class="my-market-listing-actions ${item.status === "active" ? "has-offline" : ""}">
+        <button type="button" data-edit-market-listing="${item.id}">编辑</button>
+        <button class="refresh" type="button" data-refresh-market-listing="${item.id}">${item.status === "inactive" ? "重新上架" : "刷新"}</button>
+        ${item.status === "active" ? `<button class="offline" type="button" data-offline-market-listing="${item.id}">下架</button>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function pageMyMarketListings() {
+  const tab = state.marketMyTab === "inactive" ? "inactive" : "active";
+  const all = state.myMarketListings || [];
+  const activeCount = all.filter(item => item.status === "active").length;
+  const inactiveCount = all.filter(item => item.status === "inactive").length;
+  const listings = all.filter(item => tab === "active" ? item.status === "active" : item.status === "inactive");
+  return `
+    ${topbar("我的发布", true, `<button class="market-top-add" type="button" data-page="marketAdd" aria-label="发布出售">＋</button>`)}
+    <main class="content page-fresh my-market-page">
+      <section class="my-market-notice"><strong>发布后请记得刷新</strong><p>商品超过 7 天未刷新将自动下架，刷新后重新计算展示时间。</p></section>
+      <section class="my-market-tabs">
+        <button class="${tab === "active" ? "active" : ""}" type="button" data-my-market-tab="active">已发布 <b>${activeCount}</b></button>
+        <button class="${tab === "inactive" ? "active" : ""}" type="button" data-my-market-tab="inactive">已下架 <b>${inactiveCount}</b></button>
+      </section>
+      <section class="my-market-list">${listings.map(myMarketListingRow).join("") || `<div class="market-empty"><span>龟</span><strong>${tab === "active" ? "还没有已发布的商品" : "没有已下架的商品"}</strong><p>${tab === "active" ? "发布出售后会显示在这里。" : "超过 7 天未刷新时，商品会自动移动到这里。"}</p>${tab === "active" ? `<button type="button" data-page="marketAdd">发布出售</button>` : ""}</div>`}</section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function pageMarketAdd() {
+  const editingListing = state.editingMarketListingId
+    ? ((state.myMarketListings || []).find(item => item.id === state.editingMarketListingId) || (state.marketListings || []).find(item => item.id === state.editingMarketListingId))
+    : null;
+  const turtle = (state.turtles || []).find(item => item.id === (state.marketDraftTurtleId || editingListing?.turtleId));
+  const activeTurtles = (state.turtles || []).filter(item => item.status !== "已转让" && item.status !== "已死亡");
+  if (!(state.marketDraftMedia || []).length && editingListing) state.marketDraftMedia = marketListingMediaItems(editingListing).map(media => ({ dataUrl: media.url, type: media.type || "image" }));
+  if (!(state.marketDraftMedia || []).length && turtle?.photo) state.marketDraftMedia = [{ dataUrl: turtle.photo, type: "image" }];
+  const turtleSpeciesCode = editingListing?.speciesCode || turtle?.speciesCode || speciesList.find(item => item.name === turtle?.speciesName)?.code || "";
+  const turtleSpecies = speciesByCode(turtleSpeciesCode);
+  const speciesSearchValue = turtleSpecies ? `${turtleSpecies.code} · ${turtleSpecies.name}` : "";
+  const titleValue = editingListing?.title || (turtle ? `${turtle.code || turtle.speciesName || "乌龟"}诚意出售` : "");
+  const formValue = (field, turtleField = field) => editingListing?.[field] ?? turtle?.[turtleField] ?? "";
+  const mediaCount = Array.isArray(state.marketDraftMedia) ? state.marketDraftMedia.length : 0;
+  return `
+    ${topbar(editingListing ? "编辑出售" : "发布出售", true)}
+    <main class="content page-fresh market-publish-page">
+      <form id="marketListingForm" class="market-publish-form">
+        <section class="market-form-card market-source-card">
+          <div class="market-form-heading"><b>从档案带入</b><small>减少重复填写，数据更可信</small></div>
+          <select class="select" name="turtleId" data-market-turtle-source>
+            <option value="">不关联档案，从品种库选择</option>
+            ${activeTurtles.map(item => `<option value="${item.id}" ${(state.marketDraftTurtleId || editingListing?.turtleId) === item.id ? "selected" : ""}>${escapeHtml(item.code || "未命名")} · ${escapeHtml(item.speciesName || "未知品种")}</option>`).join("")}
+          </select>
+        </section>
+        <section class="market-form-card market-media-card">
+          <div class="market-form-heading"><b>实拍图片或视频</b><small>${mediaCount}/9</small></div>
+          <div class="market-media-grid" data-market-media-grid>${marketDraftMediaMarkup()}</div>
+          <input class="hidden-file" type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple data-market-media-input>
+          <p>长按右下角拖动图标可调整顺序，第一项会作为展示首图；最多添加9个，视频不得超过30秒，不限制文件大小。</p>
+        </section>
+        <section class="market-form-card market-fields-card">
+          <div class="market-field-group"><span>品种<i class="required-mark" aria-hidden="true">*</i></span><div class="market-species-picker" data-market-species-picker>
+            <div class="market-species-search-row">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"></circle><path d="m15.5 15.5 4.2 4.2"></path></svg>
+              <input type="search" value="${escapeHtml(speciesSearchValue)}" placeholder="输入品种名称或代码" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="marketSpeciesOptions" data-market-species-search>
+              <button type="button" aria-label="展开品种选项" data-market-species-toggle>⌄</button>
+            </div>
+            <input type="hidden" name="speciesCode" value="${escapeHtml(turtleSpeciesCode)}" data-market-species-value>
+            <div class="market-species-options" id="marketSpeciesOptions" role="listbox" hidden data-market-species-options></div>
+          </div></div>
+          <label class="market-title-field"><span>出售标题<i class="required-mark" aria-hidden="true">*</i></span><input class="field" name="title" maxlength="40" value="${escapeHtml(titleValue)}" placeholder="选择品种后自动生成，可自行修改" data-market-title required><div class="market-title-templates" data-market-title-templates>${marketTitleTemplatesMarkup(turtleSpecies)}</div></label>
+          <div class="market-form-two">
+            <label><span>阶段<i class="required-mark" aria-hidden="true">*</i></span><select class="select" name="stage" required><option value="" ${!formValue("stage") ? "selected" : ""} disabled>请选择阶段</option><option value="hatchling" ${formValue("stage") === "hatchling" ? "selected" : ""}>苗子</option><option value="juvenile" ${formValue("stage") === "juvenile" ? "selected" : ""}>亚成</option><option value="adult" ${formValue("stage") === "adult" ? "selected" : ""}>种龟</option></select></label>
+            <label><span>性别</span><select class="select" name="gender"><option value="未知" ${formValue("gender") === "未知" || !formValue("gender") ? "selected" : ""}>未知</option><option value="公" ${formValue("gender") === "公" ? "selected" : ""}>公</option><option value="母" ${formValue("gender") === "母" ? "selected" : ""}>母</option></select></label>
+            <label><span>当前克重</span><input class="field" name="weight" type="number" min="0" step="0.1" value="${escapeHtml(formValue("weight"))}" placeholder="g"></label>
+            <label><span>背甲长度<i class="required-mark" aria-hidden="true">*</i></span><input class="field" name="shellLength" type="number" min="0.1" step="0.1" value="${escapeHtml(formValue("shellLength", "carapaceLength"))}" placeholder="cm" required></label>
+          </div>
+          <label><span>出售价格</span><div class="market-price-input"><b>¥</b><input name="price" type="number" min="0" step="0.01" value="${escapeHtml(editingListing?.price ?? "")}" placeholder="0.00" required></div></label>
+          <label class="market-check"><input name="negotiable" type="checkbox" ${editingListing?.negotiable ? "checked" : ""}><span>接受合理议价</span></label>
+          <div class="market-form-two">
+            <div class="market-city-field">
+              <div class="market-city-label"><span>所在城市<i class="required-mark" aria-hidden="true">*</i></span><button type="button" data-market-city-locate>⌖ 定位</button></div>
+              <input class="field" name="city" maxlength="24" value="${escapeHtml(state.marketDraftCity || editingListing?.city || "")}" placeholder="正在获取所在城市" data-market-city required>
+              <small data-market-city-hint>将自动填写您所在的城市</small>
+            </div>
+            <label><span>交付方式<i class="required-mark" aria-hidden="true">*</i></span><select class="select" name="delivery" required><option value="" ${!formValue("delivery") ? "selected" : ""} disabled>请选择方式</option><option value="可快递" ${formValue("delivery") === "可快递" ? "selected" : ""}>可快递</option><option value="仅自提" ${formValue("delivery") === "仅自提" ? "selected" : ""}>仅自提</option><option value="可面交" ${formValue("delivery") === "可面交" ? "selected" : ""}>可面交</option></select></label>
+          </div>
+          <label><span>详细说明<i class="required-mark" aria-hidden="true">*</i></span><textarea name="description" maxlength="600" placeholder="可填写开食情况、饲养环境、健康状态及转让原因" required>${escapeHtml(editingListing?.description || "")}</textarea></label>
+        </section>
+        <section class="market-safe-note"><b>交易提示</b><p>发布前请如实描述健康状态；交易前充分沟通并核对实物，不要脱离双方确认的联系方式盲目付款。</p></section>
+        <button class="market-publish-submit" type="submit">${editingListing ? "保存并刷新" : "确认发布"}</button>
+      </form>
+    </main>
+  `;
+}
+
+function pageMarketDetail() {
+  const item = (state.marketListings || []).find(listing => listing.id === state.selectedMarketListingId);
+  if (!item) return `${topbar("商品详情", true)}<main class="content page-fresh market-detail-page"><div class="empty"><strong>商品已下架</strong></div></main>`;
+  const isOwn = Boolean(item.isOwn || item.pendingLocal);
+  const sold = item.status === "sold";
+  const mediaItems = marketListingMediaItems(item);
+  const firstMediaIsVideo = mediaItems[0]?.type === "video";
+  const primaryMediaItems = firstMediaIsVideo ? mediaItems.slice(0, 1) : mediaItems.filter(media => media.type !== "video");
+  const secondaryMediaItems = firstMediaIsVideo ? mediaItems.slice(1) : [];
+  const detailVideosAfterDescription = firstMediaIsVideo ? [] : mediaItems.filter(media => media.type === "video");
+  const hasPrimaryGalleryControls = primaryMediaItems.length > 1;
+  return `
+    ${topbar("商品详情", true)}
+    <main class="content page-fresh market-detail-page">
+      <section class="market-detail-gallery-wrap">
+        <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => `<div class="market-detail-photo">${media.type === "video" ? `<video src="${media.url}" controls playsinline preload="metadata"></video>` : `<img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button">`}${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`}</section>
+        ${hasPrimaryGalleryControls ? `<button class="market-detail-gallery-arrow prev" type="button" data-market-gallery-prev aria-label="查看上一张图片" aria-controls="marketDetailGallery">‹</button><button class="market-detail-gallery-arrow next" type="button" data-market-gallery-next aria-label="查看下一张图片" aria-controls="marketDetailGallery">›</button>` : ""}
+      </section>
+      <section class="market-detail-main">
+        <div class="market-detail-price"><strong><i>¥</i>${money(item.price)}</strong>${item.negotiable ? `<span>可议价</span>` : ""}</div>
+        <h2>${escapeHtml(item.title || `${item.speciesName || "乌龟"}在售`)}</h2>
+        <p>${escapeHtml(item.speciesName || "品种未填写")} · ${marketStageLabel(item.stage)} · ${escapeHtml(item.gender || "性别未知")}</p>
+        <div class="market-detail-stats"><span>曝光 ${Math.max(0, Number(item.viewCount || 0))} 次</span><i></i><span><b>${Math.max(0, Number(item.wantCount || 0))}</b> 人想要</span></div>
+      </section>
+      <section class="market-detail-specs">
+        <div><span>当前克重</span><strong>${item.weight ? `${escapeHtml(item.weight)}g` : "未填写"}</strong></div>
+        <div><span>背甲长度</span><strong>${item.shellLength ? `${escapeHtml(item.shellLength)}cm` : "未填写"}</strong></div>
+        <div><span>所在城市</span><strong>${escapeHtml(item.city || "未填写")}</strong></div>
+        <div><span>交付方式</span><strong>${escapeHtml(item.delivery || "双方协商")}</strong></div>
+      </section>
+      ${secondaryMediaItems.length ? `<section class="market-detail-secondary-media">${secondaryMediaItems.map((media, index) => `<div class="market-detail-secondary-photo">${media.type === "video" ? `<video src="${media.url}" controls playsinline preload="metadata"></video>` : `<img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} 实拍 ${index + 2}" data-preview-market-image tabindex="0" role="button">`}</div>`).join("")}</section>` : ""}
+      ${item.description ? `<section class="market-detail-description"><h3>卖家说明</h3><p>${escapeHtml(item.description)}</p></section>` : ""}
+      ${detailVideosAfterDescription.length ? `<section class="market-detail-secondary-media market-detail-video-media">${detailVideosAfterDescription.map(media => `<div class="market-detail-secondary-photo"><video src="${media.url}" controls playsinline preload="metadata"></video></div>`).join("")}</section>` : ""}
+      <section class="market-seller-card">
+        ${marketSellerAvatar(item, "market-detail-avatar")}
+        <div><strong>${escapeHtml(item.sellerName || "壳友卖家")}</strong><span>${isOwn ? "这是我发布的商品" : "已通过账号认证"}</span></div>
+        ${isOwn ? "" : `<div class="market-seller-actions"><button class="${item.sellerFollowed ? "active" : ""}" type="button" data-toggle-community-follow="${item.sellerId}">${item.sellerFollowed ? "已关注" : "关注"}</button><button type="button" data-market-contact="${item.id}">聊一聊</button></div>`}
+      </section>
+      <section class="market-safe-note"><b>交易咨询</b><p>先看近期实拍或视频，再确认健康、尺寸与交付方式；如需购买，请联系平台客服并发送商品咨询码，活体运输责任以双方确认内容为准。</p></section>
+    </main>
+    <div class="market-detail-actions">
+      ${marketFavoriteButton(item, "market-detail-favorite")}
+      ${isOwn ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">删除</button><button class="market-sold-action" type="button" data-market-sold="${item.id}">${sold ? "恢复在售" : "标记已售"}</button>` : sold ? `<button class="market-sold-disabled" type="button" disabled>该商品已售出</button>` : `<button class="market-want-action" type="button" data-market-platform-service="${item.id}">联系平台客服</button><button class="market-chat-action" type="button" data-market-contact="${item.id}">联系卖家</button>`}
+    </div>
+  `;
+}
+
 function pageHome() {
   const s = stats();
-  const turtles = [...state.turtles].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   return `
     ${topbar("壳友手账")}
     <main class="content home-redesign">
@@ -1507,17 +2246,103 @@ function pageHome() {
         <div><strong>${s.sick}</strong><span>生病</span></div>
         <div><strong>${s.species}</strong><span>品种</span></div>
       </section>
-      <section class="action-panel">
-        <button data-page="species"><span>◇</span><strong>品种</strong><small>选择常用品种</small></button>
-        <button data-page="memos"><span>✓</span><strong>护理</strong><small>备忘与提醒</small></button>
-        <button data-page="breeds"><span>◎</span><strong>饲养品种</strong><small>管理常用品种</small></button>
+      <section class="action-panel care-action-panel home-module-panel">
+        <button class="care-action" data-page="memos"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.5 12.5 3.3 3.3 7.7-8.2"></path></svg></span><strong>护理</strong><small>备忘与提醒</small></button>
+        <button class="care-action home-module-action breeding-action" data-page="breeding"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7.7" r="4.7"></circle><circle cx="8.3" cy="14.1" r="4.7"></circle><circle cx="15.7" cy="14.1" r="4.7"></circle></svg></span><strong>繁殖</strong><small>产蛋、受精与孵化</small></button>
+        <button class="care-action home-module-action pool-action" data-page="pools"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 8.3h15v9.2a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2z"></path><path d="M4.5 11.6c2.1 1.4 4.2 1.4 6.3 0 2.1-1.4 4.2-1.4 6.3 0"></path><path d="M7.5 5.5h9"></path></svg></span><strong>龟池</strong><small>数量与尺寸</small></button>
       </section>
-      <section class="home-turtles">
-        <div class="section-title"><span>全部新增档案</span></div>
-        <div class="home-turtle-grid">
-          ${turtles.map(turtleCard).join("") || `<div class="empty"><div><strong>还没有乌龟档案</strong><br>点击新建开始记录</div></div>`}
+      ${archiveDashboardSection()}
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function turtlePoolTypeLabel(type) {
+  return ({ hatchling: "苗池", juvenile: "压成池", breeder: "种龟池" })[type] || "未填写类型";
+}
+
+function turtlePoolName(poolId) {
+  return (state.turtlePools || []).find(pool => pool.id === poolId)?.name || "未关联";
+}
+
+function turtlePoolDimensions(pool = {}) {
+  const values = [
+    pool.length !== "" && pool.length !== undefined && `长 ${pool.length}`,
+    pool.width !== "" && pool.width !== undefined && `宽 ${pool.width}`,
+    pool.height !== "" && pool.height !== undefined && `高 ${pool.height}`
+  ].filter(Boolean);
+  return values.length ? `${values.join(" · ")} cm` : "未记录尺寸";
+}
+
+function turtlePoolRow(pool) {
+  return `
+    <article class="turtle-pool-row fresh-card" data-edit-turtle-pool="${pool.id}" role="button" tabindex="0">
+      <div class="turtle-pool-row-head">
+        <span class="turtle-pool-mark" aria-hidden="true">池</span>
+        <div>
+          <div class="turtle-pool-title"><strong>${escapeHtml(pool.name || "未命名龟池")}</strong><span>${turtlePoolTypeLabel(pool.type)}</span></div>
+          <small>${escapeHtml(turtlePoolDimensions(pool))}</small>
         </div>
+        <b>${Math.max(0, Number(pool.count || 0))}<em>只</em></b>
+      </div>
+      ${pool.note ? `<p>${escapeHtml(pool.note)}</p>` : ""}
+    </article>
+  `;
+}
+
+function pageTurtlePools() {
+  const pools = state.turtlePools || [];
+  const turtleCount = pools.reduce((sum, pool) => sum + Math.max(0, Number(pool.count || 0)), 0);
+  return `
+    ${topbar("龟池管理", true)}
+    <main class="content page-fresh turtle-pools-page">
+      <section class="page-intro compact-intro turtle-pools-intro">
+        <div><p class="eyebrow dark">龟池</p><h2>${pools.length} 个龟池</h2><p>记录每个龟池的类型、尺寸、数量和日常备注。</p></div>
+        <button class="round-action" type="button" data-page="poolAdd" aria-label="新增龟池">+</button>
       </section>
+      <section class="turtle-pool-summary fresh-card">
+        <div><strong>${pools.length}</strong><span>龟池数量</span></div>
+        <div><strong>${turtleCount}</strong><span>记录饲养数量</span></div>
+      </section>
+      <section class="turtle-pool-list">
+        ${pools.map(turtlePoolRow).join("") || `<div class="empty small-empty"><div><strong>还没有龟池</strong><br>点击右上角加号，先记录第一个龟池。</div></div>`}
+      </section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function pageTurtlePoolAdd() {
+  const pool = (state.turtlePools || []).find(item => item.id === state.editingTurtlePoolId);
+  const editing = Boolean(pool);
+  return `
+    ${topbar(editing ? "编辑龟池" : "新增龟池", true)}
+    <main class="content page-fresh turtle-pool-add-page">
+      <section class="page-intro compact-intro turtle-pools-intro">
+        <div><p class="eyebrow dark">${editing ? "编辑" : "新增"}</p><h2>${editing ? escapeHtml(pool.name || "龟池") : "记录一个龟池"}</h2><p>名称和类型为必填信息，其余数据可随时补充。</p></div>
+      </section>
+      <form class="pool-form fresh-card" id="turtlePoolForm">
+        <label><span>龟池名称<i class="required-mark" aria-hidden="true">*</i></span><input class="field" name="name" maxlength="24" value="${escapeHtml(pool?.name || "")}" placeholder="例如：南侧苗池" required></label>
+        <section class="pool-type-field">
+          <span>龟池类型<i class="required-mark" aria-hidden="true">*</i></span>
+          <input type="hidden" name="type" value="${escapeHtml(pool?.type || "")}" required data-pool-type-value>
+          <div class="pool-type-choices" role="group" aria-label="龟池类型">
+            ${[["hatchling", "苗池"], ["juvenile", "压成池"], ["breeder", "种龟池"]].map(([value, label]) => `<button type="button" class="${pool?.type === value ? "active" : ""}" data-pool-type="${value}" aria-pressed="${pool?.type === value ? "true" : "false"}">${label}</button>`).join("")}
+          </div>
+        </section>
+        <section class="pool-dimension-section">
+          <small>单位 cm</small>
+          <div class="pool-dimension-grid">
+            <label><span>长</span><input class="field" name="length" type="number" min="0" step="0.1" value="${escapeHtml(pool?.length ?? "")}" placeholder="未填写"></label>
+            <label><span>宽</span><input class="field" name="width" type="number" min="0" step="0.1" value="${escapeHtml(pool?.width ?? "")}" placeholder="未填写"></label>
+            <label><span>高</span><input class="field" name="height" type="number" min="0" step="0.1" value="${escapeHtml(pool?.height ?? "")}" placeholder="未填写"></label>
+          </div>
+        </section>
+        <label><span>数量</span><input class="field" name="count" type="number" min="0" step="1" value="${pool ? Math.max(0, Number(pool.count || 0)) : ""}" placeholder="例如：12"></label>
+        <label class="pool-note"><span>备注</span><textarea name="note" maxlength="200" placeholder="可记录水温、位置、设备或其他说明">${escapeHtml(pool?.note || "")}</textarea></label>
+        <button class="primary" type="submit">${editing ? "保存修改" : "添加龟池"}</button>
+        ${editing ? `<button class="pool-delete-button" type="button" data-delete-turtle-pool="${pool.id}">删除此龟池</button>` : ""}
+      </form>
     </main>
     ${bottomNav()}
   `;
@@ -1539,56 +2364,84 @@ function turtleCard(t) {
 function sortedTurtles() {
   let list = [...state.turtles];
   if (state.turtleFilter !== "all") list = list.filter(t => t.speciesCode === state.turtleFilter);
+  if (state.turtlePoolFilter === "unassigned") {
+    list = list.filter(t => !t.poolId || !(state.turtlePools || []).some(pool => pool.id === t.poolId));
+  } else if (state.turtlePoolFilter !== "all") {
+    list = list.filter(t => t.poolId === state.turtlePoolFilter);
+  }
   if (state.turtleSort === "latest") list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   if (state.turtleSort === "weight") list.sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0));
+  if (state.turtleSort === "shellLength") list.sort((a, b) => Number(b.carapaceLength || 0) - Number(a.carapaceLength || 0));
   return list;
 }
 
-function pageList() {
+function archiveDashboardSection() {
   const speciesOptions = [...new Set(state.turtles.map(t => t.speciesCode))]
     .map(code => speciesByCode(code) || { code, name: code });
-  const s = stats();
+  const poolOptions = state.turtlePools || [];
   return `
-    ${topbar("乌龟档案")}
-    <main class="content page-fresh">
-      <section class="page-intro">
-        <div><p class="eyebrow dark">档案夹</p><h2>${state.turtles.length} 份成长记录</h2><p>筛选、排序和维护每一只乌龟的资料。</p></div>
-        <button class="round-action" data-page="add">+</button>
-      </section>
-      <section class="archive-strip">
-        <div><strong>${s.active}</strong><span>在养</span></div>
-        <div><strong>${s.healthy}</strong><span>健康</span></div>
-        <div><strong>${s.sick}</strong><span>需关注</span></div>
-      </section>
+    <section class="home-archive-section">
       <section class="filter-dock">
         <select class="select" data-filter-species>
           <option value="all">全部品种</option>
           ${speciesOptions.map(s => `<option value="${s.code}" ${state.turtleFilter === s.code ? "selected" : ""}>${s.name}</option>`).join("")}
         </select>
+        <select class="select" data-filter-pool>
+          <option value="all">全部龟池</option>
+          <option value="unassigned" ${state.turtlePoolFilter === "unassigned" ? "selected" : ""}>未关联龟池</option>
+          ${poolOptions.map(pool => `<option value="${pool.id}" ${state.turtlePoolFilter === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")}</option>`).join("")}
+        </select>
         <select class="select" data-sort-turtles>
           <option value="default" ${state.turtleSort === "default" ? "selected" : ""}>默认排序</option>
           <option value="latest" ${state.turtleSort === "latest" ? "selected" : ""}>最新添加</option>
-          <option value="weight" ${state.turtleSort === "weight" ? "selected" : ""}>体重排序</option>
+          <option value="weight" ${state.turtleSort === "weight" ? "selected" : ""}>克重排序</option>
+          <option value="shellLength" ${state.turtleSort === "shellLength" ? "selected" : ""}>背甲长度排序</option>
         </select>
       </section>
-      ${sortedTurtles().map(turtleListRow).join("") || `<div class="empty"><div><strong>没有符合条件的档案</strong></div></div>`}
-    </main>
-    ${bottomNav()}
+      ${sortedTurtles().map(turtleListRow).join("") || `<div class="empty"><div><strong>还没有乌龟档案</strong><p>点击右上角加号，创建第一份档案。</p></div></div>`}
+    </section>
   `;
 }
 
+function pageList() {
+  return pageHome();
+}
+
+function turtleActionIcon(type) {
+  return ({
+    update: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 8a7.5 7.5 0 1 0 .3 7.5"></path><path d="M19 4v4h-4"></path></svg>`,
+    sold: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 8.5h15v11h-15z"></path><path d="M8 8.5V6.8a4 4 0 0 1 8 0v1.7"></path><path d="M9 13h6"></path></svg>`,
+    loss: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M8.5 12h7"></path></svg>`,
+    delete: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10l-.7 11H7.7L7 8Z"></path><path d="M5.5 8h13M9.5 8V5.5h5V8"></path></svg>`
+  }[type] || "");
+}
+
 function turtleListRow(t) {
+  const menuOpen = state.openTurtleMenuId === t.id;
   return `
-    <article class="turtle-row fresh-card ${state.openTurtleMenuId === t.id ? "menu-open" : ""}" data-view-turtle="${t.id}">
+    <article class="turtle-row fresh-card ${menuOpen ? "menu-open" : ""}" data-view-turtle="${t.id}">
       <img src="${t.photo || defaultPhoto}" alt="${t.speciesName}">
-      <div><strong>${t.code}</strong><p>${t.speciesName}</p><small>${t.weight || "-"}g · 背甲 ${t.carapaceLength || "-"}cm</small></div>
-      <button class="more-btn" data-toggle-turtle-menu="${t.id}">•••</button>
-      ${state.openTurtleMenuId === t.id ? `
-        <div class="turtle-menu" style="top:52px;right:0;width:118px;min-width:118px;border-radius:0;box-shadow:0 18px 38px rgba(31,42,51,.16);overflow:hidden;">
-          <button data-update-turtle="${t.id}">更新</button>
-          <button data-ledger-for-turtle="sold:${t.id}">售出</button>
-          <button data-ledger-for-turtle="loss:${t.id}">损耗</button>
-          <button class="danger-link" data-delete-turtle="${t.id}">删除</button>
+      <div class="turtle-row-content">
+        <div class="turtle-row-title">
+          <strong>${t.code}</strong>
+          <span class="turtle-pool-title-meta">龟池 ${escapeHtml(turtlePoolName(t.poolId))}</span>
+        </div>
+        <div class="turtle-row-species">
+          <p>${t.speciesName}</p>
+          ${Number(t.price) > 0 ? `<span class="turtle-price">¥${money(t.price)}</span>` : ""}
+        </div>
+        <div class="turtle-row-meta">
+          <span>${t.weight || "-"}g</span>
+          <span>背甲 ${t.carapaceLength || "-"}cm</span>
+        </div>
+      </div>
+      <button class="more-btn" data-toggle-turtle-menu="${t.id}" aria-label="档案操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
+      ${menuOpen ? `
+        <div class="turtle-menu archive-turtle-menu" role="menu" aria-label="${escapeHtml(t.code || t.speciesName || "乌龟")}的档案操作">
+          <button data-update-turtle="${t.id}" role="menuitem">${turtleActionIcon("update")}<span>更新</span></button>
+          <button data-ledger-for-turtle="sold:${t.id}" role="menuitem">${turtleActionIcon("sold")}<span>售出</span></button>
+          <button data-ledger-for-turtle="loss:${t.id}" role="menuitem">${turtleActionIcon("loss")}<span>损耗</span></button>
+          <button class="danger-link" data-delete-turtle="${t.id}" role="menuitem">${turtleActionIcon("delete")}<span>删除</span></button>
         </div>
       ` : ""}
     </article>
@@ -1603,28 +2456,29 @@ function pageTurtleDetail() {
   const species = speciesByCode(speciesCode) || speciesByCode(t.speciesCode) || { code: speciesCode, name: t.speciesName };
   const nickname = isEditing ? (turtleDraftValue(t, "code") || t.code) : t.code;
   const photo = isEditing && state.updateDraftPhoto === "__CLEAR__" ? defaultPhoto : (isEditing ? state.updateDraftPhoto : "") || t.photo || speciesPhoto(species) || defaultPhoto;
-  const historyList = t.measureHistory || [];
+  const historyList = [...(t.measureHistory || [])].reverse();
+  const menuOpen = state.openTurtleMenuId === t.id;
   return `
     ${topbar("档案详情", true)}
     <main class="content page-fresh">
-      <section class="page-intro compact-intro detail-summary-card">
+      <section class="page-intro compact-intro detail-summary-card ${menuOpen ? "menu-open" : ""}">
         <div>
           <p class="eyebrow dark">明细</p>
           <h2>${nickname || "未命名档案"}</h2>
           <p>${species.name || t.speciesName} · ${turtleDraftValue(t, "status") || t.status} · ${turtleDraftValue(t, "health") || t.health}</p>
         </div>
-        <button class="detail-more" style="z-index:120;" data-toggle-turtle-menu="${t.id}">•••</button>
-        ${state.openTurtleMenuId === t.id ? `
-          <div class="turtle-menu detail-menu" style="top:92px;right:0;width:118px;min-width:118px;border-radius:0;box-shadow:0 18px 38px rgba(31,42,51,.16);overflow:hidden;z-index:90;">
-            <button data-update-turtle="${t.id}">更新</button>
-            <button data-ledger-for-turtle="sold:${t.id}">售出</button>
-            <button data-ledger-for-turtle="loss:${t.id}">损耗</button>
-            <button class="danger-link" data-delete-turtle="${t.id}">删除</button>
+        <button class="detail-more" data-toggle-turtle-menu="${t.id}" aria-label="档案操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
+        ${menuOpen ? `
+          <div class="turtle-menu detail-menu detail-actions-menu" role="menu" aria-label="${escapeHtml(nickname || species.name || "乌龟")}的档案操作">
+            <button data-update-turtle="${t.id}" role="menuitem">${turtleActionIcon("update")}<span>更新</span></button>
+            <button data-ledger-for-turtle="sold:${t.id}" role="menuitem">${turtleActionIcon("sold")}<span>售出</span></button>
+            <button data-ledger-for-turtle="loss:${t.id}" role="menuitem">${turtleActionIcon("loss")}<span>损耗</span></button>
+            <button class="danger-link" data-delete-turtle="${t.id}" role="menuitem">${turtleActionIcon("delete")}<span>删除</span></button>
           </div>
         ` : ""}
       </section>
       ${isEditing ? `
-      <form class="breeding-form fresh-card" id="turtleDetailForm">
+      <form class="breeding-form fresh-card turtle-detail-edit-form" id="turtleDetailForm">
         <div class="photo-uploader breeding-photo-box">
           <img src="${photo}" alt="${species.name || t.speciesName}">
           <div>
@@ -1636,7 +2490,16 @@ function pageTurtleDetail() {
         <div class="breeding-form-grid">
           <label><span>品种代码</span><select class="select" name="speciesCode" required>${speciesList.map(item => `<option value="${item.code}" ${item.code === speciesCode ? "selected" : ""}>${item.code} · ${item.name}</option>`).join("")}</select></label>
           <label><span>龟龟昵称</span><input class="field" name="code" value="${nickname || ""}" placeholder="例如：小核桃、黑豆、将军"></label>
-          <label><span>性别</span><select class="select" name="gender"><option ${turtleDraftValue(t, "gender") === "公" ? "selected" : ""}>公</option><option ${turtleDraftValue(t, "gender") === "母" ? "selected" : ""}>母</option><option ${turtleDraftValue(t, "gender") === "未知" ? "selected" : ""}>未知</option></select></label>
+          <label><span>龟池</span><select class="select" name="poolId"><option value="">暂不关联龟池</option>${(state.turtlePools || []).map(pool => `<option value="${pool.id}" ${turtleDraftValue(t, "poolId") === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}</select></label>
+          <div class="detail-choice-row">
+            <span>性别</span>
+            <div>
+              <input type="hidden" name="gender" value="${turtleDraftValue(t, "gender") || "未知"}">
+              <div class="radio-row">
+                ${["公", "母", "未知"].map(value => `<button class="choice ${turtleDraftValue(t, "gender") === value ? "active" : ""}" type="button" data-detail-choice="gender" data-choice-value="${value}">${value}</button>`).join("")}
+              </div>
+            </div>
+          </div>
           <label><span>当前体重(g)</span><input class="field" name="weight" type="number" min="0" step="0.1" required value="${turtleDraftValue(t, "weight")}"></label>
           <label><span>背甲长度(cm)</span><input class="field" name="carapaceLength" type="number" min="0" step="0.1" required value="${turtleDraftValue(t, "carapaceLength")}"></label>
           <details class="measure-extra">
@@ -1645,27 +2508,39 @@ function pageTurtleDetail() {
             <label><span>背高(cm)</span><input class="field" name="shellHeight" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "shellHeight")}"></label>
             <label><span>腹甲长度(cm)</span><input class="field" name="plastronLength" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "plastronLength")}"></label>
           </details>
-          <label><span>饲养状态</span><select class="select" name="status"><option ${turtleDraftValue(t, "status") === "正常饲养" ? "selected" : ""}>正常饲养</option><option ${turtleDraftValue(t, "status") === "已转让" ? "selected" : ""}>已转让</option><option ${turtleDraftValue(t, "status") === "已死亡" ? "selected" : ""}>已死亡</option></select></label>
-          <label><span>健康状态</span><select class="select" name="health"><option ${turtleDraftValue(t, "health") === "健康" ? "selected" : ""}>健康</option><option ${turtleDraftValue(t, "health") === "生病" ? "selected" : ""}>生病</option></select></label>
+          <div class="detail-choice-row">
+            <span>健康状态</span>
+            <div>
+              <input type="hidden" name="health" value="${turtleDraftValue(t, "health") || "健康"}">
+              <div class="radio-row two-options">
+                ${["健康", "生病"].map(value => `<button class="choice ${turtleDraftValue(t, "health") === value ? "active" : ""}" type="button" data-detail-choice="health" data-choice-value="${value}">${value}</button>`).join("")}
+              </div>
+            </div>
+          </div>
           <label><span>入手日期</span><input class="field" name="acquiredDate" type="date" value="${turtleDraftValue(t, "acquiredDate") || formatDate(t.acquiredDate || new Date())}"></label>
-          <label><span>来源</span><select class="select" name="source"><option ${turtleDraftValue(t, "source") === "购买" ? "selected" : ""}>购买</option><option ${turtleDraftValue(t, "source") === "孵化" ? "selected" : ""}>孵化</option><option ${turtleDraftValue(t, "source") === "其他" ? "selected" : ""}>其他</option></select></label>
           <label><span>购入价(元)</span><input class="field" name="price" type="number" min="0" step="0.01" value="${turtleDraftValue(t, "price")}"></label>
         </div>
         <label class="breeding-note"><span>备注</span><textarea name="note" placeholder="性格、饮食、状态变化、到家表现等">${turtleDraftValue(t, "note") || ""}</textarea></label>
         <button class="primary" type="submit">保存修改</button>
       </form>
       ` : turtleReadOnlyDetail(t, species, photo)}
-      <section class="section-title"><h3>更新留存</h3></section>
-      ${historyList.map(h => `
-        <article class="history-card fresh-card">
-          <div class="history-photos">
-            <img src="${h.oldPhoto || defaultPhoto}" alt="旧照片">
-            <img src="${h.newPhoto || defaultPhoto}" alt="新照片">
-          </div>
-          <p>${h.oldSnapshot && h.newSnapshot ? `${describeTurtleSnapshot(h.oldSnapshot)} → ${describeTurtleSnapshot(h.newSnapshot)}` : `背甲 ${h.oldLength || "-"}cm → ${h.newLength || "-"}cm`}</p>
-          <small>${formatTime(h.updatedAt)}</small>
-        </article>
-      `).join("") || `<div class="empty small-empty"><div><strong>暂时还没有更新留存</strong></div></div>`}
+      <section class="section-title"><h3>成长记录</h3></section>
+      ${historyList.map((h, index) => `
+        <div class="growth-history-entry">
+          <article class="history-card growth-history-card fresh-card">
+            <div class="growth-history-head">
+              <strong>第 ${index + 1} 次成长</strong>
+              <small>${formatTime(h.updatedAt)}</small>
+            </div>
+            <div class="growth-comparison">
+              ${renderTurtleGrowthSnapshot(h.oldSnapshot || { carapaceLength: h.oldLength }, h.oldPhoto, "更新前")}
+              <span class="growth-inline-arrow" aria-hidden="true">→</span>
+              ${renderTurtleGrowthSnapshot(h.newSnapshot || { carapaceLength: h.newLength }, h.newPhoto, "更新后", true)}
+            </div>
+          </article>
+          ${index < historyList.length - 1 ? `<div class="growth-down-arrow" aria-hidden="true"><span>↓</span><small>继续成长</small></div>` : ""}
+        </div>
+      `).join("") || `<div class="empty small-empty"><div><strong>暂时还没有成长记录</strong></div></div>`}
     </main>
     ${bottomNav()}
   `;
@@ -1691,15 +2566,14 @@ function turtleReadOnlyDetail(t, species, photo) {
       <div><span>入手日期</span><strong>${t.acquiredDate || "-"}</strong></div>
       <div><span>来源</span><strong>${t.source || "-"}</strong></div>
       <div><span>购入价</span><strong>${t.price ? `¥${money(t.price)}` : "-"}</strong></div>
+      <div><span>龟池</span><strong>${escapeHtml(turtlePoolName(t.poolId))}</strong></div>
     </section>
     ${t.note ? `<section class="fresh-card note-card">${t.note}</section>` : ""}
   `;
 }
 
 function pageSpecies() {
-  const query = state.search.trim();
   const list = speciesList
-    .filter(item => !query || item.name.includes(query) || item.code.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => a.letter.localeCompare(b.letter) || a.name.localeCompare(b.name, "zh-CN"));
   const groups = Object.entries(groupBy(list, "letter"));
   const availableLetters = new Set(groups.map(([letter]) => letter));
@@ -1715,7 +2589,7 @@ function pageSpecies() {
       </section>
       <section class="species-search-card fresh-card">
         <span>搜索</span>
-        <input class="field fresh-search" data-species-search placeholder="搜索中文名称或代码" value="${state.search}">
+        <input class="field fresh-search" data-species-search placeholder="搜索中文名称或代码">
       </section>
       <nav class="species-alpha-nav" aria-label="品种首字母导航">
         ${ALPHABET.map(letter => `<button class="${availableLetters.has(letter) ? "" : "muted"}" data-scroll-letter="${letter}" type="button">${letter}</button>`).join("")}
@@ -1724,10 +2598,10 @@ function pageSpecies() {
         <section class="species-section" data-letter-section="${letter}">
           <div class="species-letter"><h3>${letter}</h3><span>${items.length} 个品种</span></div>
           ${items.map(item => `
-            <article class="species-row fresh-card ${state.keptSpecies.includes(item.code) ? "selected" : ""}">
+            <article class="species-row fresh-card ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-species-keywords="${item.name.toLowerCase()} ${item.code.toLowerCase()}">
               <img class="species-photo" src="${speciesPhoto(item)}" alt="${item.name}" data-species-img="${item.code}" data-fallback-photo loading="lazy">
               <div><strong>${item.name}</strong><small>${item.code}</small></div>
-              <button class="species-add ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-add-species="${item.code}">${state.keptSpecies.includes(item.code) ? "已选" : "加入"}</button>
+              <button class="species-add ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-add-species="${item.code}">${state.keptSpecies.includes(item.code) ? "取消" : "加入"}</button>
             </article>
           `).join("")}
         </section>
@@ -1775,6 +2649,8 @@ function pageAdd() {
   const draftStatus = turtleFormValue("status", "正常饲养");
   const draftHealth = turtleFormValue("health", "健康");
   const draftSource = turtleFormValue("source", "购买");
+  const draftPoolId = turtleFormValue("poolId");
+  const turtlePools = state.turtlePools || [];
   return `
     ${topbar("新建档案", true)}
     <main class="content page-fresh">
@@ -1786,12 +2662,17 @@ function pageAdd() {
             <div><button class="secondary" type="button" data-photo-input-button>上传照片</button><button class="danger-link" type="button" data-photo-clear>清除</button></div>
           </div>
           <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-photo-input>
-          <div class="label">品种代码</div>
+          <div class="label">品种代码 <span class="required">*</span></div>
           <select class="select" name="speciesCode" required>
             <option value="">请选择品种</option>
             ${kept.map(s => `<option value="${s.code}" ${draftSpeciesCode === s.code ? "selected" : ""}>${s.code} · ${s.name}</option>`).join("")}
           </select>
           <button class="text-green" type="button" data-page="species" style="margin-top:8px;">没有这个品种？去图鉴添加</button>
+          <div class="label">龟池</div>
+          <select class="select" name="poolId">
+            <option value="">暂不关联龟池</option>
+            ${turtlePools.map(pool => `<option value="${pool.id}" ${draftPoolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}
+          </select>
           <div class="label">龟龟昵称</div>
           <input class="field" name="code" placeholder="例如：小核桃、黑豆、将军" value="${escapeHtml(turtleFormValue("code"))}">
           <div class="label">性别 <span class="required">*</span></div>
@@ -1815,15 +2696,24 @@ function pageAdd() {
         <section class="form-block fresh-card">
           <h3>当前状态</h3>
           <div class="label">饲养状态</div>
-          <select class="select" name="status"><option ${turtleFormSelected("status", "正常饲养", "正常饲养")}>正常饲养</option><option ${draftStatus === "已转让" ? "selected" : ""}>已转让</option><option ${draftStatus === "已死亡" ? "selected" : ""}>已死亡</option></select>
+          <input type="hidden" name="status" value="${draftStatus}">
+          <div class="radio-row status-choice-row">
+            ${["正常饲养", "已转让", "已死亡"].map(value => `<button class="choice ${draftStatus === value ? "active" : ""}" type="button" data-turtle-choice="status" data-choice-value="${value}">${value}</button>`).join("")}
+          </div>
           <div class="label">健康状态</div>
-          <select class="select" name="health"><option ${turtleFormSelected("health", "健康", "健康")}>健康</option><option ${draftHealth === "生病" ? "selected" : ""}>生病</option></select>
+          <input type="hidden" name="health" value="${draftHealth}">
+          <div class="radio-row two-options">
+            ${["健康", "生病"].map(value => `<button class="choice ${draftHealth === value ? "active" : ""}" type="button" data-turtle-choice="health" data-choice-value="${value}">${value}</button>`).join("")}
+          </div>
         </section>
         <section class="form-block fresh-card">
           <h3>入手记录</h3>
           <div class="label">入手日期</div><input class="field" name="acquiredDate" type="date" value="${escapeHtml(turtleFormValue("acquiredDate", today))}">
           <div class="label">来到你家的方式</div>
-          <select class="select" name="source"><option ${turtleFormSelected("source", "购买", "购买")}>购买</option><option ${draftSource === "孵化" ? "selected" : ""}>孵化</option><option ${draftSource === "其他" ? "selected" : ""}>其他</option></select>
+          <input type="hidden" name="source" value="${draftSource}">
+          <div class="radio-row">
+            ${["购买", "孵化", "其他"].map(value => `<button class="choice ${draftSource === value ? "active" : ""}" type="button" data-turtle-choice="source" data-choice-value="${value}">${value}</button>`).join("")}
+          </div>
           <div class="label">花费(元)</div><input class="field" name="price" type="number" min="0" step="0.01" value="${escapeHtml(turtleFormValue("price"))}">
           <div class="label">备注</div><textarea name="note" placeholder="性格、食欲、卖家、到家表现等都可以写在这里">${escapeHtml(turtleFormValue("note"))}</textarea>
         </section>
@@ -1856,7 +2746,7 @@ function pageMemos() {
               ${WEEKDAY_OPTIONS.map(day => `
                 <label class="weekday-chip ${selectedWeekdays.includes(day.value) ? "active" : ""}">
                   <input type="checkbox" name="weekdays" value="${day.value}" ${selectedWeekdays.includes(day.value) ? "checked" : ""}>
-                  ${day.label}
+                  <span>${day.label}</span>
                 </label>
               `).join("")}
             </div>
@@ -1916,15 +2806,22 @@ function pageLedger() {
   const purchaseTotal = allRecords.filter(item => item.type === "purchase").reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const soldTotal = allRecords.filter(item => item.type === "sold").reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const lossTotal = allRecords.filter(item => item.type === "loss").reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const profit = soldTotal - purchaseTotal - lossTotal;
+  const profitLabel = profit > 0 ? "当前盈利" : profit < 0 ? "当前亏损" : "当前结余";
+  const profitPrefix = profit > 0 ? "+" : profit < 0 ? "-" : "±";
   const dateText = dateRange.label;
   return `
-    ${topbar("经营账本")}
+    ${topbar("经营账本", true)}
     <main class="content page-fresh">
       <section class="page-intro ledger-intro"><div><p class="eyebrow dark">经营</p><h2>${records.length} 条资金明细</h2><p>${dateText}，收购、售出、损耗都可以留图、留尺寸。</p></div></section>
+      <section class="ledger-profit-card ${profit < 0 ? "negative" : "positive"}">
+        <div><span>${profitLabel}</span><strong><i>${profitPrefix}</i><em>${money(Math.abs(profit))}</em></strong><small>售出收入 − 收购投入 − 损耗金额</small></div>
+        <mark>${dateText}</mark>
+      </section>
       <section class="ledger-summary">
-        <div><span>收购投入</span><strong>-¥${money(purchaseTotal)}</strong><small>${allRecords.filter(item => item.type === "purchase").length} 条</small></div>
-        <div><span>售出收入</span><strong>¥${money(soldTotal)}</strong><small>${allRecords.filter(item => item.type === "sold").length} 条</small></div>
-        <div><span>损耗金额</span><strong>-¥${money(lossTotal)}</strong><small>${allRecords.filter(item => item.type === "loss").length} 条</small></div>
+        <div class="purchase"><span>收购投入</span><strong class="ledger-summary-value"><i>-</i><em>${money(purchaseTotal)}</em></strong><small>${allRecords.filter(item => item.type === "purchase").length} 条</small></div>
+        <div class="sold"><span>售出收入</span><strong class="ledger-summary-value"><i>+</i><em>${money(soldTotal)}</em></strong><small>${allRecords.filter(item => item.type === "sold").length} 条</small></div>
+        <div class="loss"><span>损耗金额</span><strong class="ledger-summary-value"><i>-</i><em>${money(lossTotal)}</em></strong><small>${allRecords.filter(item => item.type === "loss").length} 条</small></div>
       </section>
       <section class="fresh-card ledger-command-panel" aria-label="账本操作">
         <div class="ledger-command-grid" aria-label="账本日期筛选">
@@ -2041,6 +2938,9 @@ function ledgerRow(item) {
   const turtle = state.turtles.find(t => t.id === item.turtleId) || item.turtleSnapshot;
   const typeText = ledgerTypeText(item.type);
   const showType = state.ledgerTab === "all";
+  const linkedSoldRecord = item.type === "purchase" && item.turtleId
+    ? (state.ledgerRecords || []).find(record => record.type === "sold" && record.turtleId === item.turtleId)
+    : null;
   const title = turtle ? `${turtle.code} · ${turtle.speciesName}` : (item.title || "未关联档案");
   const dims = [
     item.weight ? `${item.weight}g` : "",
@@ -2053,11 +2953,14 @@ function ledgerRow(item) {
     <article class="fresh-card ledger-row" data-view-ledger="${item.id}">
       ${item.photo ? `<img class="ledger-thumb" src="${item.photo}" alt="${typeText}照片">` : `<div class="ledger-type ${item.type}">${typeText}</div>`}
       <div class="ledger-row-main">
-        <strong class="ledger-row-title">${showType ? `<span class="ledger-inline-type ${item.type}">${typeText}</span>` : ""}${title}</strong>
+        <div class="ledger-row-title-line">
+          <strong class="ledger-row-title">${showType ? `<span class="ledger-inline-type ${item.type}">${typeText}</span>` : ""}${title}</strong>
+          ${linkedSoldRecord ? `<span class="ledger-sold-badge" title="售出日期：${linkedSoldRecord.recordDate || formatDate(linkedSoldRecord.createdAt)}">已售出</span>` : ""}
+        </div>
         ${dims ? `<p class="ledger-dims">${dims}</p>` : ""}
         <small class="muted">${item.recordDate || formatDate(item.createdAt)}${item.note ? ` · ${item.note}` : ""}</small>
       </div>
-      <div class="ledger-amount ${item.type !== "sold" ? "danger" : ""}">${item.type === "sold" ? "+" : "-"}¥${money(item.amount)}</div>
+      <div class="ledger-amount ${item.type !== "sold" ? "danger" : ""}">${item.type === "sold" ? "+" : "-"}${money(item.amount)}</div>
       <button class="danger-link ledger-delete" data-delete-ledger="${item.id}">移除</button>
     </article>
   `;
@@ -2074,7 +2977,7 @@ function pageLedgerDetail() {
     <main class="content page-fresh">
       <section class="ledger-detail-hero">${item.photo ? `<img src="${item.photo}" alt="${typeText}照片">` : `<div class="ledger-detail-empty">${typeText}</div>`}</section>
       <section class="fresh-card ledger-detail-card">
-        <div class="ledger-detail-head"><span class="ledger-inline-type ${item.type}">${typeText}</span><strong class="${item.type !== "sold" ? "danger-text" : ""}">${amountPrefix}¥${money(item.amount)}</strong></div>
+        <div class="ledger-detail-head"><span class="ledger-inline-type ${item.type}">${typeText}</span><strong class="${item.type !== "sold" ? "danger-text" : ""}">${amountPrefix}${money(item.amount)}</strong></div>
         <h2>${turtle ? `${turtle.code} · ${turtle.speciesName}` : (item.title || "未关联档案")}</h2>
         <p class="muted">${item.recordDate || formatDate(item.createdAt)}</p>
         <div class="detail-grid">
@@ -2086,6 +2989,7 @@ function pageLedgerDetail() {
           <div><span>背高</span><strong>${item.shellHeight || turtle?.shellHeight || "-"}cm</strong></div>
           <div><span>腹甲长</span><strong>${item.plastronLength || turtle?.plastronLength || "-"}cm</strong></div>
           <div><span>记录时间</span><strong>${formatTime(item.createdAt)}</strong></div>
+          ${item.type === "sold" ? `<div><span>成交方式</span><strong>${escapeHtml(item.saleMethod || "未填写")}</strong></div>` : ""}
         </div>
         ${item.note ? `<p class="detail-note">${item.note}</p>` : ""}
       </section>
@@ -2112,7 +3016,7 @@ function pageCalendar() {
 function pageBreeding() {
   const records = state.breedingRecords || [];
   return `
-    ${topbar("繁殖记录")}
+    ${topbar("繁殖记录", true)}
     <main class="content page-fresh">
       <section class="page-intro breeding-intro">
         <div>
@@ -2131,10 +3035,21 @@ function pageBreeding() {
   `;
 }
 
+function suggestedManualBreedingMother(date = formatDate(new Date())) {
+  const dateCode = String(date || formatDate(new Date())).replace(/\D/g, "").slice(0, 8) || formatDate(new Date()).replace(/-/g, "");
+  return `${dateCode}-${(state.breedingRecords || []).length + 1}`;
+}
+
+function isSuggestedManualBreedingMother(value) {
+  return /^\d{8}-\d+$/.test(String(value || ""));
+}
+
 function pageBreedingAdd() {
   const today = state.breedingDraftDate || formatDate(new Date());
   const manualMotherSelected = state.breedingMotherMode === "manual";
+  const manualMotherValue = state.breedingManualMother || suggestedManualBreedingMother(today);
   const females = state.turtles.filter(t => t.gender === "母" || t.gender === "未知");
+  const turtlePools = state.turtlePools || [];
   return `
     ${topbar("新增繁殖", true)}
     <main class="content page-fresh">
@@ -2158,15 +3073,16 @@ function pageBreedingAdd() {
         </div>
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-breeding-photo-input>
         <div class="breeding-form-grid">
-          <label><span>日期</span><input class="field" name="date" type="date" value="${today}" required></label>
-          <label><span>种母</span>
+          <label class="breeding-date-field"><span>日期</span><input class="field" name="date" type="date" value="${today}" required></label>
+          <label class="breeding-mother-field"><span>种母</span>
             <select class="select" name="mother" data-breeding-mother required>
               <option value="" ${!state.breedingMotherValue ? "selected" : ""}>选择种母</option>
               ${females.map(t => `<option value="${t.id}" ${state.breedingMotherValue === t.id ? "selected" : ""}>${t.code} · ${t.speciesName}</option>`).join("")}
               <option value="manual" ${manualMotherSelected ? "selected" : ""}>手动备注</option>
             </select>
           </label>
-          ${manualMotherSelected ? `<label class="breeding-manual-mother"><span>手动备注</span><input class="field" name="manualMother" value="${state.breedingManualMother || ""}" placeholder="例如：黑豆 / 未建档种母 / 2024 组母龟" required></label>` : ""}
+          <label class="breeding-pool-field"><span>龟池</span><select class="select" name="poolId"><option value="">暂不关联龟池</option>${turtlePools.map(pool => `<option value="${pool.id}" ${state.breedingPoolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}</select></label>
+          ${manualMotherSelected ? `<label class="breeding-manual-mother"><span>手动备注</span><input class="field" name="manualMother" value="${escapeHtml(manualMotherValue)}" placeholder="可自行修改编号" required></label>` : ""}
           <label><span>产蛋数</span><input class="field" name="eggCount" type="number" min="0" step="1" required placeholder="0" value="${state.breedingEggCount || ""}"></label>
           <label><span>受精数</span><input class="field" name="fertileCount" type="number" min="0" step="1" required placeholder="0" value="${state.breedingFertileCount || ""}"></label>
           <label><span>孵化数</span><input class="field" name="hatchCount" type="number" min="0" step="1" placeholder="0" value="${state.breedingHatchCount || ""}"></label>
@@ -2180,15 +3096,28 @@ function pageBreedingAdd() {
 }
 
 function breedingRow(record) {
+  const menuOpen = state.openBreedingMenuId === record.id;
   return `
-    <article class="breeding-row fresh-card" data-view-breeding="${record.id}">
-      ${record.photo ? `<img src="${record.photo}" alt="繁殖附图">` : `<div class="breeding-thumb">繁</div>`}
-      <div>
-        <strong>${record.motherName || "未填写种母"}</strong>
-        <p>${record.date || "-"} · 产蛋 ${record.eggCount || 0} 枚 · 受精 ${record.fertileCount || 0} 枚 · 孵化 ${record.hatchCount || 0} 只</p>
-        ${record.note ? `<small>${record.note}</small>` : ""}
+    <article class="breeding-row fresh-card ${menuOpen ? "menu-open" : ""}" data-view-breeding="${record.id}">
+      <div class="breeding-row-main">
+        ${record.photo ? `<img src="${record.photo}" alt="繁殖附图">` : `<div class="breeding-thumb">繁</div>`}
+        <div class="breeding-row-copy">
+          <div class="breeding-row-heading"><strong>${record.motherName || "未填写种母"}</strong></div>
+          <p>${record.date || "未填写日期"} · 龟池 ${escapeHtml(record.poolName || turtlePoolName(record.poolId))}</p>
+          ${record.note ? `<small>${escapeHtml(record.note)}</small>` : ""}
+        </div>
       </div>
-      <button class="danger-link" data-delete-breeding="${record.id}">删除</button>
+      <div class="breeding-stat-grid" aria-label="繁殖数据">
+        <div><span>产蛋</span><strong>${record.eggCount || 0}<em>枚</em></strong></div>
+        <div><span>受精</span><strong>${record.fertileCount || 0}<em>枚</em></strong></div>
+        <div><span>孵化</span><strong>${record.hatchCount || 0}<em>只</em></strong></div>
+      </div>
+      <button class="more-btn breeding-more-btn" data-toggle-breeding-menu="${record.id}" aria-label="繁殖记录操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
+      ${menuOpen ? `
+        <div class="breeding-actions-menu" role="menu" aria-label="${escapeHtml(record.motherName || "繁殖记录")}操作">
+          <button class="danger-link" data-delete-breeding="${record.id}" role="menuitem">${turtleActionIcon("delete")}<span>删除</span></button>
+        </div>
+      ` : ""}
     </article>
   `;
 }
@@ -2199,7 +3128,8 @@ function pageBreedingDetail() {
   const females = state.turtles.filter(t => t.gender === "母" || t.gender === "未知");
   const currentPhoto = state.breedingEditPhoto === "__CLEAR__" ? "" : state.breedingEditPhoto || record.photo || "";
   const isManual = !record.motherId || record.motherId === "manual";
-  const historyList = record.editHistory || [];
+  const historyList = [...(record.editHistory || [])].reverse();
+  const turtlePools = state.turtlePools || [];
   return `
     ${topbar("繁殖详情", true)}
     <main class="content page-fresh">
@@ -2216,14 +3146,15 @@ function pageBreedingDetail() {
         </div>
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-breeding-edit-photo-input>
         <div class="breeding-form-grid">
-          <label><span>日期</span><input class="field" name="date" type="date" value="${record.date || formatDate(new Date())}" required></label>
-          <label><span>种母</span>
+          <label class="breeding-date-field"><span>日期</span><input class="field" name="date" type="date" value="${record.date || formatDate(new Date())}" required></label>
+          <label class="breeding-mother-field"><span>种母</span>
             <select class="select" name="mother">
               <option value="manual" ${isManual ? "selected" : ""}>手动备注</option>
               ${females.map(t => `<option value="${t.id}" ${record.motherId === t.id ? "selected" : ""}>${t.code} · ${t.speciesName}</option>`).join("")}
             </select>
           </label>
-          <label class="breeding-manual-mother"><span>种母备注</span><input class="field" name="manualMother" value="${isManual ? (record.motherName || "") : ""}" placeholder="例如：黑豆 / 2024 组母龟"></label>
+          <label class="breeding-pool-field"><span>龟池</span><select class="select" name="poolId"><option value="">暂不关联龟池</option>${turtlePools.map(pool => `<option value="${pool.id}" ${record.poolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}</select></label>
+          <label class="breeding-manual-mother"><span>种母备注</span><input class="field" name="manualMother" value="${isManual ? (record.motherName || "") : ""}" placeholder="可自行修改编号"></label>
           <label><span>产蛋数</span><input class="field" name="eggCount" type="number" min="0" step="1" required value="${record.eggCount || 0}"></label>
           <label><span>受精数</span><input class="field" name="fertileCount" type="number" min="0" step="1" required value="${record.fertileCount || 0}"></label>
           <label><span>孵化数</span><input class="field" name="hatchCount" type="number" min="0" step="1" value="${record.hatchCount || 0}"></label>
@@ -2231,19 +3162,23 @@ function pageBreedingDetail() {
         <label class="breeding-note"><span>备注</span><textarea name="note" placeholder="产蛋位置、状态、孵化盒编号、温度等">${record.note || ""}</textarea></label>
         <button class="primary" type="submit">保存修改</button>
       </form>
-      <section class="section-title"><h3>更新留存</h3></section>
-      ${historyList.map(item => `
-        <article class="history-card fresh-card">
-          ${(item.oldPhoto || item.newPhoto) ? `
-            <div class="history-photos">
-              <img src="${item.oldPhoto || defaultPhoto}" alt="旧附图">
-              <img src="${item.newPhoto || defaultPhoto}" alt="新附图">
+      <section class="section-title"><h3>繁殖记录</h3></section>
+      ${historyList.map((item, index) => `
+        <div class="growth-history-entry">
+          <article class="history-card growth-history-card fresh-card">
+            <div class="growth-history-head">
+              <strong>第 ${index + 1} 次更新</strong>
+              <small>${formatTime(item.updatedAt)}</small>
             </div>
-          ` : ""}
-          <p>${item.oldSnapshot && item.newSnapshot ? `${describeBreedingSnapshot(item.oldSnapshot)} → ${describeBreedingSnapshot(item.newSnapshot)}` : "本次留存已记录"}</p>
-          <small>${formatTime(item.updatedAt)}</small>
-        </article>
-      `).join("") || `<div class="empty small-empty"><div><strong>暂时还没有更新留存</strong></div></div>`}
+            <div class="growth-comparison">
+              ${renderBreedingHistorySnapshot(item.oldSnapshot || {}, item.oldPhoto, "更新前")}
+              <span class="growth-inline-arrow" aria-hidden="true">→</span>
+              ${renderBreedingHistorySnapshot(item.newSnapshot || {}, item.newPhoto, "更新后", true)}
+            </div>
+          </article>
+          ${index < historyList.length - 1 ? `<div class="growth-down-arrow" aria-hidden="true"><span>↓</span><small>继续记录</small></div>` : ""}
+        </div>
+      `).join("") || `<div class="empty small-empty"><div><strong>暂时还没有繁殖记录</strong></div></div>`}
     </main>
     ${bottomNav()}
   `;
@@ -2260,21 +3195,15 @@ function pageMine() {
       <div class="space-profile-main">
         <div class="space-name-line">
           <h2>${profileTitle}</h2>
-          <span class="profile-plan-badge ${activePlanKey()}">${currentPlanBadge()}</span>
         </div>
         <p class="profile-phone">${profileSub}</p>
         <div class="space-profile-pills">
           <button type="button" data-page="account">${loggedIn ? "编辑资料" : "登录 / 注册"}</button>
-          <button type="button" data-page="membership">升级权益</button>
           <button type="button" data-page="account">账号安全</button>
         </div>
       </div>
     </section>
     <main class="content page-fresh">
-      <button class="membership-ribbon" type="button" data-page="membership">
-        <strong>${hasPlan("member") ? currentPlanDetail() : "开通 VIP 会员"}</strong>
-        <span>${freeArchiveBalanceText()}</span>
-      </button>
       <section class="account-brief">
         <div><strong>${state.turtles.length}</strong><span>档案</span></div>
         <div><strong>${state.ledgerRecords.length}</strong><span>账本</span></div>
@@ -2286,9 +3215,14 @@ function pageMine() {
           ${[["teal", "青绿"], ["forest", "森林"], ["ocean", "海蓝"], ["plum", "梅紫"], ["dark", "深色"]].map(([key, label]) => `<button class="theme-dot ${key} ${state.themeColor === key ? "active" : ""}" data-theme="${key}"><span></span>${label}</button>`).join("")}
         </div>
       </section>
+      <section class="space-social-links fresh-card">
+        <button type="button" data-page="marketMy"><strong>${(state.myMarketListings || []).length}</strong><span>我的发布</span></button>
+        <button type="button" data-page="marketFavorites"><strong>${(state.marketFavoriteIds || []).length}</strong><span>我的收藏</span></button>
+        <button type="button" data-page="marketHistory"><strong>${(state.marketHistoryIds || []).length}</strong><span>历史浏览</span></button>
+        <button type="button" data-page="following"><strong>${(state.communityFollowingUsers || []).length}</strong><span>我的关注</span></button>
+      </section>
       <section class="fresh-card mine-list">
-        <button class="mine-row" data-page="membership"><span>冠</span><strong>会员订阅</strong><em>${currentPlanLabel()}</em></button>
-        <button class="mine-row" data-page="reports"><span>表</span><strong>高级报表</strong><em>${hasPlan("member") ? "已解锁" : "会员"}</em></button>
+        <button class="mine-row" data-page="reports"><span>表</span><strong>高级报表</strong></button>
         <button class="mine-row" data-page="calendar"><span>◷</span><strong>操作日志</strong></button>
         <button class="mine-row" data-page="satisfaction"><span>☆</span><strong>满意度调查</strong></button>
         <button class="mine-row" data-page="feedback"><span>✎</span><strong>意见反馈</strong></button>
@@ -2551,113 +3485,6 @@ function pageAccount() {
   `;
 }
 
-function pageMembership() {
-  const levels = [
-    {
-      key: "free",
-      tone: "free",
-      badge: "普通",
-      title: "普通用户",
-      line: `免费记录 ${FREE_TURTLE_LIMIT} 只档案`,
-      desc: "适合日常养护，核心记录功能均可使用。",
-      status: freeArchiveBalanceText(),
-      rights: [
-        ["10只", "档案管理", "免费创建十只龟档案"],
-        ["完整", "成长记录", "记录体重与背甲变化"],
-        ["可用", "照片留存", "保存档案与更新照片"],
-        ["可用", "护理提醒", "设置护理事项和通知"],
-        ["完整", "繁殖记录", "记录产蛋受精与孵化"],
-        ["完整", "经营账本", "记录收购售出与损耗"],
-        ["可用", "账号同步", "登录后同步账号数据"],
-        ["可用", "意见反馈", "发布建议并参与交流"]
-      ]
-    },
-    {
-      key: "member",
-      tone: "member",
-      badge: "会员",
-      title: "壳友会员",
-      line: "不限档案 · 高级报表 · 完整导出",
-      desc: "适合长期记录与经营整理，解除数量限制并开放进阶数据能力。",
-      status: "开通后不限档案",
-      rights: [
-        ["不限", "档案管理", "长期记录不受数量限制"],
-        ["完整", "成长记录", "持续查看历史变化轨迹"],
-        ["完整", "照片留存", "档案和更新照片完整保存"],
-        ["完整", "繁殖统计", "汇总产蛋受精孵化数据"],
-        ["完整", "账本统计", "集中分析收购售出损耗"],
-        ["高级", "数据报表", "查看饲养和经营概览"],
-        ["完整", "数据导出", "导出档案账本繁殖数据"],
-        ["优先", "功能建议", "建议优先进入产品规划"]
-      ]
-    }
-  ];
-  const previewKey = ["free", "member"].includes(state.membershipPreviewLevel) ? state.membershipPreviewLevel : activePlanKey();
-  const activeLevel = levels.find(item => item.key === previewKey) || levels[0];
-  const memberPlans = SUBSCRIPTION_PLANS.filter(plan => plan.key === "member");
-  const buySection = previewKey === "member" ? `
-      <section class="vip-buy-section member-buy-section">
-        <div class="section-title vip-section-title"><span>开通会员</span><small>个人养龟推荐</small></div>
-        <div class="vip-plan-list" aria-label="会员价格卡片">
-          ${memberPlans.map(plan => `
-            <article class="vip-price-card member-wide-card ${plan.badge ? "recommend" : ""}">
-              <div>
-                ${plan.badge ? `<span class="vip-price-badge">${plan.badge}</span>` : ""}
-                <h3>${plan.cycleName}会员</h3>
-                <p>${plan.desc}</p>
-              </div>
-              <p class="vip-price"><strong>¥${plan.price}</strong><span>/${plan.period}</span></p>
-              <button class="primary" type="button" data-subscribe-plan="${plan.key}:${plan.cycle}">${subscriptionActive() && state.subscriptionPlan === plan.key && state.subscriptionCycle === plan.cycle ? "已开通" : "开通会员"}</button>
-            </article>
-          `).join("")}
-        </div>
-      </section>
-    ` : "";
-  return `
-    ${topbar("壳友会员", true)}
-    <main class="content page-fresh membership-page member-benefit-page tone-${activeLevel.tone}">
-      <section class="member-tier-stage tone-${activeLevel.tone}">
-        <div class="member-stage-copy">
-          <span>会员权益</span>
-          <strong>${currentPlanBadge()}</strong>
-        </div>
-        <div class="member-orbit" aria-hidden="true"><i></i><i></i><i></i></div>
-        <div class="member-tier-scroll" aria-label="会员等级卡片">
-          ${levels.map(level => `
-            <button class="member-tier-card ${level.tone} ${level.key === previewKey ? "active" : ""}" type="button" data-membership-preview="${level.key}" aria-pressed="${level.key === previewKey ? "true" : "false"}">
-              <span class="tier-chip">${level.badge}</span>
-              <span class="tier-medal"><i></i></span>
-              <h2>${level.title}</h2>
-              <p>${level.line}</p>
-              <small>${level.desc}</small>
-              <strong>${level.status}</strong>
-            </button>
-          `).join("")}
-        </div>
-      </section>
-      <section class="member-rights-section tone-${activeLevel.tone}">
-        <p>开通即代表您同意并接受《壳友手账会员服务协议》</p>
-        <div class="member-rights-title">
-          <h3>我的权益</h3>
-          <span>${activeLevel.title}</span>
-        </div>
-        <div class="member-right-grid">
-          ${activeLevel.rights.map(([value, title, desc]) => `
-            <article class="member-right-item ${activeLevel.tone}">
-              <div class="right-icon"><span>${title.slice(0, 1)}</span><em>${value}</em></div>
-              <h4>${title}</h4>
-              <p>${desc}</p>
-            </article>
-          `).join("")}
-        </div>
-      </section>
-      ${buySection}
-      ${previewKey === "free" ? "" : `<p class="iap-note">订阅权益会绑定当前手机号。正式上线后，购买、续费和恢复权益将通过账号自动同步。</p>`}
-    </main>
-    ${bottomNav()}
-  `;
-}
-
 function pageReports() {
   const finance = ledgerMoneyStats();
   const breed = breedingStats();
@@ -2758,7 +3585,7 @@ function pageAbout() {
       </section>
       <section class="fresh-card settings-card about-contact-card">
         <div class="settings-title">交流与商务合作</div>
-        <div class="about-contact-row"><span>微信号</span><strong>Czjxcw</strong></div>
+        <div class="about-contact-row"><span>微信号</span><strong>${PLATFORM_SERVICE_WECHAT}</strong></div>
       </section>
     </main>
     ${bottomNav()}
@@ -2770,9 +3597,24 @@ function placeholder(title) {
 }
 
 function render() {
+  if (state.page === "membership") state.page = "mine";
   applyTheme();
   const pages = {
     home: pageHome,
+    messages: pageMessages,
+    community: pageCommunity,
+    communityPostDetail: pageCommunityPostDetail,
+    communityAdd: pageCommunityAdd,
+    communityFriends: pageCommunityFriends,
+    communityChat: pageCommunityChat,
+    following: pageFollowing,
+    followingProfile: pageFollowingProfile,
+    market: pageMarket,
+    marketAdd: pageMarketAdd,
+    marketDetail: pageMarketDetail,
+    marketMy: pageMyMarketListings,
+    marketFavorites: pageMarketFavorites,
+    marketHistory: pageMarketHistory,
     list: pageList,
     turtleDetail: pageTurtleDetail,
     species: pageSpecies,
@@ -2788,20 +3630,59 @@ function render() {
     feedbackAdd: pageFeedbackAdd,
     feedbackDetail: pageFeedbackDetail,
     account: pageAccount,
-    membership: pageMembership,
     reports: pageReports,
     sync: pageSync,
     about: pageAbout,
     breeding: pageBreeding,
     breedingAdd: pageBreedingAdd,
-    breedingDetail: pageBreedingDetail
+    breedingDetail: pageBreedingDetail,
+    pools: pageTurtlePools,
+    poolAdd: pageTurtlePoolAdd
   };
   $app.innerHTML = (pages[state.page] || pageHome)();
+  if (pendingPageScrollReset) {
+    pendingPageScrollReset = false;
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }
+  if (pendingPageEnterMotion) {
+    pendingPageEnterMotion = false;
+    $app.classList.remove("page-enter-motion");
+    void $app.offsetWidth;
+    $app.classList.add("page-enter-motion");
+    if (pageEnterMotionTimer) window.clearTimeout(pageEnterMotionTimer);
+    pageEnterMotionTimer = window.setTimeout(() => {
+      $app.classList.remove("page-enter-motion");
+      pageEnterMotionTimer = null;
+    }, 380);
+  }
   bindEvents();
+  if (state.page === "communityChat") scrollCommunityChatToLatest();
   hydrateSpeciesImages();
   startAccountCodeCooldownTimer();
   if (state.page === "satisfaction") refreshPublicReviews();
   if (["feedback", "feedbackAdd", "feedbackDetail"].includes(state.page)) refreshPublicFeedback();
+  if (["messages", "community", "communityFriends"].includes(state.page)) refreshCommunity();
+  if (["mine", "following", "followingProfile"].includes(state.page)) refreshFollowing();
+  if (state.page === "communityChat" && state.selectedCommunityFriendId) refreshCommunityChat();
+  if (["market", "marketDetail", "marketMy", "marketFavorites", "marketHistory", "following", "followingProfile", "mine"].includes(state.page)) refreshMarket();
+  if (state.page === "marketAdd") requestMarketCityAutofill();
+  if (state.page === "market") requestAnimationFrame(syncMarketWifiVideos);
+  refreshMessageUnread();
+}
+
+function scrollCommunityChatToLatest() {
+  if (!pendingCommunityChatLatestScroll || state.page !== "communityChat") return;
+  if (!communityChatLoadedKey && !(state.communityChatMessages || []).length) return;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (!pendingCommunityChatLatestScroll || state.page !== "communityChat") return;
+      const list = document.querySelector(".community-chat-list");
+      if (!list) return;
+      const top = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+      window.scrollTo({ top, left: 0, behavior: "auto" });
+      pendingCommunityChatLatestScroll = false;
+    });
+  });
 }
 
 function accountCodeCooldownRemaining() {
@@ -2843,22 +3724,44 @@ function bindEvents() {
       setState({ openFeedbackMenuId: "" }, { skipCloud: true });
     }, { once: true });
   }
+  if (state.openBreedingMenuId) {
+    $app.addEventListener("click", event => {
+      if (event.target.closest("[data-toggle-breeding-menu], .breeding-actions-menu")) return;
+      setState({ openBreedingMenuId: "" });
+    }, { once: true });
+  }
   document.querySelectorAll("[data-page]").forEach(el => el.addEventListener("click", () => {
     const targetPage = el.dataset.page;
     if (targetPage === "add" && !requireArchiveCapacity()) return;
-    if (["breedingAdd", "feedbackAdd"].includes(targetPage) && !requireLogin()) return;
-    if (targetPage === "reports" && !requireEntitlement("member", "开通壳友会员后可查看高级报表")) return;
-    setState({ page: el.dataset.page, openTurtleMenuId: "", openFeedbackMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" });
+    if (["breedingAdd", "feedbackAdd", "communityAdd", "communityFriends", "marketAdd", "poolAdd"].includes(targetPage) && !requireLogin()) return;
+    if (targetPage === "reports" && !requireLogin()) return;
+    const navigationState = { page: targetPage, openTurtleMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" };
+    if (targetPage === "poolAdd") navigationState.editingTurtlePoolId = "";
+    if (targetPage === "marketAdd") {
+      navigationState.editingMarketListingId = "";
+      navigationState.marketDraftTurtleId = "";
+      navigationState.marketDraftMedia = [];
+      navigationState.marketDraftCity = "";
+      navigationState.marketLocationStatus = "idle";
+    }
+    if (targetPage === "species") {
+      navigationState.speciesPickerForAdd = state.page === "add";
+      if (state.page === "add") navigationState.formDraft = captureTurtleFormDraft();
+    }
+    setState(navigationState);
   }));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", () => setState({
-    page: state.page === "turtleDetail" ? "list" : state.page === "ledgerDetail" ? "ledger" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : ["calendar", "satisfaction", "feedback", "account", "membership", "reports", "sync", "about"].includes(state.page) ? "mine" : "home",
+    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" ? "community" : state.page === "community" || state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "sync", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "",
+    openBreedingMenuId: "",
     openFeedbackMenuId: "",
+    editingTurtlePoolId: "",
+    editingMarketListingId: "",
     updatingTurtleId: "",
     turtleDetailDraftId: "",
     turtleDetailDraft: null,
     updateDraftPhoto: ""
-  })));
+  }, { pageMotion: "none" })));
   document.querySelectorAll("[data-view-turtle]").forEach(el => el.addEventListener("click", () => setState({ page: "turtleDetail", selectedTurtleId: el.dataset.viewTurtle, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
   document.querySelectorAll("[data-toggle-turtle-menu]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
@@ -2911,8 +3814,9 @@ function bindEvents() {
     deleteTurtle(btn.dataset.deleteTurtle);
   }));
   document.querySelector("[data-filter-species]")?.addEventListener("change", e => setState({ turtleFilter: e.target.value }));
+  document.querySelector("[data-filter-pool]")?.addEventListener("change", e => setState({ turtlePoolFilter: e.target.value }));
   document.querySelector("[data-sort-turtles]")?.addEventListener("change", e => setState({ turtleSort: e.target.value }));
-  document.querySelector("[data-species-search]")?.addEventListener("input", e => setState({ search: e.target.value }));
+  document.querySelector("[data-species-search]")?.addEventListener("input", e => filterSpeciesRows(e.target.value));
   document.querySelectorAll("[data-scroll-letter]").forEach(btn => btn.addEventListener("click", () => scrollToSpeciesLetter(btn.dataset.scrollLetter)));
   document.querySelectorAll("[data-add-species]").forEach(btn => btn.addEventListener("click", () => addKeptSpecies(btn.dataset.addSpecies)));
   document.querySelectorAll("[data-remove-species]").forEach(btn => btn.addEventListener("click", () => removeKeptSpecies(btn.dataset.removeSpecies)));
@@ -2920,6 +3824,38 @@ function bindEvents() {
     if (!requireLogin()) return;
     preserveTurtleForm({ formGender: btn.dataset.gender });
   }));
+  document.querySelectorAll("[data-turtle-choice]").forEach(btn => btn.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    const field = btn.dataset.turtleChoice;
+    preserveTurtleForm({ formDraft: { ...captureTurtleFormDraft(), [field]: btn.dataset.choiceValue } });
+  }));
+  document.querySelectorAll("[data-detail-choice]").forEach(btn => btn.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    const field = btn.dataset.detailChoice;
+    const row = btn.closest(".detail-choice-row");
+    const input = row?.querySelector(`input[name="${field}"]`);
+    if (!row || !input) return;
+    input.value = btn.dataset.choiceValue;
+    row.querySelectorAll("[data-detail-choice]").forEach(choice => choice.classList.toggle("active", choice === btn));
+  }));
+  document.querySelectorAll("[data-growth-photo-preview]").forEach(img => {
+    const openPreview = () => openImagePreview(img.currentSrc || img.src, img.alt || "成长照片");
+    img.addEventListener("click", openPreview);
+    img.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openPreview();
+    });
+  });
+  document.querySelectorAll("[data-preview-market-image]").forEach(img => {
+    const openPreview = () => openImagePreview(img.currentSrc || img.src, img.alt || "商品实拍图");
+    img.addEventListener("click", openPreview);
+    img.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openPreview();
+    });
+  });
   document.querySelectorAll("[data-purchase-gender]").forEach(btn => btn.addEventListener("click", () => {
     if (!requireLogin()) return;
     const draft = captureLedgerFormDraft();
@@ -2983,7 +3919,11 @@ function bindEvents() {
     input.click();
   });
   document.querySelector("[data-breeding-photo-input]")?.addEventListener("change", readBreedingPhoto);
-  document.querySelectorAll("[data-view-breeding]").forEach(el => el.addEventListener("click", () => setState({ page: "breedingDetail", selectedBreedingId: el.dataset.viewBreeding, breedingEditPhoto: "" })));
+  document.querySelectorAll("[data-view-breeding]").forEach(el => el.addEventListener("click", () => setState({ page: "breedingDetail", selectedBreedingId: el.dataset.viewBreeding, openBreedingMenuId: "", breedingEditPhoto: "" })));
+  document.querySelectorAll("[data-toggle-breeding-menu]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    setState({ openBreedingMenuId: state.openBreedingMenuId === btn.dataset.toggleBreedingMenu ? "" : btn.dataset.toggleBreedingMenu });
+  }));
   document.querySelector("[data-breeding-edit-photo-button]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
     const input = document.querySelector("[data-breeding-edit-photo-input]");
@@ -2999,23 +3939,63 @@ function bindEvents() {
   document.querySelector("#breedingDetailForm")?.addEventListener("submit", submitBreedingDetail);
   document.querySelector("[data-breeding-mother]")?.addEventListener("change", e => {
     if (!requireLogin()) return;
+    const draft = readBreedingDraft();
+    const manual = e.target.value === "manual";
+    const mother = state.turtles.find(t => t.id === e.target.value);
     setState({
-      ...readBreedingDraft(),
-      breedingMotherMode: e.target.value === "manual" ? "manual" : "archive",
-      breedingMotherValue: e.target.value
+      ...draft,
+      breedingMotherMode: manual ? "manual" : "archive",
+      breedingMotherValue: e.target.value,
+      breedingPoolId: manual ? draft.breedingPoolId : (mother?.poolId || ""),
+      breedingManualMother: manual ? (draft.breedingManualMother || suggestedManualBreedingMother(draft.breedingDraftDate || state.breedingDraftDate || formatDate(new Date()))) : draft.breedingManualMother
     });
   });
   document.querySelectorAll("#breedingForm [name='date'], #breedingForm [name='manualMother'], #breedingForm [name='eggCount'], #breedingForm [name='fertileCount'], #breedingForm [name='hatchCount'], #breedingForm [name='note']").forEach(input => {
-    input.addEventListener("input", () => {
+    input.addEventListener("input", event => {
       if (!requireLogin()) return;
-      setState(readBreedingDraft());
+      const draft = readBreedingDraft();
+      if (event.target.name === "date" && state.breedingMotherMode === "manual" && isSuggestedManualBreedingMother(state.breedingManualMother)) {
+        draft.breedingManualMother = suggestedManualBreedingMother(draft.breedingDraftDate);
+        const manualInput = document.querySelector("#breedingForm [name='manualMother']");
+        if (manualInput) manualInput.value = draft.breedingManualMother;
+      }
+      Object.assign(state, draft);
     });
+  });
+  document.querySelector("#breedingForm [name='poolId']")?.addEventListener("change", () => {
+    if (!requireLogin()) return;
+    Object.assign(state, readBreedingDraft());
   });
   document.querySelector("#breedingForm")?.addEventListener("submit", submitBreedingRecord);
   document.querySelectorAll("[data-delete-breeding]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
     deleteBreedingRecord(btn.dataset.deleteBreeding);
   }));
+  document.querySelectorAll("[data-edit-turtle-pool]").forEach(card => {
+    const openPool = () => {
+      if (!requireLogin()) return;
+      setState({ page: "poolAdd", editingTurtlePoolId: card.dataset.editTurtlePool });
+    };
+    card.addEventListener("click", openPool);
+    card.addEventListener("keydown", event => {
+      if (!["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      openPool();
+    });
+  });
+  document.querySelectorAll("[data-pool-type]").forEach(button => button.addEventListener("click", () => {
+    const form = button.closest("#turtlePoolForm");
+    const input = form?.querySelector("[data-pool-type-value]");
+    if (!input) return;
+    input.value = button.dataset.poolType || "";
+    form.querySelectorAll("[data-pool-type]").forEach(choice => {
+      const active = choice === button;
+      choice.classList.toggle("active", active);
+      choice.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  }));
+  document.querySelector("#turtlePoolForm")?.addEventListener("submit", submitTurtlePool);
+  document.querySelector("[data-delete-turtle-pool]")?.addEventListener("click", () => deleteTurtlePool(state.editingTurtlePoolId));
   document.querySelectorAll("[data-theme]").forEach(btn => btn.addEventListener("click", () => {
     if (!requireLogin()) return;
     setState({ themeColor: btn.dataset.theme });
@@ -3027,6 +4007,111 @@ function bindEvents() {
   document.querySelector("#satisfactionForm")?.addEventListener("submit", submitPublicSatisfaction);
   document.querySelectorAll("[data-delete-review]").forEach(btn => btn.addEventListener("click", () => deletePublicReview(btn.dataset.deleteReview)));
   document.querySelector("#feedbackForm")?.addEventListener("submit", submitPublicFeedback);
+  document.querySelector("[data-community-media-button]")?.addEventListener("click", () => document.querySelector("[data-community-media-input]")?.click());
+  document.querySelector("[data-community-media-input]")?.addEventListener("change", readCommunityMedia);
+  document.querySelector("[data-community-camera-button]")?.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    document.querySelector("[data-community-quick-media]")?.click();
+  });
+  document.querySelector("[data-community-quick-media]")?.addEventListener("change", readCommunityMedia);
+  document.querySelector("#communityPostForm textarea")?.addEventListener("input", event => {
+    communityDraftText = event.target.value;
+    syncCommunityPublishButton();
+  });
+  syncCommunityPublishButton();
+  document.querySelector("#communityPostForm")?.addEventListener("submit", submitCommunityPost);
+  document.querySelectorAll("[data-view-community-post]").forEach(card => {
+    const openDetail = event => {
+      if (event.target.closest("button, input, textarea, select, form")) return;
+      setState({ page: "communityPostDetail", selectedCommunityPostId: card.dataset.viewCommunityPost, openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
+    };
+    card.addEventListener("click", openDetail);
+    card.addEventListener("keydown", event => {
+      if (event.target !== card || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      openDetail(event);
+    });
+  });
+  document.querySelectorAll("[data-preview-community-media]").forEach(button => button.addEventListener("click", () => {
+    const post = findCommunityPost(button.dataset.previewCommunityMedia);
+    if (!post?.mediaUrl) return;
+    if (post.mediaType === "video") openVideoPreview(post.mediaUrl, "动态视频");
+    else openImagePreview(post.mediaUrl, "动态图片");
+  }));
+  document.querySelectorAll("[data-like-community-post]").forEach(btn => btn.addEventListener("click", () => toggleCommunityLike(btn.dataset.likeCommunityPost)));
+  document.querySelectorAll("[data-community-more]").forEach(btn => btn.addEventListener("click", () => setState({ openCommunityActionId: state.openCommunityActionId === btn.dataset.communityMore ? "" : btn.dataset.communityMore }, { skipCloud: true })));
+  document.querySelectorAll("[data-show-community-comment]").forEach(btn => btn.addEventListener("click", () => setState({ communityCommentPostId: btn.dataset.showCommunityComment, openCommunityActionId: "" }, { skipCloud: true })));
+  document.querySelectorAll("[data-community-comment-form]").forEach(form => form.addEventListener("submit", submitCommunityComment));
+  document.querySelectorAll("[data-add-community-friend]").forEach(btn => btn.addEventListener("click", () => addCommunityFriend(btn.dataset.addCommunityFriend)));
+  document.querySelectorAll("[data-toggle-community-follow]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    toggleCommunityFollow(btn.dataset.toggleCommunityFollow);
+  }));
+  document.querySelectorAll("[data-view-following-user]").forEach(btn => btn.addEventListener("click", () => {
+    setState({ page: "followingProfile", selectedFollowingUserId: btn.dataset.viewFollowingUser }, { skipCloud: true });
+  }));
+  document.querySelectorAll("[data-open-community-chat]").forEach(btn => btn.addEventListener("click", () => openCommunityChat(btn.dataset.openCommunityChat)));
+  document.querySelectorAll("[data-delete-community-post]").forEach(btn => btn.addEventListener("click", () => deleteCommunityPost(btn.dataset.deleteCommunityPost)));
+  document.querySelector("#communityChatForm")?.addEventListener("submit", sendCommunityMessage);
+  document.querySelector("[data-market-search-form]")?.addEventListener("submit", event => {
+    event.preventDefault();
+    const input = event.currentTarget.querySelector("[data-market-search]");
+    setState({ marketSearch: String(input?.value || "").trim() }, { skipCloud: true });
+  });
+  document.querySelectorAll("[data-market-stage]").forEach(btn => btn.addEventListener("click", () => setState({ marketStage: btn.dataset.marketStage }, { skipCloud: true })));
+  document.querySelectorAll("[data-my-market-tab]").forEach(btn => btn.addEventListener("click", () => setState({ marketMyTab: btn.dataset.myMarketTab }, { skipCloud: true })));
+  document.querySelectorAll("[data-view-market]").forEach(btn => btn.addEventListener("click", () => openMarketDetail(btn.dataset.viewMarket)));
+  const marketDetailGallery = document.querySelector("[data-market-detail-gallery]");
+  if (marketDetailGallery) {
+    const slides = Array.from(marketDetailGallery.querySelectorAll(".market-detail-photo"));
+    const previous = document.querySelector("[data-market-gallery-prev]");
+    const next = document.querySelector("[data-market-gallery-next]");
+    const updateGalleryControls = () => {
+      const index = Math.max(0, Math.min(slides.length - 1, Math.round(marketDetailGallery.scrollLeft / Math.max(1, marketDetailGallery.clientWidth))));
+      if (previous) previous.disabled = index === 0;
+      if (next) next.disabled = index >= slides.length - 1;
+    };
+    const moveGallery = offset => {
+      const current = Math.round(marketDetailGallery.scrollLeft / Math.max(1, marketDetailGallery.clientWidth));
+      const target = Math.max(0, Math.min(slides.length - 1, current + offset));
+      marketDetailGallery.scrollTo({ left: target * marketDetailGallery.clientWidth, behavior: "smooth" });
+    };
+    previous?.addEventListener("click", () => moveGallery(-1));
+    next?.addEventListener("click", () => moveGallery(1));
+    marketDetailGallery.addEventListener("scroll", updateGalleryControls, { passive: true });
+    window.addEventListener("resize", updateGalleryControls, { once: true });
+    requestAnimationFrame(updateGalleryControls);
+  }
+  document.querySelectorAll("[data-market-favorite]").forEach(btn => btn.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleMarketFavorite(btn.dataset.marketFavorite);
+  }));
+  document.querySelector("[data-market-turtle-source]")?.addEventListener("change", event => {
+    const turtle = (state.turtles || []).find(item => item.id === event.target.value);
+    setState({
+      marketDraftTurtleId: event.target.value,
+      marketDraftPhoto: "",
+      marketDraftMedia: turtle?.photo ? [{ dataUrl: turtle.photo, type: "image" }] : []
+    }, { skipCloud: true });
+  });
+  document.querySelector("[data-market-city]")?.addEventListener("input", event => {
+    state.marketDraftCity = event.target.value;
+    state.marketLocationStatus = "manual";
+  });
+  document.querySelector("[data-market-city-locate]")?.addEventListener("click", () => requestMarketCityAutofill({ force: true }));
+  bindMarketSpeciesPicker();
+  bindMarketMediaDraftEvents();
+  document.querySelector("#marketListingForm")?.addEventListener("submit", submitMarketListing);
+  document.querySelectorAll("[data-market-sold]").forEach(btn => btn.addEventListener("click", () => toggleMarketSold(btn.dataset.marketSold)));
+  document.querySelectorAll("[data-delete-market]").forEach(btn => btn.addEventListener("click", () => deleteMarketListing(btn.dataset.deleteMarket)));
+  document.querySelectorAll("[data-edit-market-listing]").forEach(btn => btn.addEventListener("click", () => beginMarketListingEdit(btn.dataset.editMarketListing)));
+  document.querySelectorAll("[data-refresh-market-listing]").forEach(btn => btn.addEventListener("click", () => refreshOwnMarketListing(btn.dataset.refreshMarketListing)));
+  document.querySelectorAll("[data-offline-market-listing]").forEach(btn => btn.addEventListener("click", () => offlineOwnMarketListing(btn.dataset.offlineMarketListing)));
+  document.querySelectorAll("[data-market-contact]").forEach(btn => btn.addEventListener("click", () => contactMarketSeller(btn.dataset.marketContact)));
+  document.querySelectorAll("[data-view-chat-market]").forEach(btn => btn.addEventListener("click", () => openChatMarketListing(btn.dataset.viewChatMarket)));
+  document.querySelector("[data-market-top-service]")?.addEventListener("click", openMarketTopService);
+  document.querySelectorAll("[data-market-platform-service]").forEach(btn => btn.addEventListener("click", () => openMarketPlatformService(btn.dataset.marketPlatformService)));
   document.querySelectorAll("[data-view-feedback]").forEach(el => el.addEventListener("click", event => {
     event.stopPropagation();
     setState({ page: "feedbackDetail", selectedFeedbackId: el.dataset.viewFeedback, openFeedbackMenuId: "" }, { skipCloud: true });
@@ -3057,7 +4142,13 @@ function bindEvents() {
   document.querySelectorAll("[data-account-mode]").forEach(btn => btn.addEventListener("click", () => setState({ accountMode: btn.dataset.accountMode, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" })));
   const passwordInput = document.querySelector("#accountForm [name='password']");
   const confirmPasswordInput = document.querySelector("#accountForm [name='confirmPassword']");
+  const accountCodeInput = document.querySelector("#accountForm [name='code']");
   [passwordInput, confirmPasswordInput].forEach(input => input?.addEventListener("input", validateAccountPasswordMatch));
+  accountCodeInput?.addEventListener("input", event => {
+    event.target.value = event.target.value.replace(/\D/g, "").slice(0, 6);
+    if (event.target.value.length !== 6 || accountSubmitInFlight) return;
+    requestAnimationFrame(() => document.querySelector("#accountForm")?.requestSubmit());
+  });
   document.querySelector("[data-send-code]")?.addEventListener("click", sendAccountCode);
   document.querySelector("[data-account-avatar-button]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
@@ -3069,13 +4160,6 @@ function bindEvents() {
   document.querySelector("[data-account-avatar-input]")?.addEventListener("change", readAccountAvatar);
   document.querySelector("#profileForm")?.addEventListener("submit", submitProfile);
   document.querySelectorAll("[data-logout-account]").forEach(btn => btn.addEventListener("click", logoutAccount));
-  document.querySelectorAll("[data-subscribe-plan]").forEach(btn => btn.addEventListener("click", () => {
-    const [plan, cycle] = btn.dataset.subscribePlan.split(":");
-    activateSubscription(plan, cycle);
-  }));
-  document.querySelectorAll("[data-membership-preview]").forEach(btn => btn.addEventListener("click", () => {
-    setState({ membershipPreviewLevel: btn.dataset.membershipPreview }, { skipCloud: true });
-  }));
   document.querySelectorAll("[data-export-data]").forEach(btn => btn.addEventListener("click", () => exportAccountData(btn.dataset.exportData)));
   document.querySelector("#batchImportForm")?.addEventListener("submit", submitBatchImport);
   document.querySelector("#deliveryNoteForm")?.addEventListener("submit", submitDeliveryNote);
@@ -3217,6 +4301,1477 @@ function canUsePublicFeedback() {
   return true;
 }
 
+function communityAuthPayload(extra = {}) {
+  return { phone: state.loggedInPhone, token: currentCloudToken(), ...extra };
+}
+
+function canUseCommunity() {
+  if (!CONFIGURED_SMS_BACKEND) {
+    toast("壳友圈需要连接云端服务");
+    return false;
+  }
+  if (!requireLogin()) return false;
+  if (!currentCloudToken()) {
+    toast("请重新登录账号");
+    return false;
+  }
+  return true;
+}
+
+function marketAuthPayload(extra = {}) {
+  return communityAuthPayload(extra);
+}
+
+function localMarketListing(payload) {
+  return {
+    id: `local-market-${Date.now()}`,
+    ...payload,
+    photoUrl: payload.photoUrl || payload.photo || "",
+    sellerId: state.loggedInPhone,
+    sellerName: state.accountName || "壳友卖家",
+    sellerAvatar: state.accountAvatar || "",
+    status: "active",
+    isOwn: true,
+    isFriend: false,
+    pendingLocal: true,
+    createdAt: new Date().toISOString()
+  };
+}
+
+async function refreshMarket(force = false) {
+  if (!CONFIGURED_SMS_BACKEND || marketLoading) return;
+  if (!force && Date.now() - marketLastLoadedAt < 10000) return;
+  marketLoading = true;
+  try {
+    const result = await apiPost("/api/market/list", marketAuthPayload());
+    const pending = (state.marketListings || []).filter(item => item.pendingLocal);
+    const remoteListings = normalizeMarketListings(result.listings || []);
+    const chatReference = (state.marketListings || []).find(item => item.chatReference && item.id === state.selectedMarketListingId);
+    const retainedReference = chatReference && !remoteListings.some(item => item.id === chatReference.id) ? [chatReference] : [];
+    const accountPatch = result.accountData ? normalizeAccountData(result.accountData) : {};
+    marketLastLoadedAt = Date.now();
+    setState({
+      ...accountPatch,
+      marketListings: [...pending, ...retainedReference, ...remoteListings],
+      myMarketListings: normalizeMarketListings(result.myListings || [])
+    }, { skipCloud: true });
+  } catch (error) {
+    if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "龟集市读取失败");
+  } finally {
+    marketLoading = false;
+  }
+}
+
+function updateMarketMetrics(listingId, metrics = {}) {
+  setState({
+    marketListings: (state.marketListings || []).map(item => item.id === listingId
+      ? {
+          ...item,
+          viewCount: Math.max(0, Number(metrics.viewCount ?? item.viewCount ?? 0)),
+          wantCount: Math.max(0, Number(metrics.wantCount ?? item.wantCount ?? 0))
+        }
+      : item)
+  }, { skipCloud: true });
+}
+
+function openMarketDetail(listingId) {
+  const id = String(listingId || "");
+  const marketHistoryIds = [id, ...(state.marketHistoryIds || []).filter(item => item !== id)].slice(0, 100);
+  setState({ page: "marketDetail", selectedMarketListingId: id, marketHistoryIds });
+  recordMarketView(listingId);
+}
+
+function toggleMarketFavorite(listingId) {
+  if (!requireLogin()) return;
+  const id = String(listingId || "");
+  if (!id) return;
+  const active = isMarketFavorite(id);
+  const marketFavoriteIds = active
+    ? (state.marketFavoriteIds || []).filter(item => item !== id)
+    : [id, ...(state.marketFavoriteIds || []).filter(item => item !== id)].slice(0, 500);
+  setState({ marketFavoriteIds });
+  toast(active ? "已取消收藏" : "已收藏");
+}
+
+async function recordMarketView(listingId) {
+  const listing = (state.marketListings || []).find(item => item.id === listingId);
+  if (!listing || listing.pendingLocal) return;
+  try {
+    const result = await apiPost("/api/market/view", { listingId });
+    updateMarketMetrics(listingId, result);
+  } catch (error) {
+    if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "商品曝光统计失败");
+  }
+}
+
+async function recordMarketWant(listingId) {
+  try {
+    const result = await apiPost("/api/market/want", marketAuthPayload({ listingId }));
+    updateMarketMetrics(listingId, result);
+  } catch (error) {
+    if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "商品想要人数统计失败");
+  }
+}
+
+function renderMarketMediaDraft() {
+  const grid = document.querySelector("[data-market-media-grid]");
+  if (!grid) return;
+  grid.innerHTML = marketDraftMediaMarkup();
+  const count = document.querySelector(".market-media-card .market-form-heading small");
+  if (count) count.textContent = `${(state.marketDraftMedia || []).length}/9`;
+  bindMarketMediaDraftEvents();
+}
+
+function bindMarketSpeciesPicker() {
+  const picker = document.querySelector("[data-market-species-picker]");
+  if (!picker) return;
+  const search = picker.querySelector("[data-market-species-search]");
+  const value = picker.querySelector("[data-market-species-value]");
+  const options = picker.querySelector("[data-market-species-options]");
+  const toggle = picker.querySelector("[data-market-species-toggle]");
+  if (!search || !value || !options) return;
+  let matches = [];
+  let activeIndex = -1;
+  let closeTimer = 0;
+
+  const closeOptions = () => {
+    options.hidden = true;
+    search.setAttribute("aria-expanded", "false");
+    search.removeAttribute("aria-activedescendant");
+    activeIndex = -1;
+  };
+
+  const findMatches = query => marketSpeciesMatches(query);
+
+  const updateActiveOption = nextIndex => {
+    const buttons = Array.from(options.querySelectorAll("[data-market-species-option]"));
+    if (!buttons.length) return;
+    activeIndex = Math.max(0, Math.min(nextIndex, buttons.length - 1));
+    buttons.forEach((button, index) => {
+      const active = index === activeIndex;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    const activeButton = buttons[activeIndex];
+    search.setAttribute("aria-activedescendant", activeButton.id);
+    activeButton.scrollIntoView({ block: "nearest" });
+  };
+
+  const selectSpecies = code => {
+    const item = speciesByCode(code);
+    if (!item) return;
+    value.value = item.code;
+    search.value = `${item.code} · ${item.name}`;
+    renderMarketTitleTemplates(item, true);
+    closeOptions();
+  };
+
+  const queryForOptions = () => {
+    const selected = speciesByCode(value.value);
+    const selectedText = selected ? `${selected.code} · ${selected.name}` : "";
+    return selectedText && search.value.trim() === selectedText ? "" : search.value;
+  };
+
+  const autoSelectClosestMatch = query => {
+    const keyword = String(query || "").trim();
+    const closest = matches[0];
+    if (!keyword || !closest) {
+      value.value = "";
+      return;
+    }
+    const changed = value.value !== closest.code;
+    value.value = closest.code;
+    updateActiveOption(0);
+    if (changed) renderMarketTitleTemplates(closest, true);
+  };
+
+  const renderOptions = query => {
+    matches = findMatches(query);
+    activeIndex = -1;
+    options.innerHTML = matches.length
+      ? matches.map((item, index) => `
+          <button type="button" id="marketSpeciesOption${index}" role="option" aria-selected="false" data-market-species-option="${escapeHtml(item.code)}">
+            <strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.code)}</small>
+          </button>`).join("")
+      : `<p>没有找到匹配品种</p>`;
+    options.hidden = false;
+    search.setAttribute("aria-expanded", "true");
+    options.querySelectorAll("[data-market-species-option]").forEach(button => {
+      button.addEventListener("mousedown", event => event.preventDefault());
+      button.addEventListener("click", () => selectSpecies(button.dataset.marketSpeciesOption));
+    });
+  };
+
+  search.addEventListener("focus", () => {
+    window.clearTimeout(closeTimer);
+    renderOptions(queryForOptions());
+  });
+  search.addEventListener("input", () => {
+    renderOptions(search.value);
+    autoSelectClosestMatch(search.value);
+  });
+  search.addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+      closeOptions();
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (options.hidden) renderOptions(queryForOptions());
+      updateActiveOption(event.key === "ArrowDown" ? activeIndex + 1 : (activeIndex < 0 ? matches.length - 1 : activeIndex - 1));
+      return;
+    }
+    if (event.key === "Enter" && !options.hidden && activeIndex >= 0) {
+      event.preventDefault();
+      selectSpecies(matches[activeIndex]?.code);
+    }
+  });
+  search.addEventListener("blur", () => {
+    closeTimer = window.setTimeout(closeOptions, 120);
+  });
+  toggle?.addEventListener("mousedown", event => event.preventDefault());
+  toggle?.addEventListener("click", () => {
+    if (options.hidden) {
+      renderOptions("");
+      search.focus();
+    } else {
+      closeOptions();
+    }
+  });
+
+  renderMarketTitleTemplates(speciesByCode(value.value), false);
+}
+
+function moveMarketDraftMedia(fromIndex, toIndex) {
+  const mediaItems = [...(state.marketDraftMedia || [])];
+  const from = Number(fromIndex);
+  const to = Number(toIndex);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from === to || from < 0 || to < 0 || from >= mediaItems.length || to >= mediaItems.length) return;
+  const [moved] = mediaItems.splice(from, 1);
+  mediaItems.splice(to, 0, moved);
+  state.marketDraftMedia = mediaItems;
+  renderMarketMediaDraft();
+}
+
+function bindMarketMediaDraftEvents() {
+  const input = document.querySelector("[data-market-media-input]");
+  const addButton = document.querySelector("[data-market-media-button]");
+  if (input) input.onchange = readMarketMedia;
+  if (addButton) addButton.onclick = () => input?.click();
+  document.querySelectorAll("[data-remove-market-media]").forEach(button => {
+    button.onclick = () => {
+      const index = Number(button.dataset.removeMarketMedia);
+      const removed = (state.marketDraftMedia || [])[index];
+      if (removed?.file && String(removed.dataUrl || "").startsWith("blob:")) URL.revokeObjectURL(removed.dataUrl);
+      state.marketDraftMedia = (state.marketDraftMedia || []).filter((_, itemIndex) => itemIndex !== index);
+      renderMarketMediaDraft();
+    };
+  });
+
+  const mediaItems = Array.from(document.querySelectorAll("[data-market-media-index]"));
+  let desktopDragIndex = null;
+  const clearDragState = () => mediaItems.forEach(item => item.classList.remove("is-dragging", "is-drag-over"));
+  const itemAtPoint = (x, y) => document.elementFromPoint(x, y)?.closest("[data-market-media-index]");
+
+  mediaItems.forEach(item => {
+    const index = Number(item.dataset.marketMediaIndex);
+    const handle = item.querySelector(".market-media-drag-handle");
+
+    item.addEventListener("dragstart", event => {
+      desktopDragIndex = index;
+      item.classList.add("is-dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", String(index));
+    });
+    item.addEventListener("dragover", event => {
+      if (desktopDragIndex === null || desktopDragIndex === index) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      mediaItems.forEach(entry => entry.classList.toggle("is-drag-over", entry === item));
+    });
+    item.addEventListener("drop", event => {
+      event.preventDefault();
+      const from = Number(event.dataTransfer.getData("text/plain") || desktopDragIndex);
+      clearDragState();
+      desktopDragIndex = null;
+      moveMarketDraftMedia(from, index);
+    });
+    item.addEventListener("dragend", () => {
+      desktopDragIndex = null;
+      clearDragState();
+    });
+
+    if (!handle) return;
+    let pressTimer = null;
+    let pointerId = null;
+    let active = false;
+    let destinationIndex = index;
+
+    const clearTouchDrag = () => {
+      if (pressTimer) window.clearTimeout(pressTimer);
+      pressTimer = null;
+      pointerId = null;
+      active = false;
+      clearDragState();
+    };
+
+    handle.addEventListener("pointerdown", event => {
+      if (!event.isPrimary || event.pointerType === "mouse") return;
+      event.preventDefault();
+      pointerId = event.pointerId;
+      destinationIndex = index;
+      pressTimer = window.setTimeout(() => {
+        active = true;
+        item.classList.add("is-dragging");
+        handle.setPointerCapture?.(pointerId);
+        navigator.vibrate?.(12);
+      }, 180);
+    });
+    handle.addEventListener("pointermove", event => {
+      if (event.pointerId !== pointerId || !active) return;
+      event.preventDefault();
+      const target = itemAtPoint(event.clientX, event.clientY);
+      const targetIndex = Number(target?.dataset.marketMediaIndex);
+      if (!Number.isInteger(targetIndex)) return;
+      destinationIndex = targetIndex;
+      mediaItems.forEach(entry => entry.classList.toggle("is-drag-over", entry === target && entry !== item));
+    });
+    handle.addEventListener("pointerup", event => {
+      if (event.pointerId !== pointerId) return;
+      const shouldMove = active && destinationIndex !== index;
+      const targetIndex = destinationIndex;
+      clearTouchDrag();
+      if (shouldMove) moveMarketDraftMedia(index, targetIndex);
+    });
+    handle.addEventListener("pointercancel", clearTouchDrag);
+  });
+}
+
+async function readMarketMedia(event) {
+  const current = Array.isArray(state.marketDraftMedia) ? state.marketDraftMedia : [];
+  const remaining = Math.max(0, 9 - current.length);
+  const selected = Array.from(event.target.files || []);
+  event.target.value = "";
+  if (!selected.length || !remaining) return;
+  const files = selected.slice(0, remaining);
+  if (selected.length > remaining) toast(`最多只能添加9个，已选取前${remaining}个`);
+  const nextItems = [];
+  try {
+    for (const file of files) {
+      const isImage = file.type.startsWith("image/");
+      const isVideo = /^(video\/(mp4|webm|quicktime))$/i.test(file.type);
+      if (!isImage && !isVideo) {
+        toast(`不支持文件：${file.name}`);
+        continue;
+      }
+      let duration = 0;
+      if (isVideo) {
+        duration = await readVideoDuration(file);
+        if (duration > 30) {
+          toast(`视频时长不能超过30秒：${file.name}`);
+          continue;
+        }
+      }
+      const dataUrl = isImage
+        ? file.size <= 8 * 1024 * 1024
+          ? await fileAsDataUrl(file)
+          : await readImageForLocalUse(file, "market", { maxSide: 3200, quality: 0.96, maxLength: 8500000 })
+        : URL.createObjectURL(file);
+      nextItems.push({ dataUrl, file: isVideo ? file : null, duration, type: isVideo ? "video" : "image" });
+    }
+    state.marketDraftMedia = [...current, ...nextItems].slice(0, 9);
+    renderMarketMediaDraft();
+  } catch (error) {
+    toast(error.message || "媒体读取失败");
+  }
+}
+
+function normalizeMarketCity(value) {
+  const text = String(value || "").replace(/\s+/g, "").trim();
+  if (!text) return "";
+  if (/(区|县|镇|乡|街|街道|村|社区|开发区|新区)$/.test(text)) return "";
+  if (/^(?:[\u4e00-\u9fff]{2,12}省|[\u4e00-\u9fff]{2,12}自治区|[\u4e00-\u9fff]{2,12}特别行政区|中国)$/.test(text)) return "";
+  const provinceMatch = text.match(/(?:省|自治区|特别行政区)([^省自治区特别行政区,，]{2,12}?市)/);
+  if (provinceMatch?.[1]) return provinceMatch[1];
+  const segments = text.split(/[,，]/).map(item => item.trim()).filter(Boolean);
+  const citySegment = segments.find(item => /市$/.test(item) && !/(区|县|镇|乡|街|街道|村|社区|开发区|新区)市$/.test(item));
+  if (citySegment) return citySegment;
+  if (/^(北京|上海|天津|重庆)市?$/.test(text)) return text.endsWith("市") ? text : `${text}市`;
+  return /^[\u4e00-\u9fff]{2,12}$/.test(text) ? `${text}市` : "";
+}
+
+function updateMarketCityLocationUi(status = state.marketLocationStatus) {
+  const button = document.querySelector("[data-market-city-locate]");
+  const hint = document.querySelector("[data-market-city-hint]");
+  if (!button || !hint) return;
+  const labels = {
+    loading: ["定位中…", "正在读取设备位置"],
+    success: ["重新定位", "已按当前位置自动填写，可手动修改"],
+    error: ["重新定位", "定位失败，请手动填写或重新定位"],
+    manual: ["重新定位", "已手动填写；可重新定位覆盖"],
+    idle: ["定位", "将自动填写您所在的城市"]
+  };
+  const [buttonText, hintText] = labels[status] || labels.idle;
+  button.textContent = buttonText;
+  button.disabled = status === "loading";
+  hint.textContent = hintText;
+}
+
+async function fetchMarketLocationJson(url) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 7000);
+  try {
+    const response = await fetch(url, {
+      headers: { "Accept-Language": "zh-CN,zh;q=0.9" },
+      signal: controller.signal,
+      cache: "no-store"
+    });
+    if (!response.ok) throw new Error("定位服务暂不可用");
+    return await response.json();
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+async function reverseGeocodeMarketCity(latitude, longitude) {
+  const lat = Number(latitude).toFixed(6);
+  const lon = Number(longitude).toFixed(6);
+  const nominatim = new URLSearchParams({ lat, lon, format: "jsonv2", zoom: "10", "accept-language": "zh-CN" });
+  try {
+    const result = await fetchMarketLocationJson(`https://nominatim.openstreetmap.org/reverse?${nominatim}`);
+    const address = result?.address || {};
+    const city = [address.city, address.municipality, result?.display_name, address.town, address.county]
+      .map(normalizeMarketCity)
+      .find(Boolean);
+    if (city) return city;
+  } catch {
+    // 尝试备用服务，保证定位接口短暂不可用时仍可填写城市。
+  }
+  const fallback = await fetchMarketLocationJson(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&localityLanguage=zh`);
+  return [fallback?.city, fallback?.locality]
+    .map(normalizeMarketCity)
+    .find(Boolean) || "";
+}
+
+function requestMarketCityAutofill({ force = false } = {}) {
+  if (state.marketLocationStatus === "loading") return;
+  if (!force && String(state.marketDraftCity || "").trim()) {
+    updateMarketCityLocationUi(state.marketLocationStatus === "idle" ? "success" : state.marketLocationStatus);
+    return;
+  }
+  if (!navigator.geolocation) {
+    state.marketLocationStatus = "error";
+    updateMarketCityLocationUi();
+    return;
+  }
+  state.marketLocationStatus = "loading";
+  updateMarketCityLocationUi();
+  navigator.geolocation.getCurrentPosition(async position => {
+    try {
+      const city = await reverseGeocodeMarketCity(position.coords.latitude, position.coords.longitude);
+      if (!city) throw new Error("未能识别所在城市");
+      const input = document.querySelector("[data-market-city]");
+      if (force || !String(state.marketDraftCity || "").trim()) {
+        state.marketDraftCity = city;
+        if (input) input.value = city;
+      }
+      state.marketLocationStatus = "success";
+      updateMarketCityLocationUi();
+    } catch {
+      state.marketLocationStatus = "error";
+      updateMarketCityLocationUi();
+    }
+  }, () => {
+    state.marketLocationStatus = "error";
+    updateMarketCityLocationUi();
+  }, {
+    enableHighAccuracy: false,
+    timeout: 10000,
+    maximumAge: 5 * 60 * 1000
+  });
+}
+
+async function submitMarketListing(event) {
+  event.preventDefault();
+  if (!canUseCommunity()) return;
+  const editingListingId = state.editingMarketListingId;
+  const form = new FormData(event.currentTarget);
+  const turtle = (state.turtles || []).find(item => item.id === String(form.get("turtleId") || ""));
+  const localMedia = (state.marketDraftMedia || []).length
+    ? state.marketDraftMedia.slice(0, 9)
+    : turtle?.photo ? [{ dataUrl: turtle.photo, type: "image" }] : [];
+  let speciesCode = String(form.get("speciesCode") || "");
+  let species = speciesByCode(speciesCode);
+  if (!species) {
+    const speciesSearch = event.currentTarget.querySelector("[data-market-species-search]");
+    species = marketSpeciesMatches(speciesSearch?.value || "")[0] || null;
+    speciesCode = species?.code || "";
+  }
+  if (!species) return toast("请从搜索结果中选择品种");
+  const payload = {
+    turtleId: String(form.get("turtleId") || ""),
+    title: String(form.get("title") || "").trim(),
+    speciesCode,
+    speciesName: species?.name || turtle?.speciesName || "",
+    stage: String(form.get("stage") || ""),
+    gender: String(form.get("gender") || "未知"),
+    weight: String(form.get("weight") || "").trim(),
+    shellLength: String(form.get("shellLength") || "").trim(),
+    price: Number(form.get("price") || 0),
+    negotiable: form.get("negotiable") === "on",
+    city: String(form.get("city") || "").trim(),
+    delivery: String(form.get("delivery") || ""),
+    description: String(form.get("description") || "").trim()
+  };
+  const missingFields = [
+    !payload.title && "出售标题",
+    !payload.speciesName && "品种",
+    !payload.stage && "阶段",
+    !payload.shellLength && "背甲长度",
+    payload.shellLength && (!Number.isFinite(Number(payload.shellLength)) || Number(payload.shellLength) <= 0) && "背甲长度",
+    !payload.city && "所在城市",
+    !payload.delivery && "交付方式",
+    !payload.description && "详细说明"
+  ].filter(Boolean);
+  if (missingFields.length || payload.price < 0) return toast(`请填写必填项：${[...new Set(missingFields)].join("、") || "出售价格"}`);
+  if (!localMedia.length) return toast("请至少添加一张实拍图片或一段视频");
+  try {
+    const mediaItems = [];
+    for (const media of localMedia) {
+      const source = media.dataUrl || media.url || "";
+      if (!source) continue;
+      if (media.file) {
+        const uploaded = await apiUploadMediaFile(media.file, media.duration || 0);
+        mediaItems.push({ url: uploaded.url || source, type: uploaded.mediaType || media.type || "video" });
+      } else if (source.startsWith("data:")) {
+        const uploaded = await apiPost("/api/upload/media", marketAuthPayload({ media: source }));
+        mediaItems.push({ url: uploaded.url || source, type: uploaded.mediaType || media.type || "image" });
+      } else {
+        mediaItems.push({ url: source, type: media.type || "image" });
+      }
+    }
+    const photoUrl = mediaItems[0]?.url || "";
+    const result = await apiPost(editingListingId ? "/api/market/update" : "/api/market/create", marketAuthPayload({
+      ...payload,
+      listingId: editingListingId,
+      photoUrl,
+      mediaItems
+    }));
+    localMedia.forEach(media => {
+      if (media.file && String(media.dataUrl || "").startsWith("blob:")) URL.revokeObjectURL(media.dataUrl);
+    });
+    state.marketDraftPhoto = "";
+    state.marketDraftMedia = [];
+    state.marketDraftTurtleId = "";
+    state.marketDraftCity = "";
+    state.marketLocationStatus = "idle";
+    state.editingMarketListingId = "";
+    marketLastLoadedAt = Date.now();
+    setState({
+      page: editingListingId ? "marketMy" : "market",
+      marketListings: normalizeMarketListings(result.listings || []),
+      myMarketListings: normalizeMarketListings(result.myListings || [])
+    }, { skipCloud: true });
+    toast(editingListingId ? "商品已保存并刷新" : "商品已发布，7 天未刷新将自动下架");
+  } catch (error) {
+    if (error.status === 405 || error.message === "方法不支持") {
+      toast("服务器尚未更新，暂时无法发布九宫格商品");
+      return;
+    }
+    toast(error.message || "发布失败");
+  }
+}
+
+function requestMarketSaleDetails(listing) {
+  return new Promise(resolve => {
+    document.querySelector(".market-sale-overlay")?.remove();
+    const previousFocus = document.activeElement;
+    const overlay = document.createElement("div");
+    overlay.className = "market-sale-overlay";
+    overlay.innerHTML = `
+      <section class="market-sale-dialog" role="dialog" aria-modal="true" aria-labelledby="marketSaleTitle">
+        <div class="market-sale-head">
+          <div><small>确认成交信息</small><h2 id="marketSaleTitle">标记商品已售</h2></div>
+          <button type="button" data-market-sale-cancel aria-label="关闭">×</button>
+        </div>
+        <p class="market-sale-product">${escapeHtml(listing.title || listing.speciesName || "龟集市商品")}</p>
+        <form data-market-sale-form>
+          <fieldset>
+            <legend>售出方式</legend>
+            <div class="market-sale-methods">
+              ${["自有客户成交", "闲鱼成交", "壳友手账成交"].map(method => `
+                <label><input type="radio" name="saleMethod" value="${method}"><span>${method}</span></label>
+              `).join("")}
+            </div>
+          </fieldset>
+          <label class="market-sale-price"><span>实际成交价格</span><div><b>¥</b><input type="number" name="salePrice" min="0" step="0.01" value="${money(listing.price)}" inputmode="decimal" required></div></label>
+          <p class="market-sale-error" aria-live="polite"></p>
+          <div class="market-sale-buttons"><button type="button" data-market-sale-cancel>取消</button><button type="submit">确认已售</button></div>
+        </form>
+      </section>
+    `;
+    document.body.appendChild(overlay);
+    document.body.classList.add("market-sale-open");
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener("keydown", onKeydown);
+      document.body.classList.remove("market-sale-open");
+      overlay.remove();
+      if (previousFocus?.isConnected) previousFocus.focus();
+      resolve(value);
+    };
+    const onKeydown = event => {
+      if (event.key === "Escape") finish(null);
+    };
+    overlay.querySelectorAll("[data-market-sale-cancel]").forEach(button => button.addEventListener("click", () => finish(null)));
+    overlay.addEventListener("click", event => {
+      if (event.target === overlay) finish(null);
+    });
+    overlay.querySelector("[data-market-sale-form]")?.addEventListener("submit", event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const saleMethod = String(form.get("saleMethod") || "");
+      const salePrice = Number(form.get("salePrice"));
+      const error = overlay.querySelector(".market-sale-error");
+      if (!saleMethod) {
+        if (error) error.textContent = "请选择售出方式";
+        return;
+      }
+      if (!Number.isFinite(salePrice) || salePrice < 0) {
+        if (error) error.textContent = "请填写正确的成交价格";
+        return;
+      }
+      finish({ saleMethod, salePrice });
+    });
+    document.addEventListener("keydown", onKeydown);
+    overlay.querySelector('input[name="saleMethod"]')?.focus();
+  });
+}
+
+function marketLedgerFallbackPatch(listing, status) {
+  const records = state.ledgerRecords || [];
+  const turtles = state.turtles || [];
+  const soldPriceValue = Number(listing.soldPrice);
+  const soldPrice = Number.isFinite(soldPriceValue) && soldPriceValue >= 0 ? soldPriceValue : Number(listing.price || 0);
+  const saleMethod = String(listing.saleMethod || "未填写");
+  const turtle = listing.turtleId ? turtles.find(item => item.id === listing.turtleId) : null;
+  const linkedRecord = records.find(item => item.marketListingId === listing.id)
+    || (listing.turtleId ? records.find(item => item.type === "sold" && item.turtleId === listing.turtleId) : null);
+
+  if (status === "sold") {
+    let record = linkedRecord;
+    let ledgerRecords = records;
+    if (!record) {
+      const photo = marketListingMediaItems(listing).find(item => item.type !== "video" && item.url)?.url || turtle?.photo || "";
+      const snapshot = turtle ? { ...turtle } : {
+        id: listing.turtleId || "",
+        code: listing.title || listing.speciesName || "龟集市商品",
+        speciesCode: listing.speciesCode || "",
+        speciesName: listing.speciesName || "未填写品种",
+        gender: listing.gender || "未知",
+        weight: listing.weight || "",
+        carapaceLength: listing.shellLength || "",
+        status: "已转让",
+        health: "",
+        source: "龟集市",
+        price: Number(listing.price || 0),
+        photo,
+        createdAt: listing.createdAt || new Date().toISOString(),
+        measureHistory: []
+      };
+      record = {
+        id: crypto.randomUUID(),
+        type: "sold",
+        turtleId: listing.turtleId || "",
+        title: turtle ? turtleLabel(turtle) : (listing.title || listing.speciesName || "龟集市商品"),
+        amount: soldPrice,
+        recordDate: formatDate(new Date()),
+        weight: listing.weight || turtle?.weight || "",
+        carapaceLength: listing.shellLength || turtle?.carapaceLength || "",
+        carapaceWidth: turtle?.carapaceWidth || "",
+        shellHeight: turtle?.shellHeight || "",
+        plastronLength: turtle?.plastronLength || "",
+        note: `成交方式：${saleMethod}；由龟集市标记已售自动生成`,
+        saleMethod,
+        photo,
+        turtleSnapshot: snapshot,
+        marketListingId: listing.id,
+        autoMarketRecord: true,
+        createdAt: new Date().toISOString()
+      };
+      ledgerRecords = [record, ...records];
+    } else if (!record.marketListingId) {
+      record = { ...record, marketListingId: listing.id };
+      ledgerRecords = records.map(item => item.id === record.id ? record : item);
+    }
+    if (record.autoMarketRecord && (record.amount !== soldPrice || record.saleMethod !== saleMethod)) {
+      record = {
+        ...record,
+        amount: soldPrice,
+        saleMethod,
+        note: `成交方式：${saleMethod}；由龟集市标记已售自动生成`
+      };
+      ledgerRecords = ledgerRecords.map(item => item.id === record.id ? record : item);
+    }
+    return {
+      ledgerRecords,
+      turtles: listing.turtleId && turtle ? turtles.filter(item => item.id !== listing.turtleId) : turtles,
+      activityLogs: logActivity(`龟集市已售自动记账：${record.title}，${saleMethod}，成交价 ${money(record.amount)} 元`, "账本")
+    };
+  }
+
+  const autoRecord = records.find(item => item.marketListingId === listing.id && item.autoMarketRecord);
+  const shouldRestore = listing.turtleId && autoRecord?.turtleSnapshot && !turtles.some(item => item.id === listing.turtleId);
+  return {
+    ledgerRecords: autoRecord ? records.filter(item => item.id !== autoRecord.id) : records,
+    turtles: shouldRestore ? [{ ...autoRecord.turtleSnapshot }, ...turtles] : turtles,
+    activityLogs: logActivity(`龟集市恢复在售：${listing.title || listing.speciesName || "商品"}`, "账本")
+  };
+}
+
+async function toggleMarketSold(listingId) {
+  const listing = (state.marketListings || []).find(item => item.id === listingId);
+  if (!listing) return;
+  const status = listing.status === "sold" ? "active" : "sold";
+  const saleDetails = status === "sold" ? await requestMarketSaleDetails(listing) : null;
+  if (status === "sold" && !saleDetails) return;
+  const ledgerListing = status === "sold" ? {
+    ...listing,
+    saleMethod: saleDetails.saleMethod,
+    soldPrice: saleDetails.salePrice
+  } : listing;
+  if (listing.pendingLocal) {
+    setState({
+      ...marketLedgerFallbackPatch(ledgerListing, status),
+      page: status === "sold" ? "market" : state.page,
+      selectedMarketListingId: status === "sold" ? "" : state.selectedMarketListingId,
+      marketListings: status === "sold"
+        ? (state.marketListings || []).filter(item => item.id !== listingId)
+        : (state.marketListings || []).map(item => item.id === listingId ? { ...item, status } : item)
+    });
+    toast(status === "sold" ? "已售出并自动记入账本" : "已恢复在售并撤销自动账本记录");
+    return;
+  }
+  try {
+    const result = await apiPost("/api/market/status", marketAuthPayload({
+      listingId,
+      status,
+      saleMethod: saleDetails?.saleMethod || "",
+      salePrice: saleDetails?.salePrice ?? ""
+    }));
+    const accountPatch = result.accountData
+      ? normalizeAccountData(result.accountData)
+      : marketLedgerFallbackPatch(ledgerListing, status);
+    setState({
+      ...accountPatch,
+      page: status === "sold" ? "market" : state.page,
+      selectedMarketListingId: status === "sold" ? "" : state.selectedMarketListingId,
+      marketListings: normalizeMarketListings(result.listings || []).filter(item => item.status !== "sold"),
+      myMarketListings: normalizeMarketListings(result.myListings || [])
+    });
+    toast(status === "sold" ? "已售出并自动记入账本" : "已恢复在售并撤销自动账本记录");
+  } catch (error) {
+    if (error.status === 405 || error.message === "方法不支持") {
+      setState({
+        ...marketLedgerFallbackPatch(ledgerListing, status),
+        page: status === "sold" ? "market" : state.page,
+        selectedMarketListingId: status === "sold" ? "" : state.selectedMarketListingId,
+        marketListings: status === "sold"
+          ? (state.marketListings || []).filter(item => item.id !== listingId)
+          : (state.marketListings || []).map(item => item.id === listingId ? { ...item, status } : item)
+      });
+      toast(status === "sold" ? "已售出并自动记入账本" : "已恢复在售并撤销自动账本记录");
+      return;
+    }
+    toast(error.message || "操作失败");
+  }
+}
+
+async function deleteMarketListing(listingId) {
+  if (!confirm("确定删除这件商品吗？")) return;
+  const listing = (state.marketListings || []).find(item => item.id === listingId);
+  if (listing?.pendingLocal) {
+    setState({ page: "market", marketListings: (state.marketListings || []).filter(item => item.id !== listingId) }, { skipCloud: true });
+    return;
+  }
+  try {
+    const result = await apiPost("/api/market/delete", marketAuthPayload({ listingId }));
+    setState({ page: "market", marketListings: normalizeMarketListings(result.listings || []) }, { skipCloud: true });
+  } catch (error) {
+    if (error.status === 405 || error.message === "方法不支持") {
+      setState({ page: "market", marketListings: (state.marketListings || []).filter(item => item.id !== listingId) }, { skipCloud: true });
+      return;
+    }
+    toast(error.message || "删除失败");
+  }
+}
+
+function beginMarketListingEdit(listingId) {
+  const listing = (state.myMarketListings || []).find(item => item.id === listingId)
+    || (state.marketListings || []).find(item => item.id === listingId);
+  if (!listing) return toast("商品信息不存在");
+  const mediaItems = marketListingMediaItems(listing).map(media => ({ dataUrl: media.url, type: media.type || "image" }));
+  setState({
+    page: "marketAdd",
+    editingMarketListingId: listing.id,
+    marketDraftTurtleId: listing.turtleId || "",
+    marketDraftPhoto: "",
+    marketDraftMedia: mediaItems,
+    marketDraftCity: listing.city || "",
+    marketLocationStatus: "manual"
+  }, { skipCloud: true });
+}
+
+async function refreshOwnMarketListing(listingId) {
+  if (!canUseCommunity()) return;
+  try {
+    const result = await apiPost("/api/market/refresh", marketAuthPayload({ listingId }));
+    marketLastLoadedAt = Date.now();
+    setState({
+      myMarketListings: normalizeMarketListings(result.myListings || []),
+      marketListings: normalizeMarketListings(result.listings || [])
+    }, { skipCloud: true });
+    toast("商品已刷新，将继续展示 7 天");
+  } catch (error) {
+    toast(error.message || "刷新失败");
+  }
+}
+
+async function offlineOwnMarketListing(listingId) {
+  if (!canUseCommunity()) return;
+  if (!confirm("下架后，其他用户将无法在龟集市看到该商品。确定下架吗？")) return;
+  try {
+    const result = await apiPost("/api/market/offline", marketAuthPayload({ listingId }));
+    marketLastLoadedAt = Date.now();
+    setState({
+      myMarketListings: normalizeMarketListings(result.myListings || []),
+      marketListings: normalizeMarketListings(result.listings || [])
+    }, { skipCloud: true });
+    toast("商品已下架");
+  } catch (error) {
+    toast(error.message || "下架失败");
+  }
+}
+
+function openChatMarketListing(listingId) {
+  const liveListing = (state.marketListings || []).find(item => item.id === listingId);
+  const snapshot = normalizeCommunityChatListing(state.communityChatListing);
+  if (liveListing) {
+    setState({ page: "marketDetail", selectedMarketListingId: listingId }, { skipCloud: true });
+    return;
+  }
+  if (!snapshot || snapshot.id !== listingId) {
+    toast("商品信息暂时不可查看");
+    return;
+  }
+  const isOwn = Boolean(snapshot.sellerId && snapshot.sellerId !== state.selectedCommunityFriendId);
+  const referenceListing = normalizeMarketListings([{
+    ...snapshot,
+    isOwn,
+    isFriend: true,
+    sellerFollowed: false,
+    chatReference: true
+  }])[0];
+  setState({
+    page: "marketDetail",
+    selectedMarketListingId: listingId,
+    marketListings: [referenceListing, ...(state.marketListings || []).filter(item => item.id !== listingId)]
+  }, { skipCloud: true });
+}
+
+async function contactMarketSeller(listingId, buying = false) {
+  const listing = (state.marketListings || []).find(item => item.id === listingId);
+  if (!listing || listing.isOwn || listing.pendingLocal) return;
+  if (!canUseCommunity()) return;
+  await recordMarketWant(listingId);
+  const buyMessage = `你好，我想咨询「${listing.title || listing.speciesName || "这只龟"}」，请问现在还在售吗？`;
+  marketChatDraft = buyMessage;
+  try {
+    if (!listing.isFriend) {
+      const result = await apiPost("/api/community/friend/add", communityAuthPayload({ userId: listing.sellerId }));
+      state.communityFriends = result.friends || state.communityFriends;
+    }
+    let friend = (state.communityFriends || []).find(item => item.id === listing.sellerId) || {
+      id: listing.sellerId,
+      name: listing.sellerName,
+      avatar: listing.sellerAvatar
+    };
+    const sent = await apiPost("/api/community/chat/send", communityAuthPayload({
+      userId: listing.sellerId,
+      content: buyMessage,
+      marketListingId: listing.id
+    }));
+    friend = sent.friend || friend;
+    const messages = sent.messages || [];
+    const marketListing = normalizeCommunityChatListing(sent.marketListing) || normalizeCommunityChatListing({
+      ...listing,
+      mediaUrl: marketListingMediaItems(listing)[0]?.url || listing.photoUrl || "",
+      mediaType: marketListingMediaItems(listing)[0]?.type || "image"
+    });
+    marketChatDraft = "";
+    communityChatLoadedKey = `${listing.sellerId}:${Math.floor(Date.now() / 10000)}`;
+    pendingCommunityChatLatestScroll = true;
+    setState({
+      page: "communityChat",
+      selectedCommunityFriendId: listing.sellerId,
+      selectedCommunityFriend: friend,
+      communityChatMessages: messages,
+      communityChatListing: marketListing,
+      communityFriends: communityFriendsWithPreview(listing.sellerId, friend, messages, { unreadCount: 0 })
+    }, { skipCloud: true });
+    refreshMessageUnread(true);
+  } catch (error) {
+    toast(error.message === "方法不支持" ? "联系卖家功能将在服务更新后开放" : (error.message || "暂时无法联系卖家"));
+  }
+}
+
+function marketInquiryCode(listing) {
+  const id = String(listing?.id || "").replace(/[^a-zA-Z0-9]/g, "").slice(-6).toUpperCase();
+  return `KM-${id || "咨询"}`;
+}
+
+async function copyText(text, successText = "已复制") {
+  const value = String(text || "");
+  if (!value) return false;
+  try {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.setAttribute("readonly", "");
+      textarea.style.cssText = "position:fixed;opacity:0;pointer-events:none;";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      textarea.remove();
+      if (!copied) throw new Error("copy failed");
+    }
+    toast(successText);
+    return true;
+  } catch {
+    toast("复制失败，请手动复制");
+    return false;
+  }
+}
+
+function openMarketTopService() {
+  document.querySelector(".market-service-overlay")?.remove();
+  const previousFocus = document.activeElement;
+  const overlay = document.createElement("div");
+  overlay.className = "market-service-overlay market-top-service-overlay";
+  overlay.innerHTML = `
+    <section class="market-service-dialog market-top-service-dialog" role="dialog" aria-modal="true" aria-labelledby="marketTopServiceTitle">
+      <div class="market-service-head">
+        <div><small>平台客服</small><h2 id="marketTopServiceTitle">联系平台客服</h2></div>
+        <button type="button" data-market-service-close aria-label="关闭">×</button>
+      </div>
+      <div class="market-service-wechat"><span>平台客服微信</span><strong>${escapeHtml(PLATFORM_SERVICE_WECHAT)}</strong></div>
+      <button class="market-top-service-copy" type="button" data-copy-market-wechat>复制微信号</button>
+    </section>
+  `;
+  document.body.appendChild(overlay);
+  document.body.classList.add("market-service-open");
+
+  const close = () => {
+    document.removeEventListener("keydown", onKeydown);
+    document.body.classList.remove("market-service-open");
+    overlay.remove();
+    if (previousFocus?.isConnected) previousFocus.focus();
+  };
+  const onKeydown = event => {
+    if (event.key === "Escape") close();
+  };
+  overlay.querySelector("[data-market-service-close]")?.addEventListener("click", close);
+  overlay.addEventListener("click", event => {
+    if (event.target === overlay) close();
+  });
+  overlay.querySelector("[data-copy-market-wechat]")?.addEventListener("click", () => copyText(PLATFORM_SERVICE_WECHAT, "客服微信号已复制"));
+  document.addEventListener("keydown", onKeydown);
+  overlay.querySelector("[data-copy-market-wechat]")?.focus();
+}
+
+function openMarketPlatformService(listingId) {
+  const listing = (state.marketListings || []).find(item => item.id === listingId);
+  if (!listing || listing.isOwn || listing.pendingLocal) return;
+  if (state.loggedInPhone && currentCloudToken()) recordMarketWant(listingId);
+
+  document.querySelector(".market-service-overlay")?.remove();
+  const previousFocus = document.activeElement;
+  const inquiryCode = marketInquiryCode(listing);
+  const productName = listing.title || listing.speciesName || "龟集市商品";
+  const consultation = `您好，我想咨询龟集市商品「${productName}」，商品咨询码：${inquiryCode}`;
+  const overlay = document.createElement("div");
+  overlay.className = "market-service-overlay";
+  overlay.innerHTML = `
+    <section class="market-service-dialog" role="dialog" aria-modal="true" aria-labelledby="marketServiceTitle">
+      <div class="market-service-head">
+        <div><small>购买前咨询</small><h2 id="marketServiceTitle">联系平台客服</h2></div>
+        <button type="button" data-market-service-close aria-label="关闭">×</button>
+      </div>
+      <p class="market-service-product">${escapeHtml(productName)}</p>
+      <div class="market-service-wechat"><span>平台客服微信</span><strong>${escapeHtml(PLATFORM_SERVICE_WECHAT)}</strong></div>
+      <div class="market-service-code"><span>商品咨询码</span><b>${escapeHtml(inquiryCode)}</b></div>
+      <p class="market-service-tip">添加客服微信后，请发送咨询内容或商品咨询码，以便确认商品、健康情况和交付方式。</p>
+      <div class="market-service-buttons">
+        <button type="button" data-copy-market-consultation>复制咨询内容</button>
+        <button type="button" data-copy-market-wechat>复制微信号</button>
+      </div>
+    </section>
+  `;
+  document.body.appendChild(overlay);
+  document.body.classList.add("market-service-open");
+
+  const close = () => {
+    document.removeEventListener("keydown", onKeydown);
+    document.body.classList.remove("market-service-open");
+    overlay.remove();
+    if (previousFocus?.isConnected) previousFocus.focus();
+  };
+  const onKeydown = event => {
+    if (event.key === "Escape") close();
+  };
+  overlay.querySelectorAll("[data-market-service-close]").forEach(button => button.addEventListener("click", close));
+  overlay.addEventListener("click", event => {
+    if (event.target === overlay) close();
+  });
+  overlay.querySelector("[data-copy-market-consultation]")?.addEventListener("click", () => copyText(consultation, "咨询内容已复制，去微信发送给客服"));
+  overlay.querySelector("[data-copy-market-wechat]")?.addEventListener("click", () => copyText(PLATFORM_SERVICE_WECHAT, "客服微信号已复制"));
+  document.addEventListener("keydown", onKeydown);
+  overlay.querySelector("[data-copy-market-wechat]")?.focus();
+}
+
+function normalizeCommunityPosts(posts = []) {
+  return posts.map(item => ({
+    ...item,
+    authorName: item.authorName || "壳友",
+    authorAvatar: item.authorAvatar ? apiAssetUrl(item.authorAvatar) : "",
+    mediaUrl: item.mediaUrl ? apiAssetUrl(item.mediaUrl) : "",
+    comments: Array.isArray(item.comments) ? item.comments.map(comment => ({
+      ...comment,
+      authorAvatar: comment.authorAvatar ? apiAssetUrl(comment.authorAvatar) : ""
+    })) : []
+  }));
+}
+
+async function refreshCommunity(force = false) {
+  if (!CONFIGURED_SMS_BACKEND || communityLoading) return;
+  if (!force && Date.now() - communityLastLoadedAt < 10000) return;
+  communityLoading = true;
+  try {
+    const result = await apiPost("/api/community/list", communityAuthPayload());
+    communityLastLoadedAt = Date.now();
+    const friends = mergeCommunityFriends(Array.isArray(result.friends) ? result.friends : []);
+    const messageUnreadCount = friends.reduce((sum, friend) => sum + Math.max(0, Number(friend.unreadCount || 0)), 0);
+    setState({ communityPosts: normalizeCommunityPosts(result.posts || []), communityFriends: friends, messageUnreadCount }, { skipCloud: true });
+  } catch (error) {
+    console.warn(error.message || "壳友圈读取失败");
+  } finally {
+    communityLoading = false;
+  }
+}
+
+async function refreshFollowing(force = false) {
+  if (!CONFIGURED_SMS_BACKEND || followingLoading || !state.loggedInPhone || !currentCloudToken()) return;
+  if (!force && Date.now() - followingLastLoadedAt < 10000) return;
+  followingLoading = true;
+  try {
+    const result = await apiPost("/api/community/following/list", communityAuthPayload());
+    followingLastLoadedAt = Date.now();
+    setState({
+      communityFollowingUsers: Array.isArray(result.following) ? result.following : [],
+      communityFollowingPosts: normalizeCommunityPosts(result.posts || []),
+      communityFollowingListings: normalizeMarketListings(result.listings || [])
+    }, { skipCloud: true });
+  } catch (error) {
+    if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "关注列表读取失败");
+  } finally {
+    followingLoading = false;
+  }
+}
+
+async function toggleCommunityFollow(userId) {
+  if (!canUseCommunity()) return;
+  try {
+    const result = await apiPost("/api/community/follow/toggle", communityAuthPayload({ userId }));
+    followingLastLoadedAt = Date.now();
+    const following = Array.isArray(result.following) ? result.following : [];
+    const stillFollowing = following.some(item => item.id === userId);
+    setState({
+      communityPosts: normalizeCommunityPosts(result.posts || []),
+      marketListings: normalizeMarketListings(result.listings || []),
+      communityFollowingUsers: following,
+      page: state.page === "followingProfile" && !stillFollowing ? "following" : state.page
+    }, { skipCloud: true, pageMotion: "none" });
+    refreshFollowing(true);
+    toast(result.followed ? "已关注" : "已取消关注");
+  } catch (error) {
+    toast(error.message || "关注操作失败");
+  }
+}
+
+function fileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("文件读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function readVideoDuration(file) {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    const objectUrl = URL.createObjectURL(file);
+    const cleanup = () => {
+      video.removeAttribute("src");
+      video.load();
+      URL.revokeObjectURL(objectUrl);
+    };
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      const duration = Number(video.duration || 0);
+      cleanup();
+      if (!Number.isFinite(duration) || duration <= 0) reject(new Error("无法读取视频时长"));
+      else resolve(duration);
+    };
+    video.onerror = () => {
+      cleanup();
+      reject(new Error("无法读取视频，请重新选择"));
+    };
+    video.src = objectUrl;
+  });
+}
+
+function syncCommunityPublishButton() {
+  const submit = document.querySelector(".community-compose-submit");
+  if (!submit) return;
+  const text = document.querySelector("#communityPostForm textarea")?.value.trim() || "";
+  const hasMedia = Boolean(
+    communityDraftMedia ||
+    document.querySelector(".community-media-preview img, .community-media-preview video")
+  );
+  const ready = Boolean(text || hasMedia);
+  submit.classList.toggle("is-ready", ready);
+  submit.dataset.ready = ready ? "true" : "false";
+  if (ready) submit.removeAttribute("disabled");
+  else submit.setAttribute("disabled", "");
+  submit.setAttribute("aria-disabled", ready ? "false" : "true");
+}
+
+async function readCommunityMedia(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const openComposerAfterRead = event.currentTarget.hasAttribute("data-community-quick-media");
+  communityDraftText = document.querySelector("#communityPostForm textarea")?.value || communityDraftText;
+  if (!/^(image\/(jpeg|png|webp)|video\/(mp4|webm|quicktime))$/i.test(file.type)) {
+    event.target.value = "";
+    return toast("请选择 JPG、PNG、WebP、MP4、WebM 或 MOV");
+  }
+  const isVideo = file.type.startsWith("video/");
+  if (!isVideo && file.size > 10 * 1024 * 1024) {
+    event.target.value = "";
+    return toast("图片不能超过 10MB");
+  }
+  try {
+    let duration = 0;
+    if (isVideo) {
+      duration = await readVideoDuration(file);
+      if (duration > 30) {
+        event.target.value = "";
+        return toast("视频时长不能超过30秒");
+      }
+    }
+    if (communityDraftMediaFile && communityDraftMedia.startsWith("blob:")) URL.revokeObjectURL(communityDraftMedia);
+    communityDraftMedia = isVideo ? URL.createObjectURL(file) : await fileAsDataUrl(file);
+    communityDraftMediaType = isVideo ? "video" : "image";
+    communityDraftMediaFile = isVideo ? file : null;
+    communityDraftMediaDuration = duration;
+    if (openComposerAfterRead) setState({ page: "communityAdd" }, { skipCloud: true });
+    else render();
+  } catch (error) {
+    toast(error.message || "文件读取失败");
+  }
+}
+
+async function submitCommunityPost(event) {
+  event.preventDefault();
+  if (!canUseCommunity()) return;
+  const form = new FormData(event.currentTarget);
+  const content = String(form.get("content") || "").trim();
+  const visibility = "public";
+  if (!content && !communityDraftMedia) return toast("写点内容，或添加图片、视频");
+  try {
+    let mediaUrl = "";
+    let mediaType = "";
+    if (communityDraftMedia) {
+      const uploaded = communityDraftMediaFile
+        ? await apiUploadMediaFile(communityDraftMediaFile, communityDraftMediaDuration)
+        : await apiPost("/api/upload/media", communityAuthPayload({ media: communityDraftMedia }));
+      mediaUrl = uploaded.url || "";
+      mediaType = uploaded.mediaType || communityDraftMediaType;
+    }
+    const result = await apiPost("/api/community/create", communityAuthPayload({ content, mediaUrl, mediaType, visibility }));
+    if (communityDraftMediaFile && communityDraftMedia.startsWith("blob:")) URL.revokeObjectURL(communityDraftMedia);
+    communityDraftMedia = "";
+    communityDraftMediaType = "";
+    communityDraftMediaFile = null;
+    communityDraftMediaDuration = 0;
+    communityDraftText = "";
+    communityLastLoadedAt = Date.now();
+    setState({ page: "community", communityPosts: normalizeCommunityPosts(result.posts || []), communityFriends: result.friends || state.communityFriends }, { skipCloud: true });
+    toast("动态已发布");
+  } catch (error) {
+    if (error.status === 405 || error.message === "方法不支持") {
+      const localPost = {
+        id: `local-${Date.now()}`,
+        content,
+        mediaUrl: communityDraftMedia,
+        mediaType: communityDraftMediaType,
+        visibility,
+        authorId: state.loggedInPhone,
+        authorName: state.accountName || "壳友",
+        authorAvatar: state.accountAvatar || "",
+        createdAt: new Date().toISOString(),
+        likeCount: 0,
+        liked: false,
+        isOwn: true,
+        isFriend: false,
+        comments: [],
+        pendingLocal: true
+      };
+      communityDraftMedia = "";
+      communityDraftMediaType = "";
+      communityDraftMediaFile = null;
+      communityDraftMediaDuration = 0;
+      communityDraftText = "";
+      setState({ page: "community", communityPosts: [localPost, ...(state.communityPosts || [])] }, { skipCloud: true });
+      toast("动态已发布");
+      return;
+    }
+    toast(error.message || "发布失败");
+  }
+}
+
+async function toggleCommunityLike(postId) {
+  if (!canUseCommunity()) return;
+  try {
+    const result = await apiPost("/api/community/like", communityAuthPayload({ postId }));
+    setState({ communityPosts: normalizeCommunityPosts(result.posts || []), openCommunityActionId: "" }, { skipCloud: true });
+  } catch (error) {
+    if (error.status === 405 || error.message === "方法不支持") {
+      const posts = (state.communityPosts || []).map(item => item.id === postId ? {
+        ...item,
+        liked: !item.liked,
+        likeCount: Math.max(0, Number(item.likeCount || 0) + (item.liked ? -1 : 1))
+      } : item);
+      setState({ communityPosts: posts, openCommunityActionId: "" }, { skipCloud: true });
+      return;
+    }
+    toast(error.message || "操作失败");
+  }
+}
+
+async function submitCommunityComment(event) {
+  event.preventDefault();
+  if (!canUseCommunity()) return;
+  const content = String(new FormData(event.currentTarget).get("content") || "").trim();
+  if (!content) return;
+  try {
+    const result = await apiPost("/api/community/comment", communityAuthPayload({ postId: event.currentTarget.dataset.communityCommentForm, content }));
+    setState({ communityPosts: normalizeCommunityPosts(result.posts || []), communityCommentPostId: "" }, { skipCloud: true });
+  } catch (error) {
+    if (error.status === 405 || error.message === "方法不支持") {
+      const postId = event.currentTarget.dataset.communityCommentForm;
+      const comment = {
+        id: `local-comment-${Date.now()}`,
+        content,
+        authorName: state.accountName || "壳友",
+        authorAvatar: state.accountAvatar || "",
+        createdAt: new Date().toISOString()
+      };
+      const posts = (state.communityPosts || []).map(item => item.id === postId
+        ? { ...item, comments: [...(item.comments || []), comment] }
+        : item);
+      setState({ communityPosts: posts, communityCommentPostId: "" }, { skipCloud: true });
+      return;
+    }
+    toast(error.message || "评论失败");
+  }
+}
+
+async function addCommunityFriend(userId) {
+  if (!canUseCommunity()) return;
+  try {
+    const result = await apiPost("/api/community/friend/add", communityAuthPayload({ userId }));
+    setState({ communityPosts: normalizeCommunityPosts(result.posts || []), communityFriends: result.friends || [] }, { skipCloud: true });
+    toast("已添加好友");
+  } catch (error) {
+    toast(error.message || "添加好友失败");
+  }
+}
+
+function latestCommunityMessagePreview(messages = []) {
+  const validMessages = (Array.isArray(messages) ? messages : [])
+    .filter(item => item && (item.content || item.createdAt))
+    .slice()
+    .sort((left, right) => new Date(left.createdAt || 0) - new Date(right.createdAt || 0));
+  const last = validMessages[validMessages.length - 1];
+  if (!last) return null;
+  return {
+    lastMessage: String(last.content || "").trim(),
+    lastMessageAt: last.createdAt || ""
+  };
+}
+
+function communityFriendsWithPreview(userId, friend, messages = [], options = {}) {
+  const preview = latestCommunityMessagePreview(messages);
+  const current = (state.communityFriends || []).find(item => item.id === userId);
+  const mergedFriend = {
+    ...(current || {}),
+    ...(friend || {}),
+    id: userId,
+    unreadCount: Number(options.unreadCount ?? current?.unreadCount ?? friend?.unreadCount ?? 0),
+    lastMessage: preview?.lastMessage || current?.lastMessage || friend?.lastMessage || "",
+    lastMessageAt: preview?.lastMessageAt || current?.lastMessageAt || friend?.lastMessageAt || ""
+  };
+  const nextFriends = (state.communityFriends || [])
+    .filter(item => item.id !== userId)
+    .concat(mergedFriend)
+    .sort((left, right) => new Date(right.lastMessageAt || right.createdAt || 0) - new Date(left.lastMessageAt || left.createdAt || 0));
+  return nextFriends;
+}
+
+function mergeCommunityFriends(incomingFriends = []) {
+  const previous = state.communityFriends || [];
+  const previousMap = new Map(previous.map(item => [item.id, item]));
+  const incomingIds = new Set();
+  const merged = (Array.isArray(incomingFriends) ? incomingFriends : []).map(friend => {
+    incomingIds.add(friend.id);
+    const old = previousMap.get(friend.id) || {};
+    return {
+      ...old,
+      ...friend,
+      lastMessage: friend.lastMessage || old.lastMessage || "",
+      lastMessageAt: friend.lastMessageAt || old.lastMessageAt || ""
+    };
+  });
+  previous.forEach(friend => {
+    if (!incomingIds.has(friend.id) && (friend.lastMessage || friend.lastMessageAt)) merged.push(friend);
+  });
+  return merged.sort((left, right) => new Date(right.lastMessageAt || right.createdAt || 0) - new Date(left.lastMessageAt || left.createdAt || 0));
+}
+
+function openCommunityChat(userId) {
+  if (!canUseCommunity()) return;
+  marketChatDraft = "";
+  communityChatLoadedKey = "";
+  pendingCommunityChatLatestScroll = true;
+  setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: (state.communityFriends || []).find(item => item.id === userId) || null, communityChatMessages: [], communityChatListing: null }, { skipCloud: true });
+}
+
+async function refreshMessageUnread(force = false) {
+  if (!CONFIGURED_SMS_BACKEND || messageUnreadLoading) return;
+  if (!state.loggedInPhone || !currentCloudToken()) {
+    if (state.messageUnreadCount) setState({ messageUnreadCount: 0 }, { skipCloud: true });
+    return;
+  }
+  if (!force && Date.now() - messageUnreadLastLoadedAt < 10000) return;
+  messageUnreadLoading = true;
+  try {
+    const result = await apiPost("/api/community/unread", communityAuthPayload());
+    const unreadCount = Math.max(0, Number(result.unreadCount || 0));
+    messageUnreadLastLoadedAt = Date.now();
+    const friends = Array.isArray(result.friends) ? mergeCommunityFriends(result.friends) : state.communityFriends;
+    const friendSignature = items => JSON.stringify((items || []).map(item => [item.id, item.name, item.avatar, item.lastMessage, item.lastMessageAt, Number(item.unreadCount || 0)]));
+    if (unreadCount !== Number(state.messageUnreadCount || 0) || friendSignature(friends) !== friendSignature(state.communityFriends)) {
+      setState({ messageUnreadCount: unreadCount, communityFriends: friends }, { skipCloud: true });
+    }
+  } catch (error) {
+    if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "未读消息读取失败");
+  } finally {
+    messageUnreadLoading = false;
+  }
+}
+
+function startMessageUnreadPolling() {
+  if (messageUnreadTimer) return;
+  messageUnreadTimer = setInterval(() => {
+    if (!document.hidden) refreshMessageUnread(true);
+  }, 5000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshMessageUnread(true);
+  });
+}
+
+async function refreshCommunityChat(force = false) {
+  const userId = state.selectedCommunityFriendId;
+  if (!userId || !CONFIGURED_SMS_BACKEND || communityChatLoading) return;
+  const key = `${userId}:${Math.floor(Date.now() / 10000)}`;
+  if (!force && communityChatLoadedKey === key) return;
+  communityChatLoading = true;
+  try {
+    const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
+    communityChatLoadedKey = key;
+    const friend = result.friend || state.selectedCommunityFriend;
+    const messages = result.messages || [];
+    setState({
+      selectedCommunityFriend: friend,
+      communityChatMessages: messages,
+      communityChatListing: normalizeCommunityChatListing(result.marketListing),
+      communityFriends: communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 })
+    }, { skipCloud: true });
+    refreshMessageUnread(true);
+    refreshCommunity(true);
+  } catch (error) {
+    toast(error.message || "聊天记录读取失败");
+  } finally {
+    communityChatLoading = false;
+  }
+}
+
+async function sendCommunityMessage(event) {
+  event.preventDefault();
+  if (!canUseCommunity()) return;
+  const content = String(new FormData(event.currentTarget).get("content") || "").trim();
+  if (!content) return;
+  try {
+    const result = await apiPost("/api/community/chat/send", communityAuthPayload({ userId: state.selectedCommunityFriendId, content }));
+    marketChatDraft = "";
+    communityChatLoadedKey = `${state.selectedCommunityFriendId}:${Math.floor(Date.now() / 10000)}`;
+    pendingCommunityChatLatestScroll = true;
+    const friend = result.friend || state.selectedCommunityFriend;
+    const messages = result.messages || [];
+    setState({
+      selectedCommunityFriend: friend,
+      communityChatMessages: messages,
+      communityChatListing: normalizeCommunityChatListing(result.marketListing) || state.communityChatListing,
+      communityFriends: communityFriendsWithPreview(state.selectedCommunityFriendId, friend, messages, { unreadCount: 0 })
+    }, { skipCloud: true });
+    refreshMessageUnread(true);
+  } catch (error) {
+    toast(error.message || "消息发送失败");
+  }
+}
+
+async function deleteCommunityPost(postId) {
+  if (!canUseCommunity() || !confirm("确定删除这条动态吗？")) return;
+  try {
+    const result = await apiPost("/api/community/delete", communityAuthPayload({ postId }));
+    setState({ communityPosts: normalizeCommunityPosts(result.posts || []) }, { skipCloud: true });
+    toast("动态已删除");
+  } catch (error) {
+    if (error.status === 405 || error.message === "方法不支持") {
+      setState({ communityPosts: (state.communityPosts || []).filter(item => item.id !== postId) }, { skipCloud: true });
+      toast("动态已删除");
+      return;
+    }
+    toast(error.message || "删除失败");
+  }
+}
+
 async function refreshPublicFeedback(force = false) {
   if (!CONFIGURED_SMS_BACKEND || publicFeedbackLoading) return;
   if (!state.loggedInPhone || !currentCloudToken()) {
@@ -3353,11 +5908,21 @@ function submitFeedback(event) {
 async function submitAccount(event) {
   event.preventDefault();
   if (accountSubmitInFlight) return;
+  const submitButton = event.currentTarget.querySelector("button[type='submit']");
+  const originalText = submitButton?.textContent || "";
   accountSubmitInFlight = true;
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = event.currentTarget.dataset.authForm === "register" ? "正在验证并登录…" : "正在登录…";
+  }
   try {
     await submitAccountInner(event);
   } finally {
     accountSubmitInFlight = false;
+    if (submitButton?.isConnected) {
+      submitButton.disabled = false;
+      submitButton.textContent = originalText;
+    }
   }
 }
 
@@ -3406,9 +5971,8 @@ async function submitAccountInner(event) {
   if (!confirmPassword) return toast("请先填写核对密码");
   if (password !== confirmPassword) return toast("密码不一致");
   if (!CONFIGURED_SMS_BACKEND && (state.registeredUsers || []).some(item => item.phone === phone)) return toast("手机号已注册，请直接登录");
-  if (!state.pendingAuthCode || state.pendingAuthPhone !== phone) return toast("请先获取验证码");
+  if (state.pendingAuthPhone !== phone || !Number(state.authCodeExpiresAt || 0)) return toast("请先获取验证码");
   if (Date.now() > Number(state.authCodeExpiresAt || 0)) return toast("验证码已过期，请重新获取");
-  if (!(await verifyServerSmsCode(phone, code))) return toast("验证码不正确");
 
   if (CONFIGURED_SMS_BACKEND) {
     try {
@@ -3419,6 +5983,7 @@ async function submitAccountInner(event) {
       const result = await apiPost("/api/account/register", {
         phone,
         password,
+        code,
         accountName: maskPhone(phone),
         data: initialCloudData
       });
@@ -3431,6 +5996,8 @@ async function submitAccountInner(event) {
       return;
     }
   }
+
+  if (!(await verifyServerSmsCode(phone, code))) return toast("验证码不正确");
 
   const accountData = emptyAccountData();
   const user = { id: crypto.randomUUID(), phone, password, accountName: maskPhone(phone), accountAvatar: "", data: accountData, createdAt: new Date().toISOString() };
@@ -3474,7 +6041,7 @@ async function sendAccountCode() {
         accountDraftConfirmPassword: confirmPassword,
         pendingAuthCode: result.code || SERVER_SMS_CODE,
         pendingAuthPhone: phone,
-        authCodeExpiresAt: String(Date.now() + 5 * 60 * 1000),
+        authCodeExpiresAt: String(Date.now() + Number(result.expiresIn || 300) * 1000),
         accountCodeCooldownUntil: String(Date.now() + 60 * 1000)
       });
       toast(result.code ? `验证码已发送：${result.code}` : "验证码已发送");
@@ -3567,6 +6134,14 @@ function logoutAccount() {
     loggedInPhone: "",
     accountName: "未登录用户",
     accountAvatar: "",
+    communityPosts: [],
+    communityFriends: [],
+    communityChatMessages: [],
+    messageUnreadCount: 0,
+    marketListings: [],
+    selectedMarketListingId: "",
+    selectedCommunityFriendId: "",
+    selectedCommunityFriend: null,
     page: "mine"
   });
   toast("已退出账号");
@@ -3605,7 +6180,36 @@ async function apiPost(path, payload) {
   if (path === "/api/upload/image" && data.message === "方法不支持") {
     throw new Error("云端服务器未更新图片上传接口，请先部署最新版后端并重启服务");
   }
-  if (!response.ok || data.ok === false) throw new Error(data.message || "服务暂时不可用");
+  if (!response.ok || data.ok === false) {
+    const error = new Error(data.message || "服务暂时不可用");
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+async function apiUploadMediaFile(file, duration = 0) {
+  const base = window.TURTLE_API_BASE_URL || "";
+  const response = await fetch(`${base}/api/upload/media`, {
+    method: "POST",
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+      "X-Auth-Phone": state.loggedInPhone,
+      "X-Auth-Token": currentCloudToken(),
+      "X-Media-Duration": String(Math.max(0, Number(duration || 0)))
+    },
+    body: file
+  });
+  const data = await response.json().catch(() => ({}));
+  if (response.status === 401) {
+    forgetCloudToken(state.loggedInPhone);
+    state.cloudToken = "";
+  }
+  if (!response.ok || data.ok === false) {
+    const error = new Error(data.message || "视频上传失败");
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 
@@ -3637,6 +6241,14 @@ function applyCloudUser(user, activityText = "", options = {}) {
     : accountData.activityLogs;
   setState({
     ...accountData,
+    communityPosts: [],
+    communityFriends: [],
+    communityChatMessages: [],
+    messageUnreadCount: 0,
+    marketListings: [],
+    selectedMarketListingId: "",
+    selectedCommunityFriendId: "",
+    selectedCommunityFriend: null,
     activityLogs,
     registeredUsers: [localUser, ...(state.registeredUsers || []).filter(item => item.phone !== localUser.phone)],
     loggedInPhone: localUser.phone,
@@ -3741,9 +6353,33 @@ function addKeptSpecies(code) {
   if (!requireLogin()) return;
   const species = speciesByCode(code);
   if (!species) return;
+  if (state.keptSpecies.includes(code)) {
+    setState({ keptSpecies: state.keptSpecies.filter(item => item !== code) });
+    toast(`${species.name} 已取消`);
+    return;
+  }
   const keptSpecies = state.keptSpecies.includes(code) ? state.keptSpecies : [...state.keptSpecies, code];
-  setState({ keptSpecies, selectedSpeciesCode: code, page: "add", search: "" });
+  if (state.speciesPickerForAdd) {
+    setState({ keptSpecies, selectedSpeciesCode: code, formDraft: { ...turtleFormDraft(), speciesCode: code }, speciesPickerForAdd: false, page: "add", search: "" });
+  } else {
+    setState({ keptSpecies });
+  }
   toast(`${species.name} 已加入常用品种`);
+}
+
+function filterSpeciesRows(value) {
+  const query = String(value || "").trim().toLowerCase();
+  document.querySelectorAll(".species-section").forEach(section => {
+    let visible = 0;
+    section.querySelectorAll(".species-row").forEach(row => {
+      const matched = !query || String(row.dataset.speciesKeywords || "").includes(query);
+      row.hidden = !matched;
+      row.style.display = matched ? "" : "none";
+      if (matched) visible += 1;
+    });
+    section.hidden = visible === 0;
+    section.style.display = visible ? "" : "none";
+  });
 }
 
 function removeKeptSpecies(code) {
@@ -3773,9 +6409,7 @@ function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") 
 }
 
 function exportAccountData(kind = "account") {
-  if (!requireEntitlement("member", kind === "business" ? "开通壳友会员后可导出经营报表" : "开通壳友会员后可导出数据")) {
-    return;
-  }
+  if (!requireLogin()) return;
   const lines = [];
   lines.push(["类型", "名称", "日期", "品种", "金额", "体重", "背甲", "备注"].map(csvCell).join(","));
   state.turtles.forEach(turtle => {
@@ -3794,7 +6428,7 @@ function exportAccountData(kind = "account") {
 
 function submitBatchImport(event) {
   event.preventDefault();
-  if (!requireEntitlement("member", "壳友会员可使用批量导入")) return;
+  if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const rows = String(form.get("batchTurtles") || "").split(/\n+/).map(row => row.trim()).filter(Boolean);
   if (!rows.length) return toast("请先填写要导入的档案");
@@ -3842,7 +6476,7 @@ function submitBatchImport(event) {
       acquiredDate: formatDate(new Date()),
       source: price > 0 ? "购买" : "其他",
       price: price > 0 ? price : "",
-      note: "会员批量导入",
+      note: "批量导入",
       photo: speciesPhoto(species) || defaultPhoto,
       createdAt: new Date().toISOString(),
       measureHistory: []
@@ -3873,14 +6507,14 @@ function submitBatchImport(event) {
     turtles: [...imported, ...state.turtles],
     keptSpecies: [...keptSpecies],
     ledgerRecords: [...ledgerRecords, ...state.ledgerRecords],
-    activityLogs: logActivity(`会员批量导入 ${imported.length} 只乌龟${skippedRows.length ? `，跳过 ${skippedRows.length} 行` : ""}`, "会员")
+    activityLogs: logActivity(`批量导入 ${imported.length} 只乌龟${skippedRows.length ? `，跳过 ${skippedRows.length} 行` : ""}`, "档案")
   });
   toast(`已导入 ${imported.length} 只乌龟${skippedRows.length ? `，${skippedRows.slice(0, 2).join("；")}` : ""}`);
 }
 
 function submitDeliveryNote(event) {
   event.preventDefault();
-  if (!requireEntitlement("member", "壳友会员可生成交付说明")) return;
+  if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const turtle = state.turtles.find(item => item.id === form.get("turtleId"));
   if (!turtle) return toast("请先选择一只乌龟");
@@ -3896,7 +6530,7 @@ function submitDeliveryNote(event) {
   ].filter(Boolean).join("\n");
   setState({
     professionalOutput: output,
-    activityLogs: logActivity(`生成交付说明：${turtleLabel(turtle)}`, "会员")
+    activityLogs: logActivity(`生成交付说明：${turtleLabel(turtle)}`, "档案")
   });
   toast("交付说明已生成");
 }
@@ -3966,16 +6600,17 @@ function submitTurtleDetail(event) {
     code: String(form.get("code") || "").trim() || turtle.code,
     speciesCode: species.code,
     speciesName: species.name,
+    poolId: (state.turtlePools || []).some(pool => pool.id === String(form.get("poolId") || "")) ? String(form.get("poolId") || "") : "",
     gender: String(form.get("gender") || "未知"),
     weight,
     carapaceLength,
     carapaceWidth: String(form.get("carapaceWidth") || ""),
     shellHeight: String(form.get("shellHeight") || ""),
     plastronLength: String(form.get("plastronLength") || ""),
-    status: String(form.get("status") || "正常饲养"),
+    status: turtle.status || "正常饲养",
     health: String(form.get("health") || "健康"),
     acquiredDate: String(form.get("acquiredDate") || ""),
-    source: String(form.get("source") || "购买"),
+    source: turtle.source || "购买",
     price: String(form.get("price") || ""),
     note: String(form.get("note") || ""),
     photo: state.updateDraftPhoto === "__CLEAR__" ? "" : state.updateDraftPhoto || turtle.photo || speciesPhoto(species) || defaultPhoto
@@ -3991,14 +6626,18 @@ function submitTurtleDetail(event) {
       weight: turtle.weight,
       carapaceLength: turtle.carapaceLength,
       status: turtle.status,
-      health: turtle.health
+      health: turtle.health,
+      poolId: turtle.poolId || "",
+      poolName: turtlePoolName(turtle.poolId)
     },
     newSnapshot: {
       code: updated.code,
       weight: updated.weight,
       carapaceLength: updated.carapaceLength,
       status: updated.status,
-      health: updated.health
+      health: updated.health,
+      poolId: updated.poolId || "",
+      poolName: turtlePoolName(updated.poolId)
     },
     updatedAt: new Date().toISOString()
   };
@@ -4030,6 +6669,7 @@ function submitTurtle(event) {
     code,
     speciesCode: species.code,
     speciesName: species.name,
+    poolId: (state.turtlePools || []).some(pool => pool.id === String(form.get("poolId") || "")) ? String(form.get("poolId") || "") : "",
     gender: state.formGender,
     weight: Number(form.get("weight")),
     carapaceLength: Number(form.get("carapaceLength")),
@@ -4118,6 +6758,59 @@ function deleteMemo(id) {
   setState({ memos: state.memos.filter(m => m.id !== id), activityLogs: logActivity(`删除护理：${memo.title}`, "护理") });
 }
 
+function submitTurtlePool(event) {
+  event.preventDefault();
+  if (!requireLogin()) return;
+  const form = new FormData(event.currentTarget);
+  const name = String(form.get("name") || "").trim();
+  const type = String(form.get("type") || "");
+  if (!name || !type) return toast("请填写龟池名称并选择龟池类型");
+  const parseOptionalSize = field => {
+    const value = String(form.get(field) || "").trim();
+    return value && Number(value) >= 0 ? value : "";
+  };
+  const rawCount = String(form.get("count") || "").trim();
+  const count = rawCount === "" ? 0 : Number(rawCount);
+  if (!Number.isFinite(count) || count < 0) return toast("养殖数量请填写为不小于 0 的数字");
+  const existing = (state.turtlePools || []).find(pool => pool.id === state.editingTurtlePoolId);
+  const now = new Date().toISOString();
+  const pool = {
+    id: existing?.id || crypto.randomUUID(),
+    name,
+    type,
+    length: parseOptionalSize("length"),
+    width: parseOptionalSize("width"),
+    height: parseOptionalSize("height"),
+    count: Math.floor(count),
+    note: String(form.get("note") || "").trim(),
+    createdAt: existing?.createdAt || now,
+    updatedAt: now
+  };
+  const turtlePools = existing
+    ? (state.turtlePools || []).map(item => item.id === existing.id ? pool : item)
+    : [pool, ...(state.turtlePools || [])];
+  setState({
+    turtlePools,
+    editingTurtlePoolId: "",
+    page: "pools",
+    activityLogs: logActivity(`${existing ? "更新" : "新增"}龟池：${name}，${turtlePoolTypeLabel(type)}，${pool.count} 只`, "龟池")
+  });
+  toast(existing ? "龟池已更新" : "龟池已添加");
+}
+
+function deleteTurtlePool(id) {
+  if (!requireLogin()) return;
+  const pool = (state.turtlePools || []).find(item => item.id === id);
+  if (!pool || !confirm(`要删除龟池“${pool.name || "未命名"}”吗？`)) return;
+  setState({
+    turtlePools: (state.turtlePools || []).filter(item => item.id !== id),
+    editingTurtlePoolId: "",
+    page: "pools",
+    activityLogs: logActivity(`删除龟池：${pool.name || "未命名龟池"}`, "龟池")
+  });
+  toast("龟池已删除");
+}
+
 function openLedgerForm(type, turtleId = "") {
   if (!requireLogin()) return;
   const turtle = state.turtles.find(t => t.id === turtleId);
@@ -4177,6 +6870,7 @@ function readBreedingDraft() {
   const data = new FormData(form);
   return {
     breedingDraftDate: String(data.get("date") || ""),
+    breedingPoolId: String(data.get("poolId") || ""),
     breedingManualMother: String(data.get("manualMother") || ""),
     breedingEggCount: String(data.get("eggCount") || ""),
     breedingFertileCount: String(data.get("fertileCount") || ""),
@@ -4193,6 +6887,8 @@ function submitBreedingDetail(event) {
   if (!record) return;
   const motherId = String(form.get("mother") || "manual");
   const mother = state.turtles.find(t => t.id === motherId);
+  const poolId = (state.turtlePools || []).some(pool => pool.id === String(form.get("poolId") || "")) ? String(form.get("poolId") || "") : "";
+  const poolName = turtlePoolName(poolId);
   const manualMother = String(form.get("manualMother") || "").trim();
   const eggCount = Number(form.get("eggCount"));
   const fertileCount = Number(form.get("fertileCount"));
@@ -4211,6 +6907,8 @@ function submitBreedingDetail(event) {
       eggCount: record.eggCount,
       fertileCount: record.fertileCount,
       hatchCount: record.hatchCount || 0,
+      poolId: record.poolId || "",
+      poolName: record.poolName || turtlePoolName(record.poolId),
       note: record.note || ""
     },
     newSnapshot: {
@@ -4219,6 +6917,8 @@ function submitBreedingDetail(event) {
       eggCount,
       fertileCount,
       hatchCount,
+      poolId,
+      poolName,
       note: String(form.get("note") || "")
     },
     updatedAt: new Date().toISOString()
@@ -4228,6 +6928,8 @@ function submitBreedingDetail(event) {
     date: form.get("date"),
     motherId,
     motherName: nextMotherName,
+    poolId,
+    poolName,
     eggCount,
     fertileCount,
     hatchCount,
@@ -4251,6 +6953,7 @@ function submitBreedingRecord(event) {
   const form = new FormData(event.currentTarget);
   const motherId = form.get("mother");
   const mother = state.turtles.find(t => t.id === motherId);
+  const poolId = (state.turtlePools || []).some(pool => pool.id === String(form.get("poolId") || "")) ? String(form.get("poolId") || "") : "";
   const manualMother = String(form.get("manualMother") || "").trim();
   const eggCount = Number(form.get("eggCount"));
   const fertileCount = Number(form.get("fertileCount"));
@@ -4268,6 +6971,8 @@ function submitBreedingRecord(event) {
     date: form.get("date"),
     motherId,
     motherName: mother ? turtleLabel(mother) : manualMother,
+    poolId,
+    poolName: turtlePoolName(poolId),
     eggCount,
     fertileCount,
     hatchCount,
@@ -4281,6 +6986,7 @@ function submitBreedingRecord(event) {
     breedingDraftPhoto: "",
     breedingMotherMode: "archive",
     breedingMotherValue: "",
+    breedingPoolId: "",
     breedingDraftDate: "",
     breedingManualMother: "",
     breedingEggCount: "",
@@ -4299,6 +7005,7 @@ function deleteBreedingRecord(id) {
   if (!record || !confirm("要删除这条繁殖记录吗？")) return;
   setState({
     breedingRecords: (state.breedingRecords || []).filter(item => item.id !== id),
+    openBreedingMenuId: "",
     activityLogs: logActivity(`删除繁殖记录：${record.motherName || "未填写种母"}`, "繁殖")
   });
 }
@@ -4397,7 +7104,105 @@ function toast(text) {
   setTimeout(() => el.remove(), 2200);
 }
 
+function openImagePreview(src, alt = "图片预览") {
+  document.querySelector(".image-preview-overlay")?.remove();
+
+  const overlay = document.createElement("div");
+  overlay.className = "image-preview-overlay";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-label", alt);
+
+  const closeButton = document.createElement("button");
+  closeButton.className = "image-preview-close";
+  closeButton.type = "button";
+  closeButton.setAttribute("aria-label", "关闭图片预览");
+  closeButton.textContent = "×";
+
+  const image = document.createElement("img");
+  image.src = src;
+  image.alt = alt;
+
+  const caption = document.createElement("span");
+  caption.className = "image-preview-caption";
+  caption.textContent = alt;
+
+  overlay.append(closeButton, image, caption);
+  document.body.appendChild(overlay);
+  document.body.classList.add("image-preview-open");
+
+  const close = () => {
+    document.removeEventListener("keydown", handleKeydown);
+    document.body.classList.remove("image-preview-open");
+    overlay.remove();
+  };
+  const handleKeydown = event => {
+    if (event.key === "Escape") close();
+  };
+
+  closeButton.addEventListener("click", close);
+  overlay.addEventListener("click", event => {
+    if (event.target === overlay) close();
+  });
+  document.addEventListener("keydown", handleKeydown);
+  closeButton.focus();
+}
+
+function openVideoPreview(src, alt = "视频预览") {
+  document.querySelector(".image-preview-overlay")?.remove();
+
+  const overlay = document.createElement("div");
+  overlay.className = "image-preview-overlay video-preview-overlay";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-label", alt);
+
+  const closeButton = document.createElement("button");
+  closeButton.className = "image-preview-close";
+  closeButton.type = "button";
+  closeButton.setAttribute("aria-label", "关闭视频预览");
+  closeButton.textContent = "×";
+
+  const video = document.createElement("video");
+  video.src = src;
+  video.controls = true;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.preload = "auto";
+
+  const caption = document.createElement("span");
+  caption.className = "image-preview-caption";
+  caption.textContent = alt;
+
+  overlay.append(closeButton, video, caption);
+  document.body.appendChild(overlay);
+  document.body.classList.add("image-preview-open");
+  video.play().catch(() => {});
+
+  const close = () => {
+    document.removeEventListener("keydown", handleKeydown);
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    document.body.classList.remove("image-preview-open");
+    overlay.remove();
+  };
+  const handleKeydown = event => {
+    if (event.key === "Escape") close();
+  };
+
+  closeButton.addEventListener("click", close);
+  overlay.addEventListener("click", event => {
+    if (event.target === overlay) close();
+  });
+  document.addEventListener("keydown", handleKeydown);
+  closeButton.focus();
+}
+
 restorePendingCloudData();
 render();
+startMarketNetworkMonitoring();
 refreshCareReminderTimers();
 startCloudSessionHydration();
+startMessageUnreadPolling();
+refreshMessageUnread(true);

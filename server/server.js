@@ -1,3 +1,6 @@
+// 所有按本地日期生成的服务器数据（如上传目录）统一使用中国标准时间。
+process.env.TZ = "Asia/Shanghai";
+
 const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
@@ -32,8 +35,8 @@ const DATA_FILE = path.resolve(DATA_DIR, "app-data.json");
 const SMS_STATE_FILE = path.resolve(DATA_DIR, "sms-state.json");
 const UPLOAD_DIR = path.resolve(__dirname, "uploads");
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
-const MAX_MEDIA_UPLOAD_BYTES = Number(process.env.MAX_MEDIA_UPLOAD_BYTES || 10 * 1024 * 1024);
 const REVIEW_ADMIN_PHONE = "18652082378";
+const MARKET_SALE_METHODS = ["自有客户成交", "闲鱼成交", "壳友手账成交"];
 const smsCodes = new Map();
 const verifiedPhones = new Map();
 
@@ -88,7 +91,7 @@ function sendJson(res, status, body) {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type"
+    "Access-Control-Allow-Headers": "Content-Type, X-Auth-Phone, X-Auth-Token, X-Media-Duration"
   });
   res.end(JSON.stringify(body));
 }
@@ -121,6 +124,9 @@ function emptyAccountData() {
     satisfactionRating: 5,
     satisfactionReviews: [],
     feedbackItems: [],
+    marketFavoriteIds: [],
+    marketHistoryIds: [],
+    turtlePools: [],
     syncEnabled: true,
     subscriptionPlan: "free",
     subscriptionCycle: "",
@@ -143,6 +149,21 @@ function normalizeAccountData(data = {}) {
     satisfactionRating: Number(next.satisfactionRating || 5),
     satisfactionReviews: Array.isArray(next.satisfactionReviews) ? next.satisfactionReviews : [],
     feedbackItems: Array.isArray(next.feedbackItems) ? next.feedbackItems : [],
+    marketFavoriteIds: Array.isArray(next.marketFavoriteIds) ? next.marketFavoriteIds.map(String).slice(0, 500) : [],
+    marketHistoryIds: Array.isArray(next.marketHistoryIds) ? next.marketHistoryIds.map(String).slice(0, 100) : [],
+    turtlePools: Array.isArray(next.turtlePools) ? next.turtlePools.slice(0, 200).map(pool => ({
+      ...pool,
+      id: String(pool?.id || crypto.randomUUID()),
+      name: String(pool?.name || "").trim().slice(0, 24),
+      type: ["hatchling", "juvenile", "breeder"].includes(pool?.type) ? pool.type : "",
+      length: String(pool?.length ?? "").slice(0, 16),
+      width: String(pool?.width ?? "").slice(0, 16),
+      height: String(pool?.height ?? "").slice(0, 16),
+      count: Math.max(0, Math.floor(Number.isFinite(Number(pool?.count)) ? Number(pool.count) : 0)),
+      note: String(pool?.note || "").trim().slice(0, 200),
+      createdAt: String(pool?.createdAt || ""),
+      updatedAt: String(pool?.updatedAt || "")
+    })).filter(pool => pool.name && pool.type) : [],
     syncEnabled: Boolean(next.syncEnabled),
     subscriptionPlan: ["free", "member", "pro"].includes(next.subscriptionPlan) ? next.subscriptionPlan : "free",
     subscriptionCycle: next.subscriptionCycle || "",
@@ -156,7 +177,7 @@ function normalizeAccountData(data = {}) {
 
 function readDatabase() {
   try {
-    if (!fs.existsSync(DATA_FILE)) return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [] };
+    if (!fs.existsSync(DATA_FILE)) return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [] };
     const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     return data && typeof data === "object"
       ? {
@@ -166,11 +187,12 @@ function readDatabase() {
           communityPosts: Array.isArray(data.communityPosts) ? data.communityPosts : [],
           marketListings: Array.isArray(data.marketListings) ? data.marketListings : [],
           friendships: Array.isArray(data.friendships) ? data.friendships : [],
-          messages: Array.isArray(data.messages) ? data.messages : []
+          messages: Array.isArray(data.messages) ? data.messages : [],
+          follows: Array.isArray(data.follows) ? data.follows : []
         }
-      : { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [] };
+      : { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [] };
   } catch {
-    return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [] };
+    return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [] };
   }
 }
 
@@ -683,13 +705,14 @@ function parseMediaDataUrl(value) {
 }
 
 async function handleUploadMedia(req, res) {
+  const requestType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+  if (requestType && requestType !== "application/json") return await handleUploadMediaStream(req, res, requestType);
   const body = await readJson(req);
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
   const media = parseMediaDataUrl(body.media);
   if (!media) return sendJson(res, 400, { ok: false, message: "仅支持 JPG、PNG、WebP、MP4、WebM 或 MOV" });
-  if (media.buffer.length > MAX_MEDIA_UPLOAD_BYTES) return sendJson(res, 413, { ok: false, message: "媒体文件不能超过 10MB" });
   const now = new Date();
   const year = String(now.getFullYear());
   const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -698,6 +721,81 @@ async function handleUploadMedia(req, res) {
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.resolve(folder, filename), media.buffer);
   return sendJson(res, 200, { ok: true, url: `/uploads/${year}/${month}/${filename}`, mediaType: media.mediaType });
+}
+
+function streamMediaInfo(mime) {
+  const types = {
+    "image/jpeg": { ext: "jpg", mediaType: "image" },
+    "image/png": { ext: "png", mediaType: "image" },
+    "image/webp": { ext: "webp", mediaType: "image" },
+    "video/mp4": { ext: "mp4", mediaType: "video" },
+    "video/webm": { ext: "webm", mediaType: "video" },
+    "video/quicktime": { ext: "mov", mediaType: "video" }
+  };
+  return types[mime] || null;
+}
+
+function handleUploadMediaStream(req, res, mime) {
+  return new Promise(resolve => {
+    const db = readDatabase();
+    const user = requireReviewUser(db, {
+      phone: req.headers["x-auth-phone"],
+      token: req.headers["x-auth-token"]
+    }, res);
+    if (!user) {
+      req.resume();
+      resolve();
+      return;
+    }
+    const media = streamMediaInfo(mime);
+    if (!media) {
+      req.resume();
+      sendJson(res, 400, { ok: false, message: "仅支持 JPG、PNG、WebP、MP4、WebM 或 MOV" });
+      resolve();
+      return;
+    }
+    const duration = Number(req.headers["x-media-duration"] || 0);
+    if (media.mediaType === "video" && (!Number.isFinite(duration) || duration <= 0 || duration > 30)) {
+      req.resume();
+      sendJson(res, 400, { ok: false, message: "视频时长不能超过30秒" });
+      resolve();
+      return;
+    }
+    const now = new Date();
+    const year = String(now.getFullYear());
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const folder = path.resolve(UPLOAD_DIR, year, month);
+    const filename = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}-media.${media.ext}`;
+    const target = path.resolve(folder, filename);
+    fs.mkdirSync(folder, { recursive: true });
+    const output = fs.createWriteStream(target, { flags: "wx" });
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      if (!output.destroyed) output.destroy();
+      fs.rm(target, { force: true }, () => {});
+      if (!res.headersSent) sendJson(res, 500, { ok: false, message: "视频上传失败，请重试" });
+      resolve();
+    };
+    req.on("aborted", fail);
+    req.on("error", fail);
+    output.on("error", fail);
+    output.on("finish", () => {
+      if (!res.headersSent) sendJson(res, 200, {
+        ok: true,
+        url: `/uploads/${year}/${month}/${filename}`,
+        mediaType: media.mediaType
+      });
+      finish();
+    });
+    req.pipe(output);
+  });
 }
 
 async function handleListReviews(req, res) {
@@ -949,20 +1047,130 @@ function friendshipKey(phoneA, phoneB) {
   return [String(phoneA), String(phoneB)].sort().join(":");
 }
 
+function communityMessagePreview(message) {
+  if (!message) return "";
+  const content = String(message.content || message.text || message.message || "").trim();
+  if (content) return content;
+  if (message.marketListing?.title || message.marketListing?.speciesName) {
+    return `咨询商品：${message.marketListing.title || message.marketListing.speciesName}`;
+  }
+  return message.mediaUrl ? "[图片]" : "";
+}
+
+function marketChatListingSnapshot(db, listingId, sellerPhone = "") {
+  const listing = (Array.isArray(db.marketListings) ? db.marketListings : [])
+    .find(item => item.id === String(listingId || ""));
+  if (!listing || (sellerPhone && listing.sellerPhoneRaw !== sellerPhone)) return null;
+  const seller = db.users?.[listing.sellerPhoneRaw];
+  const mediaItems = (Array.isArray(listing.mediaItems) ? listing.mediaItems : [])
+    .slice(0, 9)
+    .map(media => ({ url: String(media?.url || ""), type: media?.type === "video" ? "video" : "image" }))
+    .filter(media => media.url);
+  const primaryMedia = mediaItems[0] || {
+    url: String(listing.photoUrl || ""),
+    type: "image"
+  };
+  return {
+    id: listing.id,
+    turtleId: listing.turtleId || "",
+    title: listing.title || listing.speciesName || "龟集市商品",
+    speciesCode: listing.speciesCode || "",
+    speciesName: listing.speciesName || "",
+    stage: listing.stage || "hatchling",
+    gender: listing.gender || "未知",
+    weight: listing.weight || "",
+    shellLength: listing.shellLength || "",
+    price: Math.max(0, Number(listing.price || 0)),
+    negotiable: Boolean(listing.negotiable),
+    city: listing.city || "",
+    delivery: listing.delivery || "",
+    description: listing.description || "",
+    viewCount: Math.max(0, Number(listing.viewCount || 0)),
+    wantCount: (Array.isArray(listing.wantedPhones) ? listing.wantedPhones : []).length,
+    mediaUrl: primaryMedia.url || "",
+    mediaType: primaryMedia.type === "video" ? "video" : "image",
+    photoUrl: listing.photoUrl || primaryMedia.url || "",
+    mediaItems,
+    status: listing.status === "sold" ? "sold" : "active",
+    sellerId: communityUserId(listing.sellerPhoneRaw),
+    sellerName: seller?.accountName || listing.sellerName || "壳友卖家",
+    sellerAvatar: seller?.accountAvatar || listing.sellerAvatar || ""
+  };
+}
+
+function communityConversationMessages(db, phoneA, phoneB) {
+  return (Array.isArray(db.messages) ? db.messages : [])
+    .filter(item => [item.fromPhone, item.toPhone].includes(phoneA) && [item.fromPhone, item.toPhone].includes(phoneB))
+    .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
+    .map(item => {
+      const rawContent = String(item.content || item.text || item.message || "").trim();
+      return {
+        id: item.id,
+        content: communityMessagePreview(item),
+        mine: item.fromPhone === phoneA,
+        createdAt: item.createdAt,
+        marketListing: item.marketListing || null,
+        marketReferenceOnly: Boolean(item.marketListing && !rawContent)
+      };
+    });
+}
+
+function latestConversationMarketListing(messages = []) {
+  return [...messages].reverse().find(item => item.marketListing)?.marketListing || null;
+}
+
 function communityFriends(db, viewer) {
   const links = Array.isArray(db.friendships) ? db.friendships : [];
-  return links
+  const messages = Array.isArray(db.messages) ? db.messages : [];
+  const contactPhones = new Set();
+  links
     .filter(item => item.phones?.includes(viewer.phone))
-    .map(item => {
-      const phone = item.phones.find(value => value !== viewer.phone);
+    .forEach(item => item.phones.filter(phone => phone !== viewer.phone).forEach(phone => contactPhones.add(phone)));
+  messages.forEach(message => {
+    if (message.fromPhone === viewer.phone && message.toPhone) contactPhones.add(message.toPhone);
+    if (message.toPhone === viewer.phone && message.fromPhone) contactPhones.add(message.fromPhone);
+  });
+  return [...contactPhones]
+    .map(phone => {
       const user = db.users?.[phone];
+      const lastMessage = messages
+        .filter(message => (message.fromPhone === phone && message.toPhone === viewer.phone) || (message.fromPhone === viewer.phone && message.toPhone === phone))
+        .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))[0];
       return user ? {
         id: communityUserId(phone),
         name: user.accountName || maskPhone(phone),
         avatar: user.accountAvatar || "",
         phone: maskPhone(phone),
-        createdAt: item.createdAt
+        unreadCount: messages.filter(message => message.fromPhone === phone && message.toPhone === viewer.phone && !message.readAt).length,
+        lastMessage: communityMessagePreview(lastMessage),
+        lastMessageAt: lastMessage?.createdAt || "",
+        createdAt: links.find(item => item.phones?.includes(viewer.phone) && item.phones?.includes(phone))?.createdAt || lastMessage?.createdAt || ""
       } : null;
+    })
+    .filter(Boolean)
+    .sort((left, right) => new Date(right.lastMessageAt || right.createdAt || 0) - new Date(left.lastMessageAt || left.createdAt || 0));
+}
+
+function isFollowingCommunityUser(db, followerPhone, targetPhone) {
+  return (Array.isArray(db.follows) ? db.follows : []).some(item => item.followerPhone === followerPhone && item.targetPhone === targetPhone);
+}
+
+function followedCommunityUsers(db, viewer) {
+  return (Array.isArray(db.follows) ? db.follows : [])
+    .filter(item => item.followerPhone === viewer.phone)
+    .slice()
+    .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))
+    .map(item => {
+      const user = db.users?.[item.targetPhone];
+      if (!user) return null;
+      return {
+        id: communityUserId(item.targetPhone),
+        name: user.accountName || maskPhone(item.targetPhone),
+        avatar: user.accountAvatar || "",
+        postCount: (Array.isArray(db.communityPosts) ? db.communityPosts : []).filter(post => post.authorPhoneRaw === item.targetPhone).length,
+        listingCount: (Array.isArray(db.marketListings) ? db.marketListings : []).filter(listing => listing.sellerPhoneRaw === item.targetPhone && listing.status !== "sold").length,
+        followedAt: item.createdAt
+      };
     })
     .filter(Boolean);
 }
@@ -970,6 +1178,13 @@ function communityFriends(db, viewer) {
 function isCommunityFriend(db, phoneA, phoneB) {
   const key = friendshipKey(phoneA, phoneB);
   return (Array.isArray(db.friendships) ? db.friendships : []).some(item => item.key === key);
+}
+
+function hasCommunityConversation(db, phoneA, phoneB) {
+  return (Array.isArray(db.messages) ? db.messages : []).some(item =>
+    (item.fromPhone === phoneA && item.toPhone === phoneB) ||
+    (item.fromPhone === phoneB && item.toPhone === phoneA)
+  );
 }
 
 function publicCommunityPosts(db, viewer = null) {
@@ -995,6 +1210,7 @@ function publicCommunityPosts(db, viewer = null) {
         likeCount: likes.length,
         liked: Boolean(viewerPhone && likes.includes(viewerPhone)),
         isOwn: Boolean(viewerPhone && item.authorPhoneRaw === viewerPhone),
+        followed: Boolean(viewerPhone && item.authorPhoneRaw !== viewerPhone && isFollowingCommunityUser(db, viewerPhone, item.authorPhoneRaw)),
         isFriend: Boolean(viewerPhone && item.authorPhoneRaw !== viewerPhone && isCommunityFriend(db, viewerPhone, item.authorPhoneRaw)),
         comments: (Array.isArray(item.comments) ? item.comments : []).map(comment => ({
           id: comment.id,
@@ -1108,18 +1324,69 @@ async function handleCommunityAddFriend(req, res) {
   return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user), friends: communityFriends(db, user) });
 }
 
+async function handleCommunityFollowToggle(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const target = communityUserById(db, body.userId);
+  if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "无法关注该用户" });
+  db.follows = Array.isArray(db.follows) ? db.follows : [];
+  const followed = isFollowingCommunityUser(db, user.phone, target.phone);
+  db.follows = followed
+    ? db.follows.filter(item => !(item.followerPhone === user.phone && item.targetPhone === target.phone))
+    : [...db.follows, { followerPhone: user.phone, targetPhone: target.phone, createdAt: new Date().toISOString() }];
+  writeDatabase(db);
+  return sendJson(res, 200, {
+    ok: true,
+    followed: !followed,
+    posts: publicCommunityPosts(db, user),
+    listings: publicMarketListings(db, user),
+    following: followedCommunityUsers(db, user)
+  });
+}
+
+async function handleCommunityFollowingList(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const following = followedCommunityUsers(db, user);
+  const followedIds = new Set(following.map(item => item.id));
+  return sendJson(res, 200, {
+    ok: true,
+    following,
+    posts: publicCommunityPosts(db, user).filter(item => followedIds.has(item.authorId)),
+    listings: publicMarketListings(db, user).filter(item => followedIds.has(item.sellerId))
+  });
+}
+
 async function handleCommunityChatList(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
   const target = communityUserById(db, body.userId);
-  if (!target || !isCommunityFriend(db, user.phone, target.phone)) return sendJson(res, 403, { ok: false, message: "请先添加对方为好友" });
-  const messages = (Array.isArray(db.messages) ? db.messages : [])
-    .filter(item => [item.fromPhone, item.toPhone].includes(user.phone) && [item.fromPhone, item.toPhone].includes(target.phone))
-    .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
-    .map(item => ({ id: item.id, content: item.content, mine: item.fromPhone === user.phone, createdAt: item.createdAt }));
-  return sendJson(res, 200, { ok: true, friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "" }, messages });
+  if (!target || (!isCommunityFriend(db, user.phone, target.phone) && !hasCommunityConversation(db, user.phone, target.phone))) {
+    return sendJson(res, 403, { ok: false, message: "请先添加对方为好友" });
+  }
+  db.messages = Array.isArray(db.messages) ? db.messages : [];
+  let readStateChanged = false;
+  const readAt = new Date().toISOString();
+  db.messages.forEach(item => {
+    if (item.fromPhone === target.phone && item.toPhone === user.phone && !item.readAt) {
+      item.readAt = readAt;
+      readStateChanged = true;
+    }
+  });
+  if (readStateChanged) writeDatabase(db);
+  const messages = communityConversationMessages(db, user.phone, target.phone);
+  return sendJson(res, 200, {
+    ok: true,
+    friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "" },
+    messages,
+    marketListing: latestConversationMarketListing(messages)
+  });
 }
 
 async function handleCommunityChatSend(req, res) {
@@ -1129,55 +1396,141 @@ async function handleCommunityChatSend(req, res) {
   if (!user) return;
   const target = communityUserById(db, body.userId);
   const content = trimPublicText(body.content, 1000);
-  if (!target || !isCommunityFriend(db, user.phone, target.phone)) return sendJson(res, 403, { ok: false, message: "请先添加对方为好友" });
-  if (!content) return sendJson(res, 400, { ok: false, message: "请输入消息" });
-  db.messages = [...(Array.isArray(db.messages) ? db.messages : []), { id: crypto.randomUUID(), fromPhone: user.phone, toPhone: target.phone, content, createdAt: new Date().toISOString() }].slice(-5000);
+  const marketListingId = trimPublicText(body.marketListingId, 100);
+  if (!target || (!isCommunityFriend(db, user.phone, target.phone) && !hasCommunityConversation(db, user.phone, target.phone))) {
+    return sendJson(res, 403, { ok: false, message: "请先添加对方为好友" });
+  }
+  const marketListing = marketListingId ? marketChatListingSnapshot(db, marketListingId, target.phone) : null;
+  if (marketListingId && !marketListing) return sendJson(res, 400, { ok: false, message: "商品信息无效" });
+  if (!content && !marketListing) return sendJson(res, 400, { ok: false, message: "请输入消息" });
+  db.messages = [...(Array.isArray(db.messages) ? db.messages : []), {
+    id: crypto.randomUUID(),
+    fromPhone: user.phone,
+    toPhone: target.phone,
+    content,
+    marketListing,
+    readAt: "",
+    createdAt: new Date().toISOString()
+  }].slice(-5000);
   writeDatabase(db);
-  const messages = db.messages
-    .filter(item => [item.fromPhone, item.toPhone].includes(user.phone) && [item.fromPhone, item.toPhone].includes(target.phone))
-    .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
-    .map(item => ({ id: item.id, content: item.content, mine: item.fromPhone === user.phone, createdAt: item.createdAt }));
-  return sendJson(res, 200, { ok: true, friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "" }, messages });
+  const messages = communityConversationMessages(db, user.phone, target.phone);
+  return sendJson(res, 200, {
+    ok: true,
+    friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "" },
+    messages,
+    marketListing: latestConversationMarketListing(messages)
+  });
+}
+
+async function handleCommunityUnread(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const unreadCount = (Array.isArray(db.messages) ? db.messages : [])
+    .filter(item => item.toPhone === user.phone && !item.readAt)
+    .length;
+  return sendJson(res, 200, { ok: true, unreadCount, friends: communityFriends(db, user) });
+}
+
+const MARKET_REFRESH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function marketListingView(db, item, viewer = null) {
+  const viewerPhone = viewer?.phone || "";
+  const seller = db.users?.[item.sellerPhoneRaw];
+  return {
+    id: item.id,
+    turtleId: item.turtleId || "",
+    title: item.title || "",
+    speciesCode: item.speciesCode || "",
+    speciesName: item.speciesName || "",
+    stage: item.stage || "hatchling",
+    gender: item.gender || "未知",
+    weight: item.weight || "",
+    shellLength: item.shellLength || "",
+    price: Number(item.price || 0),
+    negotiable: Boolean(item.negotiable),
+    city: item.city || "",
+    delivery: item.delivery || "",
+    description: item.description || "",
+    viewCount: Math.max(0, Number(item.viewCount || 0)),
+    wantCount: (Array.isArray(item.wantedPhones) ? item.wantedPhones : []).length,
+    photoUrl: item.photoUrl || "",
+    mediaItems: (Array.isArray(item.mediaItems) ? item.mediaItems : []).slice(0, 9).map(media => ({
+      url: media.url || "",
+      type: media.type === "video" ? "video" : "image"
+    })),
+    status: ["active", "inactive", "sold"].includes(item.status) ? item.status : "active",
+    refreshedAt: item.refreshedAt || item.createdAt || "",
+    offlineAt: item.offlineAt || "",
+    offlineReason: item.offlineReason || "",
+    sellerId: communityUserId(item.sellerPhoneRaw),
+    sellerName: seller?.accountName || item.sellerName || "壳友卖家",
+    sellerAvatar: seller?.accountAvatar || item.sellerAvatar || "",
+    isOwn: Boolean(viewerPhone && item.sellerPhoneRaw === viewerPhone),
+    sellerFollowed: Boolean(viewerPhone && item.sellerPhoneRaw !== viewerPhone && isFollowingCommunityUser(db, viewerPhone, item.sellerPhoneRaw)),
+    isFriend: Boolean(viewerPhone && item.sellerPhoneRaw !== viewerPhone && isCommunityFriend(db, viewerPhone, item.sellerPhoneRaw)),
+    createdAt: item.createdAt
+  };
+}
+
+function autoOfflineStaleMarketListings(db, now = Date.now()) {
+  let changed = false;
+  (Array.isArray(db.marketListings) ? db.marketListings : []).forEach(listing => {
+    if ((listing.status || "active") !== "active") return;
+    const refreshedAt = Date.parse(listing.refreshedAt || listing.createdAt || "");
+    if (!Number.isFinite(refreshedAt) || now - refreshedAt < MARKET_REFRESH_WINDOW_MS) return;
+    listing.status = "inactive";
+    listing.offlineReason = "stale";
+    listing.offlineAt = new Date(now).toISOString();
+    changed = true;
+  });
+  return changed;
 }
 
 function publicMarketListings(db, viewer = null) {
-  const viewerPhone = viewer?.phone || "";
   return (Array.isArray(db.marketListings) ? db.marketListings : [])
+    .filter(item => (item.status || "active") === "active")
     .slice()
-    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-    .map(item => {
-      const seller = db.users?.[item.sellerPhoneRaw];
-      return {
-        id: item.id,
-        turtleId: item.turtleId || "",
-        title: item.title || "",
-        speciesName: item.speciesName || "",
-        stage: item.stage || "hatchling",
-        gender: item.gender || "未知",
-        weight: item.weight || "",
-        shellLength: item.shellLength || "",
-        price: Number(item.price || 0),
-        negotiable: Boolean(item.negotiable),
-        city: item.city || "",
-        delivery: item.delivery || "",
-        description: item.description || "",
-        photoUrl: item.photoUrl || "",
-        status: item.status === "sold" ? "sold" : "active",
-        sellerId: communityUserId(item.sellerPhoneRaw),
-        sellerName: seller?.accountName || item.sellerName || "壳友卖家",
-        sellerAvatar: seller?.accountAvatar || item.sellerAvatar || "",
-        isOwn: Boolean(viewerPhone && item.sellerPhoneRaw === viewerPhone),
-        isFriend: Boolean(viewerPhone && item.sellerPhoneRaw !== viewerPhone && isCommunityFriend(db, viewerPhone, item.sellerPhoneRaw)),
-        createdAt: item.createdAt
-      };
-    });
+    .sort((a, b) => new Date(b.refreshedAt || b.createdAt || 0) - new Date(a.refreshedAt || a.createdAt || 0))
+    .map(item => marketListingView(db, item, viewer));
+}
+
+function ownMarketListings(db, user) {
+  if (!user) return [];
+  return (Array.isArray(db.marketListings) ? db.marketListings : [])
+    .filter(item => item.sellerPhoneRaw === user.phone && item.status !== "sold")
+    .slice()
+    .sort((a, b) => new Date(b.refreshedAt || b.createdAt || 0) - new Date(a.refreshedAt || a.createdAt || 0))
+    .map(item => marketListingView(db, item, user));
 }
 
 async function handleMarketList(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
   const user = optionalReviewUser(db, body);
-  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user) });
+  let accountData = null;
+  let changed = autoOfflineStaleMarketListings(db);
+  if (user) {
+    user.data = normalizeAccountData(user.data || {});
+    (Array.isArray(db.marketListings) ? db.marketListings : [])
+      .filter(item => item.sellerPhoneRaw === user.phone && item.status === "sold")
+      .forEach(listing => {
+        const records = user.data.ledgerRecords || [];
+        const linked = records.find(item => item.marketListingId === listing.id)
+          || (listing.turtleId ? records.find(item => item.type === "sold" && item.turtleId === listing.turtleId) : null);
+        if (linked) return;
+        syncMarketListingToLedger(user, listing, "sold");
+        changed = true;
+      });
+    if (changed) {
+      user.updatedAt = new Date().toISOString();
+      writeDatabase(db);
+      accountData = normalizeAccountData(user.data || {});
+    }
+  }
+  if (changed && !user) writeDatabase(db);
+  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user), myListings: ownMarketListings(db, user), accountData });
 }
 
 async function handleMarketCreate(req, res) {
@@ -1187,12 +1540,20 @@ async function handleMarketCreate(req, res) {
   if (!user) return;
   const title = trimPublicText(body.title, 40);
   const speciesName = trimPublicText(body.speciesName, 30);
+  const mediaItems = (Array.isArray(body.mediaItems) ? body.mediaItems : [])
+    .slice(0, 9)
+    .map(media => ({
+      url: trimPublicText(media?.url, 800),
+      type: media?.type === "video" ? "video" : "image"
+    }))
+    .filter(media => media.url);
   const price = Number(body.price || 0);
   if (!title || !speciesName || !Number.isFinite(price) || price < 0) return sendJson(res, 400, { ok: false, message: "请填写正确的标题、品种和价格" });
   const listing = {
     id: crypto.randomUUID(),
     turtleId: trimPublicText(body.turtleId, 100),
     title,
+    speciesCode: trimPublicText(body.speciesCode, 20),
     speciesName,
     stage: ["hatchling", "juvenile", "adult"].includes(body.stage) ? body.stage : "hatchling",
     gender: ["公", "母", "未知"].includes(body.gender) ? body.gender : "未知",
@@ -1203,16 +1564,212 @@ async function handleMarketCreate(req, res) {
     city: trimPublicText(body.city, 24),
     delivery: ["可快递", "仅自提", "可面交"].includes(body.delivery) ? body.delivery : "双方协商",
     description: trimPublicText(body.description, 600),
-    photoUrl: trimPublicText(body.photoUrl, 800),
+    photoUrl: mediaItems[0]?.url || trimPublicText(body.photoUrl, 800),
+    mediaItems,
+    viewCount: 0,
+    wantedPhones: [],
     status: "active",
     sellerPhoneRaw: user.phone,
     sellerName: user.accountName || maskPhone(user.phone),
     sellerAvatar: user.accountAvatar || "",
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    refreshedAt: new Date().toISOString(),
+    offlineAt: "",
+    offlineReason: ""
   };
   db.marketListings = [listing, ...(Array.isArray(db.marketListings) ? db.marketListings : [])];
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user) });
+  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user), myListings: ownMarketListings(db, user) });
+}
+
+function marketRecordDate() {
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map(item => [item.type, item.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function marketLedgerPhoto(listing) {
+  const mediaItems = Array.isArray(listing.mediaItems) ? listing.mediaItems : [];
+  const image = mediaItems.find(item => item?.type !== "video" && item?.url)?.url;
+  return image || (!mediaItems.length ? (listing.photoUrl || "") : "");
+}
+
+function marketLedgerSnapshot(listing, turtle = null) {
+  if (turtle) return { ...turtle };
+  return {
+    id: listing.turtleId || "",
+    code: listing.title || listing.speciesName || "龟集市商品",
+    speciesCode: listing.speciesCode || "",
+    speciesName: listing.speciesName || "未填写品种",
+    gender: listing.gender || "未知",
+    weight: listing.weight || "",
+    carapaceLength: listing.shellLength || "",
+    status: "已转让",
+    health: "",
+    source: "龟集市",
+    price: Number(listing.price || 0),
+    photo: marketLedgerPhoto(listing),
+    createdAt: listing.createdAt || new Date().toISOString(),
+    measureHistory: []
+  };
+}
+
+function syncMarketListingToLedger(owner, listing, status) {
+  owner.data = normalizeAccountData(owner.data || {});
+  const records = Array.isArray(owner.data.ledgerRecords) ? owner.data.ledgerRecords : [];
+  const turtles = Array.isArray(owner.data.turtles) ? owner.data.turtles : [];
+  const soldPriceValue = Number(listing.soldPrice);
+  const soldPrice = Number.isFinite(soldPriceValue) && soldPriceValue >= 0 ? soldPriceValue : Number(listing.price || 0);
+  const saleMethod = MARKET_SALE_METHODS.includes(listing.saleMethod) ? listing.saleMethod : "未填写";
+  const linkedTurtle = listing.turtleId ? turtles.find(item => item.id === listing.turtleId) : null;
+  const linkedRecord = records.find(item => item.marketListingId === listing.id)
+    || (listing.turtleId ? records.find(item => item.type === "sold" && item.turtleId === listing.turtleId) : null);
+
+  if (status === "sold") {
+    let record = linkedRecord;
+    if (!record) {
+      const snapshot = marketLedgerSnapshot(listing, linkedTurtle);
+      record = {
+        id: listing.ledgerRecordId || crypto.randomUUID(),
+        type: "sold",
+        turtleId: listing.turtleId || "",
+        title: linkedTurtle
+          ? `${linkedTurtle.code || "未命名"} · ${linkedTurtle.speciesName || "未填写品种"}`
+          : (listing.title || listing.speciesName || "龟集市商品"),
+        amount: soldPrice,
+        recordDate: marketRecordDate(),
+        weight: listing.weight || linkedTurtle?.weight || "",
+        carapaceLength: listing.shellLength || linkedTurtle?.carapaceLength || "",
+        carapaceWidth: linkedTurtle?.carapaceWidth || "",
+        shellHeight: linkedTurtle?.shellHeight || "",
+        plastronLength: linkedTurtle?.plastronLength || "",
+        note: `成交方式：${saleMethod}；由龟集市标记已售自动生成`,
+        saleMethod,
+        photo: marketLedgerPhoto(listing) || linkedTurtle?.photo || "",
+        turtleSnapshot: snapshot,
+        marketListingId: listing.id,
+        autoMarketRecord: true,
+        createdAt: new Date().toISOString()
+      };
+      owner.data.ledgerRecords = [record, ...records];
+    } else {
+      if (!record.marketListingId) record.marketListingId = listing.id;
+      if (record.autoMarketRecord) {
+        record.amount = soldPrice;
+        record.saleMethod = saleMethod;
+        record.note = `成交方式：${saleMethod}；由龟集市标记已售自动生成`;
+      }
+    }
+    listing.ledgerRecordId = record.id;
+    if (listing.turtleId && linkedTurtle) {
+      owner.data.turtles = turtles.filter(item => item.id !== listing.turtleId);
+    }
+    owner.data.activityLogs = [{
+      id: crypto.randomUUID(),
+      text: `龟集市已售自动记账：${record.title}，${saleMethod}，成交价 ${Number(record.amount || 0).toFixed(2)} 元`,
+      type: "账本",
+      createdAt: new Date().toISOString()
+    }, ...(owner.data.activityLogs || [])];
+    return record;
+  }
+
+  const autoRecord = records.find(item => item.marketListingId === listing.id && item.autoMarketRecord);
+  if (autoRecord) {
+    owner.data.ledgerRecords = records.filter(item => item.id !== autoRecord.id);
+    const snapshot = autoRecord.turtleSnapshot;
+    if (listing.turtleId && snapshot && !turtles.some(item => item.id === listing.turtleId)) {
+      owner.data.turtles = [{ ...snapshot }, ...turtles];
+    }
+  }
+  owner.data.activityLogs = [{
+    id: crypto.randomUUID(),
+    text: `龟集市恢复在售：${listing.title || listing.speciesName || "商品"}`,
+    type: "账本",
+    createdAt: new Date().toISOString()
+  }, ...(owner.data.activityLogs || [])];
+  return null;
+}
+
+async function handleMarketRefresh(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const listing = (Array.isArray(db.marketListings) ? db.marketListings : []).find(item => item.id === String(body.listingId || ""));
+  if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
+  if (listing.sellerPhoneRaw !== user.phone && !isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "只能刷新自己的商品" });
+  if (listing.status === "sold") return sendJson(res, 400, { ok: false, message: "已售商品不能刷新" });
+  listing.status = "active";
+  listing.refreshedAt = new Date().toISOString();
+  listing.offlineAt = "";
+  listing.offlineReason = "";
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user), myListings: ownMarketListings(db, user), refreshedAt: listing.refreshedAt });
+}
+
+async function handleMarketOffline(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const listing = (Array.isArray(db.marketListings) ? db.marketListings : []).find(item => item.id === String(body.listingId || ""));
+  if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
+  if (listing.sellerPhoneRaw !== user.phone && !isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "只能下架自己的商品" });
+  if (listing.status === "sold") return sendJson(res, 400, { ok: false, message: "已售商品不能下架" });
+  listing.status = "inactive";
+  listing.offlineReason = "manual";
+  listing.offlineAt = new Date().toISOString();
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user), myListings: ownMarketListings(db, user) });
+}
+
+async function handleMarketUpdate(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const listing = (Array.isArray(db.marketListings) ? db.marketListings : []).find(item => item.id === String(body.listingId || ""));
+  if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
+  if (listing.sellerPhoneRaw !== user.phone && !isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "只能编辑自己的商品" });
+  if (listing.status === "sold") return sendJson(res, 400, { ok: false, message: "已售商品不能编辑" });
+  const title = trimPublicText(body.title, 40);
+  const speciesName = trimPublicText(body.speciesName, 30);
+  const price = Number(body.price || 0);
+  const mediaItems = (Array.isArray(body.mediaItems) ? body.mediaItems : [])
+    .slice(0, 9)
+    .map(media => ({ url: trimPublicText(media?.url, 800), type: media?.type === "video" ? "video" : "image" }))
+    .filter(media => media.url);
+  if (!title || !speciesName || !Number.isFinite(price) || price < 0 || !mediaItems.length) {
+    return sendJson(res, 400, { ok: false, message: "请填写正确的商品信息并保留至少一项实拍媒体" });
+  }
+  Object.assign(listing, {
+    turtleId: trimPublicText(body.turtleId, 100),
+    title,
+    speciesCode: trimPublicText(body.speciesCode, 20),
+    speciesName,
+    stage: ["hatchling", "juvenile", "adult"].includes(body.stage) ? body.stage : "hatchling",
+    gender: ["公", "母", "未知"].includes(body.gender) ? body.gender : "未知",
+    weight: trimPublicText(body.weight, 20),
+    shellLength: trimPublicText(body.shellLength, 20),
+    price,
+    negotiable: Boolean(body.negotiable),
+    city: trimPublicText(body.city, 24),
+    delivery: ["可快递", "仅自提", "可面交"].includes(body.delivery) ? body.delivery : "双方协商",
+    description: trimPublicText(body.description, 600),
+    photoUrl: mediaItems[0].url,
+    mediaItems,
+    status: "active",
+    refreshedAt: new Date().toISOString(),
+    offlineAt: "",
+    offlineReason: ""
+  });
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user), myListings: ownMarketListings(db, user) });
 }
 
 async function handleMarketStatus(req, res) {
@@ -1223,9 +1780,80 @@ async function handleMarketStatus(req, res) {
   const listing = (Array.isArray(db.marketListings) ? db.marketListings : []).find(item => item.id === String(body.listingId || ""));
   if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
   if (listing.sellerPhoneRaw !== user.phone && !isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "只能修改自己的商品" });
-  listing.status = body.status === "sold" ? "sold" : "active";
+  const status = body.status === "sold" ? "sold" : "active";
+  const saleMethod = trimPublicText(body.saleMethod, 20);
+  const salePrice = Number(body.salePrice);
+  if (status === "sold" && !MARKET_SALE_METHODS.includes(saleMethod)) {
+    return sendJson(res, 400, { ok: false, message: "请选择成交方式" });
+  }
+  if (status === "sold" && (!Number.isFinite(salePrice) || salePrice < 0)) {
+    return sendJson(res, 400, { ok: false, message: "请填写正确的成交价格" });
+  }
+  const previousStatus = listing.status === "sold" ? "sold" : "active";
+  listing.status = status;
+  if (status === "sold") {
+    listing.saleMethod = saleMethod;
+    listing.soldPrice = salePrice;
+    listing.soldAt = new Date().toISOString();
+  } else {
+    listing.saleMethod = "";
+    listing.soldPrice = "";
+    listing.soldAt = "";
+    listing.refreshedAt = new Date().toISOString();
+    listing.offlineAt = "";
+    listing.offlineReason = "";
+  }
+  const owner = db.users?.[listing.sellerPhoneRaw] || (listing.sellerPhoneRaw === user.phone ? user : null);
+  let ledgerRecord = null;
+  if (owner && previousStatus !== status) {
+    ledgerRecord = syncMarketListingToLedger(owner, listing, status);
+    owner.updatedAt = new Date().toISOString();
+  }
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user) });
+  return sendJson(res, 200, {
+    ok: true,
+    listings: publicMarketListings(db, user),
+    myListings: ownMarketListings(db, user),
+    ledgerRecord,
+    accountData: owner?.phone === user.phone ? normalizeAccountData(owner.data || {}) : null
+  });
+}
+
+async function handleMarketView(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const listing = (Array.isArray(db.marketListings) ? db.marketListings : [])
+    .find(item => item.id === String(body.listingId || ""));
+  if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
+  listing.viewCount = Math.max(0, Number(listing.viewCount || 0)) + 1;
+  writeDatabase(db);
+  return sendJson(res, 200, {
+    ok: true,
+    listingId: listing.id,
+    viewCount: listing.viewCount,
+    wantCount: (Array.isArray(listing.wantedPhones) ? listing.wantedPhones : []).length
+  });
+}
+
+async function handleMarketWant(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const listing = (Array.isArray(db.marketListings) ? db.marketListings : [])
+    .find(item => item.id === String(body.listingId || ""));
+  if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
+  listing.wantedPhones = Array.isArray(listing.wantedPhones) ? listing.wantedPhones : [];
+  if (listing.sellerPhoneRaw !== user.phone && !listing.wantedPhones.includes(user.phone)) {
+    listing.wantedPhones.push(user.phone);
+    writeDatabase(db);
+  }
+  return sendJson(res, 200, {
+    ok: true,
+    listingId: listing.id,
+    viewCount: Math.max(0, Number(listing.viewCount || 0)),
+    wantCount: listing.wantedPhones.length
+  });
 }
 
 async function handleMarketDelete(req, res) {
@@ -1316,10 +1944,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/comment") return await handleCommunityComment(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/delete") return await handleCommunityDelete(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/friend/add") return await handleCommunityAddFriend(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/follow/toggle") return await handleCommunityFollowToggle(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/following/list") return await handleCommunityFollowingList(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/unread") return await handleCommunityUnread(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/list") return await handleCommunityChatList(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/send") return await handleCommunityChatSend(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/list") return await handleMarketList(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/view") return await handleMarketView(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/want") return await handleMarketWant(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/create") return await handleMarketCreate(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/refresh") return await handleMarketRefresh(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/offline") return await handleMarketOffline(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/update") return await handleMarketUpdate(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/status") return await handleMarketStatus(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/delete") return await handleMarketDelete(req, res);
     if (req.method === "GET" && url.pathname.startsWith("/uploads/")) return serveUpload(req, res, url);
@@ -1329,6 +1965,11 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 500, { ok: false, message: error.message || "服务异常" });
   }
 });
+
+setInterval(() => {
+  const db = readDatabase();
+  if (autoOfflineStaleMarketListings(db)) writeDatabase(db);
+}, 60 * 60 * 1000).unref();
 
 server.listen(PORT, HOST, () => {
   console.log(`龟管家服务已启动：http://${HOST}:${PORT}`);

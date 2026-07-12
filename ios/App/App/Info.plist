@@ -35,6 +35,8 @@
 	<string>用于保存或更新乌龟照片。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用于上传和记录乌龟照片。</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>用于在发布出售时自动填写您所在的城市。</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

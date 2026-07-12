@@ -54,6 +54,7 @@ window.TURTLE_SPECIES = [
   { code: "HDG", name: "红肚短颈龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Emydura%20subglobosa.jpg" },
   { code: "HED", name: "红耳龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Trachemys%20scripta%20elegans.jpg" },
   { code: "HET", name: "黄额闭壳龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Cuora%20galbinifrons.jpg" },
+  { code: "HWM", name: "虎纹麝香龟", letter: "H", scientific: "Sternotherus minor peltifer", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Sternotherus%20minor%20peltifer.jpg" },
   { code: "HGG", name: "黑腹刺颈龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Acanthochelys%20spixii.jpg" },
   { code: "HHG", name: "黄喉拟水龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Mauremys%20mutica.jpg" },
   { code: "HJG", name: "黑颈乌龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Mauremys%20nigricans.jpg" },
@@ -66,6 +67,7 @@ window.TURTLE_SPECIES = [
   { code: "JBT", name: "锦箱龟", letter: "J", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Terrapene%20ornata.jpg" },
   { code: "JDG", name: "几何陆龟", letter: "J", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Psammobates%20geometricus.jpg" },
   { code: "JQG", name: "金钱龟", letter: "J", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Cuora%20trifasciata.jpg" },
+  { code: "JTM", name: "巨头麝香龟", letter: "J", scientific: "Sternotherus minor", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Sternotherus%20minor.jpg" },
   { code: "JTG", name: "锯缘摄龟", letter: "J", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Cyclemys%20dentata.jpg" },
   { code: "JWG", name: "锦龟", letter: "J", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Chrysemys%20picta.jpg" },
   { code: "JYG", name: "锯齿龟", letter: "J", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Cyclemys%20dentata.jpg" },
@@ -91,6 +93,8 @@ window.TURTLE_SPECIES = [
   { code: "MNG", name: "缅甸孔雀龟", letter: "M", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Morenia%20ocellata.jpg" },
   { code: "MRT", name: "玛塔龟", letter: "M", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Chelus%20fimbriata.jpg" },
   { code: "MSG", name: "麝香龟", letter: "M", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Sternotherus%20odoratus.jpg" },
+  { code: "MXD", name: "麝香蛋龟", letter: "M", scientific: "Sternotherus odoratus", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Sternotherus%20odoratus.jpg" },
+  { code: "MXJ", name: "墨西哥巨蛋龟", letter: "M", scientific: "Staurotypus triporcatus", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Staurotypus%20triporcatus.jpg" },
   { code: "MUG", name: "木雕水龟", letter: "M", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Glyptemys%20insculpta.jpg" },
 
   { code: "NBG", name: "南部锦龟", letter: "N", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Chrysemys%20picta%20dorsalis.jpg" },
@@ -113,6 +117,8 @@ window.TURTLE_SPECIES = [
   { code: "RLG", name: "日本地龟", letter: "R", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Geoemyda%20japonica.jpg" },
   { code: "RMT", name: "日本木纹龟", letter: "R", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Mauremys%20japonica.jpg" },
   { code: "RTG", name: "辐射陆龟", letter: "R", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Astrochelys%20radiata.jpg" },
+
+  { code: "SWE", name: "萨尔文巨蛋龟", letter: "S", scientific: "Staurotypus salvinii", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Staurotypus%20salvinii.jpg" },
 
   { code: "SBQ", name: "三线闭壳龟", letter: "S", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Cuora%20trifasciata.jpg" },
   { code: "SDG", name: "苏卡达陆龟", letter: "S", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Centrochelys%20sulcata.jpg" },
