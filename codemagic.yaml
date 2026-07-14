@@ -36,6 +36,8 @@ workflows:
             --scheme App
     artifacts:
       - build/ios/ipa/*.ipa
+      # Keep the full Xcode archive log. Codemagic's summary only shows exit code 65.
+      - /tmp/xcodebuild_logs/*.log
       - /Users/builder/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
     publishing:
       app_store_connect:
