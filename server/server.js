@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
 const https = require("https");
+const http2 = require("http2");
 const path = require("path");
 const { URL } = require("url");
 
@@ -34,11 +35,27 @@ const DATA_DIR = path.resolve(__dirname, "data");
 const DATA_FILE = path.resolve(DATA_DIR, "app-data.json");
 const SMS_STATE_FILE = path.resolve(DATA_DIR, "sms-state.json");
 const UPLOAD_DIR = path.resolve(__dirname, "uploads");
+const BACKUP_DIR = path.resolve(__dirname, "backups");
+const BACKUP_RETENTION_DAYS = Math.max(7, Math.floor(Number(process.env.BACKUP_RETENTION_DAYS || 30)));
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
-const REVIEW_ADMIN_PHONE = "18652082378";
+const REVIEW_ADMIN_PHONE = process.env.ADMIN_PHONE || "18652082378";
+// 每次 App Store 新版已发布后，将 MIN_SUPPORTED_APP_BUILD 调整为新的 Xcode 构建号即可强制更新。
+const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 12)));
+const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || MIN_SUPPORTED_APP_BUILD)));
+const IOS_APP_STORE_URL = process.env.IOS_APP_STORE_URL || "https://apps.apple.com/app/id6783481335";
+// Apple Push Notification service (APNs) credentials are configured only on the server.
+const APNS_TEAM_ID = String(process.env.APNS_TEAM_ID || "").trim();
+const APNS_KEY_ID = String(process.env.APNS_KEY_ID || "").trim();
+const APNS_BUNDLE_ID = String(process.env.APNS_BUNDLE_ID || "com.turtlekeeper.app").trim();
+const APNS_HOST = String(process.env.APNS_HOST || "api.push.apple.com").trim();
+const APNS_KEY_PATH = String(process.env.APNS_KEY_PATH || "").trim();
+const APNS_KEY_BASE64 = String(process.env.APNS_KEY_BASE64 || "").trim();
 const MARKET_SALE_METHODS = ["自有客户成交", "闲鱼成交", "壳友手账成交"];
 const smsCodes = new Map();
 const verifiedPhones = new Map();
+let lastServerBackupDate = "";
+let apnsPrivateKey = null;
+let apnsJwtCache = { token: "", createdAt: 0 };
 
 function persistSmsState() {
   const now = Date.now();
@@ -175,9 +192,13 @@ function normalizeAccountData(data = {}) {
   };
 }
 
+function emptyDatabase() {
+  return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [], reports: [] };
+}
+
 function readDatabase() {
   try {
-    if (!fs.existsSync(DATA_FILE)) return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [] };
+    if (!fs.existsSync(DATA_FILE)) return emptyDatabase();
     const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     return data && typeof data === "object"
       ? {
@@ -188,11 +209,12 @@ function readDatabase() {
           marketListings: Array.isArray(data.marketListings) ? data.marketListings : [],
           friendships: Array.isArray(data.friendships) ? data.friendships : [],
           messages: Array.isArray(data.messages) ? data.messages : [],
-          follows: Array.isArray(data.follows) ? data.follows : []
+          follows: Array.isArray(data.follows) ? data.follows : [],
+          reports: Array.isArray(data.reports) ? data.reports : []
         }
-      : { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [] };
+      : emptyDatabase();
   } catch {
-    return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [] };
+    return emptyDatabase();
   }
 }
 
@@ -201,6 +223,77 @@ function writeDatabase(db) {
   const tempFile = `${DATA_FILE}.${process.pid}.tmp`;
   fs.writeFileSync(tempFile, JSON.stringify(db, null, 2), "utf8");
   fs.renameSync(tempFile, DATA_FILE);
+}
+
+function backupDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function backupTimeKey(date = new Date()) {
+  return `${backupDateKey(date)}-${String(date.getHours()).padStart(2, "0")}${String(date.getMinutes()).padStart(2, "0")}${String(date.getSeconds()).padStart(2, "0")}`;
+}
+
+function pruneServerBackups() {
+  if (!fs.existsSync(BACKUP_DIR)) return;
+  const expiresAt = Date.now() - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  fs.readdirSync(BACKUP_DIR, { withFileTypes: true }).forEach(entry => {
+    if (!entry.isDirectory()) return;
+    const target = path.resolve(BACKUP_DIR, entry.name);
+    const stat = fs.statSync(target);
+    if (stat.mtimeMs < expiresAt) fs.rmSync(target, { recursive: true, force: true });
+  });
+}
+
+function hasBackupForDate(day = backupDateKey()) {
+  if (!fs.existsSync(BACKUP_DIR)) return false;
+  return fs.readdirSync(BACKUP_DIR, { withFileTypes: true })
+    .some(entry => entry.isDirectory() && entry.name.startsWith(`${day}-`));
+}
+
+function copyBackupDirectory(source, target) {
+  if (typeof fs.cpSync === "function") {
+    fs.cpSync(source, target, { recursive: true, force: true });
+    return;
+  }
+  fs.mkdirSync(target, { recursive: true });
+  fs.readdirSync(source, { withFileTypes: true }).forEach(entry => {
+    const from = path.resolve(source, entry.name);
+    const to = path.resolve(target, entry.name);
+    if (entry.isDirectory()) copyBackupDirectory(from, to);
+    else if (entry.isFile()) fs.copyFileSync(from, to);
+  });
+}
+
+function createServerBackup(reason = "scheduled") {
+  if (!fs.existsSync(DATA_FILE)) return "";
+  const now = new Date();
+  const safeReason = String(reason || "scheduled").replace(/[^a-z0-9_-]/gi, "").slice(0, 24) || "scheduled";
+  const targetDir = path.resolve(BACKUP_DIR, `${backupTimeKey(now)}-${safeReason}`);
+  fs.mkdirSync(targetDir, { recursive: true });
+  fs.copyFileSync(DATA_FILE, path.resolve(targetDir, "app-data.json"));
+  if (fs.existsSync(UPLOAD_DIR)) copyBackupDirectory(UPLOAD_DIR, path.resolve(targetDir, "uploads"));
+  fs.writeFileSync(path.resolve(targetDir, "manifest.json"), JSON.stringify({
+    createdAt: now.toISOString(),
+    reason: safeReason,
+    includes: ["app-data.json", fs.existsSync(UPLOAD_DIR) ? "uploads" : ""]
+      .filter(Boolean)
+  }, null, 2), "utf8");
+  pruneServerBackups();
+  return targetDir;
+}
+
+function runScheduledBackup() {
+  const today = backupDateKey();
+  if (today === lastServerBackupDate) return;
+  try {
+    if (!hasBackupForDate(today)) createServerBackup("daily");
+    lastServerBackupDate = today;
+  } catch (error) {
+    console.error("自动备份失败：", error.message);
+  }
 }
 
 function hashValue(value) {
@@ -336,6 +429,140 @@ function requestJson(url) {
         });
       })
       .on("error", reject);
+  });
+}
+
+function normalizeApnsDeviceToken(value) {
+  const token = String(value || "").trim().replace(/[<>{}\s-]/g, "").toLowerCase();
+  return /^[a-f0-9]{32,512}$/.test(token) ? token : "";
+}
+
+function normalizedPushDevices(devices) {
+  const seen = new Set();
+  return (Array.isArray(devices) ? devices : [])
+    .map(item => ({
+      token: normalizeApnsDeviceToken(item?.token || item),
+      platform: item?.platform === "ios" ? "ios" : "ios",
+      updatedAt: String(item?.updatedAt || "")
+    }))
+    .filter(item => item.token && !seen.has(item.token) && Boolean(seen.add(item.token)))
+    .slice(0, 8);
+}
+
+function apnsConfigured() {
+  return Boolean(APNS_TEAM_ID && APNS_KEY_ID && APNS_BUNDLE_ID && (APNS_KEY_PATH || APNS_KEY_BASE64));
+}
+
+function getApnsPrivateKey() {
+  if (apnsPrivateKey) return apnsPrivateKey;
+  let key = "";
+  if (APNS_KEY_BASE64) key = Buffer.from(APNS_KEY_BASE64, "base64").toString("utf8");
+  else if (APNS_KEY_PATH) key = fs.readFileSync(path.resolve(APNS_KEY_PATH), "utf8");
+  if (!key.includes("BEGIN PRIVATE KEY")) throw new Error("APNs 私钥格式无效");
+  apnsPrivateKey = crypto.createPrivateKey(key);
+  return apnsPrivateKey;
+}
+
+function base64Url(value) {
+  return Buffer.from(value).toString("base64url");
+}
+
+function apnsAuthorizationToken() {
+  const now = Date.now();
+  if (apnsJwtCache.token && now - apnsJwtCache.createdAt < 50 * 60 * 1000) return apnsJwtCache.token;
+  const encodedHeader = base64Url(JSON.stringify({ alg: "ES256", kid: APNS_KEY_ID }));
+  const encodedClaims = base64Url(JSON.stringify({ iss: APNS_TEAM_ID, iat: Math.floor(now / 1000) }));
+  const signingInput = `${encodedHeader}.${encodedClaims}`;
+  const signature = crypto.sign("sha256", Buffer.from(signingInput), {
+    key: getApnsPrivateKey(),
+    dsaEncoding: "ieee-p1363"
+  });
+  const token = `${signingInput}.${signature.toString("base64url")}`;
+  apnsJwtCache = { token, createdAt: now };
+  return token;
+}
+
+function sendApnsNotification(deviceToken, payload) {
+  return new Promise(resolve => {
+    if (!apnsConfigured()) return resolve({ ok: false, skipped: true });
+    const token = normalizeApnsDeviceToken(deviceToken);
+    if (!token) return resolve({ ok: false, invalid: true, reason: "BadDeviceToken" });
+    let client;
+    let settled = false;
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      try { client?.close(); } catch {}
+      resolve(result);
+    };
+    try {
+      client = http2.connect(`https://${APNS_HOST}`);
+      client.once("error", error => finish({ ok: false, reason: error.message || "APNs connection error" }));
+      const request = client.request({
+        ":method": "POST",
+        ":path": `/3/device/${token}`,
+        authorization: `bearer ${apnsAuthorizationToken()}`,
+        "apns-topic": APNS_BUNDLE_ID,
+        "apns-push-type": "alert",
+        "apns-priority": "10"
+      });
+      let status = 0;
+      let responseBody = "";
+      request.setEncoding("utf8");
+      request.on("response", headers => { status = Number(headers[":status"] || 0); });
+      request.on("data", chunk => { responseBody += chunk; });
+      request.on("end", () => {
+        let reason = "";
+        try { reason = JSON.parse(responseBody || "{}").reason || ""; } catch {}
+        const invalid = status === 410 || ["BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"].includes(reason);
+        finish({ ok: status >= 200 && status < 300, invalid, reason, status });
+      });
+      request.on("error", error => finish({ ok: false, reason: error.message || "APNs request error" }));
+      request.end(JSON.stringify(payload));
+    } catch (error) {
+      finish({ ok: false, reason: error.message || "APNs setup error" });
+    }
+  });
+}
+
+function removeInvalidPushDevice(phone, deviceToken) {
+  const token = normalizeApnsDeviceToken(deviceToken);
+  if (!token || !phone) return;
+  const db = readDatabase();
+  const user = db.users?.[phone];
+  if (!user) return;
+  const devices = normalizedPushDevices(user.pushDevices);
+  const next = devices.filter(item => item.token !== token);
+  if (next.length === devices.length) return;
+  user.pushDevices = next;
+  user.updatedAt = new Date().toISOString();
+  writeDatabase(db);
+}
+
+async function notifyCommunityMessage(db, message, sender, recipient) {
+  if (!apnsConfigured() || !recipient) return;
+  const devices = normalizedPushDevices(recipient.pushDevices);
+  if (!devices.length) return;
+  const unreadCount = (Array.isArray(db.messages) ? db.messages : [])
+    .filter(item => item.toPhone === recipient.phone && !item.readAt)
+    .length;
+  const preview = communityMessagePreview(message) || "发来一条新消息";
+  const payload = {
+    aps: {
+      alert: {
+        title: sender?.accountName || maskPhone(sender?.phone || "") || "壳友",
+        body: preview.slice(0, 120)
+      },
+      badge: Math.min(99, Math.max(1, unreadCount)),
+      sound: "default"
+    },
+    senderId: communityUserId(sender?.phone || ""),
+    route: "communityChat"
+  };
+  const results = await Promise.all(devices.map(item => sendApnsNotification(item.token, payload)));
+  results.forEach((result, index) => {
+    if (result.invalid) removeInvalidPushDevice(recipient.phone, devices[index].token);
+    else if (!result.ok && !result.skipped) console.warn("APNs push failed:", result.reason || result.status || "unknown");
   });
 }
 
@@ -512,6 +739,7 @@ async function handleRegister(req, res) {
   const code = String(body.code || "").trim();
   if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
   if (password.length < 6) return sendJson(res, 400, { ok: false, message: "密码至少需要 6 位" });
+  if (body.termsAccepted !== true) return sendJson(res, 400, { ok: false, message: "请先阅读并同意服务规则和隐私政策" });
 
   const db = readDatabase();
   if (db.users[phone]) return sendJson(res, 409, { ok: false, message: "手机号已注册，请直接登录" });
@@ -532,6 +760,8 @@ async function handleRegister(req, res) {
     accountName: String(body.accountName || "").trim() || maskPhone(phone),
     accountAvatar: "",
     data: normalizeAccountData(body.data || {}),
+    termsAcceptedAt: now,
+    termsVersion: "2026-07-14",
     tokens: [{ hash: hashValue(token), createdAt: now }],
     createdAt: now,
     updatedAt: now
@@ -642,6 +872,41 @@ function optionalReviewUser(db, body) {
   const phone = String(body.phone || "").trim();
   const token = String(body.token || "");
   return phone && token ? authenticate(db, phone, token) : null;
+}
+
+async function handlePushDeviceRegister(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const deviceToken = normalizeApnsDeviceToken(body.deviceToken);
+  if (!deviceToken) return sendJson(res, 400, { ok: false, message: "通知设备信息无效" });
+  const now = new Date().toISOString();
+  // A physical iPhone may be used by a different account after logout. Keep the
+  // token with exactly one user so messages are never delivered to the old one.
+  Object.values(db.users || {}).forEach(account => {
+    const devices = normalizedPushDevices(account.pushDevices);
+    account.pushDevices = devices.filter(item => item.token !== deviceToken);
+  });
+  user.pushDevices = [
+    ...normalizedPushDevices(user.pushDevices),
+    { token: deviceToken, platform: "ios", updatedAt: now }
+  ].filter((item, index, list) => list.findIndex(other => other.token === item.token) === index).slice(-8);
+  user.updatedAt = now;
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, registered: true });
+}
+
+async function handlePushDeviceUnregister(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const deviceToken = normalizeApnsDeviceToken(body.deviceToken);
+  if (deviceToken) user.pushDevices = normalizedPushDevices(user.pushDevices).filter(item => item.token !== deviceToken);
+  user.updatedAt = new Date().toISOString();
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true });
 }
 
 function parseImageDataUrl(value) {
@@ -1061,6 +1326,7 @@ function marketChatListingSnapshot(db, listingId, sellerPhone = "") {
   const listing = (Array.isArray(db.marketListings) ? db.marketListings : [])
     .find(item => item.id === String(listingId || ""));
   if (!listing || (sellerPhone && listing.sellerPhoneRaw !== sellerPhone)) return null;
+  const status = ["active", "inactive", "sold"].includes(listing.status) ? listing.status : "active";
   const seller = db.users?.[listing.sellerPhoneRaw];
   const mediaItems = (Array.isArray(listing.mediaItems) ? listing.mediaItems : [])
     .slice(0, 9)
@@ -1091,10 +1357,26 @@ function marketChatListingSnapshot(db, listingId, sellerPhone = "") {
     mediaType: primaryMedia.type === "video" ? "video" : "image",
     photoUrl: listing.photoUrl || primaryMedia.url || "",
     mediaItems,
-    status: listing.status === "sold" ? "sold" : "active",
+    status,
+    unavailable: status !== "active",
+    unavailableReason: status === "sold" ? "sold" : "offline",
     sellerId: communityUserId(listing.sellerPhoneRaw),
     sellerName: seller?.accountName || listing.sellerName || "壳友卖家",
     sellerAvatar: seller?.accountAvatar || listing.sellerAvatar || ""
+  };
+}
+
+function resolveCommunityChatListing(db, snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  const listingId = String(snapshot.id || "");
+  if (!listingId) return { ...snapshot, unavailable: true, unavailableReason: "removed", status: "removed" };
+  const current = marketChatListingSnapshot(db, listingId);
+  if (current) return current;
+  return {
+    ...snapshot,
+    status: "removed",
+    unavailable: true,
+    unavailableReason: "removed"
   };
 }
 
@@ -1104,13 +1386,14 @@ function communityConversationMessages(db, phoneA, phoneB) {
     .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
     .map(item => {
       const rawContent = String(item.content || item.text || item.message || "").trim();
+      const marketListing = resolveCommunityChatListing(db, item.marketListing);
       return {
         id: item.id,
         content: communityMessagePreview(item),
         mine: item.fromPhone === phoneA,
         createdAt: item.createdAt,
-        marketListing: item.marketListing || null,
-        marketReferenceOnly: Boolean(item.marketListing && !rawContent)
+        marketListing,
+        marketReferenceOnly: Boolean(marketListing && !rawContent)
       };
     });
 }
@@ -1223,11 +1506,28 @@ function publicCommunityPosts(db, viewer = null) {
     });
 }
 
+function communityProfileStats(db, user) {
+  if (!user?.phone) return { receivedLikes: 0, followerCount: 0 };
+  const receivedLikes = (Array.isArray(db.communityPosts) ? db.communityPosts : [])
+    .filter(post => post.authorPhoneRaw === user.phone)
+    .reduce((total, post) => total + (Array.isArray(post.likes) ? post.likes.length : 0), 0);
+  const followerCount = (Array.isArray(db.follows) ? db.follows : [])
+    .filter(item => item.targetPhone === user.phone)
+    .length;
+  return { receivedLikes, followerCount };
+}
+
 async function handleCommunityList(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
   const user = optionalReviewUser(db, body);
-  return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user), friends: user ? communityFriends(db, user) : [] });
+  return sendJson(res, 200, {
+    ok: true,
+    posts: publicCommunityPosts(db, user),
+    friends: user ? communityFriends(db, user) : [],
+    profileStats: communityProfileStats(db, user),
+    isAdmin: isAdminUser(user)
+  });
 }
 
 async function handleCommunityCreate(req, res) {
@@ -1310,18 +1610,135 @@ async function handleCommunityDelete(req, res) {
   return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
 }
 
-async function handleCommunityAddFriend(req, res) {
+const CONTENT_REPORT_REASONS = {
+  illegal_wildlife: "疑似违法野生动物或来源不明",
+  fraud: "虚假信息、诈骗或误导交易",
+  animal_welfare: "健康、运输或动物福利风险",
+  infringement: "侵权或泄露个人信息",
+  abuse: "辱骂、骚扰或不当内容",
+  other: "其他问题"
+};
+
+function reportedContent(db, targetType, targetId) {
+  const type = targetType === "market" ? "market" : "community";
+  if (type === "market") {
+    const item = (Array.isArray(db.marketListings) ? db.marketListings : []).find(listing => listing.id === targetId);
+    return item ? {
+      type,
+      id: item.id,
+      ownerPhone: item.sellerPhoneRaw,
+      title: item.title || item.speciesName || "龟集市商品"
+    } : null;
+  }
+  const item = (Array.isArray(db.communityPosts) ? db.communityPosts : []).find(post => post.id === targetId);
+  return item ? {
+    type,
+    id: item.id,
+    ownerPhone: item.authorPhoneRaw,
+    title: trimPublicText(item.content || (item.mediaUrl ? "含图片或视频的壳友圈动态" : "壳友圈动态"), 120)
+  } : null;
+}
+
+function publicContentReports(db) {
+  return (Array.isArray(db.reports) ? db.reports : [])
+    .slice()
+    .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))
+    .slice(0, 300)
+    .map(report => {
+      const target = reportedContent(db, report.targetType, report.targetId);
+      const reporter = db.users?.[report.reporterPhone];
+      return {
+        id: report.id,
+        targetType: report.targetType === "market" ? "market" : "community",
+        targetId: report.targetId,
+        targetTitle: report.targetTitle || target?.title || "内容已删除",
+        targetExists: Boolean(target),
+        reason: report.reason,
+        reasonLabel: CONTENT_REPORT_REASONS[report.reason] || CONTENT_REPORT_REASONS.other,
+        detail: report.detail || "",
+        status: ["pending", "resolved", "removed"].includes(report.status) ? report.status : "pending",
+        reporterName: reporter?.accountName || maskPhone(report.reporterPhone),
+        createdAt: report.createdAt,
+        processedAt: report.processedAt || ""
+      };
+    });
+}
+
+async function handleContentReportCreate(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
-  const target = communityUserById(db, body.userId);
-  if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "无法添加该用户" });
-  const key = friendshipKey(user.phone, target.phone);
-  db.friendships = Array.isArray(db.friendships) ? db.friendships : [];
-  if (!db.friendships.some(item => item.key === key)) db.friendships.push({ key, phones: [user.phone, target.phone], createdAt: new Date().toISOString() });
+  const targetType = body.targetType === "market" ? "market" : "community";
+  const targetId = trimPublicText(body.targetId, 100);
+  const reason = trimPublicText(body.reason, 40);
+  const detail = trimPublicText(body.detail, 500);
+  if (!targetId || !CONTENT_REPORT_REASONS[reason]) return sendJson(res, 400, { ok: false, message: "请选择有效的举报原因" });
+  const target = reportedContent(db, targetType, targetId);
+  if (!target) return sendJson(res, 404, { ok: false, message: "举报内容不存在或已删除" });
+  if (target.ownerPhone === user.phone) return sendJson(res, 400, { ok: false, message: "不能举报自己发布的内容" });
+  db.reports = Array.isArray(db.reports) ? db.reports : [];
+  const duplicate = db.reports.find(item => item.reporterPhone === user.phone && item.targetType === targetType && item.targetId === targetId && item.status === "pending");
+  if (duplicate) return sendJson(res, 409, { ok: false, message: "该内容已提交举报，请等待审核" });
+  db.reports.unshift({
+    id: crypto.randomUUID(),
+    targetType,
+    targetId,
+    targetTitle: target.title,
+    targetOwnerPhone: target.ownerPhone,
+    reporterPhone: user.phone,
+    reason,
+    detail,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+    processedAt: "",
+    processedBy: ""
+  });
+  db.reports = db.reports.slice(0, 2000);
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user), friends: communityFriends(db, user) });
+  return sendJson(res, 200, { ok: true });
+}
+
+async function handleContentReportList(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (!isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "无权查看举报审核" });
+  return sendJson(res, 200, { ok: true, reports: publicContentReports(db) });
+}
+
+async function handleContentReportAction(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (!isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "无权处理举报" });
+  const report = (Array.isArray(db.reports) ? db.reports : []).find(item => item.id === String(body.reportId || ""));
+  if (!report) return sendJson(res, 404, { ok: false, message: "举报记录不存在" });
+  const action = body.action === "remove" ? "remove" : "resolve";
+  if (action === "remove") {
+    if (report.targetType === "market") {
+      const listing = (Array.isArray(db.marketListings) ? db.marketListings : []).find(item => item.id === report.targetId);
+      if (listing) {
+        listing.status = "inactive";
+        listing.offlineAt = new Date().toISOString();
+        listing.offlineReason = "report";
+      }
+    } else {
+      db.communityPosts = (Array.isArray(db.communityPosts) ? db.communityPosts : []).filter(item => item.id !== report.targetId);
+    }
+  }
+  report.status = action === "remove" ? "removed" : "resolved";
+  report.processedAt = new Date().toISOString();
+  report.processedBy = user.phone;
+  writeDatabase(db);
+  return sendJson(res, 200, {
+    ok: true,
+    reports: publicContentReports(db),
+    posts: publicCommunityPosts(db, user),
+    listings: publicMarketListings(db, user)
+  });
 }
 
 async function handleCommunityFollowToggle(req, res) {
@@ -1361,15 +1778,38 @@ async function handleCommunityFollowingList(req, res) {
   });
 }
 
+async function handleCommunityUserProfile(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const viewer = optionalReviewUser(db, body);
+  const target = communityUserById(db, body.userId);
+  if (!target) return sendJson(res, 404, { ok: false, message: "壳友不存在或已注销" });
+  const targetId = communityUserId(target.phone);
+  const posts = publicCommunityPosts(db, viewer).filter(item => item.authorId === targetId);
+  const listings = publicMarketListings(db, viewer).filter(item => item.sellerId === targetId && item.status === "active");
+  return sendJson(res, 200, {
+    ok: true,
+    user: {
+      id: targetId,
+      name: target.accountName || maskPhone(target.phone),
+      avatar: target.accountAvatar || "",
+      postCount: posts.length,
+      listingCount: listings.length,
+      followed: Boolean(viewer && viewer.phone !== target.phone && isFollowingCommunityUser(db, viewer.phone, target.phone)),
+      isOwn: Boolean(viewer && viewer.phone === target.phone)
+    },
+    posts,
+    listings
+  });
+}
+
 async function handleCommunityChatList(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
   const target = communityUserById(db, body.userId);
-  if (!target || (!isCommunityFriend(db, user.phone, target.phone) && !hasCommunityConversation(db, user.phone, target.phone))) {
-    return sendJson(res, 403, { ok: false, message: "请先添加对方为好友" });
-  }
+  if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "无法与该用户聊天" });
   db.messages = Array.isArray(db.messages) ? db.messages : [];
   let readStateChanged = false;
   const readAt = new Date().toISOString();
@@ -1397,13 +1837,11 @@ async function handleCommunityChatSend(req, res) {
   const target = communityUserById(db, body.userId);
   const content = trimPublicText(body.content, 1000);
   const marketListingId = trimPublicText(body.marketListingId, 100);
-  if (!target || (!isCommunityFriend(db, user.phone, target.phone) && !hasCommunityConversation(db, user.phone, target.phone))) {
-    return sendJson(res, 403, { ok: false, message: "请先添加对方为好友" });
-  }
+  if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "无法与该用户聊天" });
   const marketListing = marketListingId ? marketChatListingSnapshot(db, marketListingId, target.phone) : null;
   if (marketListingId && !marketListing) return sendJson(res, 400, { ok: false, message: "商品信息无效" });
   if (!content && !marketListing) return sendJson(res, 400, { ok: false, message: "请输入消息" });
-  db.messages = [...(Array.isArray(db.messages) ? db.messages : []), {
+  const message = {
     id: crypto.randomUUID(),
     fromPhone: user.phone,
     toPhone: target.phone,
@@ -1411,8 +1849,11 @@ async function handleCommunityChatSend(req, res) {
     marketListing,
     readAt: "",
     createdAt: new Date().toISOString()
-  }].slice(-5000);
+  };
+  db.messages = [...(Array.isArray(db.messages) ? db.messages : []), message].slice(-5000);
   writeDatabase(db);
+  // Send asynchronously so a temporary APNs issue never delays the chat itself.
+  void notifyCommunityMessage(db, message, user, target);
   const messages = communityConversationMessages(db, user.phone, target.phone);
   return sendJson(res, 200, {
     ok: true,
@@ -1530,7 +1971,27 @@ async function handleMarketList(req, res) {
     }
   }
   if (changed && !user) writeDatabase(db);
-  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user), myListings: ownMarketListings(db, user), accountData });
+  const keyword = trimPublicText(body.keyword, 80).toLowerCase();
+  const stage = ["hatchling", "juvenile", "adult"].includes(body.stage) ? body.stage : "all";
+  const allListings = publicMarketListings(db, user).filter(item => {
+    if (stage !== "all" && item.stage !== stage) return false;
+    if (!keyword) return true;
+    return `${item.title || ""} ${item.speciesName || ""} ${item.city || ""}`.toLowerCase().includes(keyword);
+  });
+  const offset = Math.max(0, Math.floor(Number(body.offset || 0)));
+  const requestedLimit = body.all === true ? Math.max(8, allListings.length) : Number(body.limit || 8);
+  const limit = Math.min(200, Math.max(1, Math.floor(requestedLimit)));
+  const listings = allListings.slice(offset, offset + limit);
+  const nextOffset = offset + listings.length;
+  return sendJson(res, 200, {
+    ok: true,
+    listings,
+    hasMore: nextOffset < allListings.length,
+    nextOffset,
+    total: allListings.length,
+    myListings: ownMarketListings(db, user),
+    accountData
+  });
 }
 
 async function handleMarketCreate(req, res) {
@@ -1890,6 +2351,16 @@ function serveStatic(req, res, url) {
   });
 }
 
+function handleAppVersion(req, res) {
+  return sendJson(res, 200, {
+    ok: true,
+    minimumBuild: MIN_SUPPORTED_APP_BUILD,
+    latestBuild: LATEST_APP_BUILD,
+    appStoreUrl: IOS_APP_STORE_URL,
+    message: "壳友手账已更新，请先更新到最新版本后再继续使用。"
+  });
+}
+
 function serveUpload(req, res, url) {
   const pathname = decodeURIComponent(url.pathname).replace(/^\/uploads\/?/, "");
   const target = path.resolve(UPLOAD_DIR, pathname);
@@ -1919,12 +2390,15 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (req.method === "OPTIONS") return sendJson(res, 200, { ok: true });
   try {
+    if (req.method === "GET" && url.pathname === "/api/app/version") return handleAppVersion(req, res);
     if (req.method === "POST" && url.pathname === "/api/sms/send") return await handleSendSms(req, res);
     if (req.method === "POST" && url.pathname === "/api/sms/verify") return await handleVerifySms(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/register") return await handleRegister(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/login") return await handleLogin(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/load") return await handleLoadAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/save") return await handleSaveAccount(req, res);
+    if (req.method === "POST" && url.pathname === "/api/notifications/device/register") return await handlePushDeviceRegister(req, res);
+    if (req.method === "POST" && url.pathname === "/api/notifications/device/unregister") return await handlePushDeviceUnregister(req, res);
     if (req.method === "POST" && url.pathname === "/api/upload/image") return await handleUploadImage(req, res);
     if (req.method === "POST" && url.pathname === "/api/upload/media") return await handleUploadMedia(req, res);
     if (req.method === "POST" && url.pathname === "/api/reviews/list") return await handleListReviews(req, res);
@@ -1943,9 +2417,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/like") return await handleCommunityLike(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/comment") return await handleCommunityComment(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/delete") return await handleCommunityDelete(req, res);
-    if (req.method === "POST" && url.pathname === "/api/community/friend/add") return await handleCommunityAddFriend(req, res);
+    if (req.method === "POST" && url.pathname === "/api/content-reports/create") return await handleContentReportCreate(req, res);
+    if (req.method === "POST" && url.pathname === "/api/content-reports/list") return await handleContentReportList(req, res);
+    if (req.method === "POST" && url.pathname === "/api/content-reports/action") return await handleContentReportAction(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/follow/toggle") return await handleCommunityFollowToggle(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/following/list") return await handleCommunityFollowingList(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/user/profile") return await handleCommunityUserProfile(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/unread") return await handleCommunityUnread(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/list") return await handleCommunityChatList(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/send") return await handleCommunityChatSend(req, res);
@@ -1970,6 +2447,14 @@ setInterval(() => {
   const db = readDatabase();
   if (autoOfflineStaleMarketListings(db)) writeDatabase(db);
 }, 60 * 60 * 1000).unref();
+
+try {
+  if (!hasBackupForDate()) createServerBackup("startup");
+  lastServerBackupDate = backupDateKey();
+} catch (error) {
+  console.error("启动备份失败：", error.message);
+}
+setInterval(runScheduledBackup, 60 * 60 * 1000).unref();
 
 server.listen(PORT, HOST, () => {
   console.log(`龟管家服务已启动：http://${HOST}:${PORT}`);

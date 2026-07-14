@@ -53,6 +53,103 @@ button { border: 0; cursor: pointer; }
   overflow-x: hidden;
 }
 
+.force-update-screen {
+  min-height: 100vh;
+  padding: max(72px, env(safe-area-inset-top, 0px) + 52px) 28px max(40px, env(safe-area-inset-bottom, 0px) + 24px);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  text-align: center;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 82% 10%, rgba(47, 167, 127, .18), transparent 34%),
+    radial-gradient(circle at 16% 92%, rgba(36, 107, 122, .12), transparent 38%),
+    var(--surface);
+}
+
+.force-update-mark {
+  width: 66px;
+  height: 66px;
+  margin: 0 auto 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 23px;
+  color: #fff;
+  background: linear-gradient(145deg, var(--green-2), var(--green));
+  box-shadow: 0 16px 30px rgba(34, 115, 91, .2);
+  font-size: 34px;
+  font-weight: 800;
+}
+
+.force-update-eyebrow {
+  margin: 0 0 8px;
+  color: var(--green);
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: .06em;
+}
+
+.force-update-screen h1 {
+  margin: 0;
+  font-size: 25px;
+  line-height: 1.35;
+  letter-spacing: -.02em;
+}
+
+.force-update-copy {
+  max-width: 310px;
+  margin: 16px auto 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.force-update-version {
+  width: fit-content;
+  max-width: 100%;
+  margin: 24px auto 32px;
+  padding: 9px 13px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid rgba(34, 115, 91, .12);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(237, 247, 241, .74);
+  font-size: 12px;
+}
+
+.force-update-version i {
+  width: 4px;
+  height: 4px;
+  flex: 0 0 4px;
+  border-radius: 50%;
+  background: #a5b7af;
+}
+
+.force-update-version strong {
+  color: var(--green);
+  font-weight: 750;
+}
+
+.force-update-primary {
+  width: 100%;
+  min-height: 52px;
+  border-radius: 16px;
+  font-size: 16px;
+  font-weight: 750;
+  box-shadow: 0 12px 24px rgba(47, 167, 127, .2);
+}
+
+.force-update-recheck {
+  margin: 15px auto 0;
+  padding: 9px 6px;
+  color: var(--green);
+  background: transparent;
+  font-size: 13px;
+}
+
 .status {
   height: 38px;
   padding: 10px 20px 0;
@@ -5306,6 +5403,720 @@ html[data-theme-color="dark"] .feedback-detail-comment .field {
   }
 }
 
+/* 账本流水卡沿用看板档案卡的信息顺序：昵称、品种、体测标签、日期。 */
+.ledger-row {
+  grid-template-columns: 54px minmax(0, 1fr) auto !important;
+  min-height: 0;
+  gap: 10px;
+  padding: 12px 12px 38px !important;
+}
+
+.ledger-row-main {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+}
+
+.ledger-row-title-line {
+  min-width: 0;
+  display: grid !important;
+  align-content: start;
+  gap: 2px;
+}
+
+.ledger-row-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: nowrap;
+}
+
+.ledger-row-title .ledger-title-text {
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 780;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row .ledger-inline-type.purchase,
+.ledger-row .ledger-inline-type.sold,
+.ledger-row .ledger-inline-type.loss {
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--raised-bg);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.ledger-row-species {
+  min-width: 0;
+  margin: 0 !important;
+  overflow: hidden;
+  color: var(--muted) !important;
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row .ledger-turtle-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.ledger-row .ledger-turtle-meta span {
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  background: var(--raised-bg);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ledger-row .muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.ledger-row .ledger-amount {
+  padding-top: 27px;
+  align-self: start;
+  justify-self: end;
+  font-size: 18px;
+}
+
+.ledger-row .ledger-amount.sold { color: var(--aqua) !important; }
+.ledger-row .ledger-amount.purchase,
+.ledger-row .ledger-amount.loss { color: var(--danger) !important; }
+
+html[data-theme-color="dark"] .ledger-row .ledger-inline-type.purchase,
+html[data-theme-color="dark"] .ledger-row .ledger-inline-type.sold,
+html[data-theme-color="dark"] .ledger-row .ledger-inline-type.loss,
+html[data-theme-color="dark"] .ledger-row .ledger-turtle-meta span {
+  color: var(--muted) !important;
+  border-color: #303033 !important;
+  background: #202020 !important;
+}
+
+/* 上线前的规则、隐私、举报审核与备份入口 */
+.auth-agreement {
+  margin: 2px 0 4px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.auth-agreement input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--aqua);
+}
+
+.auth-agreement button {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--aqua);
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  font-weight: 800;
+}
+
+.mine-row-count {
+  min-width: 22px;
+  height: 22px;
+  margin-left: auto;
+  padding: 0 7px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  color: #fff;
+  background: var(--danger);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.about-compliance-card > div:last-child {
+  margin-top: 10px;
+  display: flex;
+  gap: 9px;
+}
+
+.about-compliance-card button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--divider);
+  border-radius: 9px;
+  color: var(--ink);
+  background: var(--raised-bg);
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: none;
+}
+
+.compliance-page {
+  padding-bottom: calc(var(--fixed-tabbar-height) + 24px);
+}
+
+.compliance-intro h2,
+.moderation-intro h2 {
+  font-size: 26px;
+}
+
+.policy-card {
+  margin-bottom: 12px;
+  padding: 17px 16px;
+}
+
+.policy-card h3 {
+  margin: 0 0 9px;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.policy-card p,
+.policy-card li {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.policy-card p { margin: 0; }
+.policy-card ol { margin: 0; padding-left: 19px; }
+.policy-card strong { color: var(--aqua); }
+
+.compliance-link-card {
+  width: 100%;
+  min-height: 54px;
+  margin: 0 0 10px;
+  padding: 0 16px;
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--ink);
+  background: var(--raised-bg);
+  box-shadow: none;
+  font-weight: 850;
+}
+
+.compliance-link-card b {
+  color: var(--aqua);
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.content-report-overlay {
+  position: fixed;
+  z-index: 10020;
+  inset: 0;
+  padding: 20px;
+  display: grid;
+  place-items: center;
+  background: rgba(11, 22, 28, .48);
+}
+
+body.content-report-open { overflow: hidden; }
+
+.content-report-dialog {
+  width: min(100%, 420px);
+  max-height: min(680px, calc(100vh - 40px));
+  padding: 19px;
+  border: 1px solid var(--divider);
+  border-radius: 18px;
+  overflow: auto;
+  color: var(--ink);
+  background: var(--raised-bg);
+  box-shadow: 0 28px 60px rgba(15, 33, 41, .26);
+}
+
+.content-report-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.content-report-head small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.content-report-head h2 {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-size: 21px;
+}
+
+.content-report-head button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--page-bg);
+  box-shadow: none;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.content-report-dialog > p {
+  margin: 12px 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.content-report-dialog form {
+  display: grid;
+  gap: 13px;
+}
+
+.content-report-dialog label {
+  display: grid;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.content-report-dialog textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.content-report-dialog .primary { min-height: 44px; }
+
+.market-detail-actions .market-report-action {
+  min-width: 54px;
+  flex: 0 0 auto;
+  border: 1px solid var(--divider);
+  color: var(--muted);
+  background: var(--raised-bg);
+}
+
+.moderation-page {
+  padding-bottom: calc(var(--fixed-tabbar-height) + 24px);
+}
+
+.moderation-report-list {
+  display: grid;
+  gap: 12px;
+}
+
+.moderation-report-card {
+  padding: 15px;
+}
+
+.moderation-report-head {
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.moderation-report-head > span,
+.moderation-report-head > em {
+  min-height: 23px;
+  padding: 0 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+}
+
+.moderation-report-head > span {
+  color: var(--aqua);
+  background: var(--page-bg);
+}
+
+.moderation-report-head > em.pending { color: #9b6200; background: #fff2d8; }
+.moderation-report-head > em.resolved { color: var(--muted); background: var(--page-bg); }
+.moderation-report-head > em.removed { color: var(--danger); background: #fff0f2; }
+
+.moderation-report-card > strong {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moderation-report-card > p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.moderation-report-card > p b { color: var(--ink); }
+.moderation-report-card > small { display: block; margin-top: 8px; color: var(--muted); font-size: 11px; }
+
+.moderation-report-actions {
+  margin-top: 13px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
+.moderation-report-actions button {
+  min-height: 37px;
+  border: 1px solid var(--divider);
+  border-radius: 9px;
+  color: var(--ink);
+  background: var(--page-bg);
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.moderation-report-actions .danger {
+  border-color: rgba(237, 93, 110, .26);
+  color: var(--danger);
+  background: #fff2f3;
+}
+
+html[data-theme-color="dark"] .content-report-dialog,
+html[data-theme-color="dark"] .compliance-link-card,
+html[data-theme-color="dark"] .about-compliance-card button,
+html[data-theme-color="dark"] .market-detail-actions .market-report-action,
+html[data-theme-color="dark"] .moderation-report-actions button {
+  border-color: #363638;
+  color: #e7e7e8;
+  background: #222224;
+}
+
+html[data-theme-color="dark"] .moderation-report-head > em.pending { color: #ffd28a; background: #513b18; }
+html[data-theme-color="dark"] .moderation-report-head > em.removed,
+html[data-theme-color="dark"] .moderation-report-actions .danger { color: #ff9ca8; background: #42262b; }
+
+@media (max-width: 360px) {
+  .market-detail-actions .market-report-action { min-width: 45px; padding-inline: 7px; font-size: 12px; }
+}
+
+/* 账本信息卡：压缩高度，右侧状态、金额、移除与左侧资料逐行对齐。 */
+.content .ledger-row {
+  min-height: 0 !important;
+  padding: 12px !important;
+  align-items: stretch;
+}
+
+.content .ledger-row-main {
+  gap: 4px;
+}
+
+.content .ledger-row-species {
+  padding-left: 7px;
+}
+
+.content .ledger-row-side {
+  min-width: 88px;
+  display: grid;
+  grid-template-rows: 22px auto auto 1fr;
+  row-gap: 2px;
+  justify-items: end;
+  align-items: start;
+}
+
+.content .ledger-linked-status {
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  background: var(--raised-bg);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.content .ledger-row-side .ledger-amount {
+  grid-row: 2;
+  padding-top: 0 !important;
+  align-self: start;
+  font-size: 18px;
+  line-height: 22px;
+}
+
+.content .ledger-row-side .ledger-delete {
+  position: static;
+  grid-row: 4;
+  align-self: end;
+  padding: 0;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.content .ledger-row-date {
+  grid-row: 3;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+html[data-theme-color="dark"] .content .ledger-linked-status {
+  color: var(--muted);
+  border-color: #303033;
+  background: #202020;
+}
+
+.content .ledger-row-side .ledger-linked-status {
+  margin-right: 32px;
+}
+
+.content .ledger-row.ledger-menu-open {
+  overflow: visible !important;
+  z-index: 12;
+}
+
+.content .ledger-row .ledger-more-btn {
+  position: absolute !important;
+  top: 8px !important;
+  right: 8px !important;
+  z-index: 4;
+  width: 28px !important;
+  min-width: 28px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  display: grid !important;
+  place-items: center !important;
+  color: var(--muted) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  line-height: 1 !important;
+  letter-spacing: -1px !important;
+}
+
+.content .ledger-row .ledger-more-btn > span {
+  display: block;
+  transform: translateY(-2px);
+}
+
+.content .ledger-row .ledger-more-btn:active,
+.content .ledger-row.ledger-menu-open .ledger-more-btn {
+  color: var(--text) !important;
+  background: var(--raised-bg) !important;
+}
+
+.content .ledger-action-menu {
+  position: absolute;
+  top: 39px;
+  right: 8px;
+  z-index: 16;
+  min-width: 88px;
+  padding: 4px;
+  border: 1px solid var(--divider);
+  border-radius: 9px;
+  background: var(--section-bg);
+  box-shadow: 0 10px 24px rgba(31, 42, 51, .14);
+  animation: archive-actions-in .16s ease-out both;
+}
+
+.content .ledger-action-menu button {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.content .ledger-action-menu svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+html[data-theme-color="dark"] .content .ledger-action-menu {
+  border-color: #303033;
+  background: #202020;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .32);
+}
+
+/* 经营账本：三种流水采用同一资料卡，仅以金额颜色区分收支。 */
+.ledger-row {
+  grid-template-columns: 54px minmax(0, 1fr) auto !important;
+  min-height: 112px;
+  gap: 10px;
+  padding: 14px 12px 39px !important;
+  align-items: start;
+}
+
+.ledger-row .ledger-thumb {
+  width: 54px;
+  height: 54px;
+  flex: 0 0 54px;
+  border-radius: 8px;
+}
+
+.ledger-thumb-placeholder {
+  display: grid;
+  place-items: center;
+  border: 1px solid #dceaf0;
+  color: #6d8790;
+  background: #f2f8fa;
+  box-shadow: none;
+}
+
+.ledger-thumb-placeholder span {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #4b7782;
+  background: #e2f0f2;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.ledger-row-title-line {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.ledger-row-title {
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.ledger-row-title .ledger-inline-type {
+  flex: 0 0 auto;
+}
+
+.ledger-row .ledger-inline-type.purchase,
+.ledger-row .ledger-inline-type.sold,
+.ledger-row .ledger-inline-type.loss {
+  color: #246b7a;
+  background: #eef5ff;
+}
+
+.ledger-title-text {
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row-species {
+  min-width: 0;
+  margin: 0 !important;
+  overflow: hidden;
+  color: var(--muted) !important;
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row .ledger-turtle-meta {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.ledger-row .ledger-turtle-meta span {
+  flex: 0 0 auto;
+}
+
+.ledger-row .muted {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.ledger-amount {
+  padding-top: 27px;
+  align-self: start;
+  font-size: 18px;
+}
+
+.ledger-amount.sold {
+  color: var(--aqua) !important;
+}
+
+.ledger-amount.purchase,
+.ledger-amount.loss {
+  color: var(--danger) !important;
+}
+
+html[data-theme-color="dark"] .ledger-thumb-placeholder {
+  border-color: #303d42;
+  color: #a4b6c2;
+  background: #1d282c;
+}
+
+html[data-theme-color="dark"] .ledger-thumb-placeholder span {
+  color: #b4d4d6;
+  background: #26363a;
+}
+
+html[data-theme-color="dark"] .ledger-row .ledger-inline-type.purchase,
+html[data-theme-color="dark"] .ledger-row .ledger-inline-type.sold,
+html[data-theme-color="dark"] .ledger-row .ledger-inline-type.loss {
+  color: #b6d6df !important;
+  background: #1d282c !important;
+  border-color: #303d42 !important;
+}
+
 /* 龟集市：轻量、可信的个人活体交易信息流。 */
 .bottom-nav {
   grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
@@ -5598,7 +6409,8 @@ html[data-theme-color="dark"] .feedback-detail-comment .field {
   color: var(--text);
   background: transparent !important;
   box-shadow: none !important;
-  font-size: 14px;
+  /* iOS zooms a focused input below 16px and keeps that zoom after leaving it. */
+  font-size: 16px;
   appearance: none;
   -webkit-appearance: none;
 }
@@ -6522,6 +7334,50 @@ html[data-theme-color="dark"] .detail-summary-card .detail-actions-menu .danger-
   line-height: 1.4;
 }
 
+/* 发布出售：城市和交付方式共用严格等高的双列结构，避免定位提示拉乱选择框。 */
+.market-city-delivery-row {
+  align-items: start;
+}
+
+.market-city-delivery-row .market-city-field,
+.market-city-delivery-row .market-delivery-field {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 22px 48px 15px;
+  gap: 7px;
+  align-content: start;
+}
+
+.market-city-delivery-row .market-city-label,
+.market-city-delivery-row .market-delivery-field > span {
+  min-width: 0;
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+}
+
+.market-city-delivery-row .market-city-field > .field,
+.market-city-delivery-row .market-delivery-field > .select {
+  width: 100%;
+  min-height: 48px !important;
+  height: 48px !important;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.market-city-delivery-row .market-city-field > small,
+.market-city-delivery-row .market-delivery-field > small {
+  min-width: 0;
+  min-height: 15px;
+  margin: 0;
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.market-city-delivery-row .market-delivery-field > small {
+  visibility: hidden;
+}
+
 .market-price-input {
   height: 48px;
   padding: 0 13px;
@@ -6756,9 +7612,18 @@ html[data-theme-color="dark"] .detail-summary-card .detail-actions-menu .danger-
 .market-seller-card {
   padding: 13px 15px;
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
+}
+
+.market-seller-avatar-slot {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  justify-self: center;
+  align-self: center;
 }
 
 .market-detail-avatar {
@@ -6766,9 +7631,15 @@ html[data-theme-color="dark"] .detail-summary-card .detail-actions-menu .danger-
   height: 42px;
   border-radius: 50%;
   object-fit: cover;
+  display: block;
+  margin: 0 !important;
+  line-height: 1;
+  text-align: center;
 }
 
 .market-detail-avatar.market-default-avatar {
+  display: grid;
+  place-items: center;
   font-size: 24px;
 }
 
@@ -6792,7 +7663,35 @@ html[data-theme-color="dark"] .detail-summary-card .detail-actions-menu .danger-
   font-size: 10px;
 }
 
-.market-seller-card button {
+.market-seller-profile-link {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.market-seller-profile-link:active {
+  opacity: .68;
+}
+
+.market-seller-avatar-slot.market-seller-profile-link {
+  cursor: pointer;
+}
+
+.market-seller-name {
+  display: block;
+  cursor: pointer;
+}
+
+.market-seller-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.market-seller-actions button {
   height: 34px;
   padding: 0 13px;
   border: 1px solid #2fa77f;
@@ -6800,6 +7699,69 @@ html[data-theme-color="dark"] .detail-summary-card .detail-actions-menu .danger-
   color: #298563;
   background: transparent;
   font-size: 11px;
+}
+
+.seller-store-head {
+  padding: 14px;
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+}
+
+.seller-store-avatar {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.seller-store-head > div {
+  min-width: 0;
+}
+
+.seller-store-head h2,
+.seller-store-head p {
+  margin: 0;
+}
+
+.seller-store-head h2 {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seller-store-head p {
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seller-store-head > button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--accent);
+  border-radius: 18px;
+  color: var(--accent);
+  background: transparent;
+  font-size: 12px;
+}
+
+.seller-store-head > button.active {
+  color: #7b8580;
+  border-color: #d9dfdc;
+  background: #f1f3f2;
+}
+
+.seller-store-title {
+  margin: 18px 0 12px;
 }
 
 .market-detail-page > .market-safe-note {
@@ -7457,7 +8419,7 @@ html[data-theme-color="dark"] .market-seller-card strong {
   min-height: 68px;
   padding: 10px 16px;
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 18px;
+  grid-template-columns: 44px minmax(0, 1fr) auto 18px;
   align-items: center;
   gap: 11px;
   background: transparent;
@@ -7489,6 +8451,17 @@ html[data-theme-color="dark"] .market-seller-card strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-friend-time {
+  align-self: start;
+  padding-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -8185,16 +9158,49 @@ html[data-theme-color="dark"] .message-discover-preview:not(:empty)::after {
   padding: 18px 16px 16px !important;
 }
 
+.space-profile-card .space-profile-avatar-button {
+  width: 58px;
+  height: 58px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  justify-self: center;
+  background: transparent;
+  box-shadow: none;
+}
+
 .space-profile-card .avatar,
 .space-profile-card .avatar-img {
   width: 58px !important;
   height: 58px !important;
   border-width: 2px !important;
   font-size: 34px !important;
+  justify-self: center !important;
+  align-self: center !important;
 }
 
 .space-profile-main {
   min-width: 0;
+}
+
+.space-profile-card .space-profile-name-button {
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: block;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+}
+
+.space-profile-card .space-profile-avatar-button:focus-visible,
+.space-profile-card .space-profile-name-button:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, .92);
+  outline-offset: 3px;
 }
 
 .space-name-line {
@@ -8253,11 +9259,13 @@ html[data-theme-color="dark"] .message-discover-preview:not(:empty)::after {
   gap: 7px;
 }
 
-.space-profile-pills button {
+.space-profile-pills span {
   min-height: 28px;
   padding: 0 11px;
   border: 1px solid rgba(255, 255, 255, .48);
   border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
   background: rgba(255, 255, 255, .16);
   color: #fff;
   font-size: 12px;
@@ -10785,6 +11793,37 @@ html[data-theme-color="dark"] .turtle-price {
   border-color: rgba(7, 193, 96, .32);
 }
 
+/* 看板档案列表：保留全部信息，但缩小卡片和缩略图的垂直占用。 */
+.home-archive-section .turtle-row {
+  min-height: 0 !important;
+  grid-template-columns: 58px minmax(0, 1fr) !important;
+  gap: 10px;
+  padding: 10px 12px !important;
+}
+
+.home-archive-section .turtle-row > img {
+  width: 58px;
+  height: 58px;
+}
+
+.home-archive-section .turtle-row-content {
+  gap: 4px;
+}
+
+.home-archive-section .turtle-row-title > strong {
+  margin-left: 7px;
+  font-size: 16px;
+}
+
+.home-archive-section .turtle-row-species > p {
+  margin-left: 7px !important;
+}
+
+.home-archive-section .turtle-row .more-btn {
+  top: 6px !important;
+  right: 6px !important;
+}
+
 /* A purchase card keeps its original figures and shows when the linked turtle was sold. */
 .ledger-row-title-line {
   min-width: 0;
@@ -11389,6 +12428,7 @@ html[data-theme-color="dark"] .action-panel.care-action-panel.home-module-panel 
 
 .community-chat-page {
   min-height: calc(100vh - 74px);
+  padding: 12px 0 0 !important;
   display: flex;
   flex-direction: column;
 }
@@ -11431,18 +12471,20 @@ html[data-theme-color="dark"] .action-panel.care-action-panel.home-module-panel 
 }
 
 .community-chat-product-strip {
-  width: 100%;
-  min-height: 88px;
-  padding: 10px 18px 13px;
+  width: calc(100% - 28px);
+  min-height: 78px;
+  margin: 0 14px 12px;
+  padding: 8px 10px;
   display: grid;
-  grid-template-columns: 66px minmax(0, 1fr) auto;
+  grid-template-columns: 60px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  border-top: 1px solid var(--divider);
-  border-bottom: 1px solid var(--divider);
+  gap: 10px;
+  border: 1px solid var(--divider);
+  border-radius: 14px;
   color: var(--text);
   text-align: left;
-  background: var(--topbar-bg);
+  background: var(--section-bg);
+  box-shadow: 0 7px 18px rgba(31, 42, 51, .045);
 }
 
 .community-chat-product-strip:active {
@@ -11450,9 +12492,9 @@ html[data-theme-color="dark"] .action-panel.care-action-panel.home-module-panel 
 }
 
 .community-chat-product-media {
-  width: 66px;
-  height: 66px;
-  flex: 0 0 66px;
+  width: 60px;
+  height: 60px;
+  flex: 0 0 60px;
   position: relative;
   display: grid;
   place-items: center;
@@ -11500,6 +12542,34 @@ html[data-theme-color="dark"] .action-panel.care-action-panel.home-module-panel 
   background: var(--raised-bg);
 }
 
+.community-chat-product-media.is-unavailable {
+  isolation: isolate;
+}
+
+.community-chat-product-media.is-unavailable::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  background: rgba(27, 38, 39, .45);
+  pointer-events: none;
+}
+
+.community-chat-product-unavailable-mark {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 850;
+  letter-spacing: .04em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .32);
+  pointer-events: none;
+}
+
 .community-chat-product-info {
   min-width: 0;
   display: grid;
@@ -11518,7 +12588,7 @@ html[data-theme-color="dark"] .action-panel.care-action-panel.home-module-panel 
 .community-chat-product-info strong {
   overflow: hidden;
   color: var(--text);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -11526,7 +12596,7 @@ html[data-theme-color="dark"] .action-panel.care-action-panel.home-module-panel 
 
 .community-chat-product-info b {
   color: #ef5661;
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1.25;
 }
 
@@ -11537,21 +12607,26 @@ html[data-theme-color="dark"] .action-panel.care-action-panel.home-module-panel 
 }
 
 .community-chat-product-link {
-  min-width: 74px;
-  min-height: 36px;
+  min-width: 66px;
+  min-height: 32px;
   display: grid;
   place-items: center;
-  padding: 0 12px;
-  border-radius: 19px;
+  padding: 0 9px;
+  border-radius: 17px;
   color: #fff;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   background: #ff6a00;
 }
 
+.community-chat-product-link.is-unavailable {
+  color: var(--muted);
+  background: var(--raised-bg);
+}
+
 .community-chat-list {
   flex: 1;
-  padding: 8px 0 90px;
+  padding: 0 14px calc(90px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -11979,6 +13054,53 @@ html[data-theme-color="dark"] .message-friend-avatar-wrap > i {
   font-size: 11px;
 }
 
+.profile-content-tabs {
+  margin: 12px 0;
+  padding: 4px;
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  background: var(--raised-bg);
+}
+
+.profile-content-tabs button {
+  min-width: 0;
+  min-height: 60px;
+  padding: 8px 6px;
+  border: 0;
+  border-radius: 7px;
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  color: var(--muted);
+  background: transparent;
+  text-align: center;
+}
+
+.profile-content-tabs button strong {
+  color: inherit;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.profile-content-tabs button span {
+  color: inherit;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.profile-content-tabs button.active {
+  color: var(--accent-deep);
+  background: var(--section-bg);
+  box-shadow: 0 5px 12px rgba(31, 42, 51, .08);
+}
+
+.profile-content-panel {
+  min-width: 0;
+}
+
 .saved-market-page .empty,
 .following-market-grid .empty {
   grid-column: 1 / -1;
@@ -11995,6 +13117,17 @@ html[data-theme-color="dark"] .space-social-links,
 html[data-theme-color="dark"] .following-user-card,
 html[data-theme-color="dark"] .following-profile-head {
   background: #181818;
+}
+
+html[data-theme-color="dark"] .profile-content-tabs {
+  border-color: #303033;
+  background: #202020;
+}
+
+html[data-theme-color="dark"] .profile-content-tabs button.active {
+  color: #bdebd9;
+  background: #181818;
+  box-shadow: none;
 }
 
 /* 龟集市九宫格媒体：最多9张图片或视频。 */
@@ -12185,6 +13318,27 @@ html[data-theme-color="dark"] .following-profile-head {
   background: #0f1110;
 }
 
+.market-detail-gallery-count {
+  position: absolute;
+  top: 10px;
+  right: 11px;
+  z-index: 7;
+  min-width: 34px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, .96);
+  background: rgba(0, 0, 0, .42);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .12);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: .02em;
+  text-align: center;
+  pointer-events: none;
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+
 .market-detail-gallery-arrow {
   position: absolute;
   top: 50%;
@@ -12227,6 +13381,15 @@ html[data-theme-color="dark"] .following-profile-head {
 .market-detail-gallery .market-detail-photo {
   flex: 0 0 100%;
   scroll-snap-align: start;
+}
+
+.market-feed-status {
+  min-height: 44px;
+  padding: 14px 8px 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
 }
 
 .market-detail-photo > video {
@@ -13130,6 +14293,177 @@ html[data-theme-color="dark"] .pool-type-choices button.active {
   border-color: #39735e;
 }
 
+/* 社交资料入口、聊天商品条与数字胶囊统一对齐。 */
+.community-profile-avatar-button {
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.community-profile-avatar-button .community-avatar {
+  width: 100% !important;
+  height: 100% !important;
+  display: grid;
+  place-items: center;
+  border-radius: inherit !important;
+  object-fit: cover;
+}
+
+.community-profile-name-button,
+.community-detail-author-button,
+.community-chat-user-link {
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+}
+
+.community-profile-name-button {
+  overflow: hidden;
+  color: #576b95;
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1.3;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.community-detail-author-button {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+}
+
+.community-detail-author-button strong,
+.community-detail-author-button span {
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.community-detail-author-button strong {
+  color: #576b95;
+  font-size: 15px;
+}
+
+.community-detail-author-button span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.community-chat-user-link {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.community-chat-product-context {
+  position: fixed;
+  top: var(--fixed-topbar-height);
+  left: 50%;
+  z-index: 5900;
+  width: min(430px, 100vw);
+  padding: 7px 0;
+  transform: translateX(-50%);
+  background: var(--topbar-bg);
+  border-bottom: 1px solid var(--divider);
+  box-shadow: 0 5px 13px rgba(31, 42, 51, .05);
+}
+
+.community-chat-product-context .community-chat-product-strip {
+  width: calc(100% - 28px);
+  min-height: 72px;
+  margin: 0 14px;
+}
+
+.community-chat-page.has-chat-product-context {
+  padding-top: 93px !important;
+}
+
+.keyboard-open .bottom-nav {
+  display: none !important;
+}
+
+.section-title > small,
+.following-profile-head > button,
+.following-user-card > b {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  text-align: center !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+.following-user-card > b {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.following-profile-head > button {
+  min-width: 58px;
+}
+
+.ledger-row-main {
+  gap: 6px;
+}
+
+.ledger-row-title {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 780;
+}
+
+.ledger-turtle-meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.ledger-turtle-meta span {
+  min-height: 20px;
+  max-width: 100%;
+  padding: 3px 7px;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #dceaf0;
+  border-radius: 999px;
+  color: #718593;
+  background: #f2f8fa;
+  font-size: 11px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-theme-color="dark"] .ledger-turtle-meta span {
+  color: #a4b6c2;
+  border-color: #303d42;
+  background: #1d282c;
+}
+
+html[data-theme-color="dark"] .community-chat-product-context {
+  background: #171717;
+  border-color: #303033;
+}
+
 @media (max-width: 360px) {
   .action-panel.care-action-panel.home-module-panel .care-action {
     min-height: 96px !important;
@@ -13145,4 +14479,121 @@ html[data-theme-color="dark"] .pool-type-choices button.active {
     grid-template-columns: 84px minmax(0, 1fr);
     gap: 9px;
   }
+}
+
+/* 最终覆盖：账本列表与看板档案卡采用同一信息层级。 */
+.ledger-row {
+  grid-template-columns: 54px minmax(0, 1fr) auto !important;
+  min-height: 0;
+  gap: 10px;
+  padding: 12px 12px 38px !important;
+}
+
+.ledger-row-main {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+}
+
+.ledger-row-title-line {
+  min-width: 0;
+  display: grid !important;
+  align-content: start;
+  gap: 2px;
+}
+
+.ledger-row-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: nowrap;
+}
+
+.ledger-row-title .ledger-title-text {
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 780;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row .ledger-inline-type.purchase,
+.ledger-row .ledger-inline-type.sold,
+.ledger-row .ledger-inline-type.loss {
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--raised-bg);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.ledger-row-species {
+  min-width: 0;
+  margin: 0 !important;
+  overflow: hidden;
+  color: var(--muted) !important;
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row .ledger-turtle-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.ledger-row .ledger-turtle-meta span {
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  background: var(--raised-bg);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ledger-row .muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.ledger-row .ledger-amount {
+  padding-top: 27px;
+  align-self: start;
+  justify-self: end;
+  font-size: 18px;
+}
+
+.ledger-row .ledger-amount.sold { color: var(--aqua) !important; }
+.ledger-row .ledger-amount.purchase,
+.ledger-row .ledger-amount.loss { color: var(--danger) !important; }
+
+html[data-theme-color="dark"] .ledger-row .ledger-inline-type.purchase,
+html[data-theme-color="dark"] .ledger-row .ledger-inline-type.sold,
+html[data-theme-color="dark"] .ledger-row .ledger-inline-type.loss,
+html[data-theme-color="dark"] .ledger-row .ledger-turtle-meta span {
+  color: var(--muted) !important;
+  border-color: #303033 !important;
+  background: #202020 !important;
 }

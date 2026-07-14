@@ -7,3 +7,6 @@ dist/
 .env
 server/data/
 server/uploads/
+server/backups/
+*.p8
+keys/

@@ -2,12 +2,22 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <title>壳友手账</title>
-    <link rel="stylesheet" href="./styles.css?v=20260711-compose-layer" />
+    <link rel="stylesheet" href="./styles.css?v=20260714-mobile-zoom-lock" />
   </head>
   <body>
     <div id="app" class="phone-shell"></div>
+    <script>
+      // Keep the app at its designed scale on mobile.  In particular, avoid
+      // iOS retaining a pinch/double-tap zoom after a search field is focused.
+      document.addEventListener("touchmove", event => {
+        if (event.touches.length > 1) event.preventDefault();
+      }, { passive: false });
+      ["gesturestart", "gesturechange", "gestureend"].forEach(type => {
+        document.addEventListener(type, event => event.preventDefault(), { passive: false });
+      });
+    </script>
     <script src="./config.js?v=20260627-member-two-tier"></script>
     <script src="./species-data.js?v=20260630-auth-species"></script>
     <script src="./app.js?v=20260711-publish-ready-state"></script>

@@ -7,6 +7,9 @@ const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
 const CLOUD_SYNC_DEBOUNCE_MS = 900;
 const CHINA_TIME_ZONE = "Asia/Shanghai";
 const REVIEW_ADMIN_PHONE = "18652082378";
+const APP_BUILD = Math.max(0, Number.parseInt(String(window.TURTLE_APP_BUILD || "0"), 10) || 0);
+const APP_STORE_URL = String(window.TURTLE_APP_STORE_URL || "https://apps.apple.com/app/id6783481335");
+let forceUpdateState = { required: false, checking: false, minimumBuild: 0, latestBuild: 0, message: "", appStoreUrl: "" };
 // 龟集市的购买咨询统一由平台客服承接；修改此处即可同步更新商品页和“关于”页。
 const PLATFORM_SERVICE_WECHAT = "Czjxcw";
 const defaultPhoto = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`
@@ -72,6 +75,7 @@ const initialState = {
   selectedSpeciesCode: "",
   speciesPickerForAdd: false,
   openTurtleMenuId: "",
+  openLedgerMenuId: "",
   openBreedingMenuId: "",
   openFeedbackMenuId: "",
   updatingTurtleId: "",
@@ -93,11 +97,19 @@ const initialState = {
   publicReviews: [],
   publicFeedbackItems: [],
   communityPosts: [],
+  communityProfileStats: { receivedLikes: 0, followerCount: 0 },
+  contentReports: [],
+  isCommunityAdmin: false,
   communityFriends: [],
   communityFollowingUsers: [],
   communityFollowingPosts: [],
   communityFollowingListings: [],
   selectedFollowingUserId: "",
+  selectedCommunityUserId: "",
+  selectedCommunityUser: null,
+  communityUserPosts: [],
+  communityUserListings: [],
+  profileContentTab: "posts",
   communityChatMessages: [],
   communityChatListing: null,
   messageUnreadCount: 0,
@@ -112,6 +124,12 @@ const initialState = {
   marketStage: "all",
   marketMyTab: "active",
   selectedMarketListingId: "",
+  selectedMarketSellerId: "",
+  selectedMarketSeller: null,
+  marketFeedInitialized: false,
+  marketFeedNextOffset: 0,
+  marketFeedHasMore: true,
+  marketFeedLoadingMore: false,
   marketDraftPhoto: "",
   marketDraftMedia: [],
   marketDraftTurtleId: "",
@@ -160,6 +178,7 @@ const TURTLE_FORM_DRAFT_FIELDS = [
 
 const LEDGER_FORM_DRAFT_FIELDS = [
   "turtleId",
+  "poolId",
   "purchaseSpeciesCode",
   "purchaseCode",
   "purchaseGender",
@@ -282,8 +301,12 @@ let communityChatLoading = false;
 let communityChatLoadedKey = "";
 let followingLoading = false;
 let followingLastLoadedAt = 0;
+let communityUserProfileLoading = false;
+let communityUserProfileLoadedKey = "";
 let messageUnreadLoading = false;
 let messageUnreadLastLoadedAt = 0;
+let contentReportsLoading = false;
+let contentReportsLastLoadedAt = 0;
 let marketNetworkType = "unknown";
 let marketNetworkMonitoringStarted = false;
 let messageUnreadTimer = null;
@@ -294,11 +317,15 @@ let communityDraftMediaDuration = 0;
 let communityDraftText = "";
 let marketLoading = false;
 let marketLastLoadedAt = 0;
+let marketLoadObserver = null;
 let marketChatDraft = "";
 let pendingCommunityChatLatestScroll = false;
 let pendingPageEnterMotion = false;
 let pageEnterMotionTimer = null;
 let pendingPageScrollReset = false;
+let nativePushListenersAttached = false;
+let nativePushSetupInFlight = false;
+let nativePushDeviceToken = "";
 
 if (CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE) {
   state = { ...state, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" };
@@ -441,6 +468,12 @@ function normalizeState(next) {
     publicReviews: Array.isArray(base.publicReviews) ? base.publicReviews : [],
     publicFeedbackItems: Array.isArray(base.publicFeedbackItems) ? base.publicFeedbackItems : [],
     communityPosts: Array.isArray(base.communityPosts) ? base.communityPosts : [],
+    communityProfileStats: {
+      receivedLikes: Math.max(0, Number(base.communityProfileStats?.receivedLikes || 0)),
+      followerCount: Math.max(0, Number(base.communityProfileStats?.followerCount || 0))
+    },
+    contentReports: Array.isArray(base.contentReports) ? base.contentReports : [],
+    isCommunityAdmin: Boolean(base.isCommunityAdmin),
     communityFriends: Array.isArray(base.communityFriends) ? base.communityFriends : [],
     communityFollowingUsers: Array.isArray(base.communityFollowingUsers) ? base.communityFollowingUsers : [],
     communityFollowingPosts: Array.isArray(base.communityFollowingPosts) ? base.communityFollowingPosts : [],
@@ -599,6 +632,73 @@ function requireLogin() {
   if (state.loggedInPhone) return true;
   toast("请先登录账号");
   return false;
+}
+
+function forceUpdatePage() {
+  const latestBuild = Number(forceUpdateState.latestBuild || forceUpdateState.minimumBuild || 0);
+  const message = forceUpdateState.message || "为了保障数据安全与使用体验，请先更新到最新版本后再继续使用。";
+  return `
+    <main class="force-update-screen" role="alertdialog" aria-modal="true" aria-labelledby="forceUpdateTitle">
+      <div class="force-update-mark" aria-hidden="true">⇧</div>
+      <p class="force-update-eyebrow">壳友手账有新版本</p>
+      <h1 id="forceUpdateTitle">需要更新后才能继续使用</h1>
+      <p class="force-update-copy">${escapeHtml(message)}</p>
+      <div class="force-update-version"><span>当前构建 ${APP_BUILD || "-"}</span>${latestBuild ? `<i></i><strong>最新构建 ${latestBuild}</strong>` : ""}</div>
+      <button class="primary force-update-primary" type="button" data-open-app-store-update>前往 App Store 更新</button>
+      <button class="force-update-recheck" type="button" data-recheck-app-update>更新完成后，点击重新检查</button>
+    </main>
+  `;
+}
+
+function bindForceUpdateActions() {
+  $app.querySelector("[data-open-app-store-update]")?.addEventListener("click", () => {
+    window.location.href = forceUpdateState.appStoreUrl || APP_STORE_URL;
+  });
+  $app.querySelector("[data-recheck-app-update]")?.addEventListener("click", () => {
+    checkRequiredAppUpdate(true);
+  });
+}
+
+async function checkRequiredAppUpdate(showFeedback = false) {
+  if (!CONFIGURED_SMS_BACKEND || forceUpdateState.checking) return;
+  forceUpdateState.checking = true;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 5000);
+  try {
+    const base = window.TURTLE_API_BASE_URL || "";
+    const response = await fetch(`${base}/api/app/version?build=${encodeURIComponent(APP_BUILD)}&t=${Date.now()}`, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok === false) throw new Error(result.message || "检查更新失败");
+    const minimumBuild = Math.max(0, Number.parseInt(String(result.minimumBuild || 0), 10) || 0);
+    const latestBuild = Math.max(minimumBuild, Number.parseInt(String(result.latestBuild || 0), 10) || 0);
+    const mustUpdate = minimumBuild > 0 && APP_BUILD > 0 && APP_BUILD < minimumBuild;
+    if (mustUpdate) {
+      forceUpdateState = {
+        required: true,
+        checking: false,
+        minimumBuild,
+        latestBuild,
+        message: String(result.message || ""),
+        appStoreUrl: String(result.appStoreUrl || "")
+      };
+      render();
+      return;
+    }
+    if (forceUpdateState.required) {
+      forceUpdateState = { required: false, checking: false, minimumBuild: 0, latestBuild: 0, message: "", appStoreUrl: "" };
+      render();
+    }
+    if (showFeedback) toast("已是最新版本");
+  } catch (error) {
+    if (showFeedback) toast("暂时无法连接更新服务，请检查网络后重试");
+  } finally {
+    window.clearTimeout(timeout);
+    forceUpdateState.checking = false;
+  }
 }
 
 function requireArchiveCapacity(extra = 1) {
@@ -1049,6 +1149,24 @@ function formatTime(value) {
     second: "2-digit",
     hourCycle: "h23"
   }).format(date);
+}
+
+function formatMessagePreviewTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const current = chinaDateParts();
+  const target = chinaDateParts(date);
+  if (!current || !target) return "";
+  if (current.year === target.year && current.month === target.month && current.day === target.day) {
+    return new Intl.DateTimeFormat("zh-CN", {
+      timeZone: CHINA_TIME_ZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).format(date);
+  }
+  return current.year === target.year ? `${target.month}/${target.day}` : `${target.year}/${target.month}/${target.day}`;
 }
 
 function formatDate(value) {
@@ -1565,9 +1683,9 @@ function tabIcon(name) {
 function bottomNav() {
   const dashboardPages = ["home", "list", "turtleDetail", "species", "breeds", "add", "memos", "breeding", "breedingAdd", "breedingDetail", "pools", "poolAdd"];
   const ledgerPages = ["ledger", "ledgerDetail"];
-  const marketPages = ["market", "marketAdd", "marketDetail"];
-  const messagePages = ["messages", "community", "communityAdd", "communityFriends", "communityChat", "communityPostDetail"];
-  const minePages = ["mine", "calendar", "satisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "sync", "about", "reports", "marketFavorites", "marketHistory", "following", "followingProfile"];
+  const marketPages = ["market", "marketAdd", "marketDetail", "marketSeller"];
+  const messagePages = ["messages", "community", "communityAdd", "communityFriends", "communityChat", "communityPostDetail", "communityProfile"];
+  const minePages = ["mine", "calendar", "satisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "sync", "about", "rules", "privacy", "moderation", "reports", "marketFavorites", "marketHistory", "following", "followingProfile"];
   const unreadCount = Math.max(0, Number(state.messageUnreadCount || 0));
   const unreadText = unreadCount > 99 ? "99+" : String(unreadCount);
   return `
@@ -1614,13 +1732,13 @@ function communityFeedCard(item) {
   const isOwn = Boolean(item.isOwn || item.pendingLocal);
   return `
     <article class="community-moment" data-view-community-post="${item.id}" tabindex="0" role="button" aria-label="查看${escapeHtml(item.authorName || "壳友")}发布的动态">
-      ${communityAvatar(item)}
+      <button class="community-profile-avatar-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item)}</button>
       <div class="community-moment-main">
-        <div class="community-moment-author"><strong>${escapeHtml(item.authorName || "壳友")}</strong>${!isOwn ? `<span class="community-author-actions"><button class="community-follow-button ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button>${item.isFriend ? `<button type="button" data-open-community-chat="${item.authorId}">聊天</button>` : `<button type="button" data-add-community-friend="${item.authorId}">加好友</button>`}</span>` : ""}</div>
+        <div class="community-moment-author"><button class="community-profile-name-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}">${escapeHtml(item.authorName || "壳友")}</button>${!isOwn ? `<span class="community-author-actions"><button class="community-follow-button ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></span>` : ""}</div>
         ${item.content ? `<p class="community-post-copy">${escapeHtml(item.content)}</p>` : ""}
         ${item.mediaUrl ? `<div class="community-post-media">${communityMedia(item, true)}${item.mediaType === "video" ? `<i class="community-detail-play-mark">▶</i>` : ""}</div>` : ""}
         ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
-        <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? `<div class="community-moment-popover"><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "取消" : "赞"}</button><button type="button" data-show-community-comment="${item.id}">评论</button></div>` : ""}</div></div>
+        <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? `<div class="community-moment-popover"><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "取消" : "赞"}</button><button type="button" data-show-community-comment="${item.id}">评论</button>${!isOwn ? `<button type="button" data-open-content-report data-report-type="community" data-report-id="${item.id}">举报</button>` : ""}</div>` : ""}</div></div>
         ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</div>` : ""}
         ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="评论" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
       </div>
@@ -1655,9 +1773,9 @@ function pageCommunityPostDetail() {
     <main class="content page-fresh community-detail-page">
       <article class="community-detail-card fresh-card">
         <header class="community-detail-head">
-          ${communityAvatar(item)}
-          <div><strong>${escapeHtml(item.authorName || "壳友")}</strong><span>${formatTime(item.createdAt)}</span></div>
-          ${!isOwn ? `<div class="community-author-actions"><button class="${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button>${item.isFriend ? `<button type="button" data-open-community-chat="${item.authorId}">聊天</button>` : `<button type="button" data-add-community-friend="${item.authorId}">加好友</button>`}</div>` : ""}
+          <button class="community-profile-avatar-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item)}</button>
+          <button class="community-detail-author-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}"><strong>${escapeHtml(item.authorName || "壳友")}</strong><span>${formatTime(item.createdAt)}</span></button>
+          ${!isOwn ? `<div class="community-author-actions"><button class="${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></div>` : ""}
         </header>
         ${item.content ? `<p class="community-detail-copy">${escapeHtml(item.content)}</p>` : ""}
         ${communityDetailMedia(item)}
@@ -1665,6 +1783,7 @@ function pageCommunityPostDetail() {
         <div class="community-detail-actions">
           <button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "已赞" : "♡ 赞"}${item.likeCount ? ` ${item.likeCount}` : ""}</button>
           <button type="button" data-show-community-comment="${item.id}">评论${comments.length ? ` ${comments.length}` : ""}</button>
+          ${!isOwn ? `<button type="button" data-open-content-report data-report-type="community" data-report-id="${item.id}">举报</button>` : ""}
           ${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}
         </div>
         ${(item.likeCount || comments.length) ? `<section class="community-detail-social">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</section>` : ""}
@@ -1694,7 +1813,7 @@ function pageMessages() {
       <section class="message-discover-list">
         <button class="message-discover-row" type="button" data-page="community"><span class="message-community-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2.8c2.5 0 3.9 3 2.2 4.8M21.2 12c0 2.5-3 3.9-4.8 2.2M12 21.2c-2.5 0-3.9-3-2.2-4.8M2.8 12c0-2.5 3-3.9 4.8-2.2"></path></svg></span><strong>壳友圈</strong><span class="message-discover-preview">${latestPost?.mediaUrl ? (latestPost.mediaType === "video" ? `<span class="message-video-thumb">▶</span>` : `<img src="${latestPost.mediaUrl}" alt="最新动态">`) : ""}</span><b>›</b></button>
       </section>
-      <section class="message-friend-list">${friends.map(friend => `<button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div><strong>${escapeHtml(friend.name || "壳友")}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><b>›</b></button>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>进入壳友圈添加好友后即可聊天</span></div>`}</section>
+      <section class="message-friend-list">${friends.map(friend => `<button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div><strong>${escapeHtml(friend.name || "壳友")}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div>${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></button>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`}</section>
     </main>
     ${bottomNav()}
   `;
@@ -1729,10 +1848,10 @@ function pageCommunityAdd() {
 function pageCommunityFriends() {
   const friends = state.communityFriends || [];
   return `
-    ${topbar("我的好友", true)}
+    ${topbar("消息联系人", true)}
     <main class="content page-fresh community-page">
-      <section class="section-title"><span>好友</span><small>${friends.length} 位</small></section>
-      <section class="community-friend-list">${friends.map(friend => `<article class="community-friend-row fresh-card">${communityAvatar(friend)}<div><strong>${escapeHtml(friend.name || "壳友")}</strong><small>${escapeHtml(friend.phone || "")}</small></div><button type="button" data-open-community-chat="${friend.id}">聊天</button></article>`).join("") || `<div class="empty small-empty"><div><strong>还没有好友</strong><br>在动态里点击“加好友”即可开始聊天</div></div>`}</section>
+      <section class="section-title"><span>联系人</span><small>${friends.length} 位</small></section>
+      <section class="community-friend-list">${friends.map(friend => `<article class="community-friend-row fresh-card">${communityAvatar(friend)}<div><strong>${escapeHtml(friend.name || "壳友")}</strong><small>${escapeHtml(friend.phone || "")}</small></div><button type="button" data-open-community-chat="${friend.id}">聊天</button></article>`).join("") || `<div class="empty small-empty"><div><strong>还没有联系人</strong><br>在龟集市联系卖家后即可继续聊天</div></div>`}</section>
     </main>
     ${bottomNav()}
   `;
@@ -1748,8 +1867,12 @@ function shouldShowCommunityMessageTime(messages, index) {
 
 function normalizeCommunityChatListing(listing) {
   if (!listing || typeof listing !== "object") return null;
+  const status = ["active", "inactive", "sold", "removed"].includes(listing.status) ? listing.status : "active";
   return {
     ...listing,
+    status,
+    unavailable: Boolean(listing.unavailable) || status !== "active",
+    unavailableReason: listing.unavailableReason || (status === "sold" ? "sold" : status === "active" ? "" : "offline"),
     price: Math.max(0, Number(listing.price || 0)),
     mediaUrl: apiAssetUrl(listing.mediaUrl || listing.photoUrl || ""),
     photoUrl: apiAssetUrl(listing.photoUrl || listing.mediaUrl || ""),
@@ -1762,24 +1885,34 @@ function normalizeCommunityChatListing(listing) {
   };
 }
 
+function isUnavailableChatListing(listing) {
+  return Boolean(listing?.unavailable) || ["inactive", "sold", "removed"].includes(listing?.status);
+}
+
+function unavailableChatListingMessage(listing) {
+  return listing?.status === "sold" || listing?.unavailableReason === "sold" ? "商品已售出" : "商品已下架";
+}
+
 function communityChatListingCard(listing) {
   if (!listing) return "";
   const title = listing.title || listing.speciesName || "龟集市商品";
   const meta = [listing.city || "全国", listing.delivery].filter(Boolean).join(" · ");
+  const unavailable = isUnavailableChatListing(listing);
+  const unavailableMark = unavailable ? `<em class="community-chat-product-unavailable-mark">已售出</em>` : "";
   const preview = listing.mediaUrl
     ? (listing.mediaType === "video"
-      ? `<span class="community-chat-product-media is-video"><video src="${escapeHtml(listing.mediaUrl)}" muted playsinline preload="metadata"></video><i>▶</i></span>`
-      : `<span class="community-chat-product-media"><img src="${escapeHtml(listing.mediaUrl)}" alt="${escapeHtml(title)}"></span>`)
-    : `<span class="community-chat-product-media is-placeholder">龟</span>`;
+      ? `<span class="community-chat-product-media is-video ${unavailable ? "is-unavailable" : ""}"><video src="${escapeHtml(listing.mediaUrl)}" muted playsinline preload="metadata"></video><i>▶</i>${unavailableMark}</span>`
+      : `<span class="community-chat-product-media ${unavailable ? "is-unavailable" : ""}"><img src="${escapeHtml(listing.mediaUrl)}" alt="${escapeHtml(title)}">${unavailableMark}</span>`)
+    : `<span class="community-chat-product-media is-placeholder ${unavailable ? "is-unavailable" : ""}">龟${unavailableMark}</span>`;
   return `
-    <button class="community-chat-product-strip" type="button" data-view-chat-market="${escapeHtml(listing.id || "")}" aria-label="查看商品详情：${escapeHtml(title)}">
+    <button class="community-chat-product-strip" type="button" data-view-chat-market="${escapeHtml(listing.id || "")}" aria-label="${unavailable ? "商品已下架" : `查看商品详情：${escapeHtml(title)}`} ">
       ${preview}
       <div class="community-chat-product-info">
         <strong>${escapeHtml(title)}</strong>
         <b><i>¥</i>${money(listing.price)}</b>
         <span>${escapeHtml(meta || "商品信息" )}</span>
       </div>
-      <span class="community-chat-product-link">查看商品</span>
+      <span class="community-chat-product-link ${unavailable ? "is-unavailable" : ""}">${unavailable ? "已下架" : "查看商品"}</span>
     </button>
   `;
 }
@@ -1789,18 +1922,18 @@ function pageCommunityChat() {
   const messages = state.communityChatMessages || [];
   const visibleMessages = messages.filter(message => !message.marketReferenceOnly);
   const marketListing = normalizeCommunityChatListing(state.communityChatListing);
-  const chatHeader = marketListing ? `
+  const chatHeader = `
     <div class="topbar community-chat-topbar">
-      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><h1>${escapeHtml(friend?.name || "聊天")}</h1><span aria-hidden="true">···</span></div>
-      ${communityChatListingCard(marketListing)}
+      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button><span aria-hidden="true">···</span></div>
     </div>
-  ` : topbar(friend?.name || "聊天", true);
+  `;
   return `
     ${chatHeader}
-    <main class="content page-fresh community-chat-page">
+    <main class="content page-fresh community-chat-page ${marketListing ? "has-chat-product-context" : ""}">
       <section class="community-chat-list">${visibleMessages.map((message, index) => `<div class="community-message ${message.mine ? "mine" : "theirs"}">${shouldShowCommunityMessageTime(visibleMessages, index) ? `<small>${formatTime(message.createdAt)}</small>` : ""}<p>${escapeHtml(message.content)}</p></div>`).join("") || (marketListing ? "" : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`)}</section>
       <form class="community-chat-form" id="communityChatForm"><input name="content" maxlength="1000" value="${escapeHtml(marketChatDraft)}" placeholder="输入消息…" autocomplete="off"><button type="submit">发送</button></form>
     </main>
+    ${marketListing ? `<section class="community-chat-product-context">${communityChatListingCard(marketListing)}</section>` : ""}
   `;
 }
 
@@ -1822,15 +1955,44 @@ function pageFollowingProfile() {
   const user = (state.communityFollowingUsers || []).find(item => item.id === state.selectedFollowingUserId);
   const posts = (state.communityFollowingPosts || []).filter(item => item.authorId === state.selectedFollowingUserId);
   const listings = (state.communityFollowingListings || []).filter(item => item.sellerId === state.selectedFollowingUserId);
+  const activeTab = state.profileContentTab === "listings" ? "listings" : "posts";
   if (!user) return `${topbar("关注详情", true)}<main class="content page-fresh"><div class="empty"><strong>没有找到这位壳友</strong></div></main>${bottomNav()}`;
   return `
     ${topbar(user.name || "关注详情", true)}
     <main class="content page-fresh following-profile-page">
       <section class="following-profile-head fresh-card">${communityAvatar(user, "following-profile-avatar")}<div><h2>${escapeHtml(user.name || "壳友")}</h2><p>${posts.length} 条动态 · ${listings.length} 件在售商品</p></div><button class="active" type="button" data-toggle-community-follow="${user.id}">已关注</button></section>
-      <section class="section-title"><span>壳友圈</span><small>${posts.length} 条</small></section>
-      <section class="community-feed following-posts">${posts.map(communityFeedCard).join("") || `<div class="empty small-empty"><div><strong>暂时没有动态</strong></div></div>`}</section>
-      <section class="section-title"><span>在售商品</span><small>${listings.length} 件</small></section>
-      <section class="market-grid following-market-grid">${listings.map(marketListingCard).join("") || `<div class="empty small-empty"><div><strong>暂时没有在售商品</strong></div></div>`}</section>
+      ${profileContentTabs(posts.length, listings.length, activeTab)}
+      <section class="profile-content-panel ${activeTab === "posts" ? "is-posts" : "is-listings"}">${activeTab === "posts"
+        ? `<section class="community-feed following-posts">${posts.map(communityFeedCard).join("") || `<div class="empty small-empty"><div><strong>暂时没有动态</strong></div></div>`}</section>`
+        : `<section class="market-grid following-market-grid">${listings.map(marketListingCard).join("") || `<div class="empty small-empty"><div><strong>暂时没有在售商品</strong></div></div>`}</section>`}</section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function profileContentTabs(postCount, listingCount, activeTab) {
+  return `
+    <section class="profile-content-tabs" role="tablist" aria-label="用户主页内容">
+      <button class="${activeTab === "posts" ? "active" : ""}" type="button" role="tab" aria-selected="${activeTab === "posts"}" data-profile-content-tab="posts"><strong>壳友圈</strong><span>${postCount} 条动态</span></button>
+      <button class="${activeTab === "listings" ? "active" : ""}" type="button" role="tab" aria-selected="${activeTab === "listings"}" data-profile-content-tab="listings"><strong>出售商品</strong><span>${listingCount} 件在售</span></button>
+    </section>
+  `;
+}
+
+function pageCommunityProfile() {
+  const user = state.selectedCommunityUser;
+  const posts = state.communityUserPosts || [];
+  const listings = state.communityUserListings || [];
+  const activeTab = state.profileContentTab === "listings" ? "listings" : "posts";
+  if (!user?.id) return `${topbar("壳友主页", true)}<main class="content page-fresh"><div class="empty"><strong>没有找到这位壳友</strong></div></main>${bottomNav()}`;
+  return `
+    ${topbar(user.name || "壳友主页", true)}
+    <main class="content page-fresh following-profile-page community-profile-page">
+      <section class="following-profile-head fresh-card">${communityAvatar(user, "following-profile-avatar")}<div><h2>${escapeHtml(user.name || "壳友")}</h2><p>${Number(user.postCount ?? posts.length)} 条动态 · ${Number(user.listingCount ?? listings.length)} 件在售商品</p></div>${user.isOwn ? "" : `<button class="${user.followed ? "active" : ""}" type="button" data-toggle-community-follow="${user.id}">${user.followed ? "已关注" : "关注"}</button>`}</section>
+      ${profileContentTabs(posts.length, listings.length, activeTab)}
+      <section class="profile-content-panel ${activeTab === "posts" ? "is-posts" : "is-listings"}">${activeTab === "posts"
+        ? `<section class="community-feed following-posts">${posts.map(communityFeedCard).join("") || `<div class="empty small-empty"><div><strong>暂时没有动态</strong></div></div>`}</section>`
+        : `<section class="market-grid following-market-grid">${listings.map(marketListingCard).join("") || `<div class="empty small-empty"><div><strong>暂时没有在售商品</strong></div></div>`}</section>`}</section>
     </main>
     ${bottomNav()}
   `;
@@ -2053,6 +2215,7 @@ function pageMarket() {
       <section class="market-grid">
         ${listings.map(marketListingCard).join("") || `<div class="market-empty"><span>龟</span><strong>${keyword || stage !== "all" ? "没有找到合适的商品" : "龟集市还没有商品"}</strong><p>从自己的乌龟档案一键发布，尺寸和状态会自动带入。</p><button type="button" data-page="marketAdd">发布第一只</button></div>`}
       </section>
+      ${listings.length ? `<div class="market-feed-status" data-market-load-sentinel>${state.marketFeedLoadingMore ? "正在加载更多商品…" : state.marketFeedHasMore ? "继续上滑，加载更多" : "已经到底了"}</div>` : ""}
     </main>
     <button class="market-floating-add" type="button" data-page="marketAdd"><span>＋</span>发布出售</button>
     ${bottomNav()}
@@ -2163,13 +2326,13 @@ function pageMarketAdd() {
           </div>
           <label><span>出售价格</span><div class="market-price-input"><b>¥</b><input name="price" type="number" min="0" step="0.01" value="${escapeHtml(editingListing?.price ?? "")}" placeholder="0.00" required></div></label>
           <label class="market-check"><input name="negotiable" type="checkbox" ${editingListing?.negotiable ? "checked" : ""}><span>接受合理议价</span></label>
-          <div class="market-form-two">
+          <div class="market-form-two market-city-delivery-row">
             <div class="market-city-field">
               <div class="market-city-label"><span>所在城市<i class="required-mark" aria-hidden="true">*</i></span><button type="button" data-market-city-locate>⌖ 定位</button></div>
               <input class="field" name="city" maxlength="24" value="${escapeHtml(state.marketDraftCity || editingListing?.city || "")}" placeholder="正在获取所在城市" data-market-city required>
               <small data-market-city-hint>将自动填写您所在的城市</small>
             </div>
-            <label><span>交付方式<i class="required-mark" aria-hidden="true">*</i></span><select class="select" name="delivery" required><option value="" ${!formValue("delivery") ? "selected" : ""} disabled>请选择方式</option><option value="可快递" ${formValue("delivery") === "可快递" ? "selected" : ""}>可快递</option><option value="仅自提" ${formValue("delivery") === "仅自提" ? "selected" : ""}>仅自提</option><option value="可面交" ${formValue("delivery") === "可面交" ? "selected" : ""}>可面交</option></select></label>
+            <label class="market-delivery-field"><span>交付方式<i class="required-mark" aria-hidden="true">*</i></span><select class="select" name="delivery" required><option value="" ${!formValue("delivery") ? "selected" : ""} disabled>请选择方式</option><option value="可快递" ${formValue("delivery") === "可快递" ? "selected" : ""}>可快递</option><option value="仅自提" ${formValue("delivery") === "仅自提" ? "selected" : ""}>仅自提</option><option value="可面交" ${formValue("delivery") === "可面交" ? "selected" : ""}>可面交</option></select><small aria-hidden="true">&nbsp;</small></label>
           </div>
           <label><span>详细说明<i class="required-mark" aria-hidden="true">*</i></span><textarea name="description" maxlength="600" placeholder="可填写开食情况、饲养环境、健康状态及转让原因" required>${escapeHtml(editingListing?.description || "")}</textarea></label>
         </section>
@@ -2196,6 +2359,7 @@ function pageMarketDetail() {
     <main class="content page-fresh market-detail-page">
       <section class="market-detail-gallery-wrap">
         <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => `<div class="market-detail-photo">${media.type === "video" ? `<video src="${media.url}" controls playsinline preload="metadata"></video>` : `<img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button">`}${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`}</section>
+        <span class="market-detail-gallery-count" data-market-gallery-count aria-live="polite">1/${Math.max(1, primaryMediaItems.length)}</span>
         ${hasPrimaryGalleryControls ? `<button class="market-detail-gallery-arrow prev" type="button" data-market-gallery-prev aria-label="查看上一张图片" aria-controls="marketDetailGallery">‹</button><button class="market-detail-gallery-arrow next" type="button" data-market-gallery-next aria-label="查看下一张图片" aria-controls="marketDetailGallery">›</button>` : ""}
       </section>
       <section class="market-detail-main">
@@ -2214,16 +2378,46 @@ function pageMarketDetail() {
       ${item.description ? `<section class="market-detail-description"><h3>卖家说明</h3><p>${escapeHtml(item.description)}</p></section>` : ""}
       ${detailVideosAfterDescription.length ? `<section class="market-detail-secondary-media market-detail-video-media">${detailVideosAfterDescription.map(media => `<div class="market-detail-secondary-photo"><video src="${media.url}" controls playsinline preload="metadata"></video></div>`).join("")}</section>` : ""}
       <section class="market-seller-card">
-        ${marketSellerAvatar(item, "market-detail-avatar")}
-        <div><strong>${escapeHtml(item.sellerName || "壳友卖家")}</strong><span>${isOwn ? "这是我发布的商品" : "已通过账号认证"}</span></div>
+        <button class="market-seller-avatar-slot market-seller-profile-link" type="button" data-view-market-seller="${escapeHtml(item.sellerId || "")}" aria-label="查看${escapeHtml(item.sellerName || "卖家")}发布的商品">${marketSellerAvatar(item, "market-detail-avatar")}</button>
+        <button class="market-seller-profile-link market-seller-name" type="button" data-view-market-seller="${escapeHtml(item.sellerId || "")}"><strong>${escapeHtml(item.sellerName || "壳友卖家")}</strong><span>${isOwn ? "这是我发布的商品" : "已通过账号认证"}</span></button>
         ${isOwn ? "" : `<div class="market-seller-actions"><button class="${item.sellerFollowed ? "active" : ""}" type="button" data-toggle-community-follow="${item.sellerId}">${item.sellerFollowed ? "已关注" : "关注"}</button><button type="button" data-market-contact="${item.id}">聊一聊</button></div>`}
       </section>
       <section class="market-safe-note"><b>交易咨询</b><p>先看近期实拍或视频，再确认健康、尺寸与交付方式；如需购买，请联系平台客服并发送商品咨询码，活体运输责任以双方确认内容为准。</p></section>
     </main>
     <div class="market-detail-actions">
       ${marketFavoriteButton(item, "market-detail-favorite")}
+      ${!isOwn ? `<button class="market-report-action" type="button" data-open-content-report data-report-type="market" data-report-id="${item.id}">举报</button>` : ""}
       ${isOwn ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">删除</button><button class="market-sold-action" type="button" data-market-sold="${item.id}">${sold ? "恢复在售" : "标记已售"}</button>` : sold ? `<button class="market-sold-disabled" type="button" disabled>该商品已售出</button>` : `<button class="market-want-action" type="button" data-market-platform-service="${item.id}">联系平台客服</button><button class="market-chat-action" type="button" data-market-contact="${item.id}">联系卖家</button>`}
     </div>
+  `;
+}
+
+function pageMarketSeller() {
+  const sellerId = String(state.selectedMarketSellerId || "");
+  const sourceListing = (state.marketListings || []).find(item => String(item.sellerId || "") === sellerId)
+    || (state.myMarketListings || []).find(item => String(item.sellerId || "") === sellerId);
+  const seller = state.selectedMarketSeller || (sourceListing ? {
+    id: sourceListing.sellerId,
+    sellerName: sourceListing.sellerName,
+    sellerAvatar: sourceListing.sellerAvatar,
+    city: sourceListing.city,
+    sellerFollowed: sourceListing.sellerFollowed
+  } : null);
+  if (!seller?.id) return `${topbar("卖家主页", true)}<main class="content page-fresh seller-store-page"><div class="empty"><strong>暂时无法找到这位卖家</strong></div></main>${bottomNav()}`;
+  const listings = (state.marketListings || []).filter(item => String(item.sellerId || "") === String(seller.id) && item.status === "active");
+  const isOwnSeller = String(seller.id) === String(state.loggedInPhone || "");
+  return `
+    ${topbar(seller.sellerName || "卖家主页", true)}
+    <main class="content page-fresh seller-store-page">
+      <section class="seller-store-head fresh-card">
+        ${marketSellerAvatar(seller, "seller-store-avatar")}
+        <div><h2>${escapeHtml(seller.sellerName || "壳友卖家")}</h2><p>${escapeHtml(seller.city || "全国")} · ${listings.length} 件在售商品</p></div>
+        ${isOwnSeller ? "" : `<button class="${seller.sellerFollowed ? "active" : ""}" type="button" data-toggle-community-follow="${escapeHtml(seller.id)}">${seller.sellerFollowed ? "已关注" : "关注"}</button>`}
+      </section>
+      <section class="section-title seller-store-title"><span>全部在售商品</span><small>${listings.length} 件</small></section>
+      <section class="market-grid seller-store-grid">${listings.map(marketListingCard).join("") || `<div class="empty small-empty"><div><strong>这位卖家暂时没有在售商品</strong></div></div>`}</section>
+    </main>
+    ${bottomNav()}
   `;
 }
 
@@ -2861,6 +3055,8 @@ function ledgerForm() {
   const amountValue = ledgerFormValue("amount", defaultAmount);
   const purchaseGender = ledgerFormValue("purchaseGender", state.ledgerPurchaseGender || "未知") || "未知";
   const isPurchase = type === "purchase";
+  const supportsPool = type === "purchase" || type === "loss";
+  const poolId = ledgerFormValue("poolId", turtle?.poolId || "");
   return `
     <form class="ledger-shell" id="ledgerForm">
       <section class="form-block fresh-card">
@@ -2875,6 +3071,13 @@ function ledgerForm() {
           <option value="">${isPurchase ? "收购后新建档案" : "不关联档案"}</option>
           ${state.turtles.map(t => `<option value="${t.id}" ${draftTurtleId === t.id ? "selected" : ""}>${t.code} · ${t.speciesName}</option>`).join("")}
         </select>
+        ${supportsPool ? `
+          <div class="label">龟池</div>
+          <select class="select" name="poolId">
+            <option value="">未关联龟池</option>
+            ${(state.turtlePools || []).map(pool => `<option value="${pool.id}" ${poolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}
+          </select>
+        ` : ""}
         ${isPurchase ? `
           <div class="label">品种代码</div>
           <select class="select" name="purchaseSpeciesCode" required><option value="">请选择品种</option>${speciesList.map(s => `<option value="${s.code}" ${ledgerFormSelected("purchaseSpeciesCode", s.code)}>${s.code} · ${s.name}</option>`).join("")}</select>
@@ -2937,31 +3140,36 @@ function ledgerForm() {
 function ledgerRow(item) {
   const turtle = state.turtles.find(t => t.id === item.turtleId) || item.turtleSnapshot;
   const typeText = ledgerTypeText(item.type);
-  const showType = state.ledgerTab === "all";
-  const linkedSoldRecord = item.type === "purchase" && item.turtleId
-    ? (state.ledgerRecords || []).find(record => record.type === "sold" && record.turtleId === item.turtleId)
+  const nickname = turtle?.code || String(item.title || "未关联档案").split(" · ")[0] || "未关联档案";
+  const speciesName = turtle?.speciesName || item.speciesName || String(item.title || "").split(" · ").slice(1).join(" · ") || "未填写品种";
+  const weight = item.weight || turtle?.weight || "";
+  const carapaceLength = item.carapaceLength || turtle?.carapaceLength || "";
+  const weightText = weight !== "" ? `${weight}g` : "—g";
+  const carapaceText = carapaceLength !== "" ? `背甲 ${carapaceLength}cm` : "背甲 —cm";
+  const linkedFollowup = item.type === "purchase" && item.turtleId
+    ? (state.ledgerRecords || [])
+      .filter(record => record.turtleId === item.turtleId && ["sold", "loss"].includes(record.type))
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0]
     : null;
-  const title = turtle ? `${turtle.code} · ${turtle.speciesName}` : (item.title || "未关联档案");
-  const dims = [
-    item.weight ? `${item.weight}g` : "",
-    item.carapaceLength ? `背甲${item.carapaceLength}cm` : "",
-    item.carapaceWidth ? `宽${item.carapaceWidth}cm` : "",
-    item.shellHeight ? `背高${item.shellHeight}cm` : "",
-    item.plastronLength ? `腹甲${item.plastronLength}cm` : ""
-  ].filter(Boolean).join(" · ");
+  const linkedStatus = linkedFollowup ? `已${ledgerTypeText(linkedFollowup.type)}` : "";
+  const menuOpen = state.openLedgerMenuId === item.id;
   return `
-    <article class="fresh-card ledger-row" data-view-ledger="${item.id}">
-      ${item.photo ? `<img class="ledger-thumb" src="${item.photo}" alt="${typeText}照片">` : `<div class="ledger-type ${item.type}">${typeText}</div>`}
+    <article class="fresh-card ledger-row ${menuOpen ? "ledger-menu-open" : ""}" data-view-ledger="${item.id}">
+      ${item.photo ? `<img class="ledger-thumb" src="${item.photo}" alt="${typeText}照片">` : `<div class="ledger-thumb ledger-thumb-placeholder" aria-label="未添加照片"><span>龟</span></div>`}
       <div class="ledger-row-main">
         <div class="ledger-row-title-line">
-          <strong class="ledger-row-title">${showType ? `<span class="ledger-inline-type ${item.type}">${typeText}</span>` : ""}${title}</strong>
-          ${linkedSoldRecord ? `<span class="ledger-sold-badge" title="售出日期：${linkedSoldRecord.recordDate || formatDate(linkedSoldRecord.createdAt)}">已售出</span>` : ""}
+          <div class="ledger-row-title"><span class="ledger-inline-type ${item.type}">${typeText}</span><strong class="ledger-title-text">${escapeHtml(nickname)}</strong></div>
+          <p class="ledger-row-species">${escapeHtml(speciesName)}</p>
         </div>
-        ${dims ? `<p class="ledger-dims">${dims}</p>` : ""}
-        <small class="muted">${item.recordDate || formatDate(item.createdAt)}${item.note ? ` · ${item.note}` : ""}</small>
+        <div class="ledger-turtle-meta"><span>${escapeHtml(String(weightText))}</span><span>${escapeHtml(carapaceText)}</span></div>
       </div>
-      <div class="ledger-amount ${item.type !== "sold" ? "danger" : ""}">${item.type === "sold" ? "+" : "-"}${money(item.amount)}</div>
-      <button class="danger-link ledger-delete" data-delete-ledger="${item.id}">移除</button>
+      <div class="ledger-row-side ${linkedStatus ? "has-linked-status" : ""}">
+        ${linkedStatus ? `<span class="ledger-linked-status ${linkedFollowup.type}">${linkedStatus}</span>` : ""}
+        <div class="ledger-amount ${item.type}">${item.type === "sold" ? "+" : "-"}${money(item.amount)}</div>
+        <small class="ledger-row-date">${item.recordDate || formatDate(item.createdAt)}</small>
+      </div>
+      <button class="more-btn ledger-more-btn" data-toggle-ledger-menu="${item.id}" aria-label="账本记录操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
+      ${menuOpen ? `<div class="ledger-action-menu" role="menu" aria-label="账本记录操作"><button class="danger-link" data-delete-ledger="${item.id}" role="menuitem">${turtleActionIcon("delete")}<span>删除</span></button></div>` : ""}
     </article>
   `;
 }
@@ -3188,18 +3396,24 @@ function pageMine() {
   const loggedIn = Boolean(state.loggedInPhone);
   const profileTitle = loggedIn ? (state.accountName || maskPhone(state.loggedInPhone)) : "未登录用户";
   const profileSub = loggedIn ? maskPhone(state.loggedInPhone) : "登录后同步你的档案和账本";
+  const ownPosts = (state.communityPosts || []).filter(item => item.isOwn);
+  const localReceivedLikes = ownPosts.reduce((total, item) => total + Math.max(0, Number(item.likeCount || 0)), 0);
+  const receivedLikes = Math.max(0, Number(state.communityProfileStats?.receivedLikes || localReceivedLikes));
+  const followerCount = Math.max(0, Number(state.communityProfileStats?.followerCount || 0));
   return `
     ${topbar("我的空间")}
     <section class="profile fresh-profile account-profile space-profile-card">
-      ${accountAvatarMarkup()}
+      <button class="space-profile-avatar-button" type="button" data-page="account" aria-label="编辑头像">
+        ${accountAvatarMarkup()}
+      </button>
       <div class="space-profile-main">
-        <div class="space-name-line">
-          <h2>${profileTitle}</h2>
-        </div>
+        <button class="space-profile-name-button" type="button" data-page="account" aria-label="编辑资料">
+          <div class="space-name-line"><h2>${escapeHtml(profileTitle)}</h2></div>
+        </button>
         <p class="profile-phone">${profileSub}</p>
         <div class="space-profile-pills">
-          <button type="button" data-page="account">${loggedIn ? "编辑资料" : "登录 / 注册"}</button>
-          <button type="button" data-page="account">账号安全</button>
+          <span>壳友圈获赞 ${receivedLikes}</span>
+          <span>${followerCount} 位粉丝</span>
         </div>
       </div>
     </section>
@@ -3227,6 +3441,8 @@ function pageMine() {
         <button class="mine-row" data-page="satisfaction"><span>☆</span><strong>满意度调查</strong></button>
         <button class="mine-row" data-page="feedback"><span>✎</span><strong>意见反馈</strong></button>
         <button class="mine-row" data-page="account"><span>⚙</span><strong>账号与安全</strong></button>
+        <button class="mine-row" data-page="rules"><span>☷</span><strong>平台规则与隐私</strong></button>
+        ${state.isCommunityAdmin ? `<button class="mine-row" data-page="moderation"><span>⚑</span><strong>举报审核</strong><em class="mine-row-count">${(state.contentReports || []).filter(item => item.status === "pending").length}</em></button>` : ""}
         <button class="mine-row" data-page="sync"><span>⇄</span><strong>数据同步设置</strong></button>
         <button class="mine-row" data-page="about"><span>i</span><strong>关于壳友手账</strong></button>
       </section>
@@ -3471,6 +3687,7 @@ function pageAccount() {
               <label class="survey-field"><span>验证码</span><input class="field" name="code" inputmode="numeric" maxlength="6" placeholder="6 位验证码" required></label>
               <button class="secondary" type="button" data-send-code ${codeCooldown > 0 ? "disabled" : ""}>${codeCooldown > 0 ? `${codeCooldown} 秒后重试` : "获取验证码"}</button>
             </div>
+            <label class="auth-agreement"><input type="checkbox" name="termsAccepted" required><span>我已阅读并同意<button type="button" data-page="rules">《服务与社区规则》</button>及<button type="button" data-page="privacy">《隐私政策》</button></span></label>
             ${!CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE ? `<p class="muted auth-code-hint">原型验证码：${state.pendingAuthCode}</p>` : ""}
           ` : ""}
           <button class="primary" type="submit">${state.accountMode === "register" ? "注册并登录" : "登录"}</button>
@@ -3587,6 +3804,111 @@ function pageAbout() {
         <div class="settings-title">交流与商务合作</div>
         <div class="about-contact-row"><span>微信号</span><strong>${PLATFORM_SERVICE_WECHAT}</strong></div>
       </section>
+      <section class="fresh-card settings-card about-compliance-card">
+        <div class="settings-title">规则与隐私</div>
+        <p class="muted">使用壳友圈和龟集市前，请阅读平台规则、交易提示与隐私政策。</p>
+        <div><button type="button" data-page="rules">查看平台规则</button><button type="button" data-page="privacy">查看隐私政策</button></div>
+      </section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function pageRules() {
+  return `
+    ${topbar("平台规则", true)}
+    <main class="content page-fresh compliance-page">
+      <section class="page-intro compact-intro compliance-intro">
+        <div><p class="eyebrow dark">生效日期：2026 年 7 月 14 日</p><h2>服务、社区与交易规则</h2><p>壳友手账提供养龟记录、公开内容发布和商品信息展示服务。</p></div>
+      </section>
+      <section class="fresh-card policy-card">
+        <h3>一、服务范围</h3>
+        <p>平台提供档案记录、壳友圈内容发布、龟集市商品信息展示、关注和聊天咨询功能。龟集市仅用于信息发布与沟通撮合，不提供在线支付、资金托管、担保交易、验货、物流或售后承诺。</p>
+      </section>
+      <section class="fresh-card policy-card">
+        <h3>二、发布与交易要求</h3>
+        <ol><li>发布者应如实填写品种、尺寸、克重、健康状况、照片或视频、交付方式和价格。</li><li>不得发布国家重点保护野生动物、来源或许可不合法的个体，或其他法律法规禁止交易、运输、寄递的内容。</li><li>不得虚假宣传、欺诈、诱导站外付款、发布他人隐私、侵权图片视频或违法联系方式。</li><li>买卖双方应自行核验合法来源、健康状况、运输条件和当地监管要求；交易风险由双方依法律与约定承担。</li></ol>
+      </section>
+      <section class="fresh-card policy-card">
+        <h3>三、壳友圈与聊天规则</h3>
+        <p>不得发布违法、暴力、色情、赌博、诈骗、仇恨、侵权、侮辱诽谤、个人敏感信息或其他损害他人权益的内容。不得骚扰、冒用他人身份或批量营销。</p>
+      </section>
+      <section class="fresh-card policy-card">
+        <h3>四、举报与处置</h3>
+        <p>用户可在动态详情或商品详情中举报内容。平台会留存举报记录并核验；对违规内容可采取删除动态、下架商品、限制发布或关闭账号等措施。举报并不代表平台已对交易事实作出认定。</p>
+      </section>
+      <section class="fresh-card policy-card">
+        <h3>五、规则变更与联系我们</h3>
+        <p>涉及收费、交易、争议解决等重大变更会在应用内显著提示。对规则、投诉或数据权利有疑问，可联系平台客服微信：<strong>${PLATFORM_SERVICE_WECHAT}</strong>。</p>
+      </section>
+      <button class="compliance-link-card" type="button" data-page="privacy"><span>隐私政策</span><b>›</b></button>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function pagePrivacy() {
+  return `
+    ${topbar("隐私政策", true)}
+    <main class="content page-fresh compliance-page">
+      <section class="page-intro compact-intro compliance-intro">
+        <div><p class="eyebrow dark">生效日期：2026 年 7 月 14 日</p><h2>壳友手账隐私政策</h2><p>我们按合法、正当、必要原则处理与你使用服务直接相关的信息。</p></div>
+      </section>
+      <section class="fresh-card policy-card">
+        <h3>一、我们收集的信息</h3>
+        <p>注册和登录时收集手机号、密码验证信息与昵称；你主动上传的头像、乌龟档案、龟池、护理、繁殖、账本、壳友圈、商品、聊天和反馈内容会用于提供对应功能。你主动点击定位并授权后，平台仅将所在城市用于商品发布展示。</p>
+      </section>
+      <section class="fresh-card policy-card">
+        <h3>二、使用目的</h3>
+        <p>用于账号认证、跨设备同步、内容发布与展示、买卖双方咨询、内容安全审核、故障排查和服务改进。我们不会将你的个人信息用于与上述目的无关的用途。</p>
+      </section>
+      <section class="fresh-card policy-card">
+        <h3>三、存储与共享</h3>
+        <p>数据存储在中国境内服务器。公开发布的壳友圈和龟集市内容会向其他用户展示；聊天内容仅向会话双方及依法履行审核职责的人员展示。除法律法规要求、保护用户权益或获得你的单独同意外，不会向第三方出售个人信息。</p>
+      </section>
+      <section class="fresh-card policy-card">
+        <h3>四、信息保护与备份</h3>
+        <p>服务端使用账号验证、访问控制和定期备份保护数据。数据库及上传媒体会建立灾备副本并按保留策略清理；备份仅用于故障恢复和安全审计，不用于公开展示。</p>
+      </section>
+      <section class="fresh-card policy-card">
+        <h3>五、你的权利</h3>
+        <p>你可在“我的空间—账号与安全”中修改昵称和头像，并删除自己发布的动态或商品。对于访问、更正、导出或删除账号数据、注销账号等请求，请联系平台客服微信：<strong>${PLATFORM_SERVICE_WECHAT}</strong>，我们会在核验身份后处理。</p>
+      </section>
+      <section class="fresh-card policy-card">
+        <h3>六、未成年人</h3>
+        <p>如你未满十八周岁，请在监护人同意和指导下使用本服务。我们不会故意收集与服务无关的未成年人信息。</p>
+      </section>
+      <button class="compliance-link-card" type="button" data-page="rules"><span>服务与社区规则</span><b>›</b></button>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
+function reportTypeLabel(type) {
+  return type === "market" ? "龟集市商品" : "壳友圈动态";
+}
+
+function reportStatusLabel(status) {
+  return ({ pending: "待审核", resolved: "已处理", removed: "已处置" })[status] || "待审核";
+}
+
+function pageModeration() {
+  const reports = state.contentReports || [];
+  const pendingCount = reports.filter(item => item.status === "pending").length;
+  return `
+    ${topbar("举报审核", true)}
+    <main class="content page-fresh moderation-page">
+      <section class="page-intro compact-intro moderation-intro"><div><p class="eyebrow dark">内容安全</p><h2>${pendingCount} 条待审核</h2><p>核验举报理由和原始内容后，再决定删除动态或下架商品。</p></div></section>
+      <section class="moderation-report-list">${reports.map(item => `
+        <article class="fresh-card moderation-report-card">
+          <div class="moderation-report-head"><span>${reportTypeLabel(item.targetType)}</span><em class="${item.status}">${reportStatusLabel(item.status)}</em></div>
+          <strong>${escapeHtml(item.targetTitle || "内容已删除")}</strong>
+          <p><b>举报原因：</b>${escapeHtml(item.reasonLabel || item.reason || "其他")}</p>
+          ${item.detail ? `<p><b>补充说明：</b>${escapeHtml(item.detail)}</p>` : ""}
+          <small>${escapeHtml(item.reporterName || "匿名用户")} · ${formatTime(item.createdAt)}${item.targetExists ? "" : " · 原内容已不存在"}</small>
+          ${item.status === "pending" ? `<div class="moderation-report-actions"><button type="button" data-process-content-report="${item.id}" data-report-action="resolve">标记已处理</button><button class="danger" type="button" data-process-content-report="${item.id}" data-report-action="remove">${item.targetType === "market" ? "下架商品" : "删除动态"}</button></div>` : ""}
+        </article>
+      `).join("") || `<div class="empty small-empty"><div><strong>暂时没有举报</strong><br>新提交的举报会显示在这里。</div></div>`}</section>
     </main>
     ${bottomNav()}
   `;
@@ -3599,6 +3921,11 @@ function placeholder(title) {
 function render() {
   if (state.page === "membership") state.page = "mine";
   applyTheme();
+  if (forceUpdateState.required) {
+    $app.innerHTML = forceUpdatePage();
+    bindForceUpdateActions();
+    return;
+  }
   const pages = {
     home: pageHome,
     messages: pageMessages,
@@ -3609,9 +3936,11 @@ function render() {
     communityChat: pageCommunityChat,
     following: pageFollowing,
     followingProfile: pageFollowingProfile,
+    communityProfile: pageCommunityProfile,
     market: pageMarket,
     marketAdd: pageMarketAdd,
     marketDetail: pageMarketDetail,
+    marketSeller: pageMarketSeller,
     marketMy: pageMyMarketListings,
     marketFavorites: pageMarketFavorites,
     marketHistory: pageMarketHistory,
@@ -3633,6 +3962,9 @@ function render() {
     reports: pageReports,
     sync: pageSync,
     about: pageAbout,
+    rules: pageRules,
+    privacy: pagePrivacy,
+    moderation: pageModeration,
     breeding: pageBreeding,
     breedingAdd: pageBreedingAdd,
     breedingDetail: pageBreedingDetail,
@@ -3656,15 +3988,18 @@ function render() {
     }, 380);
   }
   bindEvents();
+  setupMarketInfiniteScroll();
   if (state.page === "communityChat") scrollCommunityChatToLatest();
   hydrateSpeciesImages();
   startAccountCodeCooldownTimer();
   if (state.page === "satisfaction") refreshPublicReviews();
   if (["feedback", "feedbackAdd", "feedbackDetail"].includes(state.page)) refreshPublicFeedback();
-  if (["messages", "community", "communityFriends"].includes(state.page)) refreshCommunity();
+  if (["messages", "community", "communityFriends", "communityProfile", "mine"].includes(state.page)) refreshCommunity();
   if (["mine", "following", "followingProfile"].includes(state.page)) refreshFollowing();
+  if (state.page === "moderation") refreshContentReports();
+  if (state.page === "communityProfile" && state.selectedCommunityUserId) refreshCommunityUserProfile();
   if (state.page === "communityChat" && state.selectedCommunityFriendId) refreshCommunityChat();
-  if (["market", "marketDetail", "marketMy", "marketFavorites", "marketHistory", "following", "followingProfile", "mine"].includes(state.page)) refreshMarket();
+  if (["market", "marketDetail", "marketSeller", "marketMy", "marketFavorites", "marketHistory", "following", "followingProfile", "mine"].includes(state.page)) refreshMarket();
   if (state.page === "marketAdd") requestMarketCityAutofill();
   if (state.page === "market") requestAnimationFrame(syncMarketWifiVideos);
   refreshMessageUnread();
@@ -3718,6 +4053,12 @@ function bindEvents() {
       });
     }, { once: true });
   }
+  if (state.openLedgerMenuId) {
+    $app.addEventListener("click", event => {
+      if (event.target.closest("[data-toggle-ledger-menu], .ledger-action-menu")) return;
+      setState({ openLedgerMenuId: "" });
+    }, { once: true });
+  }
   if (state.openFeedbackMenuId) {
     $app.addEventListener("click", event => {
       if (event.target.closest("[data-feedback-action], .feedback-action-popover")) return;
@@ -3730,12 +4071,14 @@ function bindEvents() {
       setState({ openBreedingMenuId: "" });
     }, { once: true });
   }
-  document.querySelectorAll("[data-page]").forEach(el => el.addEventListener("click", () => {
+  document.querySelectorAll("[data-page]").forEach(el => el.addEventListener("click", event => {
+    event.preventDefault();
     const targetPage = el.dataset.page;
     if (targetPage === "add" && !requireArchiveCapacity()) return;
     if (["breedingAdd", "feedbackAdd", "communityAdd", "communityFriends", "marketAdd", "poolAdd"].includes(targetPage) && !requireLogin()) return;
     if (targetPage === "reports" && !requireLogin()) return;
-    const navigationState = { page: targetPage, openTurtleMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" };
+    if (targetPage === "moderation" && !state.isCommunityAdmin) return toast("仅平台管理员可审核举报");
+    const navigationState = { page: targetPage, openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" };
     if (targetPage === "poolAdd") navigationState.editingTurtlePoolId = "";
     if (targetPage === "marketAdd") {
       navigationState.editingMarketListingId = "";
@@ -3744,6 +4087,16 @@ function bindEvents() {
       navigationState.marketDraftCity = "";
       navigationState.marketLocationStatus = "idle";
     }
+    if (targetPage === "market" && state.page !== "market") {
+      marketLastLoadedAt = 0;
+      Object.assign(navigationState, {
+        marketListings: [],
+        marketFeedInitialized: false,
+        marketFeedNextOffset: 0,
+        marketFeedHasMore: true,
+        marketFeedLoadingMore: false
+      });
+    }
     if (targetPage === "species") {
       navigationState.speciesPickerForAdd = state.page === "add";
       if (state.page === "add") navigationState.formDraft = captureTurtleFormDraft();
@@ -3751,8 +4104,9 @@ function bindEvents() {
     setState(navigationState);
   }));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", () => setState({
-    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" ? "community" : state.page === "community" || state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "sync", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
+    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" ? "community" : state.page === "community" || state.page === "communityFriends" || state.page === "communityChat" || state.page === "communityProfile" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "sync", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "",
+    openLedgerMenuId: "",
     openBreedingMenuId: "",
     openFeedbackMenuId: "",
     editingTurtlePoolId: "",
@@ -3896,12 +4250,23 @@ function bindEvents() {
     ledgerDateFrom: "",
     ledgerDateTo: ""
   })));
-  document.querySelectorAll("[data-view-ledger]").forEach(el => el.addEventListener("click", () => setState({ page: "ledgerDetail", selectedLedgerId: el.dataset.viewLedger })));
+  document.querySelectorAll("[data-view-ledger]").forEach(el => el.addEventListener("click", () => setState({ page: "ledgerDetail", selectedLedgerId: el.dataset.viewLedger, openLedgerMenuId: "" })));
+  document.querySelectorAll("[data-toggle-ledger-menu]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    setState({ openLedgerMenuId: state.openLedgerMenuId === btn.dataset.toggleLedgerMenu ? "" : btn.dataset.toggleLedgerMenu });
+  }));
   document.querySelectorAll("[data-delete-ledger]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
     deleteLedgerRecord(btn.dataset.deleteLedger);
   }));
   document.querySelector("[data-cancel-ledger]")?.addEventListener("click", () => setState({ ledgerDraftType: "", ledgerDraftPhoto: "", ledgerDraftTurtleId: "", ledgerDraftForm: {}, ledgerPurchaseGender: "未知" }));
+  document.querySelector("#ledgerForm [name='turtleId']")?.addEventListener("change", event => {
+    if (!requireLogin()) return;
+    const turtle = (state.turtles || []).find(item => item.id === event.target.value);
+    const draft = captureLedgerFormDraft();
+    if (turtle?.poolId && ["purchase", "loss"].includes(state.ledgerDraftType)) draft.poolId = turtle.poolId;
+    setState({ ledgerDraftTurtleId: event.target.value || "", ledgerDraftForm: draft }, { skipCloud: true });
+  });
   document.querySelector("[data-ledger-photo-button]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
     const input = document.querySelector("[data-ledger-photo-input]");
@@ -4040,15 +4405,25 @@ function bindEvents() {
   }));
   document.querySelectorAll("[data-like-community-post]").forEach(btn => btn.addEventListener("click", () => toggleCommunityLike(btn.dataset.likeCommunityPost)));
   document.querySelectorAll("[data-community-more]").forEach(btn => btn.addEventListener("click", () => setState({ openCommunityActionId: state.openCommunityActionId === btn.dataset.communityMore ? "" : btn.dataset.communityMore }, { skipCloud: true })));
+  document.querySelectorAll("[data-open-content-report]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    openContentReportDialog(btn.dataset.reportType, btn.dataset.reportId);
+  }));
   document.querySelectorAll("[data-show-community-comment]").forEach(btn => btn.addEventListener("click", () => setState({ communityCommentPostId: btn.dataset.showCommunityComment, openCommunityActionId: "" }, { skipCloud: true })));
   document.querySelectorAll("[data-community-comment-form]").forEach(form => form.addEventListener("submit", submitCommunityComment));
-  document.querySelectorAll("[data-add-community-friend]").forEach(btn => btn.addEventListener("click", () => addCommunityFriend(btn.dataset.addCommunityFriend)));
   document.querySelectorAll("[data-toggle-community-follow]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
     toggleCommunityFollow(btn.dataset.toggleCommunityFollow);
   }));
   document.querySelectorAll("[data-view-following-user]").forEach(btn => btn.addEventListener("click", () => {
-    setState({ page: "followingProfile", selectedFollowingUserId: btn.dataset.viewFollowingUser }, { skipCloud: true });
+    setState({ page: "followingProfile", selectedFollowingUserId: btn.dataset.viewFollowingUser, profileContentTab: "posts" }, { skipCloud: true });
+  }));
+  document.querySelectorAll("[data-profile-content-tab]").forEach(btn => btn.addEventListener("click", () => {
+    setState({ profileContentTab: btn.dataset.profileContentTab === "listings" ? "listings" : "posts" }, { skipCloud: true });
+  }));
+  document.querySelectorAll("[data-view-community-user]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    openCommunityUserProfile(btn.dataset.viewCommunityUser);
   }));
   document.querySelectorAll("[data-open-community-chat]").forEach(btn => btn.addEventListener("click", () => openCommunityChat(btn.dataset.openCommunityChat)));
   document.querySelectorAll("[data-delete-community-post]").forEach(btn => btn.addEventListener("click", () => deleteCommunityPost(btn.dataset.deleteCommunityPost)));
@@ -4056,20 +4431,23 @@ function bindEvents() {
   document.querySelector("[data-market-search-form]")?.addEventListener("submit", event => {
     event.preventDefault();
     const input = event.currentTarget.querySelector("[data-market-search]");
-    setState({ marketSearch: String(input?.value || "").trim() }, { skipCloud: true });
+    resetMarketFeed({ marketSearch: String(input?.value || "").trim() });
   });
-  document.querySelectorAll("[data-market-stage]").forEach(btn => btn.addEventListener("click", () => setState({ marketStage: btn.dataset.marketStage }, { skipCloud: true })));
+  document.querySelectorAll("[data-market-stage]").forEach(btn => btn.addEventListener("click", () => resetMarketFeed({ marketStage: btn.dataset.marketStage })));
   document.querySelectorAll("[data-my-market-tab]").forEach(btn => btn.addEventListener("click", () => setState({ marketMyTab: btn.dataset.myMarketTab }, { skipCloud: true })));
   document.querySelectorAll("[data-view-market]").forEach(btn => btn.addEventListener("click", () => openMarketDetail(btn.dataset.viewMarket)));
+  document.querySelectorAll("[data-view-market-seller]").forEach(btn => btn.addEventListener("click", () => openMarketSeller(btn.dataset.viewMarketSeller)));
   const marketDetailGallery = document.querySelector("[data-market-detail-gallery]");
   if (marketDetailGallery) {
     const slides = Array.from(marketDetailGallery.querySelectorAll(".market-detail-photo"));
     const previous = document.querySelector("[data-market-gallery-prev]");
     const next = document.querySelector("[data-market-gallery-next]");
+    const count = document.querySelector("[data-market-gallery-count]");
     const updateGalleryControls = () => {
       const index = Math.max(0, Math.min(slides.length - 1, Math.round(marketDetailGallery.scrollLeft / Math.max(1, marketDetailGallery.clientWidth))));
       if (previous) previous.disabled = index === 0;
       if (next) next.disabled = index >= slides.length - 1;
+      if (count) count.textContent = `${index + 1}/${slides.length}`;
     };
     const moveGallery = offset => {
       const current = Math.round(marketDetailGallery.scrollLeft / Math.max(1, marketDetailGallery.clientWidth));
@@ -4112,6 +4490,7 @@ function bindEvents() {
   document.querySelectorAll("[data-view-chat-market]").forEach(btn => btn.addEventListener("click", () => openChatMarketListing(btn.dataset.viewChatMarket)));
   document.querySelector("[data-market-top-service]")?.addEventListener("click", openMarketTopService);
   document.querySelectorAll("[data-market-platform-service]").forEach(btn => btn.addEventListener("click", () => openMarketPlatformService(btn.dataset.marketPlatformService)));
+  document.querySelectorAll("[data-process-content-report]").forEach(btn => btn.addEventListener("click", () => processContentReport(btn.dataset.processContentReport, btn.dataset.reportAction)));
   document.querySelectorAll("[data-view-feedback]").forEach(el => el.addEventListener("click", event => {
     event.stopPropagation();
     setState({ page: "feedbackDetail", selectedFeedbackId: el.dataset.viewFeedback, openFeedbackMenuId: "" }, { skipCloud: true });
@@ -4339,11 +4718,18 @@ function localMarketListing(payload) {
 }
 
 async function refreshMarket(force = false) {
+  const isMarketFeed = state.page === "market";
   if (!CONFIGURED_SMS_BACKEND || marketLoading) return;
+  if (isMarketFeed && state.marketFeedInitialized && !force) return;
   if (!force && Date.now() - marketLastLoadedAt < 10000) return;
   marketLoading = true;
   try {
-    const result = await apiPost("/api/market/list", marketAuthPayload());
+    const result = await apiPost("/api/market/list", marketAuthPayload(isMarketFeed ? {
+      offset: 0,
+      limit: 8,
+      keyword: state.marketSearch || "",
+      stage: state.marketStage || "all"
+    } : { all: true }));
     const pending = (state.marketListings || []).filter(item => item.pendingLocal);
     const remoteListings = normalizeMarketListings(result.listings || []);
     const chatReference = (state.marketListings || []).find(item => item.chatReference && item.id === state.selectedMarketListingId);
@@ -4353,13 +4739,74 @@ async function refreshMarket(force = false) {
     setState({
       ...accountPatch,
       marketListings: [...pending, ...retainedReference, ...remoteListings],
-      myMarketListings: normalizeMarketListings(result.myListings || [])
+      myMarketListings: normalizeMarketListings(result.myListings || []),
+      ...(isMarketFeed ? {
+        marketFeedInitialized: true,
+        marketFeedNextOffset: Math.max(0, Number(result.nextOffset ?? remoteListings.length)),
+        marketFeedHasMore: Boolean(result.hasMore),
+        marketFeedLoadingMore: false
+      } : {})
     }, { skipCloud: true });
   } catch (error) {
     if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "龟集市读取失败");
   } finally {
     marketLoading = false;
   }
+}
+
+function resetMarketFeed(patch = {}) {
+  marketLastLoadedAt = 0;
+  setState({
+    ...patch,
+    marketListings: [],
+    marketFeedInitialized: false,
+    marketFeedNextOffset: 0,
+    marketFeedHasMore: true,
+    marketFeedLoadingMore: false
+  }, { skipCloud: true });
+}
+
+async function loadMoreMarketListings() {
+  if (!CONFIGURED_SMS_BACKEND || state.page !== "market" || marketLoading || state.marketFeedLoadingMore || !state.marketFeedHasMore) return;
+  marketLoading = true;
+  setState({ marketFeedLoadingMore: true }, { skipCloud: true });
+  try {
+    const result = await apiPost("/api/market/list", marketAuthPayload({
+      offset: Math.max(0, Number(state.marketFeedNextOffset || 0)),
+      limit: 8,
+      keyword: state.marketSearch || "",
+      stage: state.marketStage || "all"
+    }));
+    const incoming = normalizeMarketListings(result.listings || []);
+    const existingIds = new Set((state.marketListings || []).map(item => item.id));
+    const appended = incoming.filter(item => !existingIds.has(item.id));
+    marketLastLoadedAt = Date.now();
+    setState({
+      marketListings: [...(state.marketListings || []), ...appended],
+      myMarketListings: normalizeMarketListings(result.myListings || state.myMarketListings || []),
+      marketFeedInitialized: true,
+      marketFeedNextOffset: Math.max(0, Number(result.nextOffset ?? (Number(state.marketFeedNextOffset || 0) + incoming.length))),
+      marketFeedHasMore: Boolean(result.hasMore),
+      marketFeedLoadingMore: false
+    }, { skipCloud: true });
+  } catch (error) {
+    setState({ marketFeedLoadingMore: false }, { skipCloud: true });
+    console.warn(error.message || "加载更多龟集市商品失败");
+  } finally {
+    marketLoading = false;
+  }
+}
+
+function setupMarketInfiniteScroll() {
+  marketLoadObserver?.disconnect();
+  marketLoadObserver = null;
+  if (state.page !== "market" || !state.marketFeedHasMore || state.marketFeedLoadingMore) return;
+  const sentinel = document.querySelector("[data-market-load-sentinel]");
+  if (!sentinel || typeof IntersectionObserver === "undefined") return;
+  marketLoadObserver = new IntersectionObserver(entries => {
+    if (entries.some(entry => entry.isIntersecting)) loadMoreMarketListings();
+  }, { root: null, rootMargin: "0px 0px 220px", threshold: 0.01 });
+  marketLoadObserver.observe(sentinel);
 }
 
 function updateMarketMetrics(listingId, metrics = {}) {
@@ -4379,6 +4826,24 @@ function openMarketDetail(listingId) {
   const marketHistoryIds = [id, ...(state.marketHistoryIds || []).filter(item => item !== id)].slice(0, 100);
   setState({ page: "marketDetail", selectedMarketListingId: id, marketHistoryIds });
   recordMarketView(listingId);
+}
+
+function openMarketSeller(sellerId) {
+  const id = String(sellerId || "");
+  const listing = (state.marketListings || []).find(item => String(item.sellerId || "") === id)
+    || (state.myMarketListings || []).find(item => String(item.sellerId || "") === id);
+  if (!id || !listing) return toast("暂时无法读取卖家信息");
+  setState({
+    page: "marketSeller",
+    selectedMarketSellerId: id,
+    selectedMarketSeller: {
+      id,
+      sellerName: listing.sellerName || "壳友卖家",
+      sellerAvatar: listing.sellerAvatar || "",
+      city: listing.city || "全国",
+      sellerFollowed: Boolean(listing.sellerFollowed)
+    }
+  }, { skipCloud: true });
 }
 
 function toggleMarketFavorite(listingId) {
@@ -5156,8 +5621,12 @@ async function offlineOwnMarketListing(listingId) {
 }
 
 function openChatMarketListing(listingId) {
-  const liveListing = (state.marketListings || []).find(item => item.id === listingId);
   const snapshot = normalizeCommunityChatListing(state.communityChatListing);
+  if (snapshot?.id === listingId && isUnavailableChatListing(snapshot)) {
+    toast(unavailableChatListingMessage(snapshot));
+    return;
+  }
+  const liveListing = (state.marketListings || []).find(item => item.id === listingId);
   if (liveListing) {
     setState({ page: "marketDetail", selectedMarketListingId: listingId }, { skipCloud: true });
     return;
@@ -5189,10 +5658,6 @@ async function contactMarketSeller(listingId, buying = false) {
   const buyMessage = `你好，我想咨询「${listing.title || listing.speciesName || "这只龟"}」，请问现在还在售吗？`;
   marketChatDraft = buyMessage;
   try {
-    if (!listing.isFriend) {
-      const result = await apiPost("/api/community/friend/add", communityAuthPayload({ userId: listing.sellerId }));
-      state.communityFriends = result.friends || state.communityFriends;
-    }
     let friend = (state.communityFriends || []).find(item => item.id === listing.sellerId) || {
       id: listing.sellerId,
       name: listing.sellerName,
@@ -5343,6 +5808,70 @@ function openMarketPlatformService(listingId) {
   overlay.querySelector("[data-copy-market-wechat]")?.focus();
 }
 
+function openContentReportDialog(targetType, targetId) {
+  if (!canUseCommunity()) return;
+  const type = targetType === "market" ? "market" : "community";
+  const id = String(targetId || "");
+  if (!id) return;
+  document.querySelector(".content-report-overlay")?.remove();
+  const previousFocus = document.activeElement;
+  const overlay = document.createElement("div");
+  overlay.className = "content-report-overlay";
+  overlay.innerHTML = `
+    <section class="content-report-dialog" role="dialog" aria-modal="true" aria-labelledby="contentReportTitle">
+      <div class="content-report-head"><div><small>${type === "market" ? "龟集市商品" : "壳友圈动态"}</small><h2 id="contentReportTitle">举报内容</h2></div><button type="button" data-content-report-close aria-label="关闭">×</button></div>
+      <p>请如实说明问题。恶意或重复举报可能影响账号使用。</p>
+      <form data-content-report-form>
+        <input type="hidden" name="targetType" value="${type}">
+        <input type="hidden" name="targetId" value="${escapeHtml(id)}">
+        <label><span>举报原因</span><select class="select" name="reason" required><option value="">请选择原因</option><option value="illegal_wildlife">疑似违法野生动物或来源不明</option><option value="fraud">虚假信息、诈骗或误导交易</option><option value="animal_welfare">健康、运输或动物福利风险</option><option value="infringement">侵权或泄露个人信息</option><option value="abuse">辱骂、骚扰或不当内容</option><option value="other">其他问题</option></select></label>
+        <label><span>补充说明（选填）</span><textarea name="detail" maxlength="500" placeholder="可补充具体情况，便于平台核验"></textarea></label>
+        <button class="primary" type="submit">提交举报</button>
+      </form>
+    </section>
+  `;
+  document.body.appendChild(overlay);
+  document.body.classList.add("content-report-open");
+  const close = () => {
+    document.removeEventListener("keydown", onKeydown);
+    document.body.classList.remove("content-report-open");
+    overlay.remove();
+    if (previousFocus?.isConnected) previousFocus.focus();
+  };
+  const onKeydown = event => {
+    if (event.key === "Escape") close();
+  };
+  overlay.querySelector("[data-content-report-close]")?.addEventListener("click", close);
+  overlay.addEventListener("click", event => {
+    if (event.target === overlay) close();
+  });
+  overlay.querySelector("[data-content-report-form]")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const reason = String(form.get("reason") || "");
+    const detail = String(form.get("detail") || "").trim();
+    if (!reason) return toast("请选择举报原因");
+    const submit = event.currentTarget.querySelector("button[type='submit']");
+    if (submit) {
+      submit.disabled = true;
+      submit.textContent = "正在提交…";
+    }
+    try {
+      await apiPost("/api/content-reports/create", communityAuthPayload({ targetType: type, targetId: id, reason, detail }));
+      close();
+      toast("举报已提交，平台会尽快审核");
+    } catch (error) {
+      toast(error.message || "举报提交失败");
+      if (submit?.isConnected) {
+        submit.disabled = false;
+        submit.textContent = "提交举报";
+      }
+    }
+  });
+  document.addEventListener("keydown", onKeydown);
+  overlay.querySelector("select")?.focus();
+}
+
 function normalizeCommunityPosts(posts = []) {
   return posts.map(item => ({
     ...item,
@@ -5365,11 +5894,56 @@ async function refreshCommunity(force = false) {
     communityLastLoadedAt = Date.now();
     const friends = mergeCommunityFriends(Array.isArray(result.friends) ? result.friends : []);
     const messageUnreadCount = friends.reduce((sum, friend) => sum + Math.max(0, Number(friend.unreadCount || 0)), 0);
-    setState({ communityPosts: normalizeCommunityPosts(result.posts || []), communityFriends: friends, messageUnreadCount }, { skipCloud: true });
+    const profileStats = result.profileStats && typeof result.profileStats === "object"
+      ? {
+        receivedLikes: Math.max(0, Number(result.profileStats.receivedLikes || 0)),
+        followerCount: Math.max(0, Number(result.profileStats.followerCount || 0))
+      }
+      : state.communityProfileStats;
+    setState({
+      communityPosts: normalizeCommunityPosts(result.posts || []),
+      communityProfileStats: profileStats,
+      isCommunityAdmin: Boolean(result.isAdmin),
+      communityFriends: friends,
+      messageUnreadCount
+    }, { skipCloud: true });
   } catch (error) {
     console.warn(error.message || "壳友圈读取失败");
   } finally {
     communityLoading = false;
+  }
+}
+
+async function refreshContentReports(force = false) {
+  if (!CONFIGURED_SMS_BACKEND || contentReportsLoading || !state.isCommunityAdmin || !state.loggedInPhone || !currentCloudToken()) return;
+  if (!force && Date.now() - contentReportsLastLoadedAt < 10000) return;
+  contentReportsLoading = true;
+  try {
+    const result = await apiPost("/api/content-reports/list", communityAuthPayload({ force: Boolean(force) }));
+    contentReportsLastLoadedAt = Date.now();
+    setState({ contentReports: Array.isArray(result.reports) ? result.reports : [] }, { skipCloud: true });
+  } catch (error) {
+    if (error.status !== 403) console.warn(error.message || "举报列表读取失败");
+  } finally {
+    contentReportsLoading = false;
+  }
+}
+
+async function processContentReport(reportId, action) {
+  if (!state.isCommunityAdmin) return toast("仅平台管理员可处理举报");
+  const verb = action === "remove" ? "处置该内容" : "标记为已处理";
+  if (!confirm(`确定${verb}吗？`)) return;
+  try {
+    const result = await apiPost("/api/content-reports/action", communityAuthPayload({ reportId, action }));
+    setState({
+      contentReports: Array.isArray(result.reports) ? result.reports : state.contentReports,
+      communityPosts: Array.isArray(result.posts) ? normalizeCommunityPosts(result.posts) : state.communityPosts,
+      marketListings: Array.isArray(result.listings) ? normalizeMarketListings(result.listings) : state.marketListings
+    }, { skipCloud: true });
+    contentReportsLastLoadedAt = Date.now();
+    toast(action === "remove" ? "内容已处置" : "已标记处理");
+  } catch (error) {
+    toast(error.message || "处理举报失败");
   }
 }
 
@@ -5392,6 +5966,65 @@ async function refreshFollowing(force = false) {
   }
 }
 
+function communityUserSnapshot(userId) {
+  const id = String(userId || "");
+  if (!id) return null;
+  const post = (state.communityPosts || []).find(item => String(item.authorId || "") === id)
+    || (state.communityFollowingPosts || []).find(item => String(item.authorId || "") === id);
+  const friend = (state.communityFriends || []).find(item => String(item.id || "") === id);
+  const listing = (state.marketListings || []).find(item => String(item.sellerId || "") === id)
+    || (state.myMarketListings || []).find(item => String(item.sellerId || "") === id);
+  const user = state.selectedCommunityUser && String(state.selectedCommunityUser.id || "") === id
+    ? state.selectedCommunityUser
+    : null;
+  if (user) return user;
+  if (!post && !friend && !listing) return { id, name: "壳友", avatar: "" };
+  return {
+    id,
+    name: post?.authorName || friend?.name || listing?.sellerName || "壳友",
+    avatar: post?.authorAvatar || friend?.avatar || listing?.sellerAvatar || "",
+    followed: Boolean(post?.followed || listing?.sellerFollowed),
+    isOwn: Boolean(post?.isOwn || listing?.isOwn)
+  };
+}
+
+function openCommunityUserProfile(userId) {
+  const id = String(userId || "");
+  if (!id) return;
+  const user = communityUserSnapshot(id);
+  const posts = (state.communityPosts || []).filter(item => String(item.authorId || "") === id);
+  const listings = (state.marketListings || []).filter(item => String(item.sellerId || "") === id && item.status === "active");
+  setState({
+    page: "communityProfile",
+    selectedCommunityUserId: id,
+    selectedCommunityUser: user,
+    communityUserPosts: posts,
+    communityUserListings: listings,
+    profileContentTab: "posts"
+  }, { skipCloud: true });
+}
+
+async function refreshCommunityUserProfile(force = false) {
+  const userId = String(state.selectedCommunityUserId || "");
+  if (!userId || !CONFIGURED_SMS_BACKEND || communityUserProfileLoading) return;
+  const loadedKey = `${userId}:${Math.floor(Date.now() / 10000)}`;
+  if (!force && communityUserProfileLoadedKey === loadedKey) return;
+  communityUserProfileLoading = true;
+  try {
+    const result = await apiPost("/api/community/user/profile", communityAuthPayload({ userId }));
+    communityUserProfileLoadedKey = loadedKey;
+    setState({
+      selectedCommunityUser: result.user || communityUserSnapshot(userId),
+      communityUserPosts: normalizeCommunityPosts(result.posts || []),
+      communityUserListings: normalizeMarketListings(result.listings || [])
+    }, { skipCloud: true });
+  } catch (error) {
+    if (error.status !== 404) console.warn(error.message || "壳友主页读取失败");
+  } finally {
+    communityUserProfileLoading = false;
+  }
+}
+
 async function toggleCommunityFollow(userId) {
   if (!canUseCommunity()) return;
   try {
@@ -5403,6 +6036,9 @@ async function toggleCommunityFollow(userId) {
       communityPosts: normalizeCommunityPosts(result.posts || []),
       marketListings: normalizeMarketListings(result.listings || []),
       communityFollowingUsers: following,
+      selectedCommunityUser: String(state.selectedCommunityUser?.id || "") === String(userId)
+        ? { ...state.selectedCommunityUser, followed: Boolean(result.followed) }
+        : state.selectedCommunityUser,
       page: state.page === "followingProfile" && !stillFollowing ? "following" : state.page
     }, { skipCloud: true, pageMotion: "none" });
     refreshFollowing(true);
@@ -5602,17 +6238,6 @@ async function submitCommunityComment(event) {
   }
 }
 
-async function addCommunityFriend(userId) {
-  if (!canUseCommunity()) return;
-  try {
-    const result = await apiPost("/api/community/friend/add", communityAuthPayload({ userId }));
-    setState({ communityPosts: normalizeCommunityPosts(result.posts || []), communityFriends: result.friends || [] }, { skipCloud: true });
-    toast("已添加好友");
-  } catch (error) {
-    toast(error.message || "添加好友失败");
-  }
-}
-
 function latestCommunityMessagePreview(messages = []) {
   const validMessages = (Array.isArray(messages) ? messages : [])
     .filter(item => item && (item.content || item.createdAt))
@@ -5669,7 +6294,7 @@ function openCommunityChat(userId) {
   marketChatDraft = "";
   communityChatLoadedKey = "";
   pendingCommunityChatLatestScroll = true;
-  setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: (state.communityFriends || []).find(item => item.id === userId) || null, communityChatMessages: [], communityChatListing: null }, { skipCloud: true });
+  setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId), communityChatMessages: [], communityChatListing: null }, { skipCloud: true });
 }
 
 async function refreshMessageUnread(force = false) {
@@ -5970,6 +6595,7 @@ async function submitAccountInner(event) {
   const code = String(form.get("code") || "").trim();
   if (!confirmPassword) return toast("请先填写核对密码");
   if (password !== confirmPassword) return toast("密码不一致");
+  if (!form.get("termsAccepted")) return toast("请先阅读并同意服务规则和隐私政策");
   if (!CONFIGURED_SMS_BACKEND && (state.registeredUsers || []).some(item => item.phone === phone)) return toast("手机号已注册，请直接登录");
   if (state.pendingAuthPhone !== phone || !Number(state.authCodeExpiresAt || 0)) return toast("请先获取验证码");
   if (Date.now() > Number(state.authCodeExpiresAt || 0)) return toast("验证码已过期，请重新获取");
@@ -5984,6 +6610,7 @@ async function submitAccountInner(event) {
         phone,
         password,
         code,
+        termsAccepted: true,
         accountName: maskPhone(phone),
         data: initialCloudData
       });
@@ -6000,7 +6627,7 @@ async function submitAccountInner(event) {
   if (!(await verifyServerSmsCode(phone, code))) return toast("验证码不正确");
 
   const accountData = emptyAccountData();
-  const user = { id: crypto.randomUUID(), phone, password, accountName: maskPhone(phone), accountAvatar: "", data: accountData, createdAt: new Date().toISOString() };
+  const user = { id: crypto.randomUUID(), phone, password, accountName: maskPhone(phone), accountAvatar: "", data: accountData, termsAcceptedAt: new Date().toISOString(), termsVersion: "2026-07-14", createdAt: new Date().toISOString() };
   setState({
     ...accountData,
     registeredUsers: [user, ...(state.registeredUsers || [])],
@@ -6125,7 +6752,10 @@ function submitProfile(event) {
 }
 
 function logoutAccount() {
+  const pushAccount = state.loggedInPhone;
+  const pushToken = currentCloudToken();
   if (!confirm("确定要退出当前账号吗？")) return;
+  void unregisterNativePushNotifications(pushAccount, pushToken);
   forgetCloudToken(state.loggedInPhone);
   const registeredUsers = syncRegisteredUsers(state);
   setState({
@@ -6135,6 +6765,9 @@ function logoutAccount() {
     accountName: "未登录用户",
     accountAvatar: "",
     communityPosts: [],
+    communityProfileStats: { receivedLikes: 0, followerCount: 0 },
+    contentReports: [],
+    isCommunityAdmin: false,
     communityFriends: [],
     communityChatMessages: [],
     messageUnreadCount: 0,
@@ -6159,6 +6792,92 @@ function accountAvatarMarkup(className = "avatar") {
 
 function hasSmsBackend() {
   return CONFIGURED_SMS_BACKEND || location.protocol === "http:" || location.protocol === "https:";
+}
+
+function nativePushNotifications() {
+  const capacitor = window.Capacitor;
+  if (!capacitor || typeof capacitor.isNativePlatform !== "function" || !capacitor.isNativePlatform()) return null;
+  return capacitor.Plugins?.PushNotifications || null;
+}
+
+async function saveNativePushDeviceToken(deviceToken) {
+  const token = String(deviceToken || "").trim();
+  if (!token || !state.loggedInPhone || !currentCloudToken()) return;
+  nativePushDeviceToken = token;
+  try {
+    await apiPost("/api/notifications/device/register", communityAuthPayload({
+      deviceToken: token,
+      platform: "ios"
+    }));
+  } catch (error) {
+    // Do not interrupt chat or login when a device is temporarily offline.
+    console.warn(error.message || "消息通知设备注册失败");
+  }
+}
+
+function bindNativePushListeners(push) {
+  if (nativePushListenersAttached || !push) return;
+  nativePushListenersAttached = true;
+  try {
+    push.addListener("registration", event => {
+      saveNativePushDeviceToken(event?.value);
+    });
+    push.addListener("registrationError", event => {
+      console.warn(event?.error || "消息通知注册失败");
+    });
+    push.addListener("pushNotificationReceived", () => {
+      // The native banner/sound is presented by the iOS PushNotifications setting.
+      refreshMessageUnread(true);
+    });
+    push.addListener("pushNotificationActionPerformed", event => {
+      const senderId = String(event?.notification?.data?.senderId || "");
+      if (senderId && state.loggedInPhone && currentCloudToken()) openCommunityChat(senderId);
+      else setState({ page: "messages" }, { skipCloud: true });
+    });
+  } catch (error) {
+    nativePushListenersAttached = false;
+    console.warn(error.message || "消息通知监听初始化失败");
+  }
+}
+
+async function setupNativePushNotifications() {
+  if (nativePushSetupInFlight || !state.loggedInPhone || !currentCloudToken()) return;
+  const push = nativePushNotifications();
+  if (!push) return;
+  nativePushSetupInFlight = true;
+  try {
+    bindNativePushListeners(push);
+    let permission = await push.checkPermissions();
+    if (permission?.receive === "prompt") permission = await push.requestPermissions();
+    if (permission?.receive !== "granted") return;
+    await push.register();
+  } catch (error) {
+    console.warn(error.message || "消息通知权限初始化失败");
+  } finally {
+    nativePushSetupInFlight = false;
+  }
+}
+
+async function unregisterNativePushNotifications(phone, token) {
+  const deviceToken = nativePushDeviceToken;
+  const push = nativePushNotifications();
+  nativePushDeviceToken = "";
+  try {
+    if (phone && token && deviceToken) {
+      await apiPost("/api/notifications/device/unregister", {
+        phone,
+        token,
+        deviceToken
+      });
+    }
+  } catch (error) {
+    console.warn(error.message || "消息通知设备解绑失败");
+  }
+  try {
+    await push?.unregister?.();
+  } catch {
+    // A failed local unregister must not prevent the account from logging out.
+  }
 }
 
 async function apiPost(path, payload) {
@@ -6267,6 +6986,7 @@ function applyCloudUser(user, activityText = "", options = {}) {
   if (!options.skipMigration && CONFIGURED_SMS_BACKEND && localUser.cloudToken) {
     scheduleCloudImageMigration(600);
   }
+  window.setTimeout(setupNativePushNotifications, 0);
 }
 
 function queueCloudSave() {
@@ -6814,7 +7534,17 @@ function deleteTurtlePool(id) {
 function openLedgerForm(type, turtleId = "") {
   if (!requireLogin()) return;
   const turtle = state.turtles.find(t => t.id === turtleId);
-  setState({ page: "ledger", ledgerDraftType: type, ledgerDraftPhoto: turtle?.photo || "", ledgerDraftTurtleId: turtleId, ledgerDraftForm: turtleId ? { turtleId } : {}, ledgerPurchaseGender: "未知", ledgerTab: type, openTurtleMenuId: "" });
+  const initialPoolId = (type === "purchase" || type === "loss") ? (turtle?.poolId || "") : "";
+  setState({ page: "ledger", ledgerDraftType: type, ledgerDraftPhoto: turtle?.photo || "", ledgerDraftTurtleId: turtleId, ledgerDraftForm: turtleId ? { turtleId, poolId: initialPoolId } : { poolId: initialPoolId }, ledgerPurchaseGender: "未知", ledgerTab: type, openTurtleMenuId: "" }, { pageScroll: "preserve" });
+  requestAnimationFrame(() => requestAnimationFrame(scrollLedgerFormIntoView));
+}
+
+function scrollLedgerFormIntoView() {
+  const form = document.querySelector("#ledgerForm");
+  if (!form) return;
+  const topbarHeight = document.querySelector(".topbar")?.getBoundingClientRect().height || 0;
+  const targetTop = window.scrollY + form.getBoundingClientRect().top - topbarHeight - 10;
+  window.scrollTo({ top: Math.max(0, targetTop), left: 0, behavior: "smooth" });
 }
 
 async function readLedgerPhoto(event) {
@@ -7016,6 +7746,8 @@ function submitLedgerRecord(event) {
   const form = new FormData(event.currentTarget);
   const type = state.ledgerDraftType;
   let turtle = state.turtles.find(t => t.id === form.get("turtleId"));
+  const poolId = (state.turtlePools || []).some(pool => pool.id === String(form.get("poolId") || "")) ? String(form.get("poolId") || "") : "";
+  const poolName = turtlePoolName(poolId);
   const amount = Number(form.get("amount"));
   if (!type || Number.isNaN(amount) || amount < 0) return toast("请填写正确的金额");
   let nextTurtles = state.turtles;
@@ -7040,6 +7772,7 @@ function submitLedgerRecord(event) {
       health: form.get("purchaseHealth") || "健康",
       acquiredDate: form.get("recordDate"),
       source: "购买",
+      poolId,
       price: amount,
       note: form.get("note"),
       photo: state.ledgerDraftPhoto || speciesPhoto(species),
@@ -7049,12 +7782,18 @@ function submitLedgerRecord(event) {
     nextTurtles = [turtle, ...state.turtles];
     nextKeptSpecies = state.keptSpecies.includes(species.code) ? state.keptSpecies : [...state.keptSpecies, species.code];
   }
+  if (type === "purchase" && turtle && poolId && nextTurtles.some(item => item.id === turtle.id)) {
+    turtle = { ...turtle, poolId };
+    nextTurtles = nextTurtles.map(item => item.id === turtle.id ? turtle : item);
+  }
   if ((type === "sold" || type === "loss") && turtle) nextTurtles = nextTurtles.filter(t => t.id !== turtle.id);
   const title = turtle ? turtleLabel(turtle) : (String(form.get("note") || "").trim().split(/[，。\n]/)[0] || "未关联档案");
   const record = {
     id: crypto.randomUUID(),
     type,
     turtleId: turtle?.id || form.get("turtleId"),
+    poolId,
+    poolName,
     title,
     amount,
     recordDate: form.get("recordDate"),
@@ -7088,7 +7827,7 @@ function deleteLedgerRecord(id) {
   if (!requireLogin()) return;
   const record = state.ledgerRecords.find(item => item.id === id);
   if (!record || !confirm("要删除这条账本记录吗？")) return;
-  setState({ ledgerRecords: state.ledgerRecords.filter(item => item.id !== id), activityLogs: logActivity(`删除账本记录：${record.title}`, "账本") });
+  setState({ ledgerRecords: state.ledgerRecords.filter(item => item.id !== id), openLedgerMenuId: "", activityLogs: logActivity(`删除账本记录：${record.title}`, "账本") });
 }
 
 function toast(text) {
@@ -7199,10 +7938,31 @@ function openVideoPreview(src, alt = "视频预览") {
   closeButton.focus();
 }
 
+function syncMobileKeyboardUI() {
+  const active = document.activeElement;
+  const editable = active instanceof HTMLElement && active.matches("input, textarea, [contenteditable='true']");
+  const viewport = window.visualViewport;
+  const layoutHeight = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0);
+  const coveredHeight = viewport ? layoutHeight - viewport.height : 0;
+  const touchDevice = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+  document.documentElement.classList.toggle("keyboard-open", Boolean(editable && (touchDevice || coveredHeight > 120)));
+}
+
+function setupMobileKeyboardGuard() {
+  document.addEventListener("focusin", () => requestAnimationFrame(syncMobileKeyboardUI));
+  document.addEventListener("focusout", () => window.setTimeout(syncMobileKeyboardUI, 80));
+  window.visualViewport?.addEventListener("resize", syncMobileKeyboardUI);
+  window.visualViewport?.addEventListener("scroll", syncMobileKeyboardUI);
+  window.addEventListener("resize", syncMobileKeyboardUI);
+}
+
 restorePendingCloudData();
+setupMobileKeyboardGuard();
 render();
+checkRequiredAppUpdate();
 startMarketNetworkMonitoring();
 refreshCareReminderTimers();
 startCloudSessionHydration();
+setupNativePushNotifications();
 startMessageUnreadPolling();
 refreshMessageUnread(true);
