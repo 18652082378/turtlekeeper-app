@@ -124,6 +124,7 @@ const initialState = {
   profileContentTab: "posts",
   communityChatMessages: [],
   communityChatListing: null,
+  communityChatToolsOpen: false,
   messageUnreadCount: 0,
   selectedCommunityFriendId: "",
   selectedCommunityFriend: null,
@@ -1957,6 +1958,17 @@ function pageCommunityChat() {
   const messages = state.communityChatMessages || [];
   const visibleMessages = messages.filter(message => !message.marketReferenceOnly);
   const marketListing = normalizeCommunityChatListing(state.communityChatListing);
+  const toolsOpen = Boolean(state.communityChatToolsOpen);
+  const messageMarkup = (message, index) => {
+    const rawContent = String(message.rawContent ?? message.content ?? "").trim();
+    const mediaUrl = message.mediaUrl ? apiAssetUrl(message.mediaUrl) : "";
+    const mediaType = message.mediaType === "video" ? "video" : "image";
+    const text = mediaUrl && ["[图片]", "[视频]"].includes(rawContent) ? "" : rawContent;
+    const media = mediaUrl
+      ? `<button class="community-message-media ${mediaType === "video" ? "is-video" : ""}" type="button" data-preview-chat-media="${escapeHtml(mediaUrl)}" data-chat-media-type="${mediaType}" aria-label="查看聊天${mediaType === "video" ? "视频" : "图片"}">${mediaType === "video" ? `<video src="${escapeHtml(mediaUrl)}" muted playsinline preload="metadata"></video><i aria-hidden="true">▶</i>` : `<img src="${escapeHtml(mediaUrl)}" alt="聊天图片">`}</button>`
+      : "";
+    return `<div class="community-message ${message.mine ? "mine" : "theirs"}">${shouldShowCommunityMessageTime(visibleMessages, index) ? `<small>${formatTime(message.createdAt)}</small>` : ""}${text ? `<p>${escapeHtml(text)}</p>` : ""}${media}</div>`;
+  };
   const chatHeader = `
     <div class="topbar community-chat-topbar">
       <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button><span aria-hidden="true">···</span></div>
@@ -1964,11 +1976,21 @@ function pageCommunityChat() {
   `;
   return `
     ${chatHeader}
-    <main class="content page-fresh community-chat-page ${marketListing ? "has-chat-product-context" : ""}">
-      <section class="community-chat-list">${visibleMessages.map((message, index) => `<div class="community-message ${message.mine ? "mine" : "theirs"}">${shouldShowCommunityMessageTime(visibleMessages, index) ? `<small>${formatTime(message.createdAt)}</small>` : ""}<p>${escapeHtml(message.content)}</p></div>`).join("") || (marketListing ? "" : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`)}</section>
-      <form class="community-chat-form" id="communityChatForm"><input name="content" maxlength="1000" value="${escapeHtml(marketChatDraft)}" placeholder="输入消息…" autocomplete="off"><button type="submit">发送</button></form>
+    <main class="content page-fresh community-chat-page ${marketListing ? "has-chat-product-context" : ""} ${toolsOpen ? "chat-tools-open" : ""}">
+      <section class="community-chat-list">${visibleMessages.map(messageMarkup).join("") || (marketListing ? "" : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`)}</section>
+      <form class="community-chat-form" id="communityChatForm">
+        <input name="content" maxlength="1000" value="${escapeHtml(marketChatDraft)}" placeholder="输入消息…" autocomplete="off" enterkeyhint="send">
+        <button class="community-chat-plus-btn ${toolsOpen ? "is-open" : ""}" type="button" data-toggle-community-chat-tools aria-label="${toolsOpen ? "收起更多功能" : "更多功能"}" aria-expanded="${toolsOpen ? "true" : "false"}">${toolsOpen ? "×" : "+"}</button>
+        <input class="community-chat-media-input" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime,video/x-m4v" data-community-chat-media-input hidden>
+        <input class="community-chat-media-input" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" data-community-chat-camera-photo-input hidden>
+        <input class="community-chat-media-input" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-m4v" capture="environment" data-community-chat-camera-video-input hidden>
+      </form>
     </main>
     ${marketListing ? `<section class="community-chat-product-context">${communityChatListingCard(marketListing)}</section>` : ""}
+    ${toolsOpen ? `<section class="community-chat-tools" aria-label="更多聊天功能">
+      <button type="button" data-community-chat-media-button><span aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="3"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="m5.5 17 4.4-4.2 3.1 2.9 2.3-2.1 3.2 3.4"></path></svg></span><b>相册</b></button>
+      <button type="button" data-community-chat-camera-button aria-label="短按拍照，长按录像"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4.5 8h3l1.4-2h6.2l1.4 2h3A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-8A1.5 1.5 0 0 1 4.5 8Z"></path><circle cx="12" cy="13.5" r="3.2"></circle></svg></span><b>拍摄</b></button>
+    </section>` : ""}
   `;
 }
 
@@ -4690,6 +4712,31 @@ function bindEvents() {
   document.querySelectorAll("[data-open-community-chat]").forEach(btn => btn.addEventListener("click", () => openCommunityChat(btn.dataset.openCommunityChat)));
   document.querySelectorAll("[data-delete-community-post]").forEach(btn => btn.addEventListener("click", () => deleteCommunityPost(btn.dataset.deleteCommunityPost)));
   document.querySelector("#communityChatForm")?.addEventListener("submit", sendCommunityMessage);
+  document.querySelector("#communityChatForm input[name='content']")?.addEventListener("input", event => {
+    marketChatDraft = event.currentTarget.value;
+  });
+  document.querySelector("#communityChatForm input[name='content']")?.addEventListener("keydown", event => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
+  });
+  document.querySelector("[data-toggle-community-chat-tools]")?.addEventListener("click", () => {
+    document.querySelector("#communityChatForm input[name='content']")?.blur();
+    setState({ communityChatToolsOpen: !state.communityChatToolsOpen }, { skipCloud: true });
+  });
+  document.querySelector("[data-community-chat-media-button]")?.addEventListener("click", () => {
+    document.querySelector("[data-community-chat-media-input]")?.click();
+  });
+  bindCommunityChatCameraButton();
+  document.querySelector("[data-community-chat-media-input]")?.addEventListener("change", sendCommunityChatMedia);
+  document.querySelector("[data-community-chat-camera-photo-input]")?.addEventListener("change", sendCommunityChatMedia);
+  document.querySelector("[data-community-chat-camera-video-input]")?.addEventListener("change", sendCommunityChatMedia);
+  document.querySelectorAll("[data-preview-chat-media]").forEach(button => button.addEventListener("click", () => {
+    const url = button.dataset.previewChatMedia || "";
+    if (!url) return;
+    if (button.dataset.chatMediaType === "video") openVideoPreview(url, "聊天视频");
+    else openImagePreview(url, "聊天图片");
+  }));
   document.querySelector("[data-market-search-form]")?.addEventListener("submit", event => {
     event.preventDefault();
     const input = event.currentTarget.querySelector("[data-market-search]");
@@ -6077,6 +6124,7 @@ async function contactMarketSeller(listingId, buying = false) {
       selectedCommunityFriend: friend,
       communityChatMessages: messages,
       communityChatListing: marketListing,
+      communityChatToolsOpen: false,
       communityFriends: communityFriendsWithPreview(listing.sellerId, friend, messages, { unreadCount: 0 })
     }, { skipCloud: true });
     refreshMessageUnread(true);
@@ -6753,7 +6801,7 @@ function openCommunityChat(userId) {
   marketChatDraft = "";
   communityChatLoadedKey = "";
   pendingCommunityChatLatestScroll = true;
-  setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId), communityChatMessages: [], communityChatListing: null }, { skipCloud: true });
+  setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId), communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false }, { skipCloud: true });
 }
 
 async function refreshMessageUnread(force = false) {
@@ -6823,20 +6871,123 @@ async function sendCommunityMessage(event) {
   if (!content) return;
   try {
     const result = await apiPost("/api/community/chat/send", communityAuthPayload({ userId: state.selectedCommunityFriendId, content }));
-    marketChatDraft = "";
-    communityChatLoadedKey = `${state.selectedCommunityFriendId}:${Math.floor(Date.now() / 10000)}`;
-    pendingCommunityChatLatestScroll = true;
-    const friend = result.friend || state.selectedCommunityFriend;
-    const messages = result.messages || [];
-    setState({
-      selectedCommunityFriend: friend,
-      communityChatMessages: messages,
-      communityChatListing: normalizeCommunityChatListing(result.marketListing) || state.communityChatListing,
-      communityFriends: communityFriendsWithPreview(state.selectedCommunityFriendId, friend, messages, { unreadCount: 0 })
-    }, { skipCloud: true });
-    refreshMessageUnread(true);
+    applyCommunityChatSendResult(result);
   } catch (error) {
     toast(error.message || "消息发送失败");
+  }
+}
+
+function applyCommunityChatSendResult(result, options = {}) {
+  marketChatDraft = "";
+  communityChatLoadedKey = `${state.selectedCommunityFriendId}:${Math.floor(Date.now() / 10000)}`;
+  pendingCommunityChatLatestScroll = true;
+  const friend = result.friend || state.selectedCommunityFriend;
+  const messages = result.messages || [];
+  setState({
+    selectedCommunityFriend: friend,
+    communityChatMessages: messages,
+    communityChatListing: normalizeCommunityChatListing(result.marketListing) || state.communityChatListing,
+    communityChatToolsOpen: Boolean(options.keepToolsOpen),
+    communityFriends: communityFriendsWithPreview(state.selectedCommunityFriendId, friend, messages, { unreadCount: 0 })
+  }, { skipCloud: true });
+  refreshMessageUnread(true);
+}
+
+function bindCommunityChatCameraButton() {
+  const button = document.querySelector("[data-community-chat-camera-button]");
+  const photoInput = document.querySelector("[data-community-chat-camera-photo-input]");
+  const videoInput = document.querySelector("[data-community-chat-camera-video-input]");
+  if (!button || !photoInput || !videoInput) return;
+
+  const longPressMs = 480;
+  let holdTimer = null;
+  let pressStartedAt = 0;
+  let isLongPress = false;
+  let suppressNextClick = false;
+
+  const clearPress = () => {
+    if (holdTimer) clearTimeout(holdTimer);
+    holdTimer = null;
+    pressStartedAt = 0;
+    button.classList.remove("is-holding");
+  };
+  const openCapture = type => {
+    const input = type === "video" ? videoInput : photoInput;
+    input.value = "";
+    input.click();
+  };
+
+  button.addEventListener("pointerdown", event => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    clearPress();
+    pressStartedAt = Date.now();
+    isLongPress = false;
+    holdTimer = setTimeout(() => {
+      if (!pressStartedAt) return;
+      isLongPress = true;
+      button.classList.add("is-holding");
+      try { navigator.vibrate?.(12); } catch (_) {}
+    }, longPressMs);
+  });
+  button.addEventListener("pointerup", event => {
+    if (!pressStartedAt) return;
+    const captureType = isLongPress || Date.now() - pressStartedAt >= longPressMs ? "video" : "photo";
+    clearPress();
+    suppressNextClick = true;
+    event.preventDefault();
+    openCapture(captureType);
+    setTimeout(() => { suppressNextClick = false; }, 0);
+  });
+  button.addEventListener("pointercancel", clearPress);
+  button.addEventListener("click", event => {
+    if (suppressNextClick) {
+      event.preventDefault();
+      return;
+    }
+    openCapture("photo");
+  });
+}
+
+function collapseCommunityChatTools() {
+  if (!state.communityChatToolsOpen) return;
+  setState({ communityChatToolsOpen: false }, { skipCloud: true });
+}
+
+async function sendCommunityChatMedia(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  if (!canUseCommunity()) {
+    input.value = "";
+    return;
+  }
+  const mediaKind = localMediaFileKind(file);
+  if (!mediaKind) {
+    input.value = "";
+    return toast("请选择图片或不超过30秒的视频");
+  }
+  if (mediaKind === "image" && file.size > 10 * 1024 * 1024) {
+    input.value = "";
+    return toast("图片不能超过 10MB");
+  }
+  try {
+    const duration = mediaKind === "video" ? await readVideoDuration(file) : 0;
+    if (duration > 30) return toast("视频时长不能超过30秒");
+    const uploaded = await apiUploadMediaFile(file, duration);
+    const result = await apiPost("/api/community/chat/send", communityAuthPayload({
+      userId: state.selectedCommunityFriendId,
+      content: "",
+      mediaUrl: uploaded.url || "",
+      mediaType: uploaded.mediaType || mediaKind
+    }));
+    // 成功发送后先收起相册／拍摄面板，避免其遮住刚发送的媒体消息。
+    collapseCommunityChatTools();
+    applyCommunityChatSendResult(result);
+    toast(mediaKind === "video" ? "视频已发送" : "图片已发送");
+  } catch (error) {
+    toast(error.message === "请输入消息" ? "服务器尚未同步聊天媒体接口，请部署服务器后重试" : (error.message || "媒体发送失败"));
+  } finally {
+    input.value = "";
   }
 }
 

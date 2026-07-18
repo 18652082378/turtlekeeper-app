@@ -37,6 +37,8 @@
 	<string>用于上传和记录乌龟照片。</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>用于获取您所在的城市，便于在龟集市区域筛选和发布出售时填写城市。</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>用于在您使用壳友手账时获取所在城市，便于龟集市区域筛选和发布出售时填写城市；不会用于持续追踪您的位置。</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

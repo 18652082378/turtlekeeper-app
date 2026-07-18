@@ -3,7 +3,7 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..");
 const outDir = path.join(root, "www");
-const files = ["index.html", "config.js", "species-data.js", "app.js", "styles.css", "privacy.html", "terms.html", "support.html"];
+const files = ["index.html", "config.js", "species-data.js", "app.js", "styles.css", "chat-tools.css", "privacy.html", "terms.html", "support.html"];
 
 function copyDir(src, dest) {
   if (!fs.existsSync(src)) return;

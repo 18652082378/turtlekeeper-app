@@ -1453,7 +1453,7 @@ function communityMessagePreview(message) {
   if (message.marketListing?.title || message.marketListing?.speciesName) {
     return `咨询商品：${message.marketListing.title || message.marketListing.speciesName}`;
   }
-  return message.mediaUrl ? "[图片]" : "";
+  return message.mediaUrl ? (message.mediaType === "video" ? "[视频]" : "[图片]") : "";
 }
 
 function marketChatListingSnapshot(db, listingId, sellerPhone = "") {
@@ -1524,10 +1524,13 @@ function communityConversationMessages(db, phoneA, phoneB) {
       return {
         id: item.id,
         content: communityMessagePreview(item),
+        rawContent,
+        mediaUrl: item.mediaUrl || "",
+        mediaType: item.mediaType === "video" ? "video" : "image",
         mine: item.fromPhone === phoneA,
         createdAt: item.createdAt,
         marketListing,
-        marketReferenceOnly: Boolean(marketListing && !rawContent)
+        marketReferenceOnly: Boolean(marketListing && !rawContent && !item.mediaUrl)
       };
     });
 }
@@ -1970,16 +1973,20 @@ async function handleCommunityChatSend(req, res) {
   if (!user) return;
   const target = communityUserById(db, body.userId);
   const content = trimPublicText(body.content, 1000);
+  const mediaUrl = trimPublicText(body.mediaUrl, 800);
+  const mediaType = mediaUrl && body.mediaType === "video" ? "video" : "image";
   const marketListingId = trimPublicText(body.marketListingId, 100);
   if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "无法与该用户聊天" });
   const marketListing = marketListingId ? marketChatListingSnapshot(db, marketListingId, target.phone) : null;
   if (marketListingId && !marketListing) return sendJson(res, 400, { ok: false, message: "商品信息无效" });
-  if (!content && !marketListing) return sendJson(res, 400, { ok: false, message: "请输入消息" });
+  if (!content && !mediaUrl && !marketListing) return sendJson(res, 400, { ok: false, message: "请输入消息" });
   const message = {
     id: crypto.randomUUID(),
     fromPhone: user.phone,
     toPhone: target.phone,
     content,
+    mediaUrl,
+    mediaType,
     marketListing,
     readAt: "",
     createdAt: new Date().toISOString()
