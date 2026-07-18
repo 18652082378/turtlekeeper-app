@@ -31,6 +31,7 @@ loadEnvFile(path.resolve(__dirname, ".env"));
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
 const STATIC_ROOT = path.resolve(__dirname, "..");
+const SPECIES_CATALOG_FILE = path.resolve(STATIC_ROOT, "species-data.js");
 const DATA_DIR = path.resolve(__dirname, "data");
 const DATA_FILE = path.resolve(DATA_DIR, "app-data.json");
 const SMS_STATE_FILE = path.resolve(DATA_DIR, "sms-state.json");
@@ -39,6 +40,7 @@ const BACKUP_DIR = path.resolve(__dirname, "backups");
 const BACKUP_RETENTION_DAYS = Math.max(7, Math.floor(Number(process.env.BACKUP_RETENTION_DAYS || 30)));
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
 const REVIEW_ADMIN_PHONE = process.env.ADMIN_PHONE || "18652082378";
+const POLICY_VERSION = "2026-07-17";
 // 每次 App Store 新版已发布后，将 MIN_SUPPORTED_APP_BUILD 调整为新的 Xcode 构建号即可强制更新。
 const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 12)));
 const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || MIN_SUPPORTED_APP_BUILD)));
@@ -51,6 +53,47 @@ const APNS_HOST = String(process.env.APNS_HOST || "api.push.apple.com").trim();
 const APNS_KEY_PATH = String(process.env.APNS_KEY_PATH || "").trim();
 const APNS_KEY_BASE64 = String(process.env.APNS_KEY_BASE64 || "").trim();
 const MARKET_SALE_METHODS = ["自有客户成交", "闲鱼成交", "壳友手账成交"];
+
+function loadMarketSpeciesCatalog() {
+  try {
+    // species-data.js is a local, version-controlled browser catalog rather than JSON.
+    // Evaluate it only with an isolated `window` object and read its catalog result.
+    const source = fs.readFileSync(SPECIES_CATALOG_FILE, "utf8");
+    const items = Function("window", `"use strict";\n${source}\nreturn window.TURTLE_SPECIES;`)({});
+    return Array.isArray(items) ? items : [];
+  } catch (error) {
+    console.error("读取品种库失败，龟集市发布将暂时关闭：", error.message);
+    return [];
+  }
+}
+
+const MARKET_SPECIES_CATALOG = loadMarketSpeciesCatalog();
+const MARKET_SPECIES_BY_CODE = new Map(MARKET_SPECIES_CATALOG.map(item => [String(item.code || "").toUpperCase(), item]));
+const MARKET_SPECIES_BY_NAME = new Map(MARKET_SPECIES_CATALOG.map(item => [String(item.name || "").trim(), item]));
+
+// 平台自动禁售名单：不采用人工审核。名单覆盖国家重点保护海龟、闭壳龟及
+// 平台暂不提供合规凭证核验的高风险陆龟/水龟；新增或调整品种时只需维护此处代码。
+const MARKET_PROHIBITED_SPECIES_CODES = new Set([
+  "ABQ", "ALD", "ANG", "BWG", "CBQ", "CSG", "DBG", "DHG", "EBQ", "GBG", "GJG", "HBQ", "HET", "HJG", "HNT", "HYG",
+  "JDG", "JQG", "JTG", "JYG", "KBT", "KNG", "LHG", "LJG", "LKG", "MBG", "MDG", "MJG", "MLG", "MNG", "PDG", "PGG", "PHG",
+  "PTG", "QBT", "QYG", "RTG", "SBQ", "SDG", "SGG", "SHG", "SLG", "SSG", "STG", "XGG", "XPG", "YBG", "YHG", "YLG", "YNT",
+  "YSG", "YTG", "ZRG"
+]);
+
+function resolveMarketSpecies(speciesCode, speciesName) {
+  const code = String(speciesCode || "").trim().toUpperCase();
+  const name = String(speciesName || "").trim();
+  return MARKET_SPECIES_BY_CODE.get(code) || MARKET_SPECIES_BY_NAME.get(name) || null;
+}
+
+function isMarketProhibitedSpecies(speciesCode, speciesName) {
+  const species = resolveMarketSpecies(speciesCode, speciesName);
+  return Boolean(species && MARKET_PROHIBITED_SPECIES_CODES.has(String(species.code || "").toUpperCase()));
+}
+
+function marketSpeciesRestrictionMessage() {
+  return "该品种属于龟集市平台禁售范围，无法发布";
+}
 const smsCodes = new Map();
 const verifiedPhones = new Map();
 let lastServerBackupDate = "";
@@ -99,6 +142,7 @@ const mimeTypes = {
   ".webp": "image/webp",
   ".svg": "image/svg+xml; charset=utf-8",
   ".mp4": "video/mp4",
+  ".m4v": "video/x-m4v",
   ".webm": "video/webm",
   ".mov": "video/quicktime"
 };
@@ -267,6 +311,26 @@ function copyBackupDirectory(source, target) {
   });
 }
 
+function backupFileManifest(root, directory = root) {
+  if (!fs.existsSync(directory)) return [];
+  const rows = [];
+  fs.readdirSync(directory, { withFileTypes: true }).forEach(entry => {
+    if (entry.name === "manifest.json" && directory === root) return;
+    const file = path.resolve(directory, entry.name);
+    if (entry.isDirectory()) {
+      rows.push(...backupFileManifest(root, file));
+      return;
+    }
+    if (!entry.isFile()) return;
+    rows.push({
+      path: path.relative(root, file).split(path.sep).join("/"),
+      bytes: fs.statSync(file).size,
+      sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")
+    });
+  });
+  return rows.sort((a, b) => a.path.localeCompare(b.path));
+}
+
 function createServerBackup(reason = "scheduled") {
   if (!fs.existsSync(DATA_FILE)) return "";
   const now = new Date();
@@ -279,7 +343,8 @@ function createServerBackup(reason = "scheduled") {
     createdAt: now.toISOString(),
     reason: safeReason,
     includes: ["app-data.json", fs.existsSync(UPLOAD_DIR) ? "uploads" : ""]
-      .filter(Boolean)
+      .filter(Boolean),
+    files: backupFileManifest(targetDir)
   }, null, 2), "utf8");
   pruneServerBackups();
   return targetDir;
@@ -337,6 +402,9 @@ function publicUser(user, token = "") {
     accountName: user.accountName || maskPhone(user.phone),
     accountAvatar: user.accountAvatar || "",
     data: normalizeAccountData(user.data || {}),
+    termsAcceptedAt: user.termsAcceptedAt || "",
+    termsVersion: user.termsVersion || "",
+    isCommunityAdmin: isAdminUser(user),
     token
   };
 }
@@ -761,7 +829,7 @@ async function handleRegister(req, res) {
     accountAvatar: "",
     data: normalizeAccountData(body.data || {}),
     termsAcceptedAt: now,
-    termsVersion: "2026-07-14",
+    termsVersion: POLICY_VERSION,
     tokens: [{ hash: hashValue(token), createdAt: now }],
     createdAt: now,
     updatedAt: now
@@ -814,6 +882,19 @@ async function handleSaveAccount(req, res) {
   user.updatedAt = new Date().toISOString();
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, user: publicUser(user, token) });
+}
+
+async function handleAcceptTerms(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (body.accepted !== true) return sendJson(res, 400, { ok: false, message: "请先确认已阅读服务规则和隐私政策" });
+  user.termsAcceptedAt = new Date().toISOString();
+  user.termsVersion = POLICY_VERSION;
+  user.updatedAt = user.termsAcceptedAt;
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, user: publicUser(user, String(body.token || "")) });
 }
 
 function trimPublicText(value, maxLength = 500) {
@@ -909,6 +990,58 @@ async function handlePushDeviceUnregister(req, res) {
   return sendJson(res, 200, { ok: true });
 }
 
+async function handlePushNotificationTest(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (!isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "仅平台管理员可发送推送测试" });
+  if (!apnsConfigured()) {
+    return sendJson(res, 503, { ok: false, message: "服务器尚未完成 Apple 推送密钥配置" });
+  }
+  const devices = normalizedPushDevices(user.pushDevices);
+  if (!devices.length) {
+    return sendJson(res, 400, { ok: false, message: "当前设备尚未注册通知。请使用真机登录并允许通知后重试" });
+  }
+  const payload = {
+    aps: {
+      alert: { title: "壳友手账", body: "这是一条推送通知实机测试消息。" },
+      badge: 1,
+      sound: "default"
+    },
+    route: "messages",
+    test: "push"
+  };
+  const delayMs = Math.min(10_000, Math.max(0, Number(body.delayMs || 0)));
+  const deliver = async () => {
+    const results = await Promise.all(devices.map(item => sendApnsNotification(item.token, payload)));
+    results.forEach((result, index) => {
+      if (result.invalid) removeInvalidPushDevice(user.phone, devices[index].token);
+    });
+    const delivered = results.filter(item => item.ok).length;
+    if (!delivered) {
+      const reason = results.find(item => item.reason)?.reason || "Apple 推送服务未接受请求";
+      console.warn("APNs test push failed:", reason);
+    } else {
+      console.log(`APNs test push accepted for ${delivered} device(s).`);
+    }
+    return { delivered, results };
+  };
+  if (delayMs) {
+    setTimeout(() => { void deliver(); }, delayMs);
+    return sendJson(res, 200, {
+      ok: true,
+      message: `测试通知将在 ${Math.ceil(delayMs / 1000)} 秒后发送，请立即把 App 切到后台。`
+    });
+  }
+  const result = await deliver();
+  if (!result.delivered) {
+    const reason = result.results.find(item => item.reason)?.reason || "Apple 推送服务未接受请求";
+    return sendJson(res, 502, { ok: false, message: `测试通知未送达：${reason}` });
+  }
+  return sendJson(res, 200, { ok: true, message: `已向 ${result.delivered} 台本机设备发送测试通知。` });
+}
+
 function parseImageDataUrl(value) {
   const dataUrl = String(value || "");
   const match = dataUrl.match(/^data:image\/(png|jpe?g|webp);base64,([A-Za-z0-9+/=\s]+)$/i);
@@ -960,12 +1093,12 @@ async function handleUploadImage(req, res) {
 
 function parseMediaDataUrl(value) {
   const dataUrl = String(value || "");
-  const match = dataUrl.match(/^data:(image\/(?:png|jpe?g|webp)|video\/(?:mp4|webm|quicktime));base64,([A-Za-z0-9+/=\s]+)$/i);
+  const match = dataUrl.match(/^data:(image\/(?:png|jpe?g|webp)|video\/(?:mp4|webm|quicktime|x-m4v));base64,([A-Za-z0-9+/=\s]+)$/i);
   if (!match) return null;
   const mime = match[1].toLowerCase();
   const base64 = match[2].replace(/\s/g, "");
   if (!base64) return null;
-  const ext = mime.includes("jpeg") || mime.includes("jpg") ? "jpg" : mime.includes("quicktime") ? "mov" : mime.split("/")[1];
+  const ext = mime.includes("jpeg") || mime.includes("jpg") ? "jpg" : mime.includes("quicktime") ? "mov" : mime.includes("x-m4v") ? "m4v" : mime.split("/")[1];
   return { buffer: Buffer.from(base64, "base64"), ext, mime, mediaType: mime.startsWith("video/") ? "video" : "image" };
 }
 
@@ -994,6 +1127,7 @@ function streamMediaInfo(mime) {
     "image/png": { ext: "png", mediaType: "image" },
     "image/webp": { ext: "webp", mediaType: "image" },
     "video/mp4": { ext: "mp4", mediaType: "video" },
+    "video/x-m4v": { ext: "m4v", mediaType: "video" },
     "video/webm": { ext: "webm", mediaType: "video" },
     "video/quicktime": { ext: "mov", mediaType: "video" }
   };
@@ -1929,6 +2063,19 @@ function autoOfflineStaleMarketListings(db, now = Date.now()) {
   return changed;
 }
 
+function autoOfflineRestrictedMarketListings(db, now = Date.now()) {
+  let changed = false;
+  (Array.isArray(db.marketListings) ? db.marketListings : []).forEach(listing => {
+    if ((listing.status || "active") !== "active") return;
+    if (!isMarketProhibitedSpecies(listing.speciesCode, listing.speciesName)) return;
+    listing.status = "inactive";
+    listing.offlineReason = "restricted_species";
+    listing.offlineAt = new Date(now).toISOString();
+    changed = true;
+  });
+  return changed;
+}
+
 function publicMarketListings(db, viewer = null) {
   return (Array.isArray(db.marketListings) ? db.marketListings : [])
     .filter(item => (item.status || "active") === "active")
@@ -1952,6 +2099,7 @@ async function handleMarketList(req, res) {
   const user = optionalReviewUser(db, body);
   let accountData = null;
   let changed = autoOfflineStaleMarketListings(db);
+  if (autoOfflineRestrictedMarketListings(db)) changed = true;
   if (user) {
     user.data = normalizeAccountData(user.data || {});
     (Array.isArray(db.marketListings) ? db.marketListings : [])
@@ -1973,8 +2121,15 @@ async function handleMarketList(req, res) {
   if (changed && !user) writeDatabase(db);
   const keyword = trimPublicText(body.keyword, 80).toLowerCase();
   const stage = ["hatchling", "juvenile", "adult"].includes(body.stage) ? body.stage : "all";
+  const regionCities = [...new Set((Array.isArray(body.regionCities) ? body.regionCities : [])
+    .map(city => trimPublicText(city, 24))
+    .filter(Boolean))].slice(0, 60);
+  const requestedSavedIds = [...new Set((Array.isArray(body.savedListingIds) ? body.savedListingIds : [])
+    .map(id => trimPublicText(id, 100))
+    .filter(Boolean))].slice(0, 500);
   const allListings = publicMarketListings(db, user).filter(item => {
     if (stage !== "all" && item.stage !== stage) return false;
+    if (regionCities.length && !regionCities.includes(String(item.city || "").trim())) return false;
     if (!keyword) return true;
     return `${item.title || ""} ${item.speciesName || ""} ${item.city || ""}`.toLowerCase().includes(keyword);
   });
@@ -1982,10 +2137,20 @@ async function handleMarketList(req, res) {
   const requestedLimit = body.all === true ? Math.max(8, allListings.length) : Number(body.limit || 8);
   const limit = Math.min(200, Math.max(1, Math.floor(requestedLimit)));
   const listings = allListings.slice(offset, offset + limit);
+  const savedIds = user ? new Set([
+    ...(Array.isArray(user.data?.marketHistoryIds) ? user.data.marketHistoryIds : []),
+    ...(Array.isArray(user.data?.marketFavoriteIds) ? user.data.marketFavoriteIds : [])
+  ].map(String)) : new Set();
+  const savedListings = requestedSavedIds.length && savedIds.size
+    ? (Array.isArray(db.marketListings) ? db.marketListings : [])
+      .filter(item => requestedSavedIds.includes(String(item.id || "")) && savedIds.has(String(item.id || "")))
+      .map(item => marketListingView(db, item, user))
+    : [];
   const nextOffset = offset + listings.length;
   return sendJson(res, 200, {
     ok: true,
     listings,
+    savedListings,
     hasMore: nextOffset < allListings.length,
     nextOffset,
     total: allListings.length,
@@ -2000,7 +2165,10 @@ async function handleMarketCreate(req, res) {
   const user = requireReviewUser(db, body, res);
   if (!user) return;
   const title = trimPublicText(body.title, 40);
-  const speciesName = trimPublicText(body.speciesName, 30);
+  const species = resolveMarketSpecies(body.speciesCode, body.speciesName);
+  if (!species) return sendJson(res, 400, { ok: false, message: "请从品种库中选择品种" });
+  if (isMarketProhibitedSpecies(species.code, species.name)) return sendJson(res, 400, { ok: false, message: marketSpeciesRestrictionMessage() });
+  const speciesName = species.name;
   const mediaItems = (Array.isArray(body.mediaItems) ? body.mediaItems : [])
     .slice(0, 9)
     .map(media => ({
@@ -2014,7 +2182,7 @@ async function handleMarketCreate(req, res) {
     id: crypto.randomUUID(),
     turtleId: trimPublicText(body.turtleId, 100),
     title,
-    speciesCode: trimPublicText(body.speciesCode, 20),
+    speciesCode: species.code,
     speciesName,
     stage: ["hatchling", "juvenile", "adult"].includes(body.stage) ? body.stage : "hatchling",
     gender: ["公", "母", "未知"].includes(body.gender) ? body.gender : "未知",
@@ -2165,6 +2333,7 @@ async function handleMarketRefresh(req, res) {
   if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
   if (listing.sellerPhoneRaw !== user.phone && !isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "只能刷新自己的商品" });
   if (listing.status === "sold") return sendJson(res, 400, { ok: false, message: "已售商品不能刷新" });
+  if (isMarketProhibitedSpecies(listing.speciesCode, listing.speciesName)) return sendJson(res, 400, { ok: false, message: marketSpeciesRestrictionMessage() });
   listing.status = "active";
   listing.refreshedAt = new Date().toISOString();
   listing.offlineAt = "";
@@ -2199,7 +2368,10 @@ async function handleMarketUpdate(req, res) {
   if (listing.sellerPhoneRaw !== user.phone && !isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "只能编辑自己的商品" });
   if (listing.status === "sold") return sendJson(res, 400, { ok: false, message: "已售商品不能编辑" });
   const title = trimPublicText(body.title, 40);
-  const speciesName = trimPublicText(body.speciesName, 30);
+  const species = resolveMarketSpecies(body.speciesCode, body.speciesName);
+  if (!species) return sendJson(res, 400, { ok: false, message: "请从品种库中选择品种" });
+  if (isMarketProhibitedSpecies(species.code, species.name)) return sendJson(res, 400, { ok: false, message: marketSpeciesRestrictionMessage() });
+  const speciesName = species.name;
   const price = Number(body.price || 0);
   const mediaItems = (Array.isArray(body.mediaItems) ? body.mediaItems : [])
     .slice(0, 9)
@@ -2211,7 +2383,7 @@ async function handleMarketUpdate(req, res) {
   Object.assign(listing, {
     turtleId: trimPublicText(body.turtleId, 100),
     title,
-    speciesCode: trimPublicText(body.speciesCode, 20),
+    speciesCode: species.code,
     speciesName,
     stage: ["hatchling", "juvenile", "adult"].includes(body.stage) ? body.stage : "hatchling",
     gender: ["公", "母", "未知"].includes(body.gender) ? body.gender : "未知",
@@ -2249,6 +2421,9 @@ async function handleMarketStatus(req, res) {
   }
   if (status === "sold" && (!Number.isFinite(salePrice) || salePrice < 0)) {
     return sendJson(res, 400, { ok: false, message: "请填写正确的成交价格" });
+  }
+  if (status === "active" && isMarketProhibitedSpecies(listing.speciesCode, listing.speciesName)) {
+    return sendJson(res, 400, { ok: false, message: marketSpeciesRestrictionMessage() });
   }
   const previousStatus = listing.status === "sold" ? "sold" : "active";
   listing.status = status;
@@ -2370,19 +2545,51 @@ function serveUpload(req, res, url) {
     res.end("Forbidden");
     return;
   }
-  fs.readFile(target, (error, content) => {
-    if (error) {
+  fs.stat(target, (error, stats) => {
+    if (error || !stats.isFile()) {
       res.writeHead(404);
       res.end("Not found");
       return;
     }
     const ext = path.extname(target).toLowerCase();
-    res.writeHead(200, {
-      "Content-Type": mimeTypes[ext] || "application/octet-stream",
-      "Cache-Control": "public, max-age=31536000, immutable",
-      "Access-Control-Allow-Origin": "*"
-    });
-    res.end(content);
+    const contentType = mimeTypes[ext] || "application/octet-stream";
+    const cacheControl = [".html", ".js", ".css", ".json"].includes(ext)
+      ? "no-cache"
+      : "public, max-age=31536000, immutable";
+    const headers = {
+      "Content-Type": contentType,
+      "Cache-Control": cacheControl,
+      "Access-Control-Allow-Origin": "*",
+      "Accept-Ranges": "bytes"
+    };
+    const fileSize = stats.size;
+    const range = String(req.headers.range || "").match(/^bytes=(\d*)-(\d*)$/i);
+    if (range && fileSize > 0) {
+      let start = range[1] ? Number(range[1]) : 0;
+      let end = range[2] ? Number(range[2]) : fileSize - 1;
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start >= fileSize || end < start) {
+        res.writeHead(416, { ...headers, "Content-Range": `bytes */${fileSize}` });
+        res.end();
+        return;
+      }
+      end = Math.min(end, fileSize - 1);
+      const length = end - start + 1;
+      res.writeHead(206, {
+        ...headers,
+        "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+        "Content-Length": length
+      });
+      if (req.method === "HEAD") return res.end();
+      const stream = fs.createReadStream(target, { start, end });
+      stream.on("error", () => res.destroy());
+      stream.pipe(res);
+      return;
+    }
+    res.writeHead(200, { ...headers, "Content-Length": fileSize });
+    if (req.method === "HEAD") return res.end();
+    const stream = fs.createReadStream(target);
+    stream.on("error", () => res.destroy());
+    stream.pipe(res);
   });
 }
 
@@ -2397,8 +2604,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/account/login") return await handleLogin(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/load") return await handleLoadAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/save") return await handleSaveAccount(req, res);
+    if (req.method === "POST" && url.pathname === "/api/account/terms/accept") return await handleAcceptTerms(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/device/register") return await handlePushDeviceRegister(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/device/unregister") return await handlePushDeviceUnregister(req, res);
+    if (req.method === "POST" && url.pathname === "/api/notifications/test") return await handlePushNotificationTest(req, res);
     if (req.method === "POST" && url.pathname === "/api/upload/image") return await handleUploadImage(req, res);
     if (req.method === "POST" && url.pathname === "/api/upload/media") return await handleUploadMedia(req, res);
     if (req.method === "POST" && url.pathname === "/api/reviews/list") return await handleListReviews(req, res);
@@ -2435,7 +2644,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/market/update") return await handleMarketUpdate(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/status") return await handleMarketStatus(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/delete") return await handleMarketDelete(req, res);
-    if (req.method === "GET" && url.pathname.startsWith("/uploads/")) return serveUpload(req, res, url);
+    if (["GET", "HEAD"].includes(req.method) && url.pathname.startsWith("/uploads/")) return serveUpload(req, res, url);
     if (req.method === "GET") return serveStatic(req, res, url);
     return sendJson(res, 405, { ok: false, message: "方法不支持" });
   } catch (error) {
@@ -2445,7 +2654,9 @@ const server = http.createServer(async (req, res) => {
 
 setInterval(() => {
   const db = readDatabase();
-  if (autoOfflineStaleMarketListings(db)) writeDatabase(db);
+  let changed = autoOfflineStaleMarketListings(db);
+  if (autoOfflineRestrictedMarketListings(db)) changed = true;
+  if (changed) writeDatabase(db);
 }, 60 * 60 * 1000).unref();
 
 try {

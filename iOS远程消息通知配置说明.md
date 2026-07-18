@@ -49,3 +49,13 @@ pm2 save
 启用 Apple 的 Push Notifications 后，提交本次代码并在 Codemagic 重新构建。Codemagic 会按新的能力重新匹配签名配置。安装新 TestFlight 版本后，首次登录会弹出“允许通知”系统授权；用户选择允许后才能收到通知。
 
 > App Store/TestFlight 必须使用 `api.push.apple.com`。不要将 `.p8`、Team ID 以外的私钥内容上传到 GitHub、Codemagic 环境变量截图或聊天窗口。
+
+## 真机验收（上线前必做）
+
+1. 安装包含本次代码的 TestFlight 版本，用管理员账号 `18652082378` 登录。
+2. 首次出现 iOS 系统通知权限弹窗时选择“允许”；若之前拒绝过，到 iPhone「设置 → 通知 → 壳友手账」重新开启“允许通知”。
+3. 打开「空间 → 账号与安全」，点击“发送测试通知”。页面会提示 5 秒后发送，立刻把 App 切到后台。
+4. 5 秒内应收到标题为“壳友手账”的系统横幅和提示音；服务器可用 `pm2 logs turtlekeeper-api --lines 50` 看到 `APNs test push accepted`。
+5. 再用另一个账号向该账号发送一条聊天消息，确认锁屏/后台通知、图标角标和点击通知后进入会话均正常。
+
+如果步骤 3 提示“当前设备尚未注册通知”，说明该设备尚未成功向服务器登记 Token：请确认是 TestFlight/正式包、已登录账号、已允许通知，并在服务器确认 `.env` 中 APNS 参数已配置后重启 PM2。

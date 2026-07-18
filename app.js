@@ -7,6 +7,7 @@ const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
 const CLOUD_SYNC_DEBOUNCE_MS = 900;
 const CHINA_TIME_ZONE = "Asia/Shanghai";
 const REVIEW_ADMIN_PHONE = "18652082378";
+const POLICY_VERSION = "2026-07-17";
 const APP_BUILD = Math.max(0, Number.parseInt(String(window.TURTLE_APP_BUILD || "0"), 10) || 0);
 const APP_STORE_URL = String(window.TURTLE_APP_STORE_URL || "https://apps.apple.com/app/id6783481335");
 let forceUpdateState = { required: false, checking: false, minimumBuild: 0, latestBuild: 0, message: "", appStoreUrl: "" };
@@ -25,6 +26,15 @@ const defaultPhoto = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`
 </svg>`);
 
 const speciesList = window.TURTLE_SPECIES || [];
+
+// 与 server/server.js 中的 MARKET_PROHIBITED_SPECIES_CODES 保持一致。
+// 前端用于即时提示；服务器仍会强制校验，避免任何绕过发布。
+const MARKET_PROHIBITED_SPECIES_CODES = new Set([
+  "ABQ", "ALD", "ANG", "BWG", "CBQ", "CSG", "DBG", "DHG", "EBQ", "GBG", "GJG", "HBQ", "HET", "HJG", "HNT", "HYG",
+  "JDG", "JQG", "JTG", "JYG", "KBT", "KNG", "LHG", "LJG", "LKG", "MBG", "MDG", "MJG", "MLG", "MNG", "PDG", "PGG", "PHG",
+  "PTG", "QBT", "QYG", "RTG", "SBQ", "SDG", "SGG", "SHG", "SLG", "SSG", "STG", "XGG", "XPG", "YBG", "YHG", "YLG", "YNT",
+  "YSG", "YTG", "ZRG"
+]);
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 const SPECIES_IMAGE_CACHE = "turtlekeeper-species-image-cache-v1";
 let speciesImageObserver = null;
@@ -39,6 +49,8 @@ const WEEKDAY_OPTIONS = [
   { value: "0", label: "日" }
 ];
 let careReminderTimers = [];
+const PULL_REFRESH_THRESHOLD = 88;
+let pullRefreshState = { tracking: false, refreshing: false, startY: 0, distance: 0, ready: false };
 
 const initialState = {
   page: "home",
@@ -122,6 +134,14 @@ const initialState = {
   myMarketListings: [],
   marketSearch: "",
   marketStage: "all",
+  marketSort: "comprehensive",
+  marketPriceOrder: "",
+  marketFreshOnly: false,
+  marketRegion: "",
+  marketSearchLocationCity: "",
+  marketSearchLocationStatus: "idle",
+  marketDelivery: "",
+  marketAssistMenu: "",
   marketMyTab: "active",
   selectedMarketListingId: "",
   selectedMarketSellerId: "",
@@ -134,6 +154,8 @@ const initialState = {
   marketDraftMedia: [],
   marketDraftTurtleId: "",
   marketDraftCity: "",
+  marketDraftDescription: "",
+  marketDraftDescriptionTemplate: "",
   marketLocationStatus: "idle",
   editingMarketListingId: "",
   marketFavoriteIds: [],
@@ -154,6 +176,7 @@ const initialState = {
   pendingAuthPhone: "",
   authCodeExpiresAt: "",
   accountCodeCooldownUntil: "",
+  policyConsentRequired: false,
   syncEnabled: false,
   professionalOutput: "",
   activityLogs: []
@@ -799,6 +822,17 @@ function applyTheme() {
 
 function speciesByCode(code) {
   return speciesList.find(item => item.code === code);
+}
+
+function isMarketProhibitedSpecies(speciesOrCode) {
+  const code = typeof speciesOrCode === "object"
+    ? speciesOrCode?.code
+    : speciesOrCode;
+  return MARKET_PROHIBITED_SPECIES_CODES.has(String(code || "").trim().toUpperCase());
+}
+
+function marketSpeciesRestrictionMessage() {
+  return "该品种属于龟集市平台禁售范围，无法发布";
 }
 
 const SPECIES_IMPORT_ALIASES = {
@@ -1538,10 +1572,11 @@ function captureTurtleDetailDraft() {
     shellHeight: String(data.get("shellHeight") || ""),
     plastronLength: String(data.get("plastronLength") || ""),
     status: String(data.get("status") || turtle?.status || "正常饲养"),
-    health: String(data.get("health") || "健康"),
-    acquiredDate: String(data.get("acquiredDate") || ""),
+    // 成长记录不修改健康、入手日期或购入价；草稿切换时保留档案原值。
+    health: String(turtle?.health || "健康"),
+    acquiredDate: String(turtle?.acquiredDate || ""),
     source: String(data.get("source") || turtle?.source || "购买"),
-    price: String(data.get("price") || ""),
+    price: String(turtle?.price || ""),
     note: String(data.get("note") || "")
   };
 }
@@ -2018,6 +2053,12 @@ function pageMarketHistory() {
   return pageSavedMarket("历史浏览", state.marketHistoryIds || [], "还没有浏览记录");
 }
 
+function savedMarketListingIds() {
+  if (state.page === "marketFavorites") return (state.marketFavoriteIds || []).slice(0, 500);
+  if (["marketHistory", "marketDetail"].includes(state.page)) return (state.marketHistoryIds || []).slice(0, 100);
+  return [];
+}
+
 function marketStageLabel(stage) {
   return ({ hatchling: "苗子", juvenile: "亚成", adult: "种龟" })[stage] || "未标注";
 }
@@ -2054,6 +2095,25 @@ function marketTitleTemplates(species) {
   ];
 }
 
+function marketDescriptionTemplate(species) {
+  const name = String(species?.name || "").trim();
+  if (!name) return "";
+  return `${name}，尺寸见图，状态好，吃食正常，健康没问题。调整龟池出，喜欢可以聊，细节私信`;
+}
+
+function renderMarketDescriptionTemplate(species) {
+  const description = document.querySelector("[data-market-description]");
+  const template = marketDescriptionTemplate(species);
+  if (!description || !template) return;
+  const previousTemplate = String(description.dataset.marketDescriptionTemplate || "");
+  const currentText = String(description.value || "").trim();
+  // 仅在说明为空或仍是上一版自动模板时更新，绝不覆盖用户自行填写的内容。
+  if (!currentText || currentText === previousTemplate) description.value = template;
+  description.dataset.marketDescriptionTemplate = template;
+  state.marketDraftDescription = description.value;
+  state.marketDraftDescriptionTemplate = template;
+}
+
 function marketSpeciesMatches(query) {
   const keyword = String(query || "").trim().toLowerCase();
   return speciesList
@@ -2072,6 +2132,66 @@ function marketSpeciesMatches(query) {
     .sort((left, right) => left.rank - right.rank || left.item.name.localeCompare(right.item.name, "zh-CN"))
     .slice(0, 30)
     .map(entry => entry.item);
+}
+
+function marketPublishSpeciesMatches(query) {
+  return marketSpeciesMatches(query).filter(item => !isMarketProhibitedSpecies(item));
+}
+
+function bindMarketSearchSuggestions() {
+  const form = document.querySelector("[data-market-search-form]");
+  const input = form?.querySelector("[data-market-search]");
+  const suggestions = document.querySelector("[data-market-search-suggestions]");
+  if (!form || !input || !suggestions) return;
+  let closeTimer = 0;
+
+  const close = () => {
+    suggestions.hidden = true;
+    suggestions.innerHTML = "";
+    input.setAttribute("aria-expanded", "false");
+  };
+
+  const searchSpecies = code => {
+    const species = speciesByCode(code);
+    if (!species) return;
+    input.value = species.name;
+    close();
+    resetMarketFeed({ marketSearch: species.name });
+  };
+
+  const renderSuggestions = () => {
+    const query = String(input.value || "").trim();
+    const matches = query ? marketPublishSpeciesMatches(query).slice(0, 6) : [];
+    if (!matches.length) {
+      close();
+      return;
+    }
+    suggestions.innerHTML = matches.map(species => `
+      <button type="button" role="option" data-market-search-species="${escapeHtml(species.code)}">
+        <strong>${escapeHtml(species.name)}</strong><small>${escapeHtml(species.code)} · 搜索该品种</small>
+      </button>
+    `).join("");
+    suggestions.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+    suggestions.querySelectorAll("[data-market-search-species]").forEach(button => {
+      button.addEventListener("mousedown", event => event.preventDefault());
+      button.addEventListener("click", () => searchSpecies(button.dataset.marketSearchSpecies));
+    });
+  };
+
+  input.setAttribute("aria-expanded", "false");
+  input.addEventListener("focus", () => {
+    window.clearTimeout(closeTimer);
+    renderSuggestions();
+  });
+  input.addEventListener("input", renderSuggestions);
+  input.addEventListener("keydown", event => {
+    if (event.key === "Escape") close();
+  });
+  input.addEventListener("blur", () => {
+    closeTimer = window.setTimeout(close, 140);
+  });
+  form.addEventListener("submit", () => close());
 }
 
 function marketTitleTemplatesMarkup(species) {
@@ -2165,22 +2285,21 @@ function startMarketNetworkMonitoring() {
 }
 
 function marketListingCard(item) {
-  const sold = item.status === "sold";
+  const unavailable = item.status !== "active";
   const firstMedia = marketListingMediaItems(item)[0];
   const wifiAutoplay = firstMedia?.type === "video" && shouldAutoplayMarketVideo();
   return `
     <article class="market-card-wrap">
-    <button class="market-card ${sold ? "is-sold" : ""}" type="button" data-view-market="${item.id}">
+    <button class="market-card ${unavailable ? "is-sold" : ""}" type="button" data-view-market="${item.id}">
       <span class="market-card-photo ${wifiAutoplay ? "wifi-video-autoplay" : ""}">
         ${firstMedia?.type === "video" ? `<video src="${firstMedia.url}" muted playsinline ${wifiAutoplay ? "autoplay loop preload=\"auto\" data-market-wifi-video" : "preload=\"metadata\""}></video>${wifiAutoplay ? "" : `<b class="market-video-mark">▶</b>`}` : `<img src="${marketListingPhoto(item)}" alt="${escapeHtml(item.title || item.speciesName || "在售乌龟")}" loading="lazy">`}
-        ${sold ? `<i>已售出</i>` : item.negotiable ? `<i class="negotiable">可议价</i>` : ""}
+        ${unavailable ? `<i>已售出</i>` : item.negotiable ? `<i class="negotiable">可议价</i>` : ""}
       </span>
       <span class="market-card-body">
         <strong>${escapeHtml(item.title || `${item.speciesName || "乌龟"}在售`)}</strong>
         <small>${escapeHtml(item.speciesName || "品种未填写")} · ${marketStageLabel(item.stage)}${item.gender ? ` · ${escapeHtml(item.gender)}` : ""}</small>
         <span class="market-card-price"><b><i>¥</i>${money(item.price)}</b><small>${Math.max(0, Number(item.wantCount || 0))}人想要</small></span>
-        ${item.delivery ? `<span class="market-card-service"><em>${escapeHtml(item.delivery)}</em></span>` : ""}
-        <span class="market-card-seller">${marketSellerAvatar(item, "market-seller-avatar")}<i>${escapeHtml(item.sellerName || "壳友卖家")}</i><em>${escapeHtml(item.city || "全国")}</em></span>
+        <span class="market-card-seller">${marketSellerAvatar(item, "market-seller-avatar")}<i>${escapeHtml(item.sellerName || "壳友卖家")}</i>${item.delivery ? `<b class="market-card-delivery">${escapeHtml(item.delivery)}</b>` : ""}<em>${escapeHtml(item.city || "全国")}</em></span>
       </span>
     </button>
     ${marketFavoriteButton(item)}
@@ -2188,27 +2307,141 @@ function marketListingCard(item) {
   `;
 }
 
-function pageMarket() {
+const MARKET_PROVINCE_CITIES = {
+  "北京市": ["北京市"], "天津市": ["天津市"], "上海市": ["上海市"], "重庆市": ["重庆市"],
+  "河北省": ["石家庄市", "唐山市", "秦皇岛市", "邯郸市", "邢台市", "保定市", "张家口市", "承德市", "沧州市", "廊坊市", "衡水市"],
+  "山西省": ["太原市", "大同市", "阳泉市", "长治市", "晋城市", "朔州市", "晋中市", "运城市", "忻州市", "临汾市", "吕梁市"],
+  "内蒙古自治区": ["呼和浩特市", "包头市", "乌海市", "赤峰市", "通辽市", "鄂尔多斯市", "呼伦贝尔市", "巴彦淖尔市", "乌兰察布市", "兴安盟", "锡林郭勒盟", "阿拉善盟"],
+  "辽宁省": ["沈阳市", "大连市", "鞍山市", "抚顺市", "本溪市", "丹东市", "锦州市", "营口市", "阜新市", "辽阳市", "盘锦市", "铁岭市", "朝阳市", "葫芦岛市"],
+  "吉林省": ["长春市", "吉林市", "四平市", "辽源市", "通化市", "白山市", "松原市", "白城市", "延边州"],
+  "黑龙江省": ["哈尔滨市", "齐齐哈尔市", "鸡西市", "鹤岗市", "双鸭山市", "大庆市", "伊春市", "佳木斯市", "七台河市", "牡丹江市", "黑河市", "绥化市", "大兴安岭地区"],
+  "江苏省": ["南京市", "无锡市", "徐州市", "常州市", "苏州市", "南通市", "连云港市", "淮安市", "盐城市", "扬州市", "镇江市", "泰州市", "宿迁市"],
+  "浙江省": ["杭州市", "宁波市", "温州市", "嘉兴市", "湖州市", "绍兴市", "金华市", "衢州市", "舟山市", "台州市", "丽水市"],
+  "安徽省": ["合肥市", "芜湖市", "蚌埠市", "淮南市", "马鞍山市", "淮北市", "铜陵市", "安庆市", "黄山市", "滁州市", "阜阳市", "宿州市", "六安市", "亳州市", "池州市", "宣城市"],
+  "福建省": ["福州市", "厦门市", "莆田市", "三明市", "泉州市", "漳州市", "南平市", "龙岩市", "宁德市"],
+  "江西省": ["南昌市", "景德镇市", "萍乡市", "九江市", "新余市", "鹰潭市", "赣州市", "吉安市", "宜春市", "抚州市", "上饶市"],
+  "山东省": ["济南市", "青岛市", "淄博市", "枣庄市", "东营市", "烟台市", "潍坊市", "济宁市", "泰安市", "威海市", "日照市", "临沂市", "德州市", "聊城市", "滨州市", "菏泽市"],
+  "河南省": ["郑州市", "开封市", "洛阳市", "平顶山市", "安阳市", "鹤壁市", "新乡市", "焦作市", "濮阳市", "许昌市", "漯河市", "三门峡市", "南阳市", "商丘市", "信阳市", "周口市", "驻马店市", "济源市"],
+  "湖北省": ["武汉市", "黄石市", "十堰市", "宜昌市", "襄阳市", "鄂州市", "荆门市", "孝感市", "荆州市", "黄冈市", "咸宁市", "随州市", "恩施州", "仙桃市", "潜江市", "天门市", "神农架林区"],
+  "湖南省": ["长沙市", "株洲市", "湘潭市", "衡阳市", "邵阳市", "岳阳市", "常德市", "张家界市", "益阳市", "郴州市", "永州市", "怀化市", "娄底市", "湘西州"],
+  "广东省": ["广州市", "韶关市", "深圳市", "珠海市", "汕头市", "佛山市", "江门市", "湛江市", "茂名市", "肇庆市", "惠州市", "梅州市", "汕尾市", "河源市", "阳江市", "清远市", "东莞市", "中山市", "潮州市", "揭阳市", "云浮市"],
+  "广西壮族自治区": ["南宁市", "柳州市", "桂林市", "梧州市", "北海市", "防城港市", "钦州市", "贵港市", "玉林市", "百色市", "贺州市", "河池市", "来宾市", "崇左市"],
+  "海南省": ["海口市", "三亚市", "三沙市", "儋州市"], "四川省": ["成都市", "自贡市", "攀枝花市", "泸州市", "德阳市", "绵阳市", "广元市", "遂宁市", "内江市", "乐山市", "南充市", "眉山市", "宜宾市", "广安市", "达州市", "雅安市", "巴中市", "资阳市", "阿坝州", "甘孜州", "凉山州"],
+  "贵州省": ["贵阳市", "六盘水市", "遵义市", "安顺市", "毕节市", "铜仁市", "黔西南州", "黔东南州", "黔南州"],
+  "云南省": ["昆明市", "曲靖市", "玉溪市", "保山市", "昭通市", "丽江市", "普洱市", "临沧市", "楚雄州", "红河州", "文山州", "西双版纳州", "大理州", "德宏州", "怒江州", "迪庆州"],
+  "西藏自治区": ["拉萨市", "日喀则市", "昌都市", "林芝市", "山南市", "那曲市", "阿里地区"],
+  "陕西省": ["西安市", "铜川市", "宝鸡市", "咸阳市", "渭南市", "延安市", "汉中市", "榆林市", "安康市", "商洛市"],
+  "甘肃省": ["兰州市", "嘉峪关市", "金昌市", "白银市", "天水市", "武威市", "张掖市", "平凉市", "酒泉市", "庆阳市", "定西市", "陇南市", "临夏州", "甘南州"],
+  "青海省": ["西宁市", "海东市", "海北州", "黄南州", "海南州", "果洛州", "玉树州", "海西州"],
+  "宁夏回族自治区": ["银川市", "石嘴山市", "吴忠市", "固原市", "中卫市"],
+  "新疆维吾尔自治区": ["乌鲁木齐市", "克拉玛依市", "吐鲁番市", "哈密市", "昌吉州", "博尔塔拉州", "巴音郭楞州", "阿克苏地区", "克孜勒苏州", "喀什地区", "和田地区", "伊犁州", "塔城地区", "阿勒泰地区"],
+  "香港特别行政区": ["香港特别行政区"], "澳门特别行政区": ["澳门特别行政区"], "台湾省": ["台北市", "高雄市", "台中市", "台南市", "新北市", "桃园市", "新竹市", "基隆市", "嘉义市"]
+};
+
+function marketProvinceForCity(value) {
+  const city = String(value || "").trim();
+  if (!city) return "";
+  return Object.entries(MARKET_PROVINCE_CITIES).find(([province, cities]) => province === city || cities.includes(city))?.[0] || "";
+}
+
+function marketRegionCities(value = state.marketRegion) {
+  const region = String(value || "");
+  if (!region) return [];
+  if (region.startsWith("province:")) return MARKET_PROVINCE_CITIES[region.slice(9)] || [];
+  return region.startsWith("city:") ? [region.slice(5)] : [region];
+}
+
+function marketRegionLabel(value = state.marketRegion) {
+  const region = String(value || "");
+  if (region.startsWith("province:")) return region.slice(9);
+  return region.startsWith("city:") ? region.slice(5) : region;
+}
+
+function marketRegionOptions(regions = []) {
+  const city = String(state.marketSearchLocationCity || "").trim();
+  const province = marketProvinceForCity(city);
+  const cities = [...new Set([...(province ? MARKET_PROVINCE_CITIES[province] || [] : []), ...regions])].sort((left, right) => left.localeCompare(right, "zh-CN"));
+  return { city, province, cities };
+}
+
+function marketListingTime(item = {}) {
+  const time = Date.parse(item.refreshedAt || item.createdAt || "");
+  return Number.isFinite(time) ? time : 0;
+}
+
+function marketSearchResultListings() {
   const keyword = String(state.marketSearch || "").trim().toLowerCase();
   const stage = state.marketStage || "all";
+  const regionCities = marketRegionCities();
+  const delivery = String(state.marketDelivery || "").trim();
+  const freshAfter = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const listings = (state.marketListings || []).filter(item => {
     if (item.status === "sold") return false;
     const matchesStage = stage === "all" || item.stage === stage;
     const haystack = `${item.title || ""} ${item.speciesName || ""} ${item.city || ""}`.toLowerCase();
-    return matchesStage && (!keyword || haystack.includes(keyword));
+    const matchesKeyword = !keyword || haystack.includes(keyword);
+    const matchesRegion = !regionCities.length || regionCities.includes(String(item.city || "").trim());
+    const matchesDelivery = !delivery || String(item.delivery || "") === delivery;
+    const matchesFresh = !state.marketFreshOnly || marketListingTime(item) >= freshAfter;
+    return matchesStage && matchesKeyword && matchesRegion && matchesDelivery && matchesFresh;
   });
+  return listings.sort((left, right) => {
+    if (state.marketPriceOrder === "asc") return Number(left.price || 0) - Number(right.price || 0) || marketListingTime(right) - marketListingTime(left);
+    if (state.marketPriceOrder === "desc") return Number(right.price || 0) - Number(left.price || 0) || marketListingTime(right) - marketListingTime(left);
+    if (state.marketSort === "popular") return Number(right.wantCount || 0) - Number(left.wantCount || 0) || marketListingTime(right) - marketListingTime(left);
+    return marketListingTime(right) - marketListingTime(left);
+  });
+}
+
+function marketAssistControls(regions = []) {
+  const sortLabel = state.marketSort === "popular" ? "热门" : state.marketSort === "latest" ? "最新" : "综合";
+  const priceLabel = state.marketPriceOrder === "asc" ? "价格↑" : state.marketPriceOrder === "desc" ? "价格↓" : "价格";
+  const hasMoreFilters = Boolean(state.marketDelivery || state.marketFreshOnly || state.marketRegion || state.marketPriceOrder);
+  const deliveryOptions = ["", "可快递", "仅自提", "可面交"];
+  const region = marketRegionOptions(regions);
+  const panel = state.marketAssistMenu === "sort"
+    ? `<section class="market-assist-panel" aria-label="综合排序"><button class="${state.marketSort === "comprehensive" ? "active" : ""}" type="button" data-market-sort="comprehensive">综合排序</button><button class="${state.marketSort === "latest" ? "active" : ""}" type="button" data-market-sort="latest">最新发布</button><button class="${state.marketSort === "popular" ? "active" : ""}" type="button" data-market-sort="popular">最受关注</button></section>`
+    : state.marketAssistMenu === "region"
+      ? `<section class="market-assist-panel market-region-panel" aria-label="区域筛选"><header><strong>${region.city ? `当前定位：${escapeHtml(region.city)}` : state.marketSearchLocationStatus === "loading" ? "正在定位…" : "定位后可优先查看本省"}</strong>${region.province ? `<small>${escapeHtml(region.province)}</small>` : ""}</header><div><button class="${!state.marketRegion ? "active" : ""}" type="button" data-market-region="">全国</button>${region.province ? `<button class="${state.marketRegion === `province:${region.province}` ? "active" : ""}" type="button" data-market-region="province:${escapeHtml(region.province)}">${escapeHtml(region.province)}</button>` : ""}${region.cities.map(city => `<button class="${state.marketRegion === `city:${city}` ? "active" : ""}" type="button" data-market-region="city:${escapeHtml(city)}">${escapeHtml(city)}</button>`).join("") || `<p>暂时没有可选城市</p>`}</div></section>`
+      : state.marketAssistMenu === "filter"
+        ? `<section class="market-assist-panel market-filter-panel" aria-label="更多筛选"><div><span>交付方式</span>${deliveryOptions.map(value => `<button class="${state.marketDelivery === value ? "active" : ""}" type="button" data-market-delivery="${escapeHtml(value)}">${value || "全部"}</button>`).join("")}</div><button class="market-filter-reset" type="button" data-market-filter-reset>重置筛选</button></section>`
+        : "";
+  return `
+    <div class="market-assist-wrap">
+      <section class="market-assist-bar" aria-label="辅助搜索">
+        <button class="${state.marketAssistMenu === "sort" ? "active" : ""}" type="button" data-market-assist-menu="sort">${sortLabel}<i>⌄</i></button>
+        <button class="${state.marketPriceOrder ? "active" : ""}" type="button" data-market-price-order>${priceLabel}</button>
+        <button class="${state.marketFreshOnly ? "active" : ""}" type="button" data-market-fresh>新发</button>
+        <button class="${state.marketAssistMenu === "region" || state.marketRegion ? "active" : ""}" type="button" data-market-assist-menu="region">${escapeHtml(marketRegionLabel() || "区域")}<i>⌄</i></button>
+        <button class="${state.marketAssistMenu === "filter" || hasMoreFilters ? "active" : ""}" type="button" data-market-assist-menu="filter">筛选</button>
+      </section>
+      ${panel}
+    </div>
+  `;
+}
+
+function pageMarket() {
+  const keyword = String(state.marketSearch || "").trim().toLowerCase();
+  const stage = state.marketStage || "all";
+  const listings = marketSearchResultListings();
+  const regions = [...new Set((state.marketListings || []).map(item => String(item.city || "").trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
+  const showAssistSearch = Boolean(keyword || state.marketPriceOrder || state.marketFreshOnly || state.marketRegion || state.marketDelivery);
   return `
     ${topbar("龟集市", false, `<button class="market-top-add" type="button" data-page="marketAdd" aria-label="发布出售">＋</button>`, `<button class="market-top-service" type="button" data-market-top-service aria-label="联系平台客服"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.2v-1.1a7.5 7.5 0 0 1 15 0v1.1"></path><path d="M4.5 12.6H3.8a1.8 1.8 0 0 0-1.8 1.8v2.1a1.8 1.8 0 0 0 1.8 1.8h1.7v-5.7ZM19.5 12.6h.7a1.8 1.8 0 0 1 1.8 1.8v2.1a1.8 1.8 0 0 1-1.8 1.8h-1.7v-5.7ZM19.5 18.1c0 1.3-1.2 2.4-2.7 2.4h-1.5"></path><path d="M13.2 20.5h2.4"></path></svg></button>`)}
     <main class="content page-fresh market-page">
-      <form class="market-search-wrap" role="search" data-market-search-form>
-        <input type="search" name="keyword" value="${escapeHtml(state.marketSearch || "")}" placeholder="搜索品种、标题或城市" aria-label="搜索龟集市商品" data-market-search>
-        <button type="submit" aria-label="查找">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"></circle><path d="m15.5 15.5 4.2 4.2"></path></svg>
-        </button>
-      </form>
+      <div class="market-search-area">
+        <form class="market-search-wrap" role="search" data-market-search-form>
+          <input type="search" name="keyword" value="${escapeHtml(state.marketSearch || "")}" placeholder="搜索品种、标题或城市" aria-label="搜索龟集市商品" autocomplete="off" data-market-search>
+          <button type="submit" aria-label="查找">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"></circle><path d="m15.5 15.5 4.2 4.2"></path></svg>
+          </button>
+        </form>
+        <div class="market-search-suggestions" role="listbox" aria-label="品种搜索建议" hidden data-market-search-suggestions></div>
+      </div>
       <section class="market-promise-strip">
         <span><b>实拍</b> 一龟一图</span><span><b>直聊</b> 买卖双方沟通</span><span><b>透明</b> 状态尺寸清晰</span>
       </section>
+      ${showAssistSearch ? marketAssistControls(regions) : ""}
       <section class="market-stage-tabs">
         ${[["all", "全部"], ["hatchling", "苗子"], ["juvenile", "亚成"], ["adult", "种龟"]].map(([value, label]) => `<button class="${stage === value ? "active" : ""}" type="button" data-market-stage="${value}">${label}</button>`).join("")}
       </section>
@@ -2287,8 +2520,13 @@ function pageMarketAdd() {
   const turtleSpeciesCode = editingListing?.speciesCode || turtle?.speciesCode || speciesList.find(item => item.name === turtle?.speciesName)?.code || "";
   const turtleSpecies = speciesByCode(turtleSpeciesCode);
   const speciesSearchValue = turtleSpecies ? `${turtleSpecies.code} · ${turtleSpecies.name}` : "";
+  const speciesPolicyHint = turtleSpecies && isMarketProhibitedSpecies(turtleSpecies)
+    ? `<p class="market-species-policy-hint">${marketSpeciesRestrictionMessage()}</p>`
+    : "";
   const titleValue = editingListing?.title || (turtle ? `${turtle.code || turtle.speciesName || "乌龟"}诚意出售` : "");
   const formValue = (field, turtleField = field) => editingListing?.[field] ?? turtle?.[turtleField] ?? "";
+  const descriptionValue = editingListing ? (editingListing.description || "") : (state.marketDraftDescription || "");
+  const descriptionTemplate = editingListing ? "" : (state.marketDraftDescriptionTemplate || "");
   const mediaCount = Array.isArray(state.marketDraftMedia) ? state.marketDraftMedia.length : 0;
   return `
     ${topbar(editingListing ? "编辑出售" : "发布出售", true)}
@@ -2304,7 +2542,7 @@ function pageMarketAdd() {
         <section class="market-form-card market-media-card">
           <div class="market-form-heading"><b>实拍图片或视频</b><small>${mediaCount}/9</small></div>
           <div class="market-media-grid" data-market-media-grid>${marketDraftMediaMarkup()}</div>
-          <input class="hidden-file" type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple data-market-media-input>
+          <input class="hidden-file" type="file" accept="image/*,video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.mov,.m4v,.webm" multiple data-market-media-input>
           <p>长按右下角拖动图标可调整顺序，第一项会作为展示首图；最多添加9个，视频不得超过30秒，不限制文件大小。</p>
         </section>
         <section class="market-form-card market-fields-card">
@@ -2316,6 +2554,7 @@ function pageMarketAdd() {
             </div>
             <input type="hidden" name="speciesCode" value="${escapeHtml(turtleSpeciesCode)}" data-market-species-value>
             <div class="market-species-options" id="marketSpeciesOptions" role="listbox" hidden data-market-species-options></div>
+            ${speciesPolicyHint}
           </div></div>
           <label class="market-title-field"><span>出售标题<i class="required-mark" aria-hidden="true">*</i></span><input class="field" name="title" maxlength="40" value="${escapeHtml(titleValue)}" placeholder="选择品种后自动生成，可自行修改" data-market-title required><div class="market-title-templates" data-market-title-templates>${marketTitleTemplatesMarkup(turtleSpecies)}</div></label>
           <div class="market-form-two">
@@ -2334,7 +2573,7 @@ function pageMarketAdd() {
             </div>
             <label class="market-delivery-field"><span>交付方式<i class="required-mark" aria-hidden="true">*</i></span><select class="select" name="delivery" required><option value="" ${!formValue("delivery") ? "selected" : ""} disabled>请选择方式</option><option value="可快递" ${formValue("delivery") === "可快递" ? "selected" : ""}>可快递</option><option value="仅自提" ${formValue("delivery") === "仅自提" ? "selected" : ""}>仅自提</option><option value="可面交" ${formValue("delivery") === "可面交" ? "selected" : ""}>可面交</option></select><small aria-hidden="true">&nbsp;</small></label>
           </div>
-          <label><span>详细说明<i class="required-mark" aria-hidden="true">*</i></span><textarea name="description" maxlength="600" placeholder="可填写开食情况、饲养环境、健康状态及转让原因" required>${escapeHtml(editingListing?.description || "")}</textarea></label>
+          <label><span>详细说明<i class="required-mark" aria-hidden="true">*</i></span><textarea name="description" maxlength="600" placeholder="可填写开食情况、饲养环境、健康状态及转让原因" data-market-description data-market-description-template="${escapeHtml(descriptionTemplate)}" required>${escapeHtml(descriptionValue)}</textarea></label>
         </section>
         <section class="market-safe-note"><b>交易提示</b><p>发布前请如实描述健康状态；交易前充分沟通并核对实物，不要脱离双方确认的联系方式盲目付款。</p></section>
         <button class="market-publish-submit" type="submit">${editingListing ? "保存并刷新" : "确认发布"}</button>
@@ -2354,8 +2593,9 @@ function pageMarketDetail() {
   const secondaryMediaItems = firstMediaIsVideo ? mediaItems.slice(1) : [];
   const detailVideosAfterDescription = firstMediaIsVideo ? [] : mediaItems.filter(media => media.type === "video");
   const hasPrimaryGalleryControls = primaryMediaItems.length > 1;
+  const detailMoreAction = `<button class="market-detail-more-button" type="button" data-market-detail-more="${escapeHtml(item.id)}" aria-label="商品更多操作" aria-haspopup="dialog">•••</button>`;
   return `
-    ${topbar("商品详情", true)}
+    ${topbar("商品详情", true, detailMoreAction)}
     <main class="content page-fresh market-detail-page">
       <section class="market-detail-gallery-wrap">
         <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => `<div class="market-detail-photo">${media.type === "video" ? `<video src="${media.url}" controls playsinline preload="metadata"></video>` : `<img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button">`}${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`}</section>
@@ -2386,8 +2626,8 @@ function pageMarketDetail() {
     </main>
     <div class="market-detail-actions">
       ${marketFavoriteButton(item, "market-detail-favorite")}
-      ${!isOwn ? `<button class="market-report-action" type="button" data-open-content-report data-report-type="market" data-report-id="${item.id}">举报</button>` : ""}
-      ${isOwn ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">删除</button><button class="market-sold-action" type="button" data-market-sold="${item.id}">${sold ? "恢复在售" : "标记已售"}</button>` : sold ? `<button class="market-sold-disabled" type="button" disabled>该商品已售出</button>` : `<button class="market-want-action" type="button" data-market-platform-service="${item.id}">联系平台客服</button><button class="market-chat-action" type="button" data-market-contact="${item.id}">联系卖家</button>`}
+      ${!isOwn ? `<button class="market-contact-action" type="button" data-market-contact="${item.id}">联系卖家</button>` : ""}
+      ${isOwn ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">删除</button><button class="market-sold-action" type="button" data-market-sold="${item.id}">${sold ? "恢复在售" : "标记已售"}</button>` : sold ? `<button class="market-sold-disabled" type="button" disabled>该商品已售出</button>` : `<button class="market-want-action" type="button" data-market-platform-service="${item.id}">联系平台客服</button>`}
     </div>
   `;
 }
@@ -2653,7 +2893,7 @@ function pageTurtleDetail() {
   const historyList = [...(t.measureHistory || [])].reverse();
   const menuOpen = state.openTurtleMenuId === t.id;
   return `
-    ${topbar("档案详情", true)}
+    ${topbar(isEditing ? "成长记录" : "档案详情", true)}
     <main class="content page-fresh">
       <section class="page-intro compact-intro detail-summary-card ${menuOpen ? "menu-open" : ""}">
         <div>
@@ -2676,7 +2916,7 @@ function pageTurtleDetail() {
         <div class="photo-uploader breeding-photo-box">
           <img src="${photo}" alt="${species.name || t.speciesName}">
           <div>
-            <button class="secondary" type="button" data-update-photo-button>更换图片</button>
+            <button class="secondary" type="button" data-update-photo-button>龟龟最新照片</button>
             <button class="danger-link" type="button" data-clear-update-photo>清除图片</button>
           </div>
         </div>
@@ -2702,17 +2942,6 @@ function pageTurtleDetail() {
             <label><span>背高(cm)</span><input class="field" name="shellHeight" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "shellHeight")}"></label>
             <label><span>腹甲长度(cm)</span><input class="field" name="plastronLength" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "plastronLength")}"></label>
           </details>
-          <div class="detail-choice-row">
-            <span>健康状态</span>
-            <div>
-              <input type="hidden" name="health" value="${turtleDraftValue(t, "health") || "健康"}">
-              <div class="radio-row two-options">
-                ${["健康", "生病"].map(value => `<button class="choice ${turtleDraftValue(t, "health") === value ? "active" : ""}" type="button" data-detail-choice="health" data-choice-value="${value}">${value}</button>`).join("")}
-              </div>
-            </div>
-          </div>
-          <label><span>入手日期</span><input class="field" name="acquiredDate" type="date" value="${turtleDraftValue(t, "acquiredDate") || formatDate(t.acquiredDate || new Date())}"></label>
-          <label><span>购入价(元)</span><input class="field" name="price" type="number" min="0" step="0.01" value="${turtleDraftValue(t, "price")}"></label>
         </div>
         <label class="breeding-note"><span>备注</span><textarea name="note" placeholder="性格、饮食、状态变化、到家表现等">${turtleDraftValue(t, "note") || ""}</textarea></label>
         <button class="primary" type="submit">保存修改</button>
@@ -3048,13 +3277,14 @@ function pageLedger() {
 
 function ledgerForm() {
   const type = state.ledgerDraftType;
-  const draftTurtleId = ledgerFormValue("turtleId", state.ledgerDraftTurtleId);
+  const isPurchase = type === "purchase";
+  // 收购是新增一只龟，不能关联或覆盖已有档案。
+  const draftTurtleId = isPurchase ? "" : ledgerFormValue("turtleId", state.ledgerDraftTurtleId);
   const turtle = state.turtles.find(t => t.id === draftTurtleId);
   const today = ledgerFormValue("recordDate", formatDate(new Date()));
   const defaultAmount = type === "loss" && turtle?.price ? turtle.price : "";
   const amountValue = ledgerFormValue("amount", defaultAmount);
   const purchaseGender = ledgerFormValue("purchaseGender", state.ledgerPurchaseGender || "未知") || "未知";
-  const isPurchase = type === "purchase";
   const supportsPool = type === "purchase" || type === "loss";
   const poolId = ledgerFormValue("poolId", turtle?.poolId || "");
   return `
@@ -3066,11 +3296,13 @@ function ledgerForm() {
           <div><button class="secondary" type="button" data-ledger-photo-button>上传照片</button><p class="muted">和新建档案一样，可以上传这只龟当时的照片。</p></div>
         </div>
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-ledger-photo-input>
-        <div class="label">关联档案</div>
-        <select class="select" name="turtleId">
-          <option value="">${isPurchase ? "收购后新建档案" : "不关联档案"}</option>
-          ${state.turtles.map(t => `<option value="${t.id}" ${draftTurtleId === t.id ? "selected" : ""}>${t.code} · ${t.speciesName}</option>`).join("")}
-        </select>
+        ${!isPurchase ? `
+          <div class="label">关联档案</div>
+          <select class="select" name="turtleId">
+            <option value="">不关联档案</option>
+            ${state.turtles.map(t => `<option value="${t.id}" ${draftTurtleId === t.id ? "selected" : ""}>${t.code} · ${t.speciesName}</option>`).join("")}
+          </select>
+        ` : ""}
         ${supportsPool ? `
           <div class="label">龟池</div>
           <select class="select" name="poolId">
@@ -3673,6 +3905,13 @@ function pageAccount() {
           <p class="muted">手机号：${maskedPhone}</p>
           <button class="logout-card" type="button" data-logout-account>退出账号</button>
         </section>
+        ${state.isCommunityAdmin ? `
+          <section class="fresh-card settings-card push-test-card">
+            <div class="settings-title">推送通知实机测试</div>
+            <p class="muted">本机已允许通知并完成登录后，可向当前设备发送一条测试通知。此入口仅对平台管理员开放。</p>
+            <button class="secondary" type="button" data-test-push-notification>发送测试通知</button>
+          </section>
+        ` : ""}
       ` : `
         <section class="memo-tabs auth-tabs">
           <button class="tab ${state.accountMode === "login" ? "active" : ""}" data-account-mode="login">登录</button>
@@ -3819,7 +4058,7 @@ function pageRules() {
     ${topbar("平台规则", true)}
     <main class="content page-fresh compliance-page">
       <section class="page-intro compact-intro compliance-intro">
-        <div><p class="eyebrow dark">生效日期：2026 年 7 月 14 日</p><h2>服务、社区与交易规则</h2><p>壳友手账提供养龟记录、公开内容发布和商品信息展示服务。</p></div>
+        <div><p class="eyebrow dark">生效日期：2026 年 7 月 17 日</p><h2>服务、社区与交易规则</h2><p>壳友手账提供养龟记录、公开内容发布和商品信息展示服务。</p></div>
       </section>
       <section class="fresh-card policy-card">
         <h3>一、服务范围</h3>
@@ -3839,7 +4078,7 @@ function pageRules() {
       </section>
       <section class="fresh-card policy-card">
         <h3>五、规则变更与联系我们</h3>
-        <p>涉及收费、交易、争议解决等重大变更会在应用内显著提示。对规则、投诉或数据权利有疑问，可联系平台客服微信：<strong>${PLATFORM_SERVICE_WECHAT}</strong>。</p>
+        <p>涉及收费、交易、争议解决等重大变更会在应用内显著提示并要求重新确认。壳友手账由陈仔健运营；对规则、投诉或数据权利有疑问，可联系平台客服微信：<strong>${PLATFORM_SERVICE_WECHAT}</strong>。</p>
       </section>
       <button class="compliance-link-card" type="button" data-page="privacy"><span>隐私政策</span><b>›</b></button>
     </main>
@@ -3852,7 +4091,7 @@ function pagePrivacy() {
     ${topbar("隐私政策", true)}
     <main class="content page-fresh compliance-page">
       <section class="page-intro compact-intro compliance-intro">
-        <div><p class="eyebrow dark">生效日期：2026 年 7 月 14 日</p><h2>壳友手账隐私政策</h2><p>我们按合法、正当、必要原则处理与你使用服务直接相关的信息。</p></div>
+        <div><p class="eyebrow dark">生效日期：2026 年 7 月 17 日</p><h2>壳友手账隐私政策</h2><p>个人信息处理者：陈仔健。我们按合法、正当、必要原则处理与你使用服务直接相关的信息。</p></div>
       </section>
       <section class="fresh-card policy-card">
         <h3>一、我们收集的信息</h3>
@@ -3860,7 +4099,7 @@ function pagePrivacy() {
       </section>
       <section class="fresh-card policy-card">
         <h3>二、使用目的</h3>
-        <p>用于账号认证、跨设备同步、内容发布与展示、买卖双方咨询、内容安全审核、故障排查和服务改进。我们不会将你的个人信息用于与上述目的无关的用途。</p>
+        <p>用于账号认证、跨设备同步、内容发布与展示、买卖双方咨询、内容安全审核、故障排查和服务改进。你同意通知权限后，通知设备标识仅用于聊天消息等系统提醒。我们不会将你的个人信息用于与上述目的无关的用途。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>三、存储与共享</h3>
@@ -3868,7 +4107,7 @@ function pagePrivacy() {
       </section>
       <section class="fresh-card policy-card">
         <h3>四、信息保护与备份</h3>
-        <p>服务端使用账号验证、访问控制和定期备份保护数据。数据库及上传媒体会建立灾备副本并按保留策略清理；备份仅用于故障恢复和安全审计，不用于公开展示。</p>
+        <p>服务端使用账号验证、访问控制和定期备份保护数据。数据库及上传媒体会建立灾备副本并按保留策略清理，灾难恢复备份默认最长保留 30 天；备份仅用于故障恢复和安全审计，不用于公开展示。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>五、你的权利</h3>
@@ -3971,7 +4210,7 @@ function render() {
     pools: pageTurtlePools,
     poolAdd: pageTurtlePoolAdd
   };
-  $app.innerHTML = (pages[state.page] || pageHome)();
+  $app.innerHTML = (pages[state.page] || pageHome)() + policyConsentGate();
   if (pendingPageScrollReset) {
     pendingPageScrollReset = false;
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -4003,6 +4242,27 @@ function render() {
   if (state.page === "marketAdd") requestMarketCityAutofill();
   if (state.page === "market") requestAnimationFrame(syncMarketWifiVideos);
   refreshMessageUnread();
+}
+
+function policyConsentGate() {
+  if (!state.policyConsentRequired || !state.loggedInPhone) return "";
+  return `
+    <div class="policy-consent-overlay" role="dialog" aria-modal="true" aria-labelledby="policyConsentTitle">
+      <section class="policy-consent-dialog">
+        <p class="policy-consent-kicker">服务协议更新</p>
+        <h1 id="policyConsentTitle">请阅读并同意服务协议</h1>
+        <p>为继续使用壳友手账，请阅读最新版《服务与社区规则》和《隐私政策》。本次更新生效日期为 2026 年 7 月 17 日。</p>
+        <div class="policy-consent-links">
+          <a href="https://api.turtleworld.cn/terms.html" target="_blank" rel="noopener noreferrer">查看服务与社区规则 <b>›</b></a>
+          <a href="https://api.turtleworld.cn/privacy.html" target="_blank" rel="noopener noreferrer">查看隐私政策 <b>›</b></a>
+        </div>
+        <label class="policy-consent-check"><input type="checkbox" data-policy-consent-check><span>我已阅读并同意上述协议</span></label>
+        <p class="policy-consent-error" data-policy-consent-error hidden aria-live="polite"></p>
+        <button class="primary policy-consent-submit" type="button" data-policy-consent-submit disabled>同意并继续使用</button>
+        <button class="policy-consent-logout" type="button" data-policy-consent-logout>暂不同意，退出账号</button>
+      </section>
+    </div>
+  `;
 }
 
 function scrollCommunityChatToLatest() {
@@ -4085,6 +4345,8 @@ function bindEvents() {
       navigationState.marketDraftTurtleId = "";
       navigationState.marketDraftMedia = [];
       navigationState.marketDraftCity = "";
+      navigationState.marketDraftDescription = "";
+      navigationState.marketDraftDescriptionTemplate = "";
       navigationState.marketLocationStatus = "idle";
     }
     if (targetPage === "market" && state.page !== "market") {
@@ -4431,9 +4693,25 @@ function bindEvents() {
   document.querySelector("[data-market-search-form]")?.addEventListener("submit", event => {
     event.preventDefault();
     const input = event.currentTarget.querySelector("[data-market-search]");
-    resetMarketFeed({ marketSearch: String(input?.value || "").trim() });
+    resetMarketFeed({ marketSearch: String(input?.value || "").trim(), marketAssistMenu: "" });
   });
-  document.querySelectorAll("[data-market-stage]").forEach(btn => btn.addEventListener("click", () => resetMarketFeed({ marketStage: btn.dataset.marketStage })));
+  bindMarketSearchSuggestions();
+  document.querySelectorAll("[data-market-stage]").forEach(btn => btn.addEventListener("click", () => resetMarketFeed({ marketStage: btn.dataset.marketStage, marketAssistMenu: "" })));
+  document.querySelectorAll("[data-market-assist-menu]").forEach(btn => btn.addEventListener("click", () => {
+    const menu = btn.dataset.marketAssistMenu;
+    const nextMenu = state.marketAssistMenu === menu ? "" : menu;
+    setState({ marketAssistMenu: nextMenu }, { skipCloud: true });
+    if (nextMenu === "region") requestMarketSearchLocation({ showSettingsHint: true });
+  }));
+  document.querySelectorAll("[data-market-sort]").forEach(btn => btn.addEventListener("click", () => setState({ marketSort: btn.dataset.marketSort, marketAssistMenu: "" }, { skipCloud: true })));
+  document.querySelector("[data-market-price-order]")?.addEventListener("click", () => {
+    const next = state.marketPriceOrder === "" ? "asc" : state.marketPriceOrder === "asc" ? "desc" : "";
+    setState({ marketPriceOrder: next }, { skipCloud: true });
+  });
+  document.querySelector("[data-market-fresh]")?.addEventListener("click", () => setState({ marketFreshOnly: !state.marketFreshOnly }, { skipCloud: true }));
+  document.querySelectorAll("[data-market-region]").forEach(btn => btn.addEventListener("click", () => resetMarketFeed({ marketRegion: btn.dataset.marketRegion || "", marketAssistMenu: "" })));
+  document.querySelectorAll("[data-market-delivery]").forEach(btn => btn.addEventListener("click", () => setState({ marketDelivery: btn.dataset.marketDelivery || "" }, { skipCloud: true })));
+  document.querySelector("[data-market-filter-reset]")?.addEventListener("click", () => resetMarketFeed({ marketPriceOrder: "", marketFreshOnly: false, marketRegion: "", marketDelivery: "", marketAssistMenu: "" }));
   document.querySelectorAll("[data-my-market-tab]").forEach(btn => btn.addEventListener("click", () => setState({ marketMyTab: btn.dataset.myMarketTab }, { skipCloud: true })));
   document.querySelectorAll("[data-view-market]").forEach(btn => btn.addEventListener("click", () => openMarketDetail(btn.dataset.viewMarket)));
   document.querySelectorAll("[data-view-market-seller]").forEach(btn => btn.addEventListener("click", () => openMarketSeller(btn.dataset.viewMarketSeller)));
@@ -4467,11 +4745,24 @@ function bindEvents() {
   }));
   document.querySelector("[data-market-turtle-source]")?.addEventListener("change", event => {
     const turtle = (state.turtles || []).find(item => item.id === event.target.value);
+    const description = document.querySelector("[data-market-description]");
+    const currentDescription = String(description?.value || state.marketDraftDescription || "").trim();
+    const currentTemplate = String(description?.dataset.marketDescriptionTemplate || state.marketDraftDescriptionTemplate || "").trim();
+    const template = marketDescriptionTemplate(speciesByCode(turtle?.speciesCode));
+    const canReplaceDescription = !currentDescription || currentDescription === currentTemplate;
     setState({
       marketDraftTurtleId: event.target.value,
       marketDraftPhoto: "",
-      marketDraftMedia: turtle?.photo ? [{ dataUrl: turtle.photo, type: "image" }] : []
+      marketDraftMedia: turtle?.photo ? [{ dataUrl: turtle.photo, type: "image" }] : [],
+      marketDraftDescription: canReplaceDescription ? template : currentDescription,
+      marketDraftDescriptionTemplate: canReplaceDescription ? template : ""
     }, { skipCloud: true });
+  });
+  document.querySelector("[data-market-description]")?.addEventListener("input", event => {
+    state.marketDraftDescription = event.target.value;
+    if (String(event.target.value || "").trim() !== String(event.target.dataset.marketDescriptionTemplate || "").trim()) {
+      state.marketDraftDescriptionTemplate = "";
+    }
   });
   document.querySelector("[data-market-city]")?.addEventListener("input", event => {
     state.marketDraftCity = event.target.value;
@@ -4487,6 +4778,7 @@ function bindEvents() {
   document.querySelectorAll("[data-refresh-market-listing]").forEach(btn => btn.addEventListener("click", () => refreshOwnMarketListing(btn.dataset.refreshMarketListing)));
   document.querySelectorAll("[data-offline-market-listing]").forEach(btn => btn.addEventListener("click", () => offlineOwnMarketListing(btn.dataset.offlineMarketListing)));
   document.querySelectorAll("[data-market-contact]").forEach(btn => btn.addEventListener("click", () => contactMarketSeller(btn.dataset.marketContact)));
+  document.querySelectorAll("[data-market-detail-more]").forEach(btn => btn.addEventListener("click", () => openMarketDetailMore(btn.dataset.marketDetailMore)));
   document.querySelectorAll("[data-view-chat-market]").forEach(btn => btn.addEventListener("click", () => openChatMarketListing(btn.dataset.viewChatMarket)));
   document.querySelector("[data-market-top-service]")?.addEventListener("click", openMarketTopService);
   document.querySelectorAll("[data-market-platform-service]").forEach(btn => btn.addEventListener("click", () => openMarketPlatformService(btn.dataset.marketPlatformService)));
@@ -4539,6 +4831,14 @@ function bindEvents() {
   document.querySelector("[data-account-avatar-input]")?.addEventListener("change", readAccountAvatar);
   document.querySelector("#profileForm")?.addEventListener("submit", submitProfile);
   document.querySelectorAll("[data-logout-account]").forEach(btn => btn.addEventListener("click", logoutAccount));
+  const policyConsentCheck = document.querySelector("[data-policy-consent-check]");
+  const policyConsentSubmit = document.querySelector("[data-policy-consent-submit]");
+  policyConsentCheck?.addEventListener("change", () => {
+    if (policyConsentSubmit) policyConsentSubmit.disabled = !policyConsentCheck.checked;
+  });
+  policyConsentSubmit?.addEventListener("click", acceptLatestPolicies);
+  document.querySelector("[data-policy-consent-logout]")?.addEventListener("click", logoutAccount);
+  document.querySelector("[data-test-push-notification]")?.addEventListener("click", testNativePushNotification);
   document.querySelectorAll("[data-export-data]").forEach(btn => btn.addEventListener("click", () => exportAccountData(btn.dataset.exportData)));
   document.querySelector("#batchImportForm")?.addEventListener("submit", submitBatchImport);
   document.querySelector("#deliveryNoteForm")?.addEventListener("submit", submitDeliveryNote);
@@ -4719,6 +5019,7 @@ function localMarketListing(payload) {
 
 async function refreshMarket(force = false) {
   const isMarketFeed = state.page === "market";
+  const savedListingIds = savedMarketListingIds();
   if (!CONFIGURED_SMS_BACKEND || marketLoading) return;
   if (isMarketFeed && state.marketFeedInitialized && !force) return;
   if (!force && Date.now() - marketLastLoadedAt < 10000) return;
@@ -4728,17 +5029,21 @@ async function refreshMarket(force = false) {
       offset: 0,
       limit: 8,
       keyword: state.marketSearch || "",
-      stage: state.marketStage || "all"
-    } : { all: true }));
+      stage: state.marketStage || "all",
+      regionCities: marketRegionCities()
+    } : { all: true, savedListingIds }));
     const pending = (state.marketListings || []).filter(item => item.pendingLocal);
     const remoteListings = normalizeMarketListings(result.listings || []);
+    const savedListings = normalizeMarketListings(result.savedListings || []);
     const chatReference = (state.marketListings || []).find(item => item.chatReference && item.id === state.selectedMarketListingId);
     const retainedReference = chatReference && !remoteListings.some(item => item.id === chatReference.id) ? [chatReference] : [];
+    const mergedListings = new Map();
+    [...pending, ...retainedReference, ...remoteListings, ...savedListings].forEach(item => mergedListings.set(item.id, item));
     const accountPatch = result.accountData ? normalizeAccountData(result.accountData) : {};
     marketLastLoadedAt = Date.now();
     setState({
       ...accountPatch,
-      marketListings: [...pending, ...retainedReference, ...remoteListings],
+      marketListings: [...mergedListings.values()],
       myMarketListings: normalizeMarketListings(result.myListings || []),
       ...(isMarketFeed ? {
         marketFeedInitialized: true,
@@ -4775,7 +5080,8 @@ async function loadMoreMarketListings() {
       offset: Math.max(0, Number(state.marketFeedNextOffset || 0)),
       limit: 8,
       keyword: state.marketSearch || "",
-      stage: state.marketStage || "all"
+      stage: state.marketStage || "all",
+      regionCities: marketRegionCities()
     }));
     const incoming = normalizeMarketListings(result.listings || []);
     const existingIds = new Set((state.marketListings || []).map(item => item.id));
@@ -4906,7 +5212,7 @@ function bindMarketSpeciesPicker() {
     activeIndex = -1;
   };
 
-  const findMatches = query => marketSpeciesMatches(query);
+  const findMatches = query => marketPublishSpeciesMatches(query);
 
   const updateActiveOption = nextIndex => {
     const buttons = Array.from(options.querySelectorAll("[data-market-species-option]"));
@@ -4925,9 +5231,14 @@ function bindMarketSpeciesPicker() {
   const selectSpecies = code => {
     const item = speciesByCode(code);
     if (!item) return;
+    if (isMarketProhibitedSpecies(item)) {
+      toast(marketSpeciesRestrictionMessage());
+      return;
+    }
     value.value = item.code;
     search.value = `${item.code} · ${item.name}`;
     renderMarketTitleTemplates(item, true);
+    renderMarketDescriptionTemplate(item);
     closeOptions();
   };
 
@@ -4947,18 +5258,22 @@ function bindMarketSpeciesPicker() {
     const changed = value.value !== closest.code;
     value.value = closest.code;
     updateActiveOption(0);
-    if (changed) renderMarketTitleTemplates(closest, true);
+    if (changed) {
+      renderMarketTitleTemplates(closest, true);
+      renderMarketDescriptionTemplate(closest);
+    }
   };
 
   const renderOptions = query => {
     matches = findMatches(query);
     activeIndex = -1;
+    const rawMatches = marketSpeciesMatches(query);
     options.innerHTML = matches.length
       ? matches.map((item, index) => `
           <button type="button" id="marketSpeciesOption${index}" role="option" aria-selected="false" data-market-species-option="${escapeHtml(item.code)}">
             <strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.code)}</small>
           </button>`).join("")
-      : `<p>没有找到匹配品种</p>`;
+      : `<p>${rawMatches.length ? marketSpeciesRestrictionMessage() : "没有找到匹配品种"}</p>`;
     options.hidden = false;
     search.setAttribute("aria-expanded", "true");
     options.querySelectorAll("[data-market-species-option]").forEach(button => {
@@ -5123,8 +5438,11 @@ async function readMarketMedia(event) {
   const nextItems = [];
   try {
     for (const file of files) {
-      const isImage = file.type.startsWith("image/");
-      const isVideo = /^(video\/(mp4|webm|quicktime))$/i.test(file.type);
+      // iOS may leave File.type empty for a video picked from Photos.  Fall
+      // back to the extension so a valid MOV/MP4 is still treated as video.
+      const mediaKind = localMediaFileKind(file);
+      const isImage = mediaKind === "image";
+      const isVideo = mediaKind === "video";
       if (!isImage && !isVideo) {
         toast(`不支持文件：${file.name}`);
         continue;
@@ -5218,42 +5536,112 @@ async function reverseGeocodeMarketCity(latitude, longitude) {
     .find(Boolean) || "";
 }
 
-function requestMarketCityAutofill({ force = false } = {}) {
+function nativeGeolocationPlugin() {
+  const capacitor = window.Capacitor;
+  if (!capacitor || typeof capacitor.isNativePlatform !== "function" || !capacitor.isNativePlatform()) return null;
+  const plugin = capacitor.Plugins?.Geolocation || capacitor.registerPlugin?.("Geolocation");
+  return plugin && typeof plugin.getCurrentPosition === "function" ? plugin : null;
+}
+
+function locationPermissionError(code) {
+  const error = new Error(code);
+  error.code = code;
+  return error;
+}
+
+function isLocationPermissionDenied(error) {
+  return error?.code === "LOCATION_DENIED" || error?.message === "LOCATION_DENIED";
+}
+
+function locationSettingsHint() {
+  return "已拒绝位置权限，请打开 iPhone「设置 > 隐私与安全性 > 定位服务 > 壳友手账」，选择“使用 App 期间”后再试。";
+}
+
+async function getMarketLocationPosition({ requestPermission = true } = {}) {
+  const nativePlugin = nativeGeolocationPlugin();
+  if (nativePlugin) {
+    let permissions = await nativePlugin.checkPermissions();
+    if (permissions?.location === "denied") throw locationPermissionError("LOCATION_DENIED");
+    if (permissions?.location !== "granted") {
+      if (!requestPermission) throw locationPermissionError("LOCATION_PERMISSION_REQUIRED");
+      permissions = await nativePlugin.requestPermissions({ permissions: ["location"] });
+      if (permissions?.location !== "granted") throw locationPermissionError("LOCATION_DENIED");
+    }
+    return nativePlugin.getCurrentPosition({
+      enableHighAccuracy: false,
+      timeout: 10000,
+      maximumAge: 5 * 60 * 1000
+    });
+  }
+
+  if (!navigator.geolocation) throw locationPermissionError("LOCATION_UNAVAILABLE");
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: false,
+      timeout: 10000,
+      maximumAge: 5 * 60 * 1000
+    });
+  });
+}
+
+async function requestLocationPermissionOnLogin() {
+  const nativePlugin = nativeGeolocationPlugin();
+  if (!nativePlugin?.checkPermissions || !nativePlugin?.requestPermissions) return;
+  try {
+    const permissions = await nativePlugin.checkPermissions();
+    if (permissions?.location === "granted") return;
+    if (permissions?.location === "denied") {
+      setState({ marketSearchLocationStatus: "denied" }, { skipCloud: true });
+      return;
+    }
+    const requested = await nativePlugin.requestPermissions({ permissions: ["location"] });
+    if (requested?.location !== "granted") {
+      setState({ marketSearchLocationStatus: "denied" }, { skipCloud: true });
+    }
+  } catch {
+    // 权限弹窗被系统中断时，后续仍可在区域筛选中重新尝试。
+  }
+}
+
+async function requestMarketCityAutofill({ force = false } = {}) {
   if (state.marketLocationStatus === "loading") return;
   if (!force && String(state.marketDraftCity || "").trim()) {
     updateMarketCityLocationUi(state.marketLocationStatus === "idle" ? "success" : state.marketLocationStatus);
     return;
   }
-  if (!navigator.geolocation) {
-    state.marketLocationStatus = "error";
-    updateMarketCityLocationUi();
-    return;
-  }
   state.marketLocationStatus = "loading";
   updateMarketCityLocationUi();
-  navigator.geolocation.getCurrentPosition(async position => {
-    try {
-      const city = await reverseGeocodeMarketCity(position.coords.latitude, position.coords.longitude);
-      if (!city) throw new Error("未能识别所在城市");
-      const input = document.querySelector("[data-market-city]");
-      if (force || !String(state.marketDraftCity || "").trim()) {
-        state.marketDraftCity = city;
-        if (input) input.value = city;
-      }
-      state.marketLocationStatus = "success";
-      updateMarketCityLocationUi();
-    } catch {
-      state.marketLocationStatus = "error";
-      updateMarketCityLocationUi();
+  try {
+    const position = await getMarketLocationPosition({ requestPermission: force });
+    const city = await reverseGeocodeMarketCity(position.coords.latitude, position.coords.longitude);
+    if (!city) throw new Error("未能识别所在城市");
+    const input = document.querySelector("[data-market-city]");
+    if (force || !String(state.marketDraftCity || "").trim()) {
+      state.marketDraftCity = city;
+      if (input) input.value = city;
     }
-  }, () => {
+    state.marketLocationStatus = "success";
+    updateMarketCityLocationUi();
+  } catch {
     state.marketLocationStatus = "error";
     updateMarketCityLocationUi();
-  }, {
-    enableHighAccuracy: false,
-    timeout: 10000,
-    maximumAge: 5 * 60 * 1000
-  });
+  }
+}
+
+async function requestMarketSearchLocation({ showSettingsHint = false } = {}) {
+  if (state.marketSearchLocationStatus === "loading" || state.marketSearchLocationCity) return;
+  state.marketSearchLocationStatus = "loading";
+  render();
+  try {
+    const position = await getMarketLocationPosition({ requestPermission: true });
+    const city = await reverseGeocodeMarketCity(position.coords.latitude, position.coords.longitude);
+    if (!city) throw new Error("未能识别所在城市");
+    setState({ marketSearchLocationCity: city, marketSearchLocationStatus: "success" }, { skipCloud: true });
+  } catch (error) {
+    const status = isLocationPermissionDenied(error) ? "denied" : "error";
+    setState({ marketSearchLocationStatus: status }, { skipCloud: true });
+    if (status === "denied" && showSettingsHint) toast(locationSettingsHint());
+  }
 }
 
 async function submitMarketListing(event) {
@@ -5273,6 +5661,7 @@ async function submitMarketListing(event) {
     speciesCode = species?.code || "";
   }
   if (!species) return toast("请从搜索结果中选择品种");
+  if (isMarketProhibitedSpecies(species)) return toast(marketSpeciesRestrictionMessage());
   const payload = {
     turtleId: String(form.get("turtleId") || ""),
     title: String(form.get("title") || "").trim(),
@@ -5329,6 +5718,8 @@ async function submitMarketListing(event) {
     state.marketDraftMedia = [];
     state.marketDraftTurtleId = "";
     state.marketDraftCity = "";
+    state.marketDraftDescription = "";
+    state.marketDraftDescriptionTemplate = "";
     state.marketLocationStatus = "idle";
     state.editingMarketListingId = "";
     marketLastLoadedAt = Date.now();
@@ -5585,6 +5976,8 @@ function beginMarketListingEdit(listingId) {
     marketDraftPhoto: "",
     marketDraftMedia: mediaItems,
     marketDraftCity: listing.city || "",
+    marketDraftDescription: listing.description || "",
+    marketDraftDescriptionTemplate: "",
     marketLocationStatus: "manual"
   }, { skipCloud: true });
 }
@@ -5720,6 +6113,72 @@ async function copyText(text, successText = "已复制") {
     toast("复制失败，请手动复制");
     return false;
   }
+}
+
+function marketShareUrl(listing) {
+  const base = String(window.TURTLE_PUBLIC_APP_URL || "https://api.turtleworld.cn/").replace(/\/?$/, "/");
+  return `${base}?market=${encodeURIComponent(String(listing?.id || ""))}`;
+}
+
+async function shareMarketListing(listingId) {
+  const listing = (state.marketListings || []).find(item => item.id === String(listingId || ""));
+  if (!listing) return toast("商品信息不存在");
+  const url = marketShareUrl(listing);
+  const title = listing.title || `${listing.speciesName || "乌龟"}在售`;
+  const text = `${title} · ${money(listing.price)}`;
+  try {
+    const nativeShare = window.Capacitor?.Plugins?.Share;
+    if (nativeShare?.share) {
+      await nativeShare.share({ title, text, url, dialogTitle: "分享商品" });
+      return;
+    }
+    if (navigator.share) {
+      await navigator.share({ title, text, url });
+      return;
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+  }
+  copyText(url, "商品链接已复制，可发送给微信好友");
+}
+
+function openMarketDetailMore(listingId) {
+  const listing = (state.marketListings || []).find(item => item.id === String(listingId || ""));
+  if (!listing) return toast("商品信息不存在");
+  document.querySelector(".market-detail-more-overlay")?.remove();
+  const previousFocus = document.activeElement;
+  const isOwn = Boolean(listing.isOwn || listing.pendingLocal);
+  const overlay = document.createElement("div");
+  overlay.className = "market-detail-more-overlay";
+  overlay.innerHTML = `
+    <section class="market-detail-more-sheet" role="dialog" aria-modal="true" aria-labelledby="marketDetailMoreTitle">
+      <h2 id="marketDetailMoreTitle">分享至</h2>
+      <div class="market-detail-more-actions">
+        <button type="button" data-market-share-listing="${escapeHtml(listing.id)}"><span aria-hidden="true">↗</span><small>微信 / 其他</small></button>
+        <button type="button" data-market-copy-listing="${escapeHtml(listing.id)}"><span aria-hidden="true">⌁</span><small>复制链接</small></button>
+        ${isOwn ? "" : `<button type="button" class="danger" data-market-report-from-menu="${escapeHtml(listing.id)}"><span aria-hidden="true">!</span><small>举报</small></button>`}
+      </div>
+      <button class="market-detail-more-cancel" type="button" data-market-detail-more-close>取消</button>
+    </section>
+  `;
+  document.body.appendChild(overlay);
+  document.body.classList.add("market-detail-more-open");
+  const close = () => {
+    document.body.classList.remove("market-detail-more-open");
+    overlay.remove();
+    if (previousFocus?.isConnected) previousFocus.focus();
+  };
+  overlay.addEventListener("click", event => {
+    if (event.target === overlay) close();
+  });
+  overlay.querySelector("[data-market-detail-more-close]")?.addEventListener("click", close);
+  overlay.querySelector("[data-market-share-listing]")?.addEventListener("click", () => shareMarketListing(listing.id));
+  overlay.querySelector("[data-market-copy-listing]")?.addEventListener("click", () => copyText(marketShareUrl(listing), "商品链接已复制"));
+  overlay.querySelector("[data-market-report-from-menu]")?.addEventListener("click", () => {
+    close();
+    openContentReportDialog("market", listing.id);
+  });
+  overlay.querySelector("[data-market-share-listing]")?.focus();
 }
 
 function openMarketTopService() {
@@ -6567,6 +7026,7 @@ async function submitAccountInner(event) {
         const result = await apiPost("/api/account/login", { phone, password });
         if (!result.user) throw new Error("登录失败，请稍后重试");
         applyCloudUser(result.user, `手机号登录：${maskPhone(phone)}`, { skipCloud: true, skipMigration: true });
+        void requestLocationPermissionOnLogin();
         toast("登录成功");
         return;
       } catch (error) {
@@ -6585,9 +7045,11 @@ async function submitAccountInner(event) {
       accountDraftPhone: "",
       accountDraftPassword: "",
       accountDraftConfirmPassword: "",
+      policyConsentRequired: user.termsVersion !== POLICY_VERSION,
       page: "mine",
       activityLogs: [makeActivity(`手机号登录：${maskPhone(phone)}`, "空间"), ...(accountData.activityLogs || [])]
     });
+    void requestLocationPermissionOnLogin();
     toast("登录成功");
     return;
   }
@@ -6616,6 +7078,7 @@ async function submitAccountInner(event) {
       });
       if (!result.user) throw new Error("注册失败，请稍后重试");
       applyCloudUser(result.user, `注册并登录：${maskPhone(phone)}`, { skipCloud: true, skipMigration: true });
+      void requestLocationPermissionOnLogin();
       toast("注册成功，已登录");
       return;
     } catch (error) {
@@ -6627,7 +7090,7 @@ async function submitAccountInner(event) {
   if (!(await verifyServerSmsCode(phone, code))) return toast("验证码不正确");
 
   const accountData = emptyAccountData();
-  const user = { id: crypto.randomUUID(), phone, password, accountName: maskPhone(phone), accountAvatar: "", data: accountData, termsAcceptedAt: new Date().toISOString(), termsVersion: "2026-07-14", createdAt: new Date().toISOString() };
+  const user = { id: crypto.randomUUID(), phone, password, accountName: maskPhone(phone), accountAvatar: "", data: accountData, termsAcceptedAt: new Date().toISOString(), termsVersion: POLICY_VERSION, createdAt: new Date().toISOString() };
   setState({
     ...accountData,
     registeredUsers: [user, ...(state.registeredUsers || [])],
@@ -6641,9 +7104,11 @@ async function submitAccountInner(event) {
     accountDraftPhone: "",
     accountDraftPassword: "",
     accountDraftConfirmPassword: "",
+    policyConsentRequired: false,
     page: "mine",
     activityLogs: [makeActivity(`注册并登录：${maskPhone(phone)}`, "空间")]
   });
+  void requestLocationPermissionOnLogin();
   toast("注册成功，已登录");
 }
 
@@ -6751,6 +7216,44 @@ function submitProfile(event) {
   toast("昵称和头像已保存");
 }
 
+async function acceptLatestPolicies() {
+  if (!state.loggedInPhone) return;
+  const submit = document.querySelector("[data-policy-consent-submit]");
+  if (submit) {
+    submit.disabled = true;
+    submit.textContent = "正在确认…";
+  }
+  try {
+    if (CONFIGURED_SMS_BACKEND && currentCloudToken()) {
+      const result = await apiPost("/api/account/terms/accept", communityAuthPayload({
+        accepted: true,
+        termsVersion: POLICY_VERSION
+      }));
+      if (!result.user) throw new Error("协议确认失败，请稍后重试");
+      applyCloudUser(result.user, "已同意最新版服务协议和隐私政策", { skipCloud: true, skipMigration: true });
+    } else {
+      const acceptedAt = new Date().toISOString();
+      const registeredUsers = (state.registeredUsers || []).map(user => user.phone === state.loggedInPhone
+        ? { ...user, termsAcceptedAt: acceptedAt, termsVersion: POLICY_VERSION }
+        : user);
+      setState({ registeredUsers, policyConsentRequired: false }, { skipCloud: true });
+    }
+    toast("已确认协议，欢迎继续使用");
+  } catch (error) {
+    const message = error.message || "协议确认失败，请稍后重试";
+    const errorBox = document.querySelector("[data-policy-consent-error]");
+    if (errorBox) {
+      errorBox.hidden = false;
+      errorBox.textContent = message;
+    }
+    if (submit?.isConnected) {
+      submit.disabled = false;
+      submit.textContent = "同意并继续使用";
+    }
+    toast(message);
+  }
+}
+
 function logoutAccount() {
   const pushAccount = state.loggedInPhone;
   const pushToken = currentCloudToken();
@@ -6775,6 +7278,7 @@ function logoutAccount() {
     selectedMarketListingId: "",
     selectedCommunityFriendId: "",
     selectedCommunityFriend: null,
+    policyConsentRequired: false,
     page: "mine"
   });
   toast("已退出账号");
@@ -6880,6 +7384,26 @@ async function unregisterNativePushNotifications(phone, token) {
   }
 }
 
+async function testNativePushNotification() {
+  if (!state.isCommunityAdmin || !requireLogin()) return;
+  const button = document.querySelector("[data-test-push-notification]");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "正在发送…";
+  }
+  try {
+    const result = await apiPost("/api/notifications/test", communityAuthPayload({ delayMs: 5000 }));
+    toast(result.message || "测试通知已提交，请将 App 切到后台确认系统通知");
+  } catch (error) {
+    toast(error.message || "推送测试失败，请检查通知权限和服务器配置");
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = "发送测试通知";
+    }
+  }
+}
+
 async function apiPost(path, payload) {
   const base = window.TURTLE_API_BASE_URL || "";
   const response = await fetch(`${base}${path}`, {
@@ -6899,6 +7423,9 @@ async function apiPost(path, payload) {
   if (path === "/api/upload/image" && data.message === "方法不支持") {
     throw new Error("云端服务器未更新图片上传接口，请先部署最新版后端并重启服务");
   }
+  if (path === "/api/account/terms/accept" && response.status === 405) {
+    throw new Error("服务器尚未部署协议确认接口，请同步服务器后重试");
+  }
   if (!response.ok || data.ok === false) {
     const error = new Error(data.message || "服务暂时不可用");
     error.status = response.status;
@@ -6909,10 +7436,12 @@ async function apiPost(path, payload) {
 
 async function apiUploadMediaFile(file, duration = 0) {
   const base = window.TURTLE_API_BASE_URL || "";
+  const mediaKind = localMediaFileKind(file);
+  const contentType = localMediaUploadMimeType(file, mediaKind);
   const response = await fetch(`${base}/api/upload/media`, {
     method: "POST",
     headers: {
-      "Content-Type": file.type || "application/octet-stream",
+      "Content-Type": contentType,
       "X-Auth-Phone": state.loggedInPhone,
       "X-Auth-Token": currentCloudToken(),
       "X-Media-Duration": String(Math.max(0, Number(duration || 0)))
@@ -6932,6 +7461,28 @@ async function apiUploadMediaFile(file, duration = 0) {
   return data;
 }
 
+function localMediaFileKind(file) {
+  const type = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  if (/^image\/(jpeg|png|webp)$/.test(type) || /\.(?:jpe?g|png|webp)$/.test(name)) return "image";
+  if (/^video\/(mp4|webm|quicktime|x-m4v)$/.test(type) || /\.(?:mp4|m4v|mov|webm)$/.test(name)) return "video";
+  return "";
+}
+
+function localMediaUploadMimeType(file, kind = localMediaFileKind(file)) {
+  const type = String(file?.type || "").toLowerCase();
+  if (kind === "image" && /^image\/(jpeg|png|webp)$/.test(type)) return type;
+  if (kind === "video" && /^video\/(mp4|webm|quicktime|x-m4v)$/.test(type)) return type;
+  const name = String(file?.name || "").toLowerCase();
+  if (/\.mov$/.test(name)) return "video/quicktime";
+  if (/\.webm$/.test(name)) return "video/webm";
+  if (/\.(?:mp4|m4v)$/.test(name)) return "video/mp4";
+  if (/\.png$/.test(name)) return "image/png";
+  if (/\.webp$/.test(name)) return "image/webp";
+  if (/\.jpe?g$/.test(name)) return "image/jpeg";
+  return "application/octet-stream";
+}
+
 function currentCloudToken() {
   const activeUser = (state.registeredUsers || []).find(user => user.phone === state.loggedInPhone);
   return state.cloudToken || activeUser?.cloudToken || readSavedCloudToken(state.loggedInPhone) || "";
@@ -6947,6 +7498,9 @@ function cloudUserToLocal(user, fallbackToken = "") {
     accountAvatar: user.accountAvatar || "",
     cloudToken: user.token || fallbackToken || "",
     data: normalizeAccountData(user.data || {}),
+    termsAcceptedAt: user.termsAcceptedAt || "",
+    termsVersion: user.termsVersion || "",
+    isCommunityAdmin: Boolean(user.isCommunityAdmin),
     createdAt: user.createdAt || new Date().toISOString()
   };
 }
@@ -6974,6 +7528,8 @@ function applyCloudUser(user, activityText = "", options = {}) {
     cloudToken: localUser.cloudToken,
     accountName: localUser.accountName,
     accountAvatar: localUser.accountAvatar,
+    isCommunityAdmin: localUser.isCommunityAdmin,
+    policyConsentRequired: localUser.termsVersion !== POLICY_VERSION,
     accountDraftPhone: "",
     accountDraftPassword: "",
     accountDraftConfirmPassword: "",
@@ -7328,10 +7884,11 @@ function submitTurtleDetail(event) {
     shellHeight: String(form.get("shellHeight") || ""),
     plastronLength: String(form.get("plastronLength") || ""),
     status: turtle.status || "正常饲养",
-    health: String(form.get("health") || "健康"),
-    acquiredDate: String(form.get("acquiredDate") || ""),
+    // 以下字段是建档基础资料，不应在成长记录中被重置。
+    health: turtle.health || "健康",
+    acquiredDate: turtle.acquiredDate || "",
     source: turtle.source || "购买",
-    price: String(form.get("price") || ""),
+    price: turtle.price || "",
     note: String(form.get("note") || ""),
     photo: state.updateDraftPhoto === "__CLEAR__" ? "" : state.updateDraftPhoto || turtle.photo || speciesPhoto(species) || defaultPhoto
   };
@@ -7533,9 +8090,11 @@ function deleteTurtlePool(id) {
 
 function openLedgerForm(type, turtleId = "") {
   if (!requireLogin()) return;
-  const turtle = state.turtles.find(t => t.id === turtleId);
+  // 收购始终新建档案；只有售出、损耗才可以操作既有档案。
+  const linkedTurtleId = type === "purchase" ? "" : turtleId;
+  const turtle = state.turtles.find(t => t.id === linkedTurtleId);
   const initialPoolId = (type === "purchase" || type === "loss") ? (turtle?.poolId || "") : "";
-  setState({ page: "ledger", ledgerDraftType: type, ledgerDraftPhoto: turtle?.photo || "", ledgerDraftTurtleId: turtleId, ledgerDraftForm: turtleId ? { turtleId, poolId: initialPoolId } : { poolId: initialPoolId }, ledgerPurchaseGender: "未知", ledgerTab: type, openTurtleMenuId: "" }, { pageScroll: "preserve" });
+  setState({ page: "ledger", ledgerDraftType: type, ledgerDraftPhoto: turtle?.photo || "", ledgerDraftTurtleId: linkedTurtleId, ledgerDraftForm: linkedTurtleId ? { turtleId: linkedTurtleId, poolId: initialPoolId } : { poolId: initialPoolId }, ledgerPurchaseGender: "未知", ledgerTab: type, openTurtleMenuId: "" }, { pageScroll: "preserve" });
   requestAnimationFrame(() => requestAnimationFrame(scrollLedgerFormIntoView));
 }
 
@@ -7745,7 +8304,8 @@ function submitLedgerRecord(event) {
   if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const type = state.ledgerDraftType;
-  let turtle = state.turtles.find(t => t.id === form.get("turtleId"));
+  // 收购一定产生一条新档案，绝不复用已有档案。
+  let turtle = type === "purchase" ? null : state.turtles.find(t => t.id === form.get("turtleId"));
   const poolId = (state.turtlePools || []).some(pool => pool.id === String(form.get("poolId") || "")) ? String(form.get("poolId") || "") : "";
   const poolName = turtlePoolName(poolId);
   const amount = Number(form.get("amount"));
@@ -7791,7 +8351,7 @@ function submitLedgerRecord(event) {
   const record = {
     id: crypto.randomUUID(),
     type,
-    turtleId: turtle?.id || form.get("turtleId"),
+    turtleId: turtle?.id || (type === "purchase" ? "" : form.get("turtleId")),
     poolId,
     poolName,
     title,
@@ -7956,8 +8516,99 @@ function setupMobileKeyboardGuard() {
   window.addEventListener("resize", syncMobileKeyboardUI);
 }
 
+function pullRefreshSupportedPage() {
+  return state.page === "market" || state.page === "messages";
+}
+
+function pageAtTop() {
+  return Math.max(window.scrollY || 0, document.documentElement.scrollTop || 0, document.body.scrollTop || 0) <= 2;
+}
+
+function pullRefreshIndicator() {
+  let indicator = document.querySelector(".pull-refresh-indicator");
+  if (indicator) return indicator;
+  indicator = document.createElement("div");
+  indicator.className = "pull-refresh-indicator";
+  indicator.setAttribute("aria-live", "polite");
+  indicator.innerHTML = `<i aria-hidden="true">↓</i><span>下拉刷新</span>`;
+  document.body.appendChild(indicator);
+  return indicator;
+}
+
+function setPullRefreshIndicator({ distance = 0, ready = false, refreshing = false } = {}) {
+  const indicator = pullRefreshIndicator();
+  const visibleDistance = refreshing ? 58 : Math.min(62, Math.max(0, distance * .52));
+  const label = refreshing ? "正在刷新" : ready ? "松开即可刷新" : "下拉刷新";
+  indicator.style.setProperty("--pull-refresh-distance", `${visibleDistance}px`);
+  indicator.classList.toggle("is-visible", visibleDistance > 0);
+  indicator.classList.toggle("is-ready", Boolean(ready) && !refreshing);
+  indicator.classList.toggle("is-refreshing", Boolean(refreshing));
+  indicator.querySelector("span").textContent = label;
+}
+
+function resetPullRefreshIndicator() {
+  pullRefreshState = { ...pullRefreshState, tracking: false, startY: 0, distance: 0, ready: false };
+  setPullRefreshIndicator();
+}
+
+async function runPullRefresh() {
+  if (pullRefreshState.refreshing || !pullRefreshSupportedPage()) return;
+  pullRefreshState = { ...pullRefreshState, tracking: false, refreshing: true, ready: false };
+  setPullRefreshIndicator({ refreshing: true });
+  const startedAt = Date.now();
+  try {
+    if (state.page === "market") {
+      marketLastLoadedAt = 0;
+      await refreshMarket(true);
+    } else {
+      communityLastLoadedAt = 0;
+      await Promise.all([refreshCommunity(true), refreshMessageUnread(true)]);
+    }
+  } catch (error) {
+    console.warn(error?.message || "下拉刷新失败");
+  } finally {
+    const remaining = Math.max(0, 420 - (Date.now() - startedAt));
+    window.setTimeout(() => {
+      pullRefreshState = { tracking: false, refreshing: false, startY: 0, distance: 0, ready: false };
+      setPullRefreshIndicator();
+    }, remaining);
+  }
+}
+
+function setupPullToRefresh() {
+  if (document.body.dataset.pullRefreshBound === "true") return;
+  document.body.dataset.pullRefreshBound = "true";
+
+  document.addEventListener("touchstart", event => {
+    if (pullRefreshState.refreshing || !pullRefreshSupportedPage() || !pageAtTop() || event.touches.length !== 1) return;
+    if (event.target.closest("input, textarea, select, [contenteditable='true'], .image-preview-overlay, .modal-overlay")) return;
+    pullRefreshState = { ...pullRefreshState, tracking: true, startY: event.touches[0].clientY, distance: 0, ready: false };
+  }, { passive: true });
+
+  document.addEventListener("touchmove", event => {
+    if (!pullRefreshState.tracking || pullRefreshState.refreshing || event.touches.length !== 1) return;
+    const distance = event.touches[0].clientY - pullRefreshState.startY;
+    if (distance <= 0) {
+      resetPullRefreshIndicator();
+      return;
+    }
+    event.preventDefault();
+    pullRefreshState = { ...pullRefreshState, distance, ready: distance >= PULL_REFRESH_THRESHOLD };
+    setPullRefreshIndicator(pullRefreshState);
+  }, { passive: false });
+
+  const finish = () => {
+    if (!pullRefreshState.tracking || pullRefreshState.refreshing) return;
+    if (pullRefreshState.ready) runPullRefresh();
+    else resetPullRefreshIndicator();
+  };
+  document.addEventListener("touchend", finish, { passive: true });
+  document.addEventListener("touchcancel", resetPullRefreshIndicator, { passive: true });
+}
+
 restorePendingCloudData();
 setupMobileKeyboardGuard();
+setupPullToRefresh();
 render();
 checkRequiredAppUpdate();
 startMarketNetworkMonitoring();

@@ -31,9 +31,20 @@ workflows:
           xcode-project use-profiles
       - name: Build IPA
         script: |
+          set +e
           xcode-project build-ipa \
             --project ios/App/App.xcodeproj \
             --scheme App
+          build_status=$?
+          if [ "$build_status" -ne 0 ]; then
+            echo "===== Xcode detailed error log ====="
+            if [ -d /tmp/xcodebuild_logs ]; then
+              find /tmp/xcodebuild_logs -type f -name "*.log" -print -exec tail -n 160 {} \;
+            else
+              echo "No detailed Xcode log directory was created."
+            fi
+            exit "$build_status"
+          fi
     artifacts:
       - build/ios/ipa/*.ipa
       # Keep the full Xcode archive log. Codemagic's summary only shows exit code 65.
