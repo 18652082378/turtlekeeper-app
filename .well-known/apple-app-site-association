@@ -1,0 +1,12 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appID": "BGB9AS2PST.com.turtlekeeper.app",
+        "paths": [
+          "/wechat/*"
+        ]
+      }
+    ]
+  }
+}

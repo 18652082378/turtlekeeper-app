@@ -2528,7 +2528,10 @@ function serveStatic(req, res, url) {
       return;
     }
     const ext = path.extname(target).toLowerCase();
-    res.writeHead(200, { "Content-Type": mimeTypes[ext] || "application/octet-stream" });
+    const contentType = pathname === "/.well-known/apple-app-site-association"
+      ? "application/json"
+      : (mimeTypes[ext] || "application/octet-stream");
+    res.writeHead(200, { "Content-Type": contentType });
     res.end(content);
   });
 }
