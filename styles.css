@@ -105,6 +105,19 @@ button { border: 0; cursor: pointer; }
   animation: pull-refresh-spin .75s linear infinite;
 }
 
+/* 龟集市、消息与壳友圈下拉刷新：内容随手势轻微下移，松手后回弹。 */
+body.pull-refresh-active .topbar,
+body.pull-refresh-active .content {
+  transform: translate3d(0, var(--pull-refresh-page-offset, 0px), 0);
+  transition: transform .22s cubic-bezier(.2, .75, .25, 1);
+  will-change: transform;
+}
+
+body.pull-refresh-dragging .topbar,
+body.pull-refresh-dragging .content {
+  transition: none;
+}
+
 @keyframes pull-refresh-spin {
   to { transform: rotate(360deg); }
 }

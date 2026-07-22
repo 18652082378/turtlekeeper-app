@@ -49,8 +49,9 @@ const WEEKDAY_OPTIONS = [
   { value: "0", label: "日" }
 ];
 let careReminderTimers = [];
-const PULL_REFRESH_THRESHOLD = 88;
-let pullRefreshState = { tracking: false, refreshing: false, startY: 0, distance: 0, ready: false };
+const PULL_REFRESH_THRESHOLD = 72;
+const PULL_REFRESH_MAX_OFFSET = 72;
+let pullRefreshState = { tracking: false, refreshing: false, startX: 0, startY: 0, distance: 0, ready: false, direction: "" };
 
 const initialState = {
   page: "home",
@@ -8668,7 +8669,7 @@ function setupMobileKeyboardGuard() {
 }
 
 function pullRefreshSupportedPage() {
-  return state.page === "market" || state.page === "messages";
+  return ["market", "messages", "community"].includes(state.page);
 }
 
 function pageAtTop() {
@@ -8688,17 +8689,22 @@ function pullRefreshIndicator() {
 
 function setPullRefreshIndicator({ distance = 0, ready = false, refreshing = false } = {}) {
   const indicator = pullRefreshIndicator();
-  const visibleDistance = refreshing ? 58 : Math.min(62, Math.max(0, distance * .52));
-  const label = refreshing ? "正在刷新" : ready ? "松开即可刷新" : "下拉刷新";
+  const visibleDistance = refreshing ? 62 : Math.min(PULL_REFRESH_MAX_OFFSET, Math.max(0, distance * .56));
+  const pageOffset = refreshing ? 54 : Math.min(PULL_REFRESH_MAX_OFFSET, Math.max(0, distance * .52));
+  const label = refreshing ? "正在刷新中" : ready ? "松开即可刷新" : "下拉刷新";
   indicator.style.setProperty("--pull-refresh-distance", `${visibleDistance}px`);
   indicator.classList.toggle("is-visible", visibleDistance > 0);
   indicator.classList.toggle("is-ready", Boolean(ready) && !refreshing);
   indicator.classList.toggle("is-refreshing", Boolean(refreshing));
   indicator.querySelector("span").textContent = label;
+
+  document.body.style.setProperty("--pull-refresh-page-offset", `${pageOffset}px`);
+  document.body.classList.toggle("pull-refresh-active", pageOffset > 0);
+  document.body.classList.toggle("pull-refresh-dragging", pageOffset > 0 && !refreshing);
 }
 
 function resetPullRefreshIndicator() {
-  pullRefreshState = { ...pullRefreshState, tracking: false, startY: 0, distance: 0, ready: false };
+  pullRefreshState = { ...pullRefreshState, tracking: false, startX: 0, startY: 0, distance: 0, ready: false, direction: "" };
   setPullRefreshIndicator();
 }
 
@@ -8720,7 +8726,7 @@ async function runPullRefresh() {
   } finally {
     const remaining = Math.max(0, 420 - (Date.now() - startedAt));
     window.setTimeout(() => {
-      pullRefreshState = { tracking: false, refreshing: false, startY: 0, distance: 0, ready: false };
+      pullRefreshState = { tracking: false, refreshing: false, startX: 0, startY: 0, distance: 0, ready: false, direction: "" };
       setPullRefreshIndicator();
     }, remaining);
   }
@@ -8733,17 +8739,35 @@ function setupPullToRefresh() {
   document.addEventListener("touchstart", event => {
     if (pullRefreshState.refreshing || !pullRefreshSupportedPage() || !pageAtTop() || event.touches.length !== 1) return;
     if (event.target.closest("input, textarea, select, [contenteditable='true'], .image-preview-overlay, .modal-overlay")) return;
-    pullRefreshState = { ...pullRefreshState, tracking: true, startY: event.touches[0].clientY, distance: 0, ready: false };
+    if (document.documentElement.classList.contains("keyboard-open")) return;
+    pullRefreshState = {
+      ...pullRefreshState,
+      tracking: true,
+      startX: event.touches[0].clientX,
+      startY: event.touches[0].clientY,
+      distance: 0,
+      ready: false,
+      direction: ""
+    };
   }, { passive: true });
 
   document.addEventListener("touchmove", event => {
     if (!pullRefreshState.tracking || pullRefreshState.refreshing || event.touches.length !== 1) return;
-    const distance = event.touches[0].clientY - pullRefreshState.startY;
+    const touch = event.touches[0];
+    const horizontalDistance = touch.clientX - pullRefreshState.startX;
+    const distance = touch.clientY - pullRefreshState.startY;
+    if (!pullRefreshState.direction && Math.max(Math.abs(horizontalDistance), Math.abs(distance)) > 8) {
+      pullRefreshState.direction = Math.abs(horizontalDistance) > Math.abs(distance) ? "horizontal" : "vertical";
+    }
+    if (pullRefreshState.direction === "horizontal") {
+      resetPullRefreshIndicator();
+      return;
+    }
     if (distance <= 0) {
       resetPullRefreshIndicator();
       return;
     }
-    event.preventDefault();
+    if (event.cancelable) event.preventDefault();
     pullRefreshState = { ...pullRefreshState, distance, ready: distance >= PULL_REFRESH_THRESHOLD };
     setPullRefreshIndicator(pullRefreshState);
   }, { passive: false });
