@@ -1464,10 +1464,15 @@ function marketChatListingSnapshot(db, listingId, sellerPhone = "") {
   const seller = db.users?.[listing.sellerPhoneRaw];
   const mediaItems = (Array.isArray(listing.mediaItems) ? listing.mediaItems : [])
     .slice(0, 9)
-    .map(media => ({ url: String(media?.url || ""), type: media?.type === "video" ? "video" : "image" }))
+    .map(media => ({
+      url: String(media?.url || ""),
+      posterUrl: String(media?.posterUrl || media?.poster || ""),
+      type: media?.type === "video" ? "video" : "image"
+    }))
     .filter(media => media.url);
   const primaryMedia = mediaItems[0] || {
     url: String(listing.photoUrl || ""),
+    posterUrl: "",
     type: "image"
   };
   return {
@@ -1488,6 +1493,7 @@ function marketChatListingSnapshot(db, listingId, sellerPhone = "") {
     viewCount: Math.max(0, Number(listing.viewCount || 0)),
     wantCount: (Array.isArray(listing.wantedPhones) ? listing.wantedPhones : []).length,
     mediaUrl: primaryMedia.url || "",
+    mediaPosterUrl: primaryMedia.posterUrl || "",
     mediaType: primaryMedia.type === "video" ? "video" : "image",
     photoUrl: listing.photoUrl || primaryMedia.url || "",
     mediaItems,
@@ -1526,6 +1532,7 @@ function communityConversationMessages(db, phoneA, phoneB) {
         content: communityMessagePreview(item),
         rawContent,
         mediaUrl: item.mediaUrl || "",
+        posterUrl: item.posterUrl || "",
         mediaType: item.mediaType === "video" ? "video" : "image",
         mine: item.fromPhone === phoneA,
         createdAt: item.createdAt,
@@ -1674,6 +1681,7 @@ async function handleCommunityCreate(req, res) {
   if (!user) return;
   const content = trimPublicText(body.content, 1200);
   const mediaUrl = trimPublicText(body.mediaUrl, 800);
+  const posterUrl = trimPublicText(body.posterUrl, 800);
   const mediaType = ["image", "video"].includes(body.mediaType) ? body.mediaType : "";
   const location = trimPublicText(body.location, 100);
   const mentions = trimPublicText(body.mentions, 200);
@@ -1683,6 +1691,7 @@ async function handleCommunityCreate(req, res) {
     id: crypto.randomUUID(),
     content,
     mediaUrl,
+    posterUrl,
     mediaType,
     location,
     mentions,
@@ -1974,6 +1983,7 @@ async function handleCommunityChatSend(req, res) {
   const target = communityUserById(db, body.userId);
   const content = trimPublicText(body.content, 1000);
   const mediaUrl = trimPublicText(body.mediaUrl, 800);
+  const posterUrl = trimPublicText(body.posterUrl, 800);
   const mediaType = mediaUrl && body.mediaType === "video" ? "video" : "image";
   const marketListingId = trimPublicText(body.marketListingId, 100);
   if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "无法与该用户聊天" });
@@ -1986,6 +1996,7 @@ async function handleCommunityChatSend(req, res) {
     toPhone: target.phone,
     content,
     mediaUrl,
+    posterUrl,
     mediaType,
     marketListing,
     readAt: "",
@@ -2040,6 +2051,7 @@ function marketListingView(db, item, viewer = null) {
     photoUrl: item.photoUrl || "",
     mediaItems: (Array.isArray(item.mediaItems) ? item.mediaItems : []).slice(0, 9).map(media => ({
       url: media.url || "",
+      posterUrl: media.posterUrl || media.poster || "",
       type: media.type === "video" ? "video" : "image"
     })),
     status: ["active", "inactive", "sold"].includes(item.status) ? item.status : "active",
@@ -2180,6 +2192,7 @@ async function handleMarketCreate(req, res) {
     .slice(0, 9)
     .map(media => ({
       url: trimPublicText(media?.url, 800),
+      posterUrl: trimPublicText(media?.posterUrl || media?.poster, 800),
       type: media?.type === "video" ? "video" : "image"
     }))
     .filter(media => media.url);
@@ -2382,7 +2395,11 @@ async function handleMarketUpdate(req, res) {
   const price = Number(body.price || 0);
   const mediaItems = (Array.isArray(body.mediaItems) ? body.mediaItems : [])
     .slice(0, 9)
-    .map(media => ({ url: trimPublicText(media?.url, 800), type: media?.type === "video" ? "video" : "image" }))
+    .map(media => ({
+      url: trimPublicText(media?.url, 800),
+      posterUrl: trimPublicText(media?.posterUrl || media?.poster, 800),
+      type: media?.type === "video" ? "video" : "image"
+    }))
     .filter(media => media.url);
   if (!title || !speciesName || !Number.isFinite(price) || price < 0 || !mediaItems.length) {
     return sendJson(res, 400, { ok: false, message: "请填写正确的商品信息并保留至少一项实拍媒体" });

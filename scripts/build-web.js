@@ -3,7 +3,7 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..");
 const outDir = path.join(root, "www");
-const files = ["index.html", "config.js", "species-data.js", "app.js", "styles.css", "chat-tools.css", "privacy.html", "terms.html", "support.html"];
+const files = ["index.html", "official.html", "config.js", "species-data.js", "app.js", "styles.css", "chat-tools.css", "dark-surface-audit.css", "privacy.html", "terms.html", "support.html"];
 
 function readIosBuildNumber() {
   const projectFile = path.join(root, "ios", "App", "App.xcodeproj", "project.pbxproj");

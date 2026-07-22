@@ -13732,6 +13732,9 @@ html[data-theme-color="dark"] .market-contact-action { color: #9be0c5; backgroun
   color: var(--muted);
   background: transparent;
   text-align: center;
+  cursor: pointer;
+  transition: color .16s ease, background-color .16s ease, box-shadow .16s ease, transform .12s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .profile-content-tabs button strong {
@@ -13750,6 +13753,10 @@ html[data-theme-color="dark"] .market-contact-action { color: #9be0c5; backgroun
   color: var(--accent-deep);
   background: var(--section-bg);
   box-shadow: 0 5px 12px rgba(31, 42, 51, .08);
+}
+
+.profile-content-tabs button:active {
+  transform: scale(.975);
 }
 
 .profile-content-panel {
@@ -13780,9 +13787,9 @@ html[data-theme-color="dark"] .profile-content-tabs {
 }
 
 html[data-theme-color="dark"] .profile-content-tabs button.active {
-  color: #bdebd9;
-  background: #181818;
-  box-shadow: none;
+  color: #f2f5f4;
+  background: #39393d;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .055), 0 3px 9px rgba(0, 0, 0, .2);
 }
 
 /* 龟集市九宫格媒体：最多9张图片或视频。 */

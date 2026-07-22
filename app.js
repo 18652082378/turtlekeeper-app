@@ -1722,7 +1722,7 @@ function bottomNav() {
   const ledgerPages = ["ledger", "ledgerDetail"];
   const marketPages = ["market", "marketAdd", "marketDetail", "marketSeller"];
   const messagePages = ["messages", "community", "communityAdd", "communityFriends", "communityChat", "communityPostDetail", "communityProfile"];
-  const minePages = ["mine", "calendar", "satisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "sync", "about", "rules", "privacy", "moderation", "reports", "marketFavorites", "marketHistory", "following", "followingProfile"];
+  const minePages = ["mine", "calendar", "satisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "about", "rules", "privacy", "moderation", "reports", "marketFavorites", "marketHistory", "following", "followingProfile"];
   const unreadCount = Math.max(0, Number(state.messageUnreadCount || 0));
   const unreadText = unreadCount > 99 ? "99+" : String(unreadCount);
   return `
@@ -1912,14 +1912,21 @@ function normalizeCommunityChatListing(listing) {
     unavailableReason: listing.unavailableReason || (status === "sold" ? "sold" : status === "active" ? "" : "offline"),
     price: Math.max(0, Number(listing.price || 0)),
     mediaUrl: apiAssetUrl(listing.mediaUrl || listing.photoUrl || ""),
+    mediaPosterUrl: apiAssetUrl(listing.mediaPosterUrl || listing.posterUrl || ""),
     photoUrl: apiAssetUrl(listing.photoUrl || listing.mediaUrl || ""),
     mediaType: listing.mediaType === "video" ? "video" : "image",
     mediaItems: Array.isArray(listing.mediaItems) ? listing.mediaItems.slice(0, 9).map(media => ({
       ...media,
       url: apiAssetUrl(media?.url || ""),
+      posterUrl: apiAssetUrl(media?.posterUrl || media?.poster || ""),
       type: media?.type === "video" ? "video" : "image"
     })).filter(media => media.url) : []
   };
+}
+
+function videoPosterAttribute(media) {
+  const posterUrl = String(media?.posterUrl || media?.mediaPosterUrl || media?.poster || "").trim();
+  return posterUrl ? ` poster="${escapeHtml(posterUrl)}"` : "";
 }
 
 function isUnavailableChatListing(listing) {
@@ -1938,7 +1945,7 @@ function communityChatListingCard(listing) {
   const unavailableMark = unavailable ? `<em class="community-chat-product-unavailable-mark">已售出</em>` : "";
   const preview = listing.mediaUrl
     ? (listing.mediaType === "video"
-      ? `<span class="community-chat-product-media is-video ${unavailable ? "is-unavailable" : ""}"><video src="${escapeHtml(listing.mediaUrl)}" muted playsinline preload="metadata"></video><i>▶</i>${unavailableMark}</span>`
+      ? `<span class="community-chat-product-media is-video ${unavailable ? "is-unavailable" : ""}"><video src="${escapeHtml(listing.mediaUrl)}"${videoPosterAttribute(listing)} muted playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video><i>▶</i>${unavailableMark}</span>`
       : `<span class="community-chat-product-media ${unavailable ? "is-unavailable" : ""}"><img src="${escapeHtml(listing.mediaUrl)}" alt="${escapeHtml(title)}">${unavailableMark}</span>`)
     : `<span class="community-chat-product-media is-placeholder ${unavailable ? "is-unavailable" : ""}">龟${unavailableMark}</span>`;
   return `
@@ -1965,8 +1972,9 @@ function pageCommunityChat() {
     const mediaUrl = message.mediaUrl ? apiAssetUrl(message.mediaUrl) : "";
     const mediaType = message.mediaType === "video" ? "video" : "image";
     const text = mediaUrl && ["[图片]", "[视频]"].includes(rawContent) ? "" : rawContent;
+    const mediaPosterUrl = message.posterUrl ? apiAssetUrl(message.posterUrl) : "";
     const media = mediaUrl
-      ? `<button class="community-message-media ${mediaType === "video" ? "is-video" : ""}" type="button" data-preview-chat-media="${escapeHtml(mediaUrl)}" data-chat-media-type="${mediaType}" aria-label="查看聊天${mediaType === "video" ? "视频" : "图片"}">${mediaType === "video" ? `<video src="${escapeHtml(mediaUrl)}" muted playsinline preload="metadata"></video><i aria-hidden="true">▶</i>` : `<img src="${escapeHtml(mediaUrl)}" alt="聊天图片">`}</button>`
+      ? `<button class="community-message-media ${mediaType === "video" ? "is-video" : ""}" type="button" data-preview-chat-media="${escapeHtml(mediaUrl)}" data-chat-media-poster="${escapeHtml(mediaPosterUrl)}" data-chat-media-type="${mediaType}" aria-label="查看聊天${mediaType === "video" ? "视频" : "图片"}">${mediaType === "video" ? `<video src="${escapeHtml(mediaUrl)}"${videoPosterAttribute({ posterUrl: mediaPosterUrl })} muted playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video><i aria-hidden="true">▶</i>` : `<img src="${escapeHtml(mediaUrl)}" alt="聊天图片">`}</button>`
       : "";
     return `<div class="community-message ${message.mine ? "mine" : "theirs"}">${shouldShowCommunityMessageTime(visibleMessages, index) ? `<small>${formatTime(message.createdAt)}</small>` : ""}${text ? `<p>${escapeHtml(text)}</p>` : ""}${media}</div>`;
   };
@@ -2100,7 +2108,7 @@ function marketDraftMediaMarkup() {
   const mediaItems = Array.isArray(state.marketDraftMedia) ? state.marketDraftMedia : [];
   return `${mediaItems.map((item, index) => `
     <div class="market-media-item" draggable="true" data-market-media-index="${index}">
-      ${item.type === "video" ? `<video src="${item.dataUrl || item.url}" muted playsinline preload="metadata"></video><i>▶</i>` : `<img src="${item.dataUrl || item.url}" alt="实拍图 ${index + 1}">`}
+      ${item.type === "video" ? `<video src="${item.dataUrl || item.url}"${videoPosterAttribute(item)} muted playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video><i>▶</i>` : `<img src="${item.dataUrl || item.url}" alt="实拍图 ${index + 1}">`}
       <span class="market-media-drag-handle" title="长按拖动调整顺序" aria-hidden="true">⠿</span>
       <button type="button" data-remove-market-media="${index}" aria-label="删除第 ${index + 1} 个媒体">×</button>
     </div>
@@ -2247,7 +2255,8 @@ function normalizeMarketListings(listings = []) {
     photoUrl: item.photoUrl ? apiAssetUrl(item.photoUrl) : "",
     mediaItems: Array.isArray(item.mediaItems) ? item.mediaItems.slice(0, 9).map(media => ({
       ...media,
-      url: media.url ? apiAssetUrl(media.url) : ""
+      url: media.url ? apiAssetUrl(media.url) : "",
+      posterUrl: media.posterUrl || media.poster ? apiAssetUrl(media.posterUrl || media.poster) : ""
     })) : []
   }));
 }
@@ -2315,7 +2324,7 @@ function marketListingCard(item) {
     <article class="market-card-wrap">
     <button class="market-card ${unavailable ? "is-sold" : ""}" type="button" data-view-market="${item.id}">
       <span class="market-card-photo ${wifiAutoplay ? "wifi-video-autoplay" : ""}">
-        ${firstMedia?.type === "video" ? `<video src="${firstMedia.url}" muted playsinline ${wifiAutoplay ? "autoplay loop preload=\"auto\" data-market-wifi-video" : "preload=\"metadata\""}></video>${wifiAutoplay ? "" : `<b class="market-video-mark">▶</b>`}` : `<img src="${marketListingPhoto(item)}" alt="${escapeHtml(item.title || item.speciesName || "在售乌龟")}" loading="lazy">`}
+        ${firstMedia?.type === "video" ? `<video src="${firstMedia.url}"${videoPosterAttribute(firstMedia)} muted playsinline crossorigin="anonymous" data-video-first-frame ${wifiAutoplay ? "autoplay loop preload=\"auto\" data-market-wifi-video" : "preload=\"auto\""}></video>${wifiAutoplay ? "" : `<b class="market-video-mark">▶</b>`}` : `<img src="${marketListingPhoto(item)}" alt="${escapeHtml(item.title || item.speciesName || "在售乌龟")}" loading="lazy">`}
         ${unavailable ? `<i>已售出</i>` : item.negotiable ? `<i class="negotiable">可议价</i>` : ""}
       </span>
       <span class="market-card-body">
@@ -2538,7 +2547,7 @@ function pageMarketAdd() {
     : null;
   const turtle = (state.turtles || []).find(item => item.id === (state.marketDraftTurtleId || editingListing?.turtleId));
   const activeTurtles = (state.turtles || []).filter(item => item.status !== "已转让" && item.status !== "已死亡");
-  if (!(state.marketDraftMedia || []).length && editingListing) state.marketDraftMedia = marketListingMediaItems(editingListing).map(media => ({ dataUrl: media.url, type: media.type || "image" }));
+  if (!(state.marketDraftMedia || []).length && editingListing) state.marketDraftMedia = marketListingMediaItems(editingListing).map(media => ({ dataUrl: media.url, posterUrl: media.posterUrl || "", type: media.type || "image" }));
   if (!(state.marketDraftMedia || []).length && turtle?.photo) state.marketDraftMedia = [{ dataUrl: turtle.photo, type: "image" }];
   const turtleSpeciesCode = editingListing?.speciesCode || turtle?.speciesCode || speciesList.find(item => item.name === turtle?.speciesName)?.code || "";
   const turtleSpecies = speciesByCode(turtleSpeciesCode);
@@ -2621,7 +2630,7 @@ function pageMarketDetail() {
     ${topbar("商品详情", true, detailMoreAction)}
     <main class="content page-fresh market-detail-page">
       <section class="market-detail-gallery-wrap">
-        <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => `<div class="market-detail-photo">${media.type === "video" ? `<video src="${media.url}" controls playsinline preload="metadata"></video>` : `<img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button">`}${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`}</section>
+        <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => `<div class="market-detail-photo">${media.type === "video" ? `<video src="${media.url}"${videoPosterAttribute(media)} controls playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video>` : `<img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button">`}${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`}</section>
         <span class="market-detail-gallery-count" data-market-gallery-count aria-live="polite">1/${Math.max(1, primaryMediaItems.length)}</span>
         ${hasPrimaryGalleryControls ? `<button class="market-detail-gallery-arrow prev" type="button" data-market-gallery-prev aria-label="查看上一张图片" aria-controls="marketDetailGallery">‹</button><button class="market-detail-gallery-arrow next" type="button" data-market-gallery-next aria-label="查看下一张图片" aria-controls="marketDetailGallery">›</button>` : ""}
       </section>
@@ -2637,9 +2646,9 @@ function pageMarketDetail() {
         <div><span>所在城市</span><strong>${escapeHtml(item.city || "未填写")}</strong></div>
         <div><span>交付方式</span><strong>${escapeHtml(item.delivery || "双方协商")}</strong></div>
       </section>
-      ${secondaryMediaItems.length ? `<section class="market-detail-secondary-media">${secondaryMediaItems.map((media, index) => `<div class="market-detail-secondary-photo">${media.type === "video" ? `<video src="${media.url}" controls playsinline preload="metadata"></video>` : `<img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} 实拍 ${index + 2}" data-preview-market-image tabindex="0" role="button">`}</div>`).join("")}</section>` : ""}
+      ${secondaryMediaItems.length ? `<section class="market-detail-secondary-media">${secondaryMediaItems.map((media, index) => `<div class="market-detail-secondary-photo">${media.type === "video" ? `<video src="${media.url}"${videoPosterAttribute(media)} controls playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video>` : `<img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} 实拍 ${index + 2}" data-preview-market-image tabindex="0" role="button">`}</div>`).join("")}</section>` : ""}
       ${item.description ? `<section class="market-detail-description"><h3>卖家说明</h3><p>${escapeHtml(item.description)}</p></section>` : ""}
-      ${detailVideosAfterDescription.length ? `<section class="market-detail-secondary-media market-detail-video-media">${detailVideosAfterDescription.map(media => `<div class="market-detail-secondary-photo"><video src="${media.url}" controls playsinline preload="metadata"></video></div>`).join("")}</section>` : ""}
+      ${detailVideosAfterDescription.length ? `<section class="market-detail-secondary-media market-detail-video-media">${detailVideosAfterDescription.map(media => `<div class="market-detail-secondary-photo"><video src="${media.url}"${videoPosterAttribute(media)} controls playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video></div>`).join("")}</section>` : ""}
       <section class="market-seller-card">
         <button class="market-seller-avatar-slot market-seller-profile-link" type="button" data-view-market-seller="${escapeHtml(item.sellerId || "")}" aria-label="查看${escapeHtml(item.sellerName || "卖家")}发布的商品">${marketSellerAvatar(item, "market-detail-avatar")}</button>
         <button class="market-seller-profile-link market-seller-name" type="button" data-view-market-seller="${escapeHtml(item.sellerId || "")}"><strong>${escapeHtml(item.sellerName || "壳友卖家")}</strong><span>${isOwn ? "这是我发布的商品" : "已通过账号认证"}</span></button>
@@ -3698,7 +3707,6 @@ function pageMine() {
         <button class="mine-row" data-page="account"><span>⚙</span><strong>账号与安全</strong></button>
         <button class="mine-row" data-page="rules"><span>☷</span><strong>平台规则与隐私</strong></button>
         ${state.isCommunityAdmin ? `<button class="mine-row" data-page="moderation"><span>⚑</span><strong>举报审核</strong><em class="mine-row-count">${(state.contentReports || []).filter(item => item.status === "pending").length}</em></button>` : ""}
-        <button class="mine-row" data-page="sync"><span>⇄</span><strong>数据同步设置</strong></button>
         <button class="mine-row" data-page="about"><span>i</span><strong>关于壳友手账</strong></button>
       </section>
     </main>
@@ -4222,7 +4230,6 @@ function render() {
     feedbackDetail: pageFeedbackDetail,
     account: pageAccount,
     reports: pageReports,
-    sync: pageSync,
     about: pageAbout,
     rules: pageRules,
     privacy: pagePrivacy,
@@ -4251,6 +4258,7 @@ function render() {
   }
   bindEvents();
   setupMarketInfiniteScroll();
+  requestAnimationFrame(hydrateVideoFirstFrames);
   if (state.page === "communityChat") scrollCommunityChatToLatest();
   hydrateSpeciesImages();
   startAccountCodeCooldownTimer();
@@ -4389,7 +4397,7 @@ function bindEvents() {
     setState(navigationState);
   }));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", () => setState({
-    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" ? "community" : state.page === "community" || state.page === "communityFriends" || state.page === "communityChat" || state.page === "communityProfile" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "sync", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
+    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" ? "community" : state.page === "community" || state.page === "communityFriends" || state.page === "communityChat" || state.page === "communityProfile" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "",
     openLedgerMenuId: "",
     openBreedingMenuId: "",
@@ -4735,7 +4743,7 @@ function bindEvents() {
   document.querySelectorAll("[data-preview-chat-media]").forEach(button => button.addEventListener("click", () => {
     const url = button.dataset.previewChatMedia || "";
     if (!url) return;
-    if (button.dataset.chatMediaType === "video") openVideoPreview(url, "聊天视频");
+    if (button.dataset.chatMediaType === "video") openVideoPreview(url, "聊天视频", button.dataset.chatMediaPoster || "");
     else openImagePreview(url, "聊天图片");
   }));
   document.querySelector("[data-market-search-form]")?.addEventListener("submit", event => {
@@ -4890,14 +4898,6 @@ function bindEvents() {
   document.querySelectorAll("[data-export-data]").forEach(btn => btn.addEventListener("click", () => exportAccountData(btn.dataset.exportData)));
   document.querySelector("#batchImportForm")?.addEventListener("submit", submitBatchImport);
   document.querySelector("#deliveryNoteForm")?.addEventListener("submit", submitDeliveryNote);
-  document.querySelector("[data-toggle-sync]")?.addEventListener("click", () => {
-    if (!requireLogin()) return;
-    setState({
-      syncEnabled: true,
-      activityLogs: logActivity("手动同步数据到云端", "空间")
-    });
-    pushCloudDataNow(true).then(() => toast("已同步到云端")).catch(() => toast("同步失败，请稍后再试"));
-  });
 }
 
 function reviewAuthPayload(extra = {}) {
@@ -5390,7 +5390,8 @@ function bindMarketMediaDraftEvents() {
     button.onclick = () => {
       const index = Number(button.dataset.removeMarketMedia);
       const removed = (state.marketDraftMedia || [])[index];
-      if (removed?.file && String(removed.dataUrl || "").startsWith("blob:")) URL.revokeObjectURL(removed.dataUrl);
+      if (String(removed?.dataUrl || "").startsWith("blob:")) URL.revokeObjectURL(removed.dataUrl);
+      if (String(removed?.posterUrl || "").startsWith("blob:")) URL.revokeObjectURL(removed.posterUrl);
       state.marketDraftMedia = (state.marketDraftMedia || []).filter((_, itemIndex) => itemIndex !== index);
       renderMarketMediaDraft();
     };
@@ -5508,7 +5509,15 @@ async function readMarketMedia(event) {
           ? await fileAsDataUrl(file)
           : await readImageForLocalUse(file, "market", { maxSide: 3200, quality: 0.96, maxLength: 8500000 })
         : URL.createObjectURL(file);
-      nextItems.push({ dataUrl, file: isVideo ? file : null, duration, type: isVideo ? "video" : "image" });
+      const poster = isVideo ? await createVideoPoster(file) : null;
+      nextItems.push({
+        dataUrl,
+        file: isVideo ? file : null,
+        duration,
+        posterFile: poster?.file || null,
+        posterUrl: poster?.previewUrl || "",
+        type: isVideo ? "video" : "image"
+      });
     }
     state.marketDraftMedia = [...current, ...nextItems].slice(0, 9);
     renderMarketMediaDraft();
@@ -5742,14 +5751,23 @@ async function submitMarketListing(event) {
     for (const media of localMedia) {
       const source = media.dataUrl || media.url || "";
       if (!source) continue;
+      let posterUrl = String(media.posterUrl || "");
+      if (media.type === "video" && media.posterFile) {
+        try {
+          const uploadedPoster = await apiUploadMediaFile(media.posterFile);
+          posterUrl = uploadedPoster.url || posterUrl;
+        } catch (error) {
+          console.warn("视频封面上传失败", error);
+        }
+      }
       if (media.file) {
         const uploaded = await apiUploadMediaFile(media.file, media.duration || 0);
-        mediaItems.push({ url: uploaded.url || source, type: uploaded.mediaType || media.type || "video" });
+        mediaItems.push({ url: uploaded.url || source, type: uploaded.mediaType || media.type || "video", posterUrl });
       } else if (source.startsWith("data:")) {
         const uploaded = await apiPost("/api/upload/media", marketAuthPayload({ media: source }));
-        mediaItems.push({ url: uploaded.url || source, type: uploaded.mediaType || media.type || "image" });
+        mediaItems.push({ url: uploaded.url || source, type: uploaded.mediaType || media.type || "image", posterUrl });
       } else {
-        mediaItems.push({ url: source, type: media.type || "image" });
+        mediaItems.push({ url: source, type: media.type || "image", posterUrl });
       }
     }
     const photoUrl = mediaItems[0]?.url || "";
@@ -5761,6 +5779,7 @@ async function submitMarketListing(event) {
     }));
     localMedia.forEach(media => {
       if (media.file && String(media.dataUrl || "").startsWith("blob:")) URL.revokeObjectURL(media.dataUrl);
+      if (String(media.posterUrl || "").startsWith("blob:")) URL.revokeObjectURL(media.posterUrl);
     });
     state.marketDraftPhoto = "";
     state.marketDraftMedia = [];
@@ -6589,6 +6608,95 @@ function readVideoDuration(file) {
   });
 }
 
+function createVideoPoster(file) {
+  return new Promise(resolve => {
+    if (!file || localMediaFileKind(file) !== "video") return resolve(null);
+    const video = document.createElement("video");
+    const objectUrl = URL.createObjectURL(file);
+    let settled = false;
+    let timer = 0;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      video.removeAttribute("src");
+      video.load();
+      URL.revokeObjectURL(objectUrl);
+      resolve(value);
+    };
+    const capture = () => {
+      const sourceWidth = Number(video.videoWidth || 0);
+      const sourceHeight = Number(video.videoHeight || 0);
+      if (!sourceWidth || !sourceHeight) return finish(null);
+      try {
+        const limit = 1280;
+        const scale = Math.min(1, limit / Math.max(sourceWidth, sourceHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+        canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+        const context = canvas.getContext("2d");
+        if (!context) return finish(null);
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(blob => {
+          if (!blob) return finish(null);
+          const posterFile = new File([blob], `video-poster-${Date.now()}.jpg`, { type: "image/jpeg" });
+          finish({ file: posterFile, previewUrl: URL.createObjectURL(posterFile) });
+        }, "image/jpeg", 0.86);
+      } catch {
+        finish(null);
+      }
+    };
+    const seekAndCapture = () => {
+      const duration = Number(video.duration || 0);
+      const target = Number.isFinite(duration) && duration > 0.2 ? Math.min(0.16, Math.max(0.04, duration - 0.04)) : 0;
+      if (target > 0 && Math.abs(video.currentTime - target) > 0.01) {
+        video.addEventListener("seeked", capture, { once: true });
+        try {
+          video.currentTime = target;
+        } catch {
+          capture();
+        }
+      } else {
+        capture();
+      }
+    };
+    timer = window.setTimeout(() => finish(null), 10000);
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    video.addEventListener("loadeddata", seekAndCapture, { once: true });
+    video.addEventListener("error", () => finish(null), { once: true });
+    video.src = objectUrl;
+    video.load();
+  });
+}
+
+function hydrateVideoFirstFrames() {
+  document.querySelectorAll("video[data-video-first-frame]").forEach(video => {
+    if (video.dataset.firstFrameReady === "true" || video.getAttribute("poster")) return;
+    const capture = () => {
+      if (video.dataset.firstFrameReady === "true" || video.getAttribute("poster") || !video.videoWidth || !video.videoHeight) return;
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const context = canvas.getContext("2d");
+        if (!context) return;
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        video.poster = canvas.toDataURL("image/jpeg", 0.84);
+        video.dataset.firstFrameReady = "true";
+      } catch {
+        // A remote video without CORS support can still play; it just cannot be drawn to a canvas.
+      }
+    };
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) capture();
+    else {
+      video.addEventListener("loadeddata", capture, { once: true });
+      video.addEventListener("canplay", capture, { once: true });
+    }
+  });
+}
+
 function syncCommunityPublishButton() {
   const submit = document.querySelector(".community-compose-submit");
   if (!submit) return;
@@ -6975,11 +7083,22 @@ async function sendCommunityChatMedia(event) {
     const duration = mediaKind === "video" ? await readVideoDuration(file) : 0;
     if (duration > 30) return toast("视频时长不能超过30秒");
     const uploaded = await apiUploadMediaFile(file, duration);
+    const poster = mediaKind === "video" ? await createVideoPoster(file) : null;
+    let posterUrl = "";
+    try {
+      if (poster?.file) {
+        const uploadedPoster = await apiUploadMediaFile(poster.file);
+        posterUrl = uploadedPoster.url || "";
+      }
+    } finally {
+      if (String(poster?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(poster.previewUrl);
+    }
     const result = await apiPost("/api/community/chat/send", communityAuthPayload({
       userId: state.selectedCommunityFriendId,
       content: "",
       mediaUrl: uploaded.url || "",
-      mediaType: uploaded.mediaType || mediaKind
+      mediaType: uploaded.mediaType || mediaKind,
+      posterUrl
     }));
     // 成功发送后先收起相册／拍摄面板，避免其遮住刚发送的媒体消息。
     collapseCommunityChatTools();
@@ -8599,7 +8718,7 @@ function openImagePreview(src, alt = "图片预览") {
   closeButton.focus();
 }
 
-function openVideoPreview(src, alt = "视频预览") {
+function openVideoPreview(src, alt = "视频预览", poster = "") {
   document.querySelector(".image-preview-overlay")?.remove();
 
   const overlay = document.createElement("div");
@@ -8620,6 +8739,8 @@ function openVideoPreview(src, alt = "视频预览") {
   video.autoplay = true;
   video.playsInline = true;
   video.preload = "auto";
+  video.crossOrigin = "anonymous";
+  if (poster) video.poster = poster;
 
   const caption = document.createElement("span");
   caption.className = "image-preview-caption";

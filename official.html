@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="壳友手账是一款面向养龟爱好者的记录与交流工具，提供档案、龟池、护理、繁殖、经营账本、壳友圈与龟集市信息展示功能。" />
+    <title>壳友手账｜养龟记录与交流工具</title>
+    <style>
+      :root { --ink: #18394b; --green: #28a77d; --soft: #eef7f3; --line: #dceae3; --paper: #fbfcfa; }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body { margin: 0; color: #25313a; background: var(--paper); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; line-height: 1.7; }
+      a { color: inherit; }
+      .wrap { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+      header { position: sticky; top: 0; z-index: 5; background: rgba(251, 252, 250, .92); border-bottom: 1px solid rgba(220, 234, 227, .85); backdrop-filter: blur(14px); }
+      .nav { min-height: 70px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+      .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; color: var(--ink); text-decoration: none; font-size: 19px; }
+      .brand img { width: 38px; height: 38px; object-fit: cover; border-radius: 12px; }
+      nav { display: flex; align-items: center; gap: 20px; font-size: 14px; color: #52656d; }
+      nav a { text-decoration: none; }
+      nav a:hover { color: var(--green); }
+      .hero { overflow: hidden; padding: 82px 0 70px; background: radial-gradient(circle at 88% 12%, rgba(66, 192, 150, .25), transparent 25%), linear-gradient(135deg, #effaf5, #fbfcfa 58%, #f4f9f6); }
+      .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 420px); align-items: center; gap: 54px; }
+      .eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; color: #167457; background: #e1f5ec; border-radius: 999px; font-size: 13px; font-weight: 700; }
+      h1 { max-width: 650px; margin: 18px 0 16px; color: var(--ink); font-size: clamp(36px, 5vw, 58px); line-height: 1.2; letter-spacing: -1.6px; }
+      .hero p { max-width: 630px; margin: 0; color: #586c74; font-size: 18px; }
+      .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+      .button { display: inline-flex; align-items: center; justify-content: center; min-height: 46px; padding: 0 21px; border-radius: 13px; background: var(--green); color: #fff; text-decoration: none; font-weight: 750; }
+      .button.secondary { border: 1px solid #bcdacc; background: #fff; color: #217659; }
+      .phone { width: min(100%, 356px); margin: 0 auto; padding: 9px; border: 8px solid #193a4a; border-radius: 44px; background: #193a4a; box-shadow: 0 28px 48px rgba(34, 66, 54, .22); transform: rotate(3deg); }
+      .phone img { display: block; width: 100%; border-radius: 29px; }
+      section { padding: 80px 0; }
+      .section-heading { max-width: 680px; margin-bottom: 30px; }
+      .section-heading h2 { margin: 0 0 8px; color: var(--ink); font-size: 30px; line-height: 1.35; }
+      .section-heading p { margin: 0; color: #667980; }
+      .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+      .feature { min-height: 210px; padding: 26px; border: 1px solid var(--line); border-radius: 20px; background: #fff; box-shadow: 0 12px 25px rgba(31, 54, 43, .04); }
+      .feature i { display: grid; width: 43px; height: 43px; place-items: center; border-radius: 13px; color: #168366; background: var(--soft); font-style: normal; font-size: 21px; }
+      .feature h3 { margin: 17px 0 6px; color: var(--ink); font-size: 19px; }
+      .feature p { margin: 0; color: #667980; font-size: 14px; }
+      .gallery-section { background: #f0f6f3; }
+      .gallery { display: grid; grid-template-columns: repeat(5, 1fr); align-items: start; gap: 15px; }
+      figure { margin: 0; overflow: hidden; border: 1px solid #d8e7df; border-radius: 18px; background: #fff; box-shadow: 0 12px 24px rgba(31, 54, 43, .09); }
+      figure img { display: block; width: 100%; aspect-ratio: 9 / 19.5; object-fit: cover; object-position: top; }
+      figcaption { padding: 12px 10px; color: var(--ink); font-size: 14px; font-weight: 700; text-align: center; }
+      .notice { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+      .notice article { padding: 26px; border: 1px solid var(--line); border-radius: 20px; background: #fff; }
+      .notice h3 { margin: 0 0 10px; color: var(--ink); font-size: 19px; }
+      .notice p, .notice li { margin: 0; color: #596d75; font-size: 14px; }
+      .notice ul { padding-left: 20px; margin: 10px 0 0; }
+      .links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+      .links a { padding: 10px 14px; border: 1px solid #b9ddcb; border-radius: 11px; color: #147755; background: #f5fcf8; font-size: 14px; font-weight: 700; text-decoration: none; }
+      footer { padding: 30px 0 44px; border-top: 1px solid var(--line); color: #667980; font-size: 13px; }
+      .footer-content { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+      .footer-content p { margin: 0; }
+      .record { margin-top: 8px !important; }
+      @media (max-width: 800px) { .hero { padding: 54px 0 44px; } .hero-grid { grid-template-columns: 1fr; gap: 35px; } .phone { width: min(88%, 360px); transform: none; } .feature-grid { grid-template-columns: 1fr; } .gallery { grid-template-columns: repeat(2, 1fr); } .notice { grid-template-columns: 1fr; } nav { gap: 12px; font-size: 13px; } nav a:nth-child(2) { display: none; } section { padding: 55px 0; } .footer-content { display: block; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap nav">
+        <a class="brand" href="/official.html"><img src="/assets/guohe-turtle-logo.png" alt="壳友手账图标" />壳友手账</a>
+        <nav aria-label="官网导航"><a href="#features">产品功能</a><a href="#screens">应用截图</a><a href="#service">服务与支持</a><a href="/privacy.html">隐私政策</a></nav>
+      </div>
+    </header>
+    <main>
+      <section class="hero">
+        <div class="wrap hero-grid">
+          <div>
+            <span class="eyebrow">养龟记录 · 交流工具</span>
+            <h1>把每一只龟的成长，认真记录下来。</h1>
+            <p>壳友手账为养龟爱好者提供档案、龟池、护理、繁殖与经营账本记录，并提供公开的壳友圈和龟集市信息展示与沟通服务。</p>
+            <div class="actions"><a class="button" href="#features">了解产品功能</a><a class="button secondary" href="/support.html">获取使用支持</a></div>
+          </div>
+          <div class="phone"><img src="/assets/official/dashboard.jpg" alt="壳友手账看板页面截图" /></div>
+        </div>
+      </section>
+      <section id="features">
+        <div class="wrap">
+          <div class="section-heading"><h2>从日常饲养到长期经营，一处管理</h2><p>数据由用户自主录入和管理，帮助持续记录每只龟的状态、尺寸与成长轨迹。</p></div>
+          <div class="feature-grid">
+            <article class="feature"><i>▣</i><h3>档案与龟池</h3><p>记录昵称、品种、体重、背甲长度、健康状态、图片和龟池归属，按品种或龟池快速筛选。</p></article>
+            <article class="feature"><i>✓</i><h3>护理与繁殖</h3><p>管理护理提醒、繁殖批次、产蛋、受精与孵化信息，沉淀每一次饲养记录。</p></article>
+            <article class="feature"><i>¥</i><h3>经营账本</h3><p>集中记录收购、售出和损耗，清晰查看资金明细与经营结余。</p></article>
+            <article class="feature"><i>◎</i><h3>壳友圈</h3><p>公开发布图文或视频动态，进行点赞、评论和内容互动；用户可举报违规内容。</p></article>
+            <article class="feature"><i>⌂</i><h3>龟集市</h3><p>展示合法合规的龟类商品信息，买卖双方可在应用内沟通；平台不提供在线支付或资金托管服务。</p></article>
+            <article class="feature"><i>☁</i><h3>同步与备份</h3><p>支持账号数据同步、导出与恢复；用于服务保障的备份按规则保存和清理。</p></article>
+          </div>
+        </div>
+      </section>
+      <section class="gallery-section" id="screens">
+        <div class="wrap">
+          <div class="section-heading"><h2>真实应用界面</h2><p>以下为壳友手账 iPhone 客户端的功能页面展示。</p></div>
+          <div class="gallery">
+            <figure><img src="/assets/official/dashboard.jpg" alt="看板与档案概览" /><figcaption>看板与档案</figcaption></figure>
+            <figure><img src="/assets/official/ledger.jpg" alt="经营账本" /><figcaption>经营账本</figcaption></figure>
+            <figure><img src="/assets/official/market.jpg" alt="龟集市" /><figcaption>龟集市</figcaption></figure>
+            <figure><img src="/assets/official/messages.jpg" alt="消息与壳友圈" /><figcaption>消息与壳友圈</figcaption></figure>
+            <figure><img src="/assets/official/space.jpg" alt="我的空间" /><figcaption>我的空间</figcaption></figure>
+          </div>
+        </div>
+      </section>
+      <section id="service">
+        <div class="wrap">
+          <div class="section-heading"><h2>公开内容与用户保障</h2><p>我们重视用户隐私、内容安全和合规使用；用户使用公开发布、聊天或商品展示功能前，应阅读相关规则。</p></div>
+          <div class="notice">
+            <article><h3>服务范围说明</h3><p>壳友手账提供养龟记录、公开内容发布、商品信息展示和用户沟通工具。龟集市不提供在线支付、资金托管、担保交易、物流、验货或售后承诺；用户应自行核验合法来源、健康状态、运输条件和交易信息。</p><div class="links"><a href="/terms.html">服务与社区规则</a><a href="/privacy.html">隐私政策</a></div></article>
+            <article><h3>支持、举报与数据权利</h3><p>如需反馈问题、举报违规内容、申请查询、更正、导出或删除与账号相关的信息，请通过应用内“我的空间－意见反馈”提交，或联系平台客服微信：<strong>Czjxcw</strong>。</p><div class="links"><a href="/support.html">壳友手账支持</a><a href="/privacy.html#rights">个人信息权利说明</a></div></article>
+          </div>
+        </div>
+      </section>
+    </main>
+    <footer>
+      <div class="wrap footer-content">
+        <div><p><strong>壳友手账</strong>｜养龟记录与交流工具</p><p class="record">版权所有 © 2026 陈仔健。保留所有权利。</p></div>
+        <div><p>联系支持：应用内意见反馈／平台客服微信 Czjxcw</p><p class="record"><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">网站备案信息：请在部署前替换为实际 ICP 备案号</a></p></div>
+      </div>
+    </footer>
+  </body>
+</html>

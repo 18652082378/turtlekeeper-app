@@ -1,0 +1,149 @@
+/* Final dark-theme surface audit. This stylesheet loads after every feature stylesheet. */
+html[data-theme-color="dark"] {
+  --surface: #1c1c1e;
+  --surface-2: #28282a;
+  --section-bg: #1c1c1e;
+  --row-bg: #1c1c1e;
+  --raised-bg: #28282a;
+  --card-bg: #1c1c1e;
+  --topbar-bg: #1c1c1e;
+}
+
+html[data-theme-color="dark"] .market-page,
+html[data-theme-color="dark"] .my-market-page,
+html[data-theme-color="dark"] .market-publish-page,
+html[data-theme-color="dark"] .market-detail-page,
+html[data-theme-color="dark"] .member-benefit-page.tone-member,
+html[data-theme-color="dark"] .member-benefit-page.tone-pro {
+  background: #111111 !important;
+}
+
+html[data-theme-color="dark"] .my-market-notice,
+html[data-theme-color="dark"] .my-market-tabs,
+html[data-theme-color="dark"] .my-market-listing,
+html[data-theme-color="dark"] .detail-summary-card .turtle-menu,
+html[data-theme-color="dark"] .feedback-post,
+html[data-theme-color="dark"] .ledger-thumb-placeholder,
+html[data-theme-color="dark"] .market-promise-strip,
+html[data-theme-color="dark"] .market-search-wrap,
+html[data-theme-color="dark"] .market-stage-tabs,
+html[data-theme-color="dark"] .market-form-card,
+html[data-theme-color="dark"] .market-safe-note,
+html[data-theme-color="dark"] .market-empty > span,
+html[data-theme-color="dark"] .market-detail-main,
+html[data-theme-color="dark"] .market-detail-specs,
+html[data-theme-color="dark"] .market-detail-description,
+html[data-theme-color="dark"] .market-seller-card,
+html[data-theme-color="dark"] .market-detail-page > .market-safe-note,
+html[data-theme-color="dark"] .market-sale-dialog,
+html[data-theme-color="dark"] .market-service-dialog,
+html[data-theme-color="dark"] .moderation-report-card,
+html[data-theme-color="dark"] .member-tier-stage {
+  color: #e7e7e7 !important;
+  background: #1c1c1e !important;
+  border-color: #303033 !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-color="dark"] .market-sale-price > div,
+html[data-theme-color="dark"] .my-market-tabs button,
+html[data-theme-color="dark"] .my-market-listing-actions button,
+html[data-theme-color="dark"] .detail-menu button,
+html[data-theme-color="dark"] .market-photo-card > button,
+html[data-theme-color="dark"] .market-stage-tabs button,
+html[data-theme-color="dark"] .market-sale-methods span,
+html[data-theme-color="dark"] .market-sale-head > button,
+html[data-theme-color="dark"] .market-sale-buttons button:first-child,
+html[data-theme-color="dark"] .market-service-head > button,
+html[data-theme-color="dark"] .market-service-wechat,
+html[data-theme-color="dark"] .market-service-code,
+html[data-theme-color="dark"] .market-service-buttons button:first-child,
+html[data-theme-color="dark"] .seller-store-head > button.active,
+html[data-theme-color="dark"] .market-delete-action,
+html[data-theme-color="dark"] .market-sold-disabled,
+html[data-theme-color="dark"] .market-seller-actions button,
+html[data-theme-color="dark"] .market-contact-action,
+html[data-theme-color="dark"] .market-detail-favorite,
+html[data-theme-color="dark"] .market-media-add,
+html[data-theme-color="dark"] .community-chat-product-media,
+html[data-theme-color="dark"] .turtle-pool-mark,
+html[data-theme-color="dark"] .member-right-item.member .right-icon {
+  color: #e7e7e7 !important;
+  background: #29292b !important;
+  border-color: #3a3a3d !important;
+}
+
+html[data-theme-color="dark"] .my-market-tabs button.active,
+html[data-theme-color="dark"] .market-stage-tabs button.active {
+  color: #f1f1f1 !important;
+  background: #343438 !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-color="dark"] .my-market-listing-actions button.refresh {
+  color: #ecfff5 !important;
+  background: #237958 !important;
+  border-color: #237958 !important;
+}
+
+html[data-theme-color="dark"] .my-market-listing-actions button.offline {
+  color: #f3d4d8 !important;
+  background: #302729 !important;
+  border-color: #473437 !important;
+}
+
+html[data-theme-color="dark"] .bottom-nav {
+  background: #19191b !important;
+  border-color: #303033 !important;
+}
+
+html[data-theme-color="dark"] .market-card-photo,
+html[data-theme-color="dark"] .my-market-media,
+html[data-theme-color="dark"] .ledger-thumb-placeholder,
+html[data-theme-color="dark"] .community-chat-product-media {
+  background: #29292b !important;
+}
+
+html[data-theme-color="dark"] .ledger-thumb-placeholder span,
+html[data-theme-color="dark"] .ledger-row .ledger-inline-type.purchase,
+html[data-theme-color="dark"] .ledger-row .ledger-inline-type.sold,
+html[data-theme-color="dark"] .ledger-row .ledger-inline-type.loss,
+html[data-theme-color="dark"] .market-card-delivery,
+html[data-theme-color="dark"] .market-detail-price span,
+html[data-theme-color="dark"] .market-title-templates button,
+html[data-theme-color="dark"] .ledger-turtle-meta span {
+  color: #b7d6c9 !important;
+  border-color: #31473e !important;
+  background: #20342b !important;
+}
+
+html[data-theme-color="dark"] .market-sale-methods input:checked + span,
+html[data-theme-color="dark"] .market-seller-actions button.active {
+  color: #d9f4e7 !important;
+  border-color: #315b49 !important;
+  background: #214435 !important;
+}
+
+html[data-theme-color="dark"] .market-service-wechat,
+html[data-theme-color="dark"] .market-service-code {
+  border-color: #3a3a3d !important;
+}
+
+html[data-theme-color="dark"] .market-service-wechat strong {
+  color: #a7e2c4 !important;
+}
+
+html[data-theme-color="dark"] .my-market-listing-main em {
+  color: #a7e2c4 !important;
+  background: #214435 !important;
+}
+
+html[data-theme-color="dark"] .my-market-listing.is-inactive em,
+html[data-theme-color="dark"] .moderation-report-head > em.pending,
+html[data-theme-color="dark"] .moderation-report-head > em.removed,
+html[data-theme-color="dark"] .moderation-report-actions .danger,
+html[data-theme-color="dark"] .member-tier-stage.tone-member::after,
+html[data-theme-color="dark"] .care-action-panel .home-module-action.breeding-action > span,
+html[data-theme-color="dark"] .care-action-panel .home-module-action.ledger-action > span {
+  background: #29292b !important;
+}
