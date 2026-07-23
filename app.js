@@ -49,6 +49,7 @@ const WEEKDAY_OPTIONS = [
   { value: "6", label: "六" },
   { value: "0", label: "日" }
 ];
+const BOTTOM_NAV_ROOT_PAGES = new Set(["home", "ledger", "market", "messages", "mine"]);
 const PULL_REFRESH_THRESHOLD = 72;
 const PULL_REFRESH_MAX_OFFSET = 72;
 let pullRefreshState = { tracking: false, refreshing: false, startX: 0, startY: 0, distance: 0, ready: false, direction: "" };
@@ -642,10 +643,12 @@ function setState(patch, options = {}) {
   const pageChanged = Object.prototype.hasOwnProperty.call(patch, "page") && patch.page && patch.page !== state.page;
   if (pageChanged) {
     pendingCommunityChatEnterMotion = options.pageMotion === "chat";
-    // Full-page scale/fade on every navigation causes visible reflow on long
-    // lists and media-heavy pages. Navigation is instant by default; gestures
-    // retain their own compositor-driven motion.
-    pendingPageEnterMotion = options.pageMotion === "enter";
+    // Bottom tabs switch immediately and keep their fixed navigation stable.
+    // Every secondary module gets a short, unobtrusive entry transition unless
+    // it is a gesture-driven return or a dedicated chat transition.
+    pendingPageEnterMotion = options.pageMotion === "enter" || (
+      options.pageMotion === undefined && !BOTTOM_NAV_ROOT_PAGES.has(patch.page)
+    );
     pendingPageScrollReset = options.pageScroll !== "preserve";
     if (!pendingPageEnterMotion) {
       if (pageEnterMotionTimer) window.clearTimeout(pageEnterMotionTimer);
