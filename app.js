@@ -351,6 +351,7 @@ let pendingPageEnterMotion = false;
 let pendingCommunityChatEnterMotion = false;
 let pageEnterMotionTimer = null;
 let pendingPageScrollReset = false;
+let edgeBackSnapshots = [];
 let nativePushListenersAttached = false;
 let nativePushSetupInFlight = false;
 let nativePushDeviceToken = "";
@@ -642,6 +643,12 @@ function saveState(options = {}) {
 function setState(patch, options = {}) {
   const pageChanged = Object.prototype.hasOwnProperty.call(patch, "page") && patch.page && patch.page !== state.page;
   if (pageChanged) {
+    if (options.pageMotion !== "none" && !BOTTOM_NAV_ROOT_PAGES.has(patch.page) && $app?.innerHTML) {
+      edgeBackSnapshots.push({ page: state.page, html: $app.innerHTML });
+      edgeBackSnapshots = edgeBackSnapshots.slice(-8);
+    } else if (BOTTOM_NAV_ROOT_PAGES.has(patch.page)) {
+      edgeBackSnapshots = [];
+    }
     pendingCommunityChatEnterMotion = options.pageMotion === "chat";
     // Bottom tabs switch immediately and keep their fixed navigation stable.
     // Every secondary module gets a short, unobtrusive entry transition unless
@@ -1971,6 +1978,12 @@ function backNavigationState() {
     openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "",
     editingTurtlePoolId: "", editingMarketListingId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: ""
   };
+}
+
+function navigateBack() {
+  const snapshot = edgeBackSnapshots.pop();
+  const fallback = backNavigationState();
+  setState(snapshot?.page ? { ...fallback, page: snapshot.page } : fallback, { pageMotion: "none" });
 }
 
 function pageFollowing() {
@@ -4400,7 +4413,7 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-open-platform-wechat]").forEach(button => button.addEventListener("click", openPlatformWeChat));
   document.querySelectorAll("[data-open-platform-service-dialog]").forEach(button => button.addEventListener("click", openMarketTopService));
-  document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", () => setState(backNavigationState(), { pageMotion: "none" })));
+  document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", navigateBack));
   document.querySelectorAll("[data-view-turtle]").forEach(el => el.addEventListener("click", () => setState({ page: "turtleDetail", selectedTurtleId: el.dataset.viewTurtle, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
   document.querySelectorAll("[data-toggle-turtle-menu]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
@@ -8959,6 +8972,20 @@ function setupPullToRefresh() {
   document.addEventListener("touchcancel", resetPullRefreshIndicator, { passive: true });
 }
 
+function showEdgeBackPreview(snapshot) {
+  document.querySelector(".edge-back-preview")?.remove();
+  if (!snapshot?.html) return null;
+  const preview = document.createElement("div");
+  preview.className = "edge-back-preview";
+  preview.innerHTML = snapshot.html;
+  document.body.insertBefore(preview, $app);
+  return preview;
+}
+
+function clearEdgeBackPreview() {
+  document.querySelector(".edge-back-preview")?.remove();
+}
+
 function setupEdgeBackAndConversationSwipe() {
   if (document.body.dataset.edgeGesturesBound === "true") return;
   document.body.dataset.edgeGesturesBound = "true";
@@ -8991,11 +9018,15 @@ function setupEdgeBackAndConversationSwipe() {
       if (event.cancelable) event.preventDefault();
       return;
     }
-    if (gesture.x <= 24 && dx > 0 && Math.abs(dx) > Math.abs(dy) && !rootPages.has(state.page)) {
+    if (gesture.x <= 24 && dx > 0 && Math.abs(dx) > Math.abs(dy) && !rootPages.has(state.page) && edgeBackSnapshots.length) {
       gesture.edgeBack = true;
-      const offset = Math.min(Math.max(0, dx), Math.max(96, window.innerWidth * .42));
+      if (!gesture.preview) gesture.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
+      // No midpoint cap: the screen follows the finger all the way across.
+      const offset = Math.max(0, dx);
+      const progress = Math.min(1, offset / Math.max(1, window.innerWidth));
       $app.classList.add("edge-back-dragging");
       $app.style.transform = `translate3d(${offset}px, 0, 0)`;
+      gesture.preview?.style.setProperty("transform", `translate3d(${-22 + (progress * 22)}%, 0, 0)`);
       if (event.cancelable) event.preventDefault();
     }
   }, { passive: false });
@@ -9018,10 +9049,19 @@ function setupEdgeBackAndConversationSwipe() {
       $app.classList.remove("edge-back-dragging");
       $app.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
       $app.style.transform = shouldComplete ? "translate3d(100vw, 0, 0)" : "translate3d(0, 0, 0)";
+      if (gesture.preview) {
+        gesture.preview.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
+        gesture.preview.style.transform = shouldComplete ? "translate3d(0, 0, 0)" : "translate3d(-22%, 0, 0)";
+      }
       window.setTimeout(() => {
         $app.style.transition = "";
         $app.style.transform = "";
-        if (shouldComplete && !rootPages.has(state.page)) setState(backNavigationState(), { pageMotion: "none" });
+        if (shouldComplete && !rootPages.has(state.page)) {
+          clearEdgeBackPreview();
+          navigateBack();
+        } else {
+          clearEdgeBackPreview();
+        }
       }, shouldComplete ? 190 : 210);
     } else if (!gesture.row && document.querySelector(".message-friend-swipe.is-open") && Math.abs(dx) > Math.abs(dy)) {
       document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => row.classList.remove("is-open"));

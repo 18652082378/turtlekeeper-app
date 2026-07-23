@@ -179,7 +179,27 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
 .message-friend-swipe.is-dragging .message-friend-row { transition: none; }
 
 /* Interactive edge-swipe back: page follows the finger and rebounds if released early. */
+#app { position: relative; z-index: 2; }
 #app.edge-back-dragging { transition: none !important; will-change: transform; }
+.edge-back-preview {
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--bg);
+  box-shadow: inset -18px 0 32px rgba(0, 0, 0, .10);
+  transform: translate3d(-22%, 0, 0);
+  will-change: transform;
+}
+.edge-back-preview::after {
+  content: "";
+  position: absolute;
+  z-index: 99;
+  inset: 0;
+  background: rgba(0, 0, 0, .08);
+  pointer-events: none;
+}
 
 /* On real touch devices, a fixed live backdrop blur has to be repainted while
    content moves underneath it. Stable opaque surfaces keep scrolling and pull
