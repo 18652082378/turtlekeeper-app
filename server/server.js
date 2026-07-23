@@ -53,6 +53,11 @@ const APNS_HOST = String(process.env.APNS_HOST || "api.push.apple.com").trim();
 const APNS_KEY_PATH = String(process.env.APNS_KEY_PATH || "").trim();
 const APNS_KEY_BASE64 = String(process.env.APNS_KEY_BASE64 || "").trim();
 const MARKET_SALE_METHODS = ["自有客户成交", "闲鱼成交", "壳友手账成交"];
+const DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);
+
+function randomDefaultAccountAvatar() {
+  return DEFAULT_ACCOUNT_AVATARS[crypto.randomInt(DEFAULT_ACCOUNT_AVATARS.length)];
+}
 
 function loadMarketSpeciesCatalog() {
   try {
@@ -187,6 +192,8 @@ function emptyAccountData() {
     feedbackItems: [],
     marketFavoriteIds: [],
     marketHistoryIds: [],
+    pinnedConversationPhones: [],
+    hiddenConversationPhones: [],
     turtlePools: [],
     syncEnabled: true,
     subscriptionPlan: "free",
@@ -212,6 +219,8 @@ function normalizeAccountData(data = {}) {
     feedbackItems: Array.isArray(next.feedbackItems) ? next.feedbackItems : [],
     marketFavoriteIds: Array.isArray(next.marketFavoriteIds) ? next.marketFavoriteIds.map(String).slice(0, 500) : [],
     marketHistoryIds: Array.isArray(next.marketHistoryIds) ? next.marketHistoryIds.map(String).slice(0, 100) : [],
+    pinnedConversationPhones: Array.isArray(next.pinnedConversationPhones) ? next.pinnedConversationPhones.map(String).slice(0, 200) : [],
+    hiddenConversationPhones: Array.isArray(next.hiddenConversationPhones) ? next.hiddenConversationPhones.map(String).slice(0, 200) : [],
     turtlePools: Array.isArray(next.turtlePools) ? next.turtlePools.slice(0, 200).map(pool => ({
       ...pool,
       id: String(pool?.id || crypto.randomUUID()),
@@ -826,7 +835,7 @@ async function handleRegister(req, res) {
     passwordSalt: passwordInfo.salt,
     passwordHash: passwordInfo.hash,
     accountName: String(body.accountName || "").trim() || maskPhone(phone),
-    accountAvatar: "",
+    accountAvatar: randomDefaultAccountAvatar(),
     data: normalizeAccountData(body.data || {}),
     termsAcceptedAt: now,
     termsVersion: POLICY_VERSION,
@@ -1535,6 +1544,8 @@ function communityConversationMessages(db, phoneA, phoneB) {
         posterUrl: item.posterUrl || "",
         mediaType: item.mediaType === "video" ? "video" : "image",
         mine: item.fromPhone === phoneA,
+        senderId: communityUserId(item.fromPhone),
+        senderAvatar: db.users?.[item.fromPhone]?.accountAvatar || "",
         createdAt: item.createdAt,
         marketListing,
         marketReferenceOnly: Boolean(marketListing && !rawContent && !item.mediaUrl)
@@ -1557,7 +1568,10 @@ function communityFriends(db, viewer) {
     if (message.fromPhone === viewer.phone && message.toPhone) contactPhones.add(message.toPhone);
     if (message.toPhone === viewer.phone && message.fromPhone) contactPhones.add(message.fromPhone);
   });
+  const pinned = new Set(Array.isArray(viewer.data?.pinnedConversationPhones) ? viewer.data.pinnedConversationPhones : []);
+  const hidden = new Set(Array.isArray(viewer.data?.hiddenConversationPhones) ? viewer.data.hiddenConversationPhones : []);
   return [...contactPhones]
+    .filter(phone => !hidden.has(phone))
     .map(phone => {
       const user = db.users?.[phone];
       const lastMessage = messages
@@ -1572,10 +1586,11 @@ function communityFriends(db, viewer) {
         lastMessage: communityMessagePreview(lastMessage),
         lastMessageAt: lastMessage?.createdAt || "",
         createdAt: links.find(item => item.phones?.includes(viewer.phone) && item.phones?.includes(phone))?.createdAt || lastMessage?.createdAt || ""
+        , pinned: pinned.has(phone)
       } : null;
     })
     .filter(Boolean)
-    .sort((left, right) => new Date(right.lastMessageAt || right.createdAt || 0) - new Date(left.lastMessageAt || left.createdAt || 0));
+    .sort((left, right) => Number(right.pinned) - Number(left.pinned) || new Date(right.lastMessageAt || right.createdAt || 0) - new Date(left.lastMessageAt || left.createdAt || 0));
 }
 
 function isFollowingCommunityUser(db, followerPhone, targetPhone) {
@@ -2003,6 +2018,11 @@ async function handleCommunityChatSend(req, res) {
     createdAt: new Date().toISOString()
   };
   db.messages = [...(Array.isArray(db.messages) ? db.messages : []), message].slice(-5000);
+  // A new message restores a conversation explicitly deleted by either participant.
+  [user, target].forEach(account => {
+    account.data = normalizeAccountData(account.data);
+    account.data.hiddenConversationPhones = account.data.hiddenConversationPhones.filter(phone => phone !== (account.phone === user.phone ? target.phone : user.phone));
+  });
   writeDatabase(db);
   // Send asynchronously so a temporary APNs issue never delays the chat itself.
   void notifyCommunityMessage(db, message, user, target);
@@ -2013,6 +2033,35 @@ async function handleCommunityChatSend(req, res) {
     messages,
     marketListing: latestConversationMarketListing(messages)
   });
+}
+
+async function handleCommunityConversationPin(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const target = communityUserById(db, body.userId);
+  if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "会话不存在" });
+  user.data = normalizeAccountData(user.data);
+  const pins = new Set(user.data.pinnedConversationPhones);
+  if (pins.has(target.phone)) pins.delete(target.phone); else pins.add(target.phone);
+  user.data.pinnedConversationPhones = [...pins];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, friends: communityFriends(db, user) });
+}
+
+async function handleCommunityConversationDelete(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const target = communityUserById(db, body.userId);
+  if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "会话不存在" });
+  user.data = normalizeAccountData(user.data);
+  user.data.hiddenConversationPhones = [...new Set([...user.data.hiddenConversationPhones, target.phone])];
+  user.data.pinnedConversationPhones = user.data.pinnedConversationPhones.filter(phone => phone !== target.phone);
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, friends: communityFriends(db, user) });
 }
 
 async function handleCommunityUnread(req, res) {
@@ -2027,6 +2076,7 @@ async function handleCommunityUnread(req, res) {
 }
 
 const MARKET_REFRESH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const MARKET_MANUAL_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 function marketListingView(db, item, viewer = null) {
   const viewerPhone = viewer?.phone || "";
@@ -2353,9 +2403,13 @@ async function handleMarketRefresh(req, res) {
   if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
   if (listing.sellerPhoneRaw !== user.phone && !isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "只能刷新自己的商品" });
   if (listing.status === "sold") return sendJson(res, 400, { ok: false, message: "已售商品不能刷新" });
+  const lastRefresh = Date.parse(listing.manualRefreshedAt || "");
+  const remaining = MARKET_MANUAL_REFRESH_INTERVAL_MS - (Date.now() - lastRefresh);
+  if (Number.isFinite(lastRefresh) && remaining > 0) return sendJson(res, 429, { ok: false, message: `每个商品每天仅可刷新一次，请 ${Math.ceil(remaining / 3600000)} 小时后再试` });
   if (isMarketProhibitedSpecies(listing.speciesCode, listing.speciesName)) return sendJson(res, 400, { ok: false, message: marketSpeciesRestrictionMessage() });
   listing.status = "active";
   listing.refreshedAt = new Date().toISOString();
+  listing.manualRefreshedAt = listing.refreshedAt;
   listing.offlineAt = "";
   listing.offlineReason = "";
   writeDatabase(db);
@@ -2662,6 +2716,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/unread") return await handleCommunityUnread(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/list") return await handleCommunityChatList(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/send") return await handleCommunityChatSend(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/chat/pin") return await handleCommunityConversationPin(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/chat/delete") return await handleCommunityConversationDelete(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/list") return await handleMarketList(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/view") return await handleMarketView(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/want") return await handleMarketWant(req, res);

@@ -7,6 +7,7 @@ const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
 const CLOUD_SYNC_DEBOUNCE_MS = 900;
 const CHINA_TIME_ZONE = "Asia/Shanghai";
 const REVIEW_ADMIN_PHONE = "18652082378";
+const DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);
 const POLICY_VERSION = "2026-07-17";
 const APP_BUILD = Math.max(0, Number.parseInt(String(window.TURTLE_APP_BUILD || "0"), 10) || 0);
 const APP_STORE_URL = String(window.TURTLE_APP_STORE_URL || "https://apps.apple.com/app/id6783481335");
@@ -1339,6 +1340,22 @@ function apiAssetUrl(url) {
   return base ? `${base}${pathValue}` : pathValue;
 }
 
+function randomDefaultAccountAvatar() {
+  return DEFAULT_ACCOUNT_AVATARS[Math.floor(Math.random() * DEFAULT_ACCOUNT_AVATARS.length)];
+}
+
+function isDefaultAccountAvatar(avatar) {
+  const value = String(avatar || "");
+  return DEFAULT_ACCOUNT_AVATARS.includes(value) || /^\/?assets\/default-avatars\/avatar-\d+\.png$/.test(value);
+}
+
+function accountAvatarSource(avatar) {
+  const value = String(avatar || "");
+  // Built-in avatars are bundled into the Capacitor web assets. Keeping this
+  // relative path prevents an unnecessary network request on every render.
+  return isDefaultAccountAvatar(value) ? value.replace(/^\/+/, "") : apiAssetUrl(value);
+}
+
 function isEmbeddedImage(value) {
   return /^data:image\//i.test(String(value || ""));
 }
@@ -1850,7 +1867,7 @@ function pageMessages() {
       <section class="message-discover-list">
         <button class="message-discover-row" type="button" data-page="community"><span class="message-community-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2.8c2.5 0 3.9 3 2.2 4.8M21.2 12c0 2.5-3 3.9-4.8 2.2M12 21.2c-2.5 0-3.9-3-2.2-4.8M2.8 12c0-2.5 3-3.9 4.8-2.2"></path></svg></span><strong>壳友圈</strong><span class="message-discover-preview">${latestPost?.mediaUrl ? (latestPost.mediaType === "video" ? `<span class="message-video-thumb">▶</span>` : `<img src="${latestPost.mediaUrl}" alt="最新动态">`) : ""}</span><b>›</b></button>
       </section>
-      <section class="message-friend-list">${friends.map(friend => `<button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div><strong>${escapeHtml(friend.name || "壳友")}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div>${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></button>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`}</section>
+      <section class="message-friend-list">${friends.map(friend => `<article class="message-friend-swipe" data-conversation-id="${escapeHtml(friend.id)}"><div class="message-friend-actions"><button type="button" data-toggle-conversation-pin="${escapeHtml(friend.id)}">${friend.pinned ? "取消置顶" : "置顶"}</button><button class="delete" type="button" data-delete-conversation="${escapeHtml(friend.id)}">删除</button></div><button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div><strong>${escapeHtml(friend.name || "壳友")}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div>${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></button></article>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`}</section>
     </main>
     ${bottomNav()}
   `;
@@ -1976,11 +1993,18 @@ function pageCommunityChat() {
     const media = mediaUrl
       ? `<button class="community-message-media ${mediaType === "video" ? "is-video" : ""}" type="button" data-preview-chat-media="${escapeHtml(mediaUrl)}" data-chat-media-poster="${escapeHtml(mediaPosterUrl)}" data-chat-media-type="${mediaType}" aria-label="查看聊天${mediaType === "video" ? "视频" : "图片"}">${mediaType === "video" ? `<video src="${escapeHtml(mediaUrl)}"${videoPosterAttribute({ posterUrl: mediaPosterUrl })} muted playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video><i aria-hidden="true">▶</i>` : `<img src="${escapeHtml(mediaUrl)}" alt="聊天图片">`}</button>`
       : "";
-    return `<div class="community-message ${message.mine ? "mine" : "theirs"}">${shouldShowCommunityMessageTime(visibleMessages, index) ? `<small>${formatTime(message.createdAt)}</small>` : ""}${text ? `<p>${escapeHtml(text)}</p>` : ""}${media}</div>`;
+    const showTime = shouldShowCommunityMessageTime(visibleMessages, index);
+    const sender = { id: message.senderId || friend?.id || state.selectedCommunityFriendId, avatar: message.senderAvatar || friend?.avatar || "", name: friend?.name || "壳友" };
+    const senderMark = !message.mine
+      ? (showTime
+        ? `<button class="community-chat-message-avatar" type="button" data-view-community-user="${escapeHtml(sender.id)}" aria-label="查看${escapeHtml(sender.name)}的主页">${communityAvatar(sender, "community-chat-avatar")}</button>`
+        : `<span class="community-chat-avatar-spacer" aria-hidden="true"></span>`)
+      : "";
+    return `<div class="community-message ${message.mine ? "mine" : "theirs"}">${showTime ? `<small>${formatTime(message.createdAt)}</small>` : ""}<div class="community-message-body">${senderMark}<div class="community-message-content">${text ? `<p>${escapeHtml(text)}</p>` : ""}${media}</div></div></div>`;
   };
   const chatHeader = `
     <div class="topbar community-chat-topbar">
-      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button><span aria-hidden="true">···</span></div>
+      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button></div>
     </div>
   `;
   return `
@@ -2001,6 +2025,14 @@ function pageCommunityChat() {
       <button type="button" data-community-chat-camera-button aria-label="短按拍照，长按录像"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4.5 8h3l1.4-2h6.2l1.4 2h3A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-8A1.5 1.5 0 0 1 4.5 8Z"></path><circle cx="12" cy="13.5" r="3.2"></circle></svg></span><b>拍摄</b></button>
     </section>` : ""}
   `;
+}
+
+function backNavigationState() {
+  return {
+    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" ? "community" : state.page === "community" || state.page === "communityFriends" || state.page === "communityChat" || state.page === "communityProfile" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
+    openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "",
+    editingTurtlePoolId: "", editingMarketListingId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: ""
+  };
 }
 
 function pageFollowing() {
@@ -3929,6 +3961,12 @@ function pageAccount() {
             </div>
           </div>
           <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-account-avatar-input>
+          <section class="default-avatar-picker" aria-label="选择内置头像">
+            <div><strong>选择内置头像</strong><span>新用户将随机获得其中一张</span></div>
+            <div class="default-avatar-grid">
+              ${DEFAULT_ACCOUNT_AVATARS.map((avatar, index) => `<button class="default-avatar-option ${state.accountAvatar === avatar ? "active" : ""}" type="button" data-select-default-avatar="${avatar}" aria-label="选择默认头像 ${index + 1}"><img src="${accountAvatarSource(avatar)}" alt="默认头像 ${index + 1}"></button>`).join("")}
+            </div>
+          </section>
           <form id="profileForm" class="profile-form-inner">
             <label class="survey-field"><span>昵称</span><input class="field" name="nickname" value="${state.accountName || ""}" placeholder="请输入昵称"></label>
             <button class="primary" type="submit">保存昵称和头像</button>
@@ -4396,19 +4434,7 @@ function bindEvents() {
     }
     setState(navigationState);
   }));
-  document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", () => setState({
-    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" ? "community" : state.page === "community" || state.page === "communityFriends" || state.page === "communityChat" || state.page === "communityProfile" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
-    openTurtleMenuId: "",
-    openLedgerMenuId: "",
-    openBreedingMenuId: "",
-    openFeedbackMenuId: "",
-    editingTurtlePoolId: "",
-    editingMarketListingId: "",
-    updatingTurtleId: "",
-    turtleDetailDraftId: "",
-    turtleDetailDraft: null,
-    updateDraftPhoto: ""
-  }, { pageMotion: "none" })));
+  document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", () => setState(backNavigationState(), { pageMotion: "none" })));
   document.querySelectorAll("[data-view-turtle]").forEach(el => el.addEventListener("click", () => setState({ page: "turtleDetail", selectedTurtleId: el.dataset.viewTurtle, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
   document.querySelectorAll("[data-toggle-turtle-menu]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
@@ -4719,6 +4745,14 @@ function bindEvents() {
     openCommunityUserProfile(btn.dataset.viewCommunityUser);
   }));
   document.querySelectorAll("[data-open-community-chat]").forEach(btn => btn.addEventListener("click", () => openCommunityChat(btn.dataset.openCommunityChat)));
+  document.querySelectorAll("[data-toggle-conversation-pin]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    toggleCommunityConversationPin(btn.dataset.toggleConversationPin);
+  }));
+  document.querySelectorAll("[data-delete-conversation]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    deleteCommunityConversation(btn.dataset.deleteConversation);
+  }));
   document.querySelectorAll("[data-delete-community-post]").forEach(btn => btn.addEventListener("click", () => deleteCommunityPost(btn.dataset.deleteCommunityPost)));
   document.querySelector("#communityChatForm")?.addEventListener("submit", sendCommunityMessage);
   document.querySelector("#communityChatForm input[name='content']")?.addEventListener("input", event => {
@@ -4885,6 +4919,11 @@ function bindEvents() {
     input.click();
   });
   document.querySelector("[data-account-avatar-input]")?.addEventListener("change", readAccountAvatar);
+  document.querySelectorAll("[data-select-default-avatar]").forEach(button => button.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    setState({ accountAvatar: button.dataset.selectDefaultAvatar || randomDefaultAccountAvatar() }, { skipCloud: true });
+    toast("已选择内置头像，点击保存后生效");
+  }));
   document.querySelector("#profileForm")?.addEventListener("submit", submitProfile);
   document.querySelectorAll("[data-logout-account]").forEach(btn => btn.addEventListener("click", logoutAccount));
   const policyConsentCheck = document.querySelector("[data-policy-consent-check]");
@@ -6902,7 +6941,7 @@ function mergeCommunityFriends(incomingFriends = []) {
   previous.forEach(friend => {
     if (!incomingIds.has(friend.id) && (friend.lastMessage || friend.lastMessageAt)) merged.push(friend);
   });
-  return merged.sort((left, right) => new Date(right.lastMessageAt || right.createdAt || 0) - new Date(left.lastMessageAt || left.createdAt || 0));
+  return merged.sort((left, right) => Number(right.pinned) - Number(left.pinned) || new Date(right.lastMessageAt || right.createdAt || 0) - new Date(left.lastMessageAt || left.createdAt || 0));
 }
 
 function openCommunityChat(userId) {
@@ -6911,6 +6950,28 @@ function openCommunityChat(userId) {
   communityChatLoadedKey = "";
   pendingCommunityChatLatestScroll = true;
   setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId), communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false }, { skipCloud: true });
+}
+
+async function toggleCommunityConversationPin(userId) {
+  if (!canUseCommunity()) return;
+  try {
+    const result = await apiPost("/api/community/chat/pin", communityAuthPayload({ userId }));
+    setState({ communityFriends: Array.isArray(result.friends) ? result.friends : [] }, { skipCloud: true });
+  } catch (error) {
+    toast(error.message || "操作失败，请重试");
+  }
+}
+
+async function deleteCommunityConversation(userId) {
+  const friend = (state.communityFriends || []).find(item => item.id === userId);
+  const name = String(friend?.name || "该用户").trim();
+  if (!canUseCommunity() || !confirm(`确认删除与“${name}”的聊天记录吗？\n\n删除后将不再显示此会话；收到对方新消息时会再次出现。`)) return;
+  try {
+    const result = await apiPost("/api/community/chat/delete", communityAuthPayload({ userId }));
+    setState({ communityFriends: Array.isArray(result.friends) ? result.friends : [] }, { skipCloud: true });
+  } catch (error) {
+    toast(error.message || "删除失败，请重试");
+  }
 }
 
 async function refreshMessageUnread(force = false) {
@@ -7345,6 +7406,7 @@ async function submitAccountInner(event) {
         code,
         termsAccepted: true,
         accountName: maskPhone(phone),
+        accountAvatar: randomDefaultAccountAvatar(),
         data: initialCloudData
       });
       if (!result.user) throw new Error("注册失败，请稍后重试");
@@ -7361,13 +7423,13 @@ async function submitAccountInner(event) {
   if (!(await verifyServerSmsCode(phone, code))) return toast("验证码不正确");
 
   const accountData = emptyAccountData();
-  const user = { id: crypto.randomUUID(), phone, password, accountName: maskPhone(phone), accountAvatar: "", data: accountData, termsAcceptedAt: new Date().toISOString(), termsVersion: POLICY_VERSION, createdAt: new Date().toISOString() };
+  const user = { id: crypto.randomUUID(), phone, password, accountName: maskPhone(phone), accountAvatar: randomDefaultAccountAvatar(), data: accountData, termsAcceptedAt: new Date().toISOString(), termsVersion: POLICY_VERSION, createdAt: new Date().toISOString() };
   setState({
     ...accountData,
     registeredUsers: [user, ...(state.registeredUsers || [])],
     loggedInPhone: phone,
     accountName: user.accountName,
-    accountAvatar: "",
+    accountAvatar: user.accountAvatar,
     pendingAuthCode: "",
     pendingAuthPhone: "",
     authCodeExpiresAt: "",
@@ -7561,7 +7623,7 @@ function maskPhone(phone) {
 
 function accountAvatarMarkup(className = "avatar") {
   return state.accountAvatar
-    ? `<img class="${className} avatar-img" src="${state.accountAvatar}" alt="头像">`
+    ? `<img class="${className} avatar-img" src="${accountAvatarSource(state.accountAvatar)}" alt="头像">`
     : `<div class="${className}">龟</div>`;
 }
 
@@ -8902,9 +8964,47 @@ function setupPullToRefresh() {
   document.addEventListener("touchcancel", resetPullRefreshIndicator, { passive: true });
 }
 
+function setupEdgeBackAndConversationSwipe() {
+  if (document.body.dataset.edgeGesturesBound === "true") return;
+  document.body.dataset.edgeGesturesBound = "true";
+  let gesture = null;
+  const rootPages = new Set(["home", "ledger", "market", "messages", "mine"]);
+  document.addEventListener("touchstart", event => {
+    if (event.touches.length !== 1 || event.target.closest("input, textarea, select, [contenteditable='true'], .modal-overlay")) return;
+    const touch = event.touches[0];
+    gesture = { x: touch.clientX, y: touch.clientY, row: event.target.closest(".message-friend-swipe"), moved: false };
+  }, { passive: true });
+  document.addEventListener("touchmove", event => {
+    if (!gesture || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    const dx = touch.clientX - gesture.x;
+    const dy = touch.clientY - gesture.y;
+    if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy)) return;
+    gesture.moved = true;
+    if (gesture.row && dx < 0) {
+      gesture.row.classList.toggle("is-open", dx < -44);
+      return;
+    }
+    if (gesture.x <= 24 && dx > 0 && !rootPages.has(state.page) && dx > 38 && event.cancelable) event.preventDefault();
+  }, { passive: false });
+  document.addEventListener("touchend", event => {
+    if (!gesture) return;
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - gesture.x;
+    const dy = touch.clientY - gesture.y;
+    if (gesture.x <= 24 && dx > 78 && Math.abs(dx) > Math.abs(dy) && !rootPages.has(state.page)) {
+      setState(backNavigationState(), { pageMotion: "none" });
+    } else if (!gesture.row && document.querySelector(".message-friend-swipe.is-open") && Math.abs(dx) > Math.abs(dy)) {
+      document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => row.classList.remove("is-open"));
+    }
+    gesture = null;
+  }, { passive: true });
+}
+
 restorePendingCloudData();
 setupMobileKeyboardGuard();
 setupPullToRefresh();
+setupEdgeBackAndConversationSwipe();
 render();
 checkRequiredAppUpdate();
 startMarketNetworkMonitoring();

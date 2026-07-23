@@ -147,3 +147,94 @@ html[data-theme-color="dark"] .care-action-panel .home-module-action.breeding-ac
 html[data-theme-color="dark"] .care-action-panel .home-module-action.ledger-action > span {
   background: #29292b !important;
 }
+/* Native app polish: the web shell must fill an iPhone edge to edge. */
+html, body, #app { width: 100%; min-width: 0; }
+body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior-y: none; }
+input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; user-select: text; }
+@media (max-width: 600px) {
+  body { background: var(--bg); }
+  .phone-shell { width: 100vw; max-width: none; margin: 0; box-shadow: none; }
+  .community-chat-form { width: 100vw; max-width: none; }
+}
+
+/* Chat avatars mark the beginning of a received message group. */
+.community-message-body { display: flex; align-items: flex-start; gap: 8px; }
+.community-message.mine .community-message-body { justify-content: flex-end; }
+.community-message-content { min-width: 0; display: grid; gap: 5px; }
+.community-chat-message-avatar { width: 32px; height: 32px; flex: 0 0 32px; padding: 0; overflow: hidden; border-radius: 50%; background: transparent; }
+.community-chat-avatar { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; object-fit: cover; }
+.community-chat-avatar-spacer { width: 32px; height: 32px; flex: 0 0 32px; }
+.community-message.mine .community-message-media { justify-self: end; }
+
+/* Message list swipe actions. */
+.message-friend-swipe { position: relative; overflow: hidden; background: var(--section-bg); }
+.message-friend-actions { position: absolute; inset: 0 0 0 auto; display: flex; transform: translateX(100%); pointer-events: none; transition: transform .2s ease; }
+.message-friend-actions button { width: 72px; border-radius: 0; color: #fff; background: #4b9f7d; font-size: 13px; font-weight: 700; }
+.message-friend-actions .delete { background: #e45762; }
+.message-friend-row { position: relative; z-index: 1; width: 100%; transform: translateX(0); transition: transform .2s ease; }
+.message-friend-swipe.is-open .message-friend-actions { transform: translateX(0); pointer-events: auto; }
+.message-friend-swipe.is-open .message-friend-row { transform: translateX(-144px); }
+
+/* In dark mode inactive chips are plain text, like the light theme. */
+html[data-theme-color="dark"] .market-stage-tabs { background: #181818 !important; border-color: #292929 !important; }
+html[data-theme-color="dark"] .market-stage-tabs button { color: #c4c4c6 !important; background: transparent !important; }
+html[data-theme-color="dark"] .market-stage-tabs button.active { color: #fff !important; background: #245f70 !important; }
+
+/* Responsive application frame: phones are edge-to-edge; larger screens use their
+   available width instead of a 430px phone mockup.  Every fixed surface shares
+   the same frame width, so headers, tab bar and chat composer stay aligned. */
+:root { --responsive-app-width: 100vw; }
+@media (min-width: 601px) {
+  :root { --responsive-app-width: min(1180px, calc(100vw - 32px)); }
+  body { background: var(--body-bg); }
+  .phone-shell {
+    width: var(--responsive-app-width) !important;
+    min-height: 100dvh;
+    margin: 0 auto;
+    box-shadow: 0 0 36px rgba(0, 0, 0, .08);
+  }
+  .topbar,
+  .bottom-nav,
+  .phone-shell .bottom-nav,
+  .community-chat-form,
+  .community-chat-tools,
+  .community-chat-product-context,
+  .phone-shell::before {
+    width: var(--responsive-app-width) !important;
+  }
+  .community-chat-list {
+    width: 100%;
+    margin-inline: 0;
+  }
+  .community-message p { max-width: min(78%, 620px); }
+}
+
+@media (min-width: 601px) and (max-width: 820px) {
+  :root { --responsive-app-width: calc(100vw - 24px); }
+}
+
+/* Keep short chat text visually centered inside its own message bubble. */
+.community-message p {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+/* Built-in avatar picker in account settings. */
+.default-avatar-picker {
+  margin: 14px 0 4px;
+  padding: 13px;
+  border: 1px solid var(--divider);
+  border-radius: 14px;
+  background: var(--raised-bg);
+}
+.default-avatar-picker > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.default-avatar-picker strong { color: var(--ink); font-size: 14px; }
+.default-avatar-picker span { color: var(--muted); font-size: 11px; }
+.default-avatar-grid { margin-top: 11px; display: grid; grid-template-columns: repeat(auto-fill, 68px); gap: 10px; }
+.default-avatar-option { aspect-ratio: 1; min-width: 0; padding: 2px; border: 2px solid transparent; border-radius: 50%; background: transparent; }
+.default-avatar-option img { width: 100%; height: 100%; display: block; border-radius: 50%; object-fit: cover; }
+.default-avatar-option.active { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+html[data-theme-color="dark"] .default-avatar-picker { border-color: #303033; background: #202020; }
+@media (min-width: 601px) { .default-avatar-grid { grid-template-columns: repeat(auto-fill, 92px); gap: 12px; } }
