@@ -1550,12 +1550,29 @@ function friendshipKey(phoneA, phoneB) {
 
 function communityMessagePreview(message) {
   if (!message) return "";
+  if (message.systemType === "platform_transaction_warning") return "平台官方提醒";
   const content = String(message.content || message.text || message.message || "").trim();
   if (content) return content;
   if (message.marketListing?.title || message.marketListing?.speciesName) {
     return `咨询商品：${message.marketListing.title || message.marketListing.speciesName}`;
   }
   return message.mediaUrl ? (message.mediaType === "video" ? "[视频]" : "[图片]") : "";
+}
+
+const PLATFORM_TRANSACTION_WARNING = "私下直款交易有风险，请联系平台客服";
+function isPriceNegotiationMessage(content) {
+  const text = String(content || "").trim();
+  if (!text) return false;
+  return /(?:价格|价钱|报价|多少钱|多少米|砍价|便宜|优惠|包邮|到手价|一口价|直款|转账|付款|收款|定金|尾款|￥|¥|\d+(?:\.\d{1,2})?\s*(?:元|块))/i.test(text);
+}
+
+function hasRecentPlatformTransactionWarning(db, phoneA, phoneB) {
+  const cutoff = Date.now() - (12 * 60 * 60 * 1000);
+  return (Array.isArray(db.messages) ? db.messages : []).some(item =>
+    item.systemType === "platform_transaction_warning" &&
+    ((item.fromPhone === phoneA && item.toPhone === phoneB) || (item.fromPhone === phoneB && item.toPhone === phoneA)) &&
+    new Date(item.createdAt || 0).getTime() >= cutoff
+  );
 }
 
 function marketChatListingSnapshot(db, listingId, sellerPhone = "") {
@@ -1635,7 +1652,8 @@ function communityConversationMessages(db, phoneA, phoneB) {
         rawContent,
         mediaUrl: item.mediaUrl || "",
         posterUrl: item.posterUrl || "",
-        mediaType: item.mediaType === "video" ? "video" : "image",
+      mediaType: item.mediaType === "video" ? "video" : "image",
+        official: item.systemType === "platform_transaction_warning",
         mine: item.fromPhone === phoneA,
         senderId: communityUserId(item.fromPhone),
         senderAvatar: db.users?.[item.fromPhone]?.accountAvatar || "",
@@ -2110,7 +2128,19 @@ async function handleCommunityChatSend(req, res) {
     readAt: "",
     createdAt: new Date().toISOString()
   };
-  db.messages = [...(Array.isArray(db.messages) ? db.messages : []), message].slice(-5000);
+  const newMessages = [...(Array.isArray(db.messages) ? db.messages : []), message];
+  if (isPriceNegotiationMessage(content) && !hasRecentPlatformTransactionWarning(db, user.phone, target.phone)) {
+    newMessages.push({
+      id: crypto.randomUUID(),
+      fromPhone: user.phone,
+      toPhone: target.phone,
+      content: PLATFORM_TRANSACTION_WARNING,
+      systemType: "platform_transaction_warning",
+      readAt: "",
+      createdAt: new Date().toISOString()
+    });
+  }
+  db.messages = newMessages.slice(-5000);
   // A new message restores a conversation explicitly deleted by either participant.
   [user, target].forEach(account => {
     account.data = normalizeAccountData(account.data);

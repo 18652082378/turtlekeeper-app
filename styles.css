@@ -13007,6 +13007,7 @@ html[data-theme-color="dark"] .action-panel.care-action-panel.home-module-panel 
 
 .community-chat-topbar {
   min-height: 0;
+  position: relative;
 }
 
 .community-chat-nav {
@@ -13040,6 +13041,36 @@ html[data-theme-color="dark"] .action-panel.care-action-panel.home-module-panel 
   font-size: 19px;
   font-weight: 800;
   letter-spacing: 2px;
+}
+
+.community-chat-service {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  min-width: 42px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 17px;
+  color: var(--accent-deep);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.community-chat-service svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
 }
 
 .community-chat-product-strip {
@@ -13248,6 +13279,67 @@ html[data-theme-color="dark"] .action-panel.care-action-panel.home-module-panel 
   text-align: center;
 }
 
+.community-message-official {
+  gap: 6px;
+  margin: 3px 0;
+}
+
+.community-official-reminder {
+  width: min(100%, 390px);
+  justify-self: center;
+  padding: 10px 12px;
+  border: 1px solid #f0d497;
+  border-radius: 12px;
+  color: #77561b;
+  background: #fff8e8;
+  box-shadow: 0 3px 12px rgba(112, 84, 24, .06);
+}
+
+.community-official-reminder > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.community-official-reminder i {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #d79a28;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+}
+
+.community-official-reminder strong {
+  font-size: 12px;
+}
+
+.community-official-reminder p {
+  width: auto;
+  max-width: none;
+  margin: 5px 0 8px;
+  padding: 0;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  font-size: 13px;
+}
+
+.community-official-reminder button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 14px;
+  color: #735015;
+  background: #f9e8bd;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .community-chat-empty {
   margin: auto;
   color: var(--muted);
@@ -13279,6 +13371,22 @@ html[data-theme-color="dark"] .community-message p {
 html[data-theme-color="dark"] .community-message.mine p {
   color: #dff7e9 !important;
   background: #24523b !important;
+}
+
+html[data-theme-color="dark"] .community-official-reminder {
+  border-color: #594927;
+  color: #f0d899;
+  background: #312b1d;
+}
+
+html[data-theme-color="dark"] .community-official-reminder p {
+  color: #f0d899 !important;
+  background: transparent !important;
+}
+
+html[data-theme-color="dark"] .community-official-reminder button {
+  color: #f4dfaa;
+  background: #4a3d21;
 }
 
 @media (max-width: 360px) {

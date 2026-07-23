@@ -1885,6 +1885,9 @@ function pageCommunityChat() {
   const marketListing = normalizeCommunityChatListing(state.communityChatListing);
   const toolsOpen = Boolean(state.communityChatToolsOpen);
   const messageMarkup = (message, index) => {
+    if (message.official) {
+      return `<div class="community-message community-message-official"><small>${formatTime(message.createdAt)}</small><section class="community-official-reminder"><div><i aria-hidden="true">!</i><strong>平台官方提醒</strong></div><p>${escapeHtml(message.rawContent || "私下直款交易有风险，请联系平台客服")}</p><button type="button" data-open-platform-wechat>联系客服</button></section></div>`;
+    }
     const rawContent = String(message.rawContent ?? message.content ?? "").trim();
     const mediaUrl = message.mediaUrl ? apiAssetUrl(message.mediaUrl) : "";
     const mediaType = message.mediaType === "video" ? "video" : "image";
@@ -1905,6 +1908,7 @@ function pageCommunityChat() {
   const chatHeader = `
     <div class="topbar community-chat-topbar">
       <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button></div>
+      <button class="community-chat-service" type="button" data-open-platform-wechat aria-label="联系平台客服"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.2v-1.1a7.5 7.5 0 0 1 15 0v1.1"></path><path d="M4.5 12.6H3.8a1.8 1.8 0 0 0-1.8 1.8v2.1a1.8 1.8 0 0 0 1.8 1.8h1.7v-5.7ZM19.5 12.6h.7a1.8 1.8 0 0 1 1.8 1.8v2.1a1.8 1.8 0 0 1-1.8 1.8h-1.7v-5.7ZM19.5 18.1c0 1.3-1.2 2.4-2.7 2.4h-1.5"></path><path d="M13.2 20.5h2.4"></path></svg><span>客服</span></button>
     </div>
   `;
   return `
