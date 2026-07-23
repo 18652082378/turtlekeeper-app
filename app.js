@@ -8857,7 +8857,7 @@ function pullRefreshIndicator() {
   indicator = document.createElement("div");
   indicator.className = "pull-refresh-indicator";
   indicator.setAttribute("aria-live", "polite");
-  indicator.innerHTML = `<i aria-hidden="true">↓</i><span>下拉刷新</span>`;
+  indicator.innerHTML = `<i aria-hidden="true"></i><span>下拉刷新</span>`;
   document.body.appendChild(indicator);
   return indicator;
 }
@@ -8866,13 +8866,16 @@ function setPullRefreshIndicator({ distance = 0, ready = false, refreshing = fal
   const indicator = pullRefreshIndicator();
   const visibleDistance = refreshing ? 62 : Math.min(PULL_REFRESH_MAX_OFFSET, Math.max(0, distance * .56));
   const pageOffset = refreshing ? 54 : Math.min(PULL_REFRESH_MAX_OFFSET, Math.max(0, distance * .42));
-  const label = refreshing ? "正在刷新中" : ready ? "松开即可刷新" : "下拉刷新";
+  // Put the hint in the gap opened under the header, matching the finger pull.
+  const headerBottom = document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0;
+  const label = refreshing ? "正在刷新中···" : ready ? "松开即可刷新" : "下拉刷新";
   indicator.style.setProperty("--pull-refresh-distance", `${visibleDistance}px`);
   indicator.classList.toggle("is-visible", visibleDistance > 0);
   indicator.classList.toggle("is-ready", Boolean(ready) && !refreshing);
   indicator.classList.toggle("is-refreshing", Boolean(refreshing));
   indicator.querySelector("span").textContent = label;
 
+  document.body.style.setProperty("--pull-refresh-header-bottom", `${Math.max(0, headerBottom)}px`);
   document.body.style.setProperty("--pull-refresh-page-offset", `${pageOffset}px`);
   document.body.classList.toggle("pull-refresh-active", pageOffset > 0);
   document.body.classList.toggle("pull-refresh-dragging", pageOffset > 0 && !refreshing);

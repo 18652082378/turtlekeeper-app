@@ -57,7 +57,8 @@ button { border: 0; cursor: pointer; }
   --pull-refresh-distance: 0px;
   position: fixed;
   z-index: 1200;
-  top: max(8px, env(safe-area-inset-top, 0px));
+  /* The hint belongs in the gap revealed directly below the fixed header. */
+  top: var(--pull-refresh-header-bottom, max(8px, env(safe-area-inset-top, 0px)));
   left: 50%;
   min-width: 116px;
   min-height: 34px;
@@ -66,16 +67,16 @@ button { border: 0; cursor: pointer; }
   align-items: center;
   justify-content: center;
   gap: 6px;
-  border: 1px solid rgba(36, 107, 122, .1);
+  border: 1px solid var(--card-border);
   border-radius: 999px;
-  color: #3b6871;
-  background: rgba(255, 255, 255, .96);
-  box-shadow: 0 8px 20px rgba(22, 48, 57, .12);
+  color: var(--muted);
+  background: var(--topbar-bg);
+  box-shadow: 0 8px 20px rgba(22, 48, 57, .16);
   font-size: 12px;
   font-weight: 650;
   pointer-events: none;
   opacity: 0;
-  transform: translate(-50%, calc(-120% + var(--pull-refresh-distance)));
+  transform: translate3d(-50%, calc(-100% + var(--pull-refresh-distance)), 0);
   transition: transform .18s ease, opacity .18s ease;
 }
 
@@ -87,18 +88,18 @@ button { border: 0; cursor: pointer; }
 .pull-refresh-indicator i {
   width: 15px;
   height: 15px;
-  display: grid;
-  place-items: center;
-  color: var(--accent);
-  font-size: 17px;
-  font-style: normal;
-  font-weight: 700;
-  line-height: 1;
+  box-sizing: border-box;
+  flex: 0 0 15px;
+  border: 2px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
   transition: transform .18s ease;
 }
 
 .pull-refresh-indicator.is-ready i {
-  transform: rotate(180deg);
+  border-top-color: transparent;
+  border-right-color: var(--accent);
+  transform: rotate(135deg);
 }
 
 .pull-refresh-indicator.is-refreshing i {
@@ -106,7 +107,6 @@ button { border: 0; cursor: pointer; }
 }
 
 /* 龟集市、消息与壳友圈下拉刷新：内容随手势轻微下移，松手后回弹。 */
-body.pull-refresh-active .topbar,
 body.pull-refresh-active .content {
   transform: translate3d(0, var(--pull-refresh-page-offset, 0px), 0);
   transition: transform .22s cubic-bezier(.2, .75, .25, 1);
@@ -115,7 +115,6 @@ body.pull-refresh-active .content {
   -webkit-backface-visibility: hidden;
 }
 
-body.pull-refresh-dragging .topbar,
 body.pull-refresh-dragging .content {
   transition: none;
 }
