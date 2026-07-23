@@ -1656,6 +1656,34 @@ function bottomNav() {
   `;
 }
 
+function bottomNavActivePage(page = state.page) {
+  if (["home", "list", "turtleDetail", "species", "breeds", "add", "memos", "breeding", "breedingAdd", "breedingDetail", "pools", "poolAdd"].includes(page)) return "home";
+  if (["ledger", "ledgerDetail"].includes(page)) return "ledger";
+  if (["market", "marketAdd", "marketDetail", "marketSeller"].includes(page)) return "market";
+  if (["messages", "community", "communityAdd", "communityFriends", "communityChat", "communityPostDetail", "communityProfile"].includes(page)) return "messages";
+  return "mine";
+}
+
+function syncPersistentBottomNav(nav) {
+  if (!nav) return;
+  const activePage = bottomNavActivePage();
+  nav.querySelectorAll("[data-page]").forEach(button => button.classList.toggle("active", button.dataset.page === activePage));
+  const messageButton = nav.querySelector("[data-page='messages']");
+  if (!messageButton) return;
+  const unreadCount = Math.max(0, Number(state.messageUnreadCount || 0));
+  let badge = messageButton.querySelector(".nav-unread-badge");
+  if (unreadCount) {
+    if (!badge) {
+      badge = document.createElement("i");
+      badge.className = "nav-unread-badge";
+      messageButton.appendChild(badge);
+    }
+    badge.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+  } else {
+    badge?.remove();
+  }
+}
+
 function communityAvatar(item, className = "community-avatar") {
   if (item.authorAvatar || item.avatar) return `<img class="${className}" src="${item.authorAvatar || item.avatar}" alt="头像">`;
   return `<span class="${className} fallback-avatar">${escapeHtml(String(item.authorName || item.name || "壳").slice(0, 1))}</span>`;
@@ -4187,10 +4215,21 @@ function render() {
     pools: pageTurtlePools,
     poolAdd: pageTurtlePoolAdd
   };
-  $app.innerHTML = (pages[state.page] || pageHome)() + policyConsentGate();
+  // Reset before replacing content. Resetting after a complete DOM replacement
+  // makes iOS recompute fixed surfaces twice and causes the visible tab-bar hop.
   if (pendingPageScrollReset) {
     pendingPageScrollReset = false;
-    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    if (window.scrollY > 1) window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }
+  // Root tab pages retain one physical bottom-nav node between renders. Its
+  // safe-area geometry and compositor layer therefore remain stable while only
+  // the middle content is replaced.
+  const persistentBottomNav = $app.querySelector(".bottom-nav");
+  $app.innerHTML = (pages[state.page] || pageHome)() + policyConsentGate();
+  const incomingBottomNav = $app.querySelector(".bottom-nav");
+  if (persistentBottomNav && incomingBottomNav) {
+    incomingBottomNav.replaceWith(persistentBottomNav);
+    syncPersistentBottomNav(persistentBottomNav);
   }
   if (pendingPageEnterMotion) {
     pendingPageEnterMotion = false;
@@ -4318,7 +4357,10 @@ function bindEvents() {
       setState({ openBreedingMenuId: "" });
     }, { once: true });
   }
-  document.querySelectorAll("[data-page]").forEach(el => el.addEventListener("click", event => {
+  document.querySelectorAll("[data-page]").forEach(el => {
+    if (el.dataset.pageNavigationBound === "true") return;
+    el.dataset.pageNavigationBound = "true";
+    el.addEventListener("click", event => {
     event.preventDefault();
     const targetPage = el.dataset.page;
     if (targetPage === "add" && !requireArchiveCapacity()) return;
@@ -4350,8 +4392,9 @@ function bindEvents() {
       navigationState.speciesPickerForAdd = state.page === "add";
       if (state.page === "add") navigationState.formDraft = captureTurtleFormDraft();
     }
-    setState(navigationState);
-  }));
+      setState(navigationState);
+    });
+  });
   document.querySelectorAll("[data-open-platform-wechat]").forEach(button => button.addEventListener("click", openPlatformWeChat));
   document.querySelectorAll("[data-open-platform-service-dialog]").forEach(button => button.addEventListener("click", openMarketTopService));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", () => setState(backNavigationState(), { pageMotion: "none" })));
