@@ -8980,6 +8980,7 @@ html[data-theme-color="dark"] .market-seller-card strong {
   background: transparent;
   border-bottom: 1px solid var(--divider);
   text-align: left;
+  will-change: transform;
 }
 
 .message-friend-row:last-child {
@@ -9018,6 +9019,44 @@ html[data-theme-color="dark"] .market-seller-card strong {
   font-style: normal;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* Chat opens like a native conversation: the header settles first, followed
+   by the message surface and composer. This is scoped to intentional chat
+   entry only, so list refreshes never visibly jump. */
+#app.community-chat-enter-motion .community-chat-topbar {
+  animation: community-chat-header-in .22s cubic-bezier(.2,.72,.25,1) both;
+}
+
+#app.community-chat-enter-motion .community-chat-page {
+  animation: community-chat-surface-in .28s cubic-bezier(.2,.72,.25,1) both;
+}
+
+#app.community-chat-enter-motion .community-chat-form {
+  animation: community-chat-composer-in .26s cubic-bezier(.2,.72,.25,1) both;
+}
+
+@keyframes community-chat-header-in {
+  from { opacity: .7; transform: translate3d(14px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes community-chat-surface-in {
+  from { opacity: .45; transform: translate3d(24px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes community-chat-composer-in {
+  from { opacity: 0; transform: translate3d(-50%, 10px, 0); }
+  to { opacity: 1; transform: translate3d(-50%, 0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #app.community-chat-enter-motion .community-chat-topbar,
+  #app.community-chat-enter-motion .community-chat-page,
+  #app.community-chat-enter-motion .community-chat-form {
+    animation: none;
+  }
 }
 
 .message-empty {

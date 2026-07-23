@@ -347,6 +347,7 @@ let marketLoadObserver = null;
 let marketChatDraft = "";
 let pendingCommunityChatLatestScroll = false;
 let pendingPageEnterMotion = false;
+let pendingCommunityChatEnterMotion = false;
 let pageEnterMotionTimer = null;
 let pendingPageScrollReset = false;
 let nativePushListenersAttached = false;
@@ -640,6 +641,7 @@ function saveState(options = {}) {
 function setState(patch, options = {}) {
   const pageChanged = Object.prototype.hasOwnProperty.call(patch, "page") && patch.page && patch.page !== state.page;
   if (pageChanged) {
+    pendingCommunityChatEnterMotion = options.pageMotion === "chat";
     // Full-page scale/fade on every navigation causes visible reflow on long
     // lists and media-heavy pages. Navigation is instant by default; gestures
     // retain their own compositor-driven motion.
@@ -650,6 +652,7 @@ function setState(patch, options = {}) {
       pageEnterMotionTimer = null;
       $app.classList.remove("page-enter-motion");
     }
+    if (!pendingCommunityChatEnterMotion) $app.classList.remove("community-chat-enter-motion");
   }
   state = { ...state, ...patch };
   saveState(options);
@@ -4200,6 +4203,13 @@ function render() {
       pageEnterMotionTimer = null;
     }, 380);
   }
+  if (pendingCommunityChatEnterMotion) {
+    pendingCommunityChatEnterMotion = false;
+    $app.classList.remove("community-chat-enter-motion");
+    void $app.offsetWidth;
+    $app.classList.add("community-chat-enter-motion");
+    window.setTimeout(() => $app.classList.remove("community-chat-enter-motion"), 300);
+  }
   bindEvents();
   setupMarketInfiniteScroll();
   requestAnimationFrame(hydrateVideoFirstFrames);
@@ -6870,7 +6880,7 @@ function openCommunityChat(userId) {
   marketChatDraft = "";
   communityChatLoadedKey = "";
   pendingCommunityChatLatestScroll = true;
-  setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId), communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false }, { skipCloud: true });
+  setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId), communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false }, { skipCloud: true, pageMotion: "chat" });
 }
 
 async function toggleCommunityConversationPin(userId) {
@@ -8922,10 +8932,15 @@ function setupEdgeBackAndConversationSwipe() {
     gesture.moved = true;
     if (gesture.row && Math.abs(dx) > Math.abs(dy)) {
       const currentOpen = gesture.row.classList.contains("is-open");
-      const reveal = Math.min(144, Math.max(0, (currentOpen ? 144 : 0) - dx));
+      const actionWidth = 144;
+      const rawReveal = Math.max(0, (currentOpen ? actionWidth : 0) - dx);
+      const reveal = rawReveal > actionWidth
+        ? actionWidth + ((rawReveal - actionWidth) * .16)
+        : rawReveal;
       gesture.row.classList.add("is-dragging");
       gesture.row.querySelector(".message-friend-row")?.style.setProperty("transform", `translate3d(${-reveal}px, 0, 0)`);
-      gesture.row.dataset.swipeReveal = String(reveal);
+      gesture.row.style.setProperty("--message-swipe-reveal", `${Math.min(actionWidth, reveal)}px`);
+      gesture.row.dataset.swipeReveal = String(Math.min(actionWidth, reveal));
       if (event.cancelable) event.preventDefault();
       return;
     }
@@ -8949,6 +8964,7 @@ function setupEdgeBackAndConversationSwipe() {
       gesture.row.classList.toggle("is-open", shouldOpen);
       const row = gesture.row.querySelector(".message-friend-row");
       if (row) row.style.transform = "";
+      gesture.row.style.removeProperty("--message-swipe-reveal");
       delete gesture.row.dataset.swipeReveal;
     } else if (gesture.edgeBack) {
       const shouldComplete = dx > Math.max(78, window.innerWidth * .18) && Math.abs(dx) > Math.abs(dy);
