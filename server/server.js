@@ -52,6 +52,7 @@ const APNS_BUNDLE_ID = String(process.env.APNS_BUNDLE_ID || "com.turtlekeeper.ap
 const APNS_HOST = String(process.env.APNS_HOST || "api.push.apple.com").trim();
 const APNS_KEY_PATH = String(process.env.APNS_KEY_PATH || "").trim();
 const APNS_KEY_BASE64 = String(process.env.APNS_KEY_BASE64 || "").trim();
+const CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || "Asia/Shanghai").trim();
 const MARKET_SALE_METHODS = ["自有客户成交", "闲鱼成交", "壳友手账成交"];
 const DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);
 
@@ -246,7 +247,7 @@ function normalizeAccountData(data = {}) {
 }
 
 function emptyDatabase() {
-  return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [], reports: [] };
+  return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [], reports: [], careReminderDeliveries: {} };
 }
 
 function readDatabase() {
@@ -263,7 +264,8 @@ function readDatabase() {
           friendships: Array.isArray(data.friendships) ? data.friendships : [],
           messages: Array.isArray(data.messages) ? data.messages : [],
           follows: Array.isArray(data.follows) ? data.follows : [],
-          reports: Array.isArray(data.reports) ? data.reports : []
+          reports: Array.isArray(data.reports) ? data.reports : [],
+          careReminderDeliveries: data.careReminderDeliveries && typeof data.careReminderDeliveries === "object" ? data.careReminderDeliveries : {}
         }
       : emptyDatabase();
   } catch {
@@ -641,6 +643,97 @@ async function notifyCommunityMessage(db, message, sender, recipient) {
     if (result.invalid) removeInvalidPushDevice(recipient.phone, devices[index].token);
     else if (!result.ok && !result.skipped) console.warn("APNs push failed:", result.reason || result.status || "unknown");
   });
+}
+
+function careReminderClock(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CARE_REMINDER_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    weekday: "short"
+  }).formatToParts(date).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+  const weekdays = { Sun: "0", Mon: "1", Tue: "2", Wed: "3", Thu: "4", Fri: "5", Sat: "6" };
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    time: `${parts.hour}:${parts.minute}`,
+    weekday: weekdays[parts.weekday] || "",
+    occurrence: `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`
+  };
+}
+
+function careReminderDue(memo, clock) {
+  if (!memo || !/^\d{2}:\d{2}$/.test(String(memo.remindTime || ""))) return false;
+  if (String(memo.remindTime) !== clock.time) return false;
+  if (!memo.repeat) return true;
+  const weekdays = Array.isArray(memo.weekdays) ? memo.weekdays.map(String) : [];
+  return !weekdays.length || weekdays.includes(clock.weekday);
+}
+
+async function notifyCareReminder(user, memo) {
+  const devices = normalizedPushDevices(user.pushDevices);
+  if (!devices.length) return false;
+  const payload = {
+    aps: {
+      alert: {
+        title: "壳友手账护理提醒",
+        body: String(memo.title || "护理事项").slice(0, 120)
+      },
+      sound: "default"
+    },
+    route: "memos",
+    memoId: String(memo.id || "")
+  };
+  const results = await Promise.all(devices.map(item => sendApnsNotification(item.token, payload)));
+  let delivered = false;
+  results.forEach((result, index) => {
+    if (result.ok) delivered = true;
+    if (result.invalid) removeInvalidPushDevice(user.phone, devices[index].token);
+    else if (!result.ok && !result.skipped) console.warn("Care reminder push failed:", result.reason || result.status || "unknown");
+  });
+  return delivered;
+}
+
+let careReminderDispatching = false;
+async function dispatchDueCareReminders() {
+  if (careReminderDispatching || !apnsConfigured()) return;
+  careReminderDispatching = true;
+  try {
+    const db = readDatabase();
+    const clock = careReminderClock();
+    const deliveries = db.careReminderDeliveries || {};
+    let changed = false;
+    for (const user of Object.values(db.users || {})) {
+      const memos = Array.isArray(user?.data?.memos) ? user.data.memos : [];
+      for (const memo of memos) {
+        if (!careReminderDue(memo, clock)) continue;
+        const revision = String(memo.updatedAt || memo.createdAt || "");
+        const deliveryKey = memo.repeat
+          ? `repeat:${user.phone}:${memo.id}:${revision}:${clock.occurrence}`
+          : `once:${user.phone}:${memo.id}:${revision}`;
+        if (deliveries[deliveryKey]) continue;
+        if (await notifyCareReminder(user, memo)) {
+          deliveries[deliveryKey] = new Date().toISOString();
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      const cutoff = Date.now() - (45 * 24 * 60 * 60 * 1000);
+      for (const [key, deliveredAt] of Object.entries(deliveries)) {
+        if (key.startsWith("repeat:") && Date.parse(deliveredAt) < cutoff) delete deliveries[key];
+      }
+      db.careReminderDeliveries = deliveries;
+      writeDatabase(db);
+    }
+  } catch (error) {
+    console.warn("Care reminder dispatch failed:", error.message || error);
+  } finally {
+    careReminderDispatching = false;
+  }
 }
 
 function aliyunConfigured() {
@@ -2741,6 +2834,11 @@ setInterval(() => {
   if (autoOfflineRestrictedMarketListings(db)) changed = true;
   if (changed) writeDatabase(db);
 }, 60 * 60 * 1000).unref();
+
+// Remote care reminders are checked twice a minute, allowing a short recovery
+// window if the timer runs close to the minute boundary.
+setInterval(() => { void dispatchDueCareReminders(); }, 30 * 1000).unref();
+void dispatchDueCareReminders();
 
 try {
   if (!hasBackupForDate()) createServerBackup("startup");

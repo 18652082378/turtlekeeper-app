@@ -49,10 +49,10 @@ const WEEKDAY_OPTIONS = [
   { value: "6", label: "六" },
   { value: "0", label: "日" }
 ];
-let careReminderTimers = [];
 const PULL_REFRESH_THRESHOLD = 72;
 const PULL_REFRESH_MAX_OFFSET = 72;
 let pullRefreshState = { tracking: false, refreshing: false, startX: 0, startY: 0, distance: 0, ready: false, direction: "" };
+let pullRefreshAnimationFrame = 0;
 
 const initialState = {
   page: "home",
@@ -640,7 +640,10 @@ function saveState(options = {}) {
 function setState(patch, options = {}) {
   const pageChanged = Object.prototype.hasOwnProperty.call(patch, "page") && patch.page && patch.page !== state.page;
   if (pageChanged) {
-    pendingPageEnterMotion = options.pageMotion !== "none";
+    // Full-page scale/fade on every navigation causes visible reflow on long
+    // lists and media-heavy pages. Navigation is instant by default; gestures
+    // retain their own compositor-driven motion.
+    pendingPageEnterMotion = options.pageMotion === "enter";
     pendingPageScrollReset = options.pageScroll !== "preserve";
     if (!pendingPageEnterMotion) {
       if (pageEnterMotionTimer) window.clearTimeout(pageEnterMotionTimer);
@@ -998,128 +1001,25 @@ function memoWeekdays(memo) {
   return values.map(String).filter(value => WEEKDAY_OPTIONS.some(item => item.value === value));
 }
 
-function nextCareReminderDate(memo, forcedWeekday = null) {
-  if (!memo?.remindTime) return null;
-  const [hourText, minuteText] = String(memo.remindTime).split(":");
-  const hour = Number(hourText);
-  const minute = Number(minuteText);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
-  const now = new Date();
-  const selectedDays = forcedWeekday === null ? memoWeekdays(memo) : [String(forcedWeekday)];
-  const candidateDays = memo.repeat && selectedDays.length ? selectedDays : ["single"];
-  let bestDate = null;
-
-  candidateDays.forEach(dayValue => {
-    const candidate = new Date(now);
-    candidate.setHours(hour, minute, 0, 0);
-    if (dayValue !== "single") {
-      const targetDay = Number(dayValue);
-      const diff = (targetDay - candidate.getDay() + 7) % 7;
-      candidate.setDate(candidate.getDate() + diff);
-      if (candidate <= now) candidate.setDate(candidate.getDate() + 7);
-    } else if (candidate <= now) {
-      candidate.setDate(candidate.getDate() + 1);
-    }
-    if (!bestDate || candidate < bestDate) bestDate = candidate;
-  });
-
-  return bestDate;
-}
-
-function showCareReminder(memo) {
-  const title = "壳友手账提醒您";
-  const body = memo?.title || "护理事项";
-  if ("Notification" in window && Notification.permission === "granted") {
-    try {
-      new Notification(title, { body });
-      return;
-    } catch {
-      // Some embedded WebViews expose Notification but still reject it.
-    }
-  }
-  toast(`${title}：${body}`);
-}
-
 function refreshCareReminderTimers() {
-  careReminderTimers.forEach(timer => clearTimeout(timer));
-  careReminderTimers = [];
-  if (!("Notification" in window) || Notification.permission !== "granted") return;
-  (state.memos || []).forEach(memo => {
-    const nextDate = nextCareReminderDate(memo);
-    if (!nextDate) return;
-    const delay = Math.max(0, nextDate.getTime() - Date.now());
-    const timer = setTimeout(() => {
-      showCareReminder(memo);
-      if (memo.repeat) refreshCareReminderTimers();
-    }, Math.min(delay, 2147483647));
-    careReminderTimers.push(timer);
-  });
-}
-
-function careReminderBaseId(memo) {
-  return Math.abs(String(memo?.id || "").split("").reduce((sum, char) => ((sum * 31) + char.charCodeAt(0)) | 0, 910000));
+  // Kept as a no-op for existing state transitions. The server owns the
+  // reminder schedule and sends the remote notification.
 }
 
 async function requestCareReminderPermission() {
-  const localNotifications = window.Capacitor?.Plugins?.LocalNotifications;
-  if (localNotifications?.requestPermissions) {
-    try {
-      const result = await localNotifications.requestPermissions();
-      return result?.display === "granted" || result?.display === "prompt" || result?.granted;
-    } catch {
-      return false;
-    }
-  }
-  if (!("Notification" in window)) return false;
-  if (Notification.permission === "granted") return true;
-  if (Notification.permission === "denied") return false;
-  try {
-    return await Notification.requestPermission() === "granted";
-  } catch {
-    return false;
-  }
+  // Chat and nursing reminders use the same native APNs authorization. The
+  // browser/local-notification permission is not a reliable iOS signal.
+  return true;
 }
 
 async function scheduleNativeCareReminder(memo) {
-  const localNotifications = window.Capacitor?.Plugins?.LocalNotifications;
-  if (!localNotifications?.schedule || !memo?.remindTime) return false;
-  const selectedDays = memo.repeat ? memoWeekdays(memo) : [];
-  const days = selectedDays.length ? selectedDays : [null];
-  const baseId = careReminderBaseId(memo);
-  const oldIds = Array.from({ length: 8 }, (_, index) => ({ id: baseId + index }));
-  try {
-    if (localNotifications.cancel) await localNotifications.cancel({ notifications: oldIds });
-    const notifications = days.map((dayValue, index) => {
-      const at = nextCareReminderDate(memo, dayValue);
-      return {
-        id: baseId + index,
-        title: "壳友手账提醒您",
-        body: memo.title || "护理事项",
-        schedule: memo.repeat
-          ? { at, repeats: true, every: dayValue === null ? "day" : "week" }
-          : { at, repeats: false }
-      };
-    }).filter(item => item.schedule.at);
-    if (!notifications.length) return false;
-    await localNotifications.schedule({ notifications });
-    return true;
-  } catch (error) {
-    console.warn("系统通知排程失败", error);
-    return false;
-  }
+  // Scheduling happens on the server so reminders work after the app exits.
+  return Boolean(memo?.remindTime);
 }
 
 async function cancelNativeCareReminder(memo) {
-  const localNotifications = window.Capacitor?.Plugins?.LocalNotifications;
-  if (!localNotifications?.cancel || !memo?.id) return;
-  const baseId = careReminderBaseId(memo);
-  try {
-    await localNotifications.cancel({
-      notifications: Array.from({ length: 8 }, (_, index) => ({ id: baseId + index }))
-    });
-  } catch {
-    // The reminder may only be using the in-page fallback.
-  }
+  // Deleting or updating the cloud-synced memo updates the server schedule.
+  return Boolean(memo?.id);
 }
 
 async function activateCareReminder(memo) {
@@ -4111,6 +4011,8 @@ function pageAbout() {
       <section class="fresh-card settings-card about-contact-card">
         <div class="settings-title">交流与商务合作</div>
         <div class="about-contact-row"><span>微信号</span><strong>${PLATFORM_SERVICE_WECHAT}</strong></div>
+        <button class="about-contact-action" type="button" data-open-platform-wechat>复制微信号并打开微信</button>
+        <p class="muted about-contact-tip">微信打开后，粘贴客服微信号并搜索即可添加。</p>
       </section>
       <section class="fresh-card settings-card about-compliance-card">
         <div class="settings-title">规则与隐私</div>
@@ -4337,16 +4239,18 @@ function policyConsentGate() {
 function scrollCommunityChatToLatest() {
   if (!pendingCommunityChatLatestScroll || state.page !== "communityChat") return;
   if (!communityChatLoadedKey && !(state.communityChatMessages || []).length) return;
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      if (!pendingCommunityChatLatestScroll || state.page !== "communityChat") return;
-      const list = document.querySelector(".community-chat-list");
-      if (!list) return;
-      const top = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
-      window.scrollTo({ top, left: 0, behavior: "auto" });
-      pendingCommunityChatLatestScroll = false;
-    });
-  });
+  const scrollToBottom = () => {
+    if (state.page !== "communityChat") return;
+    const list = document.querySelector(".community-chat-list");
+    if (!list) return;
+    const top = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, list.scrollHeight);
+    window.scrollTo({ top, left: 0, behavior: "auto" });
+  };
+  requestAnimationFrame(() => requestAnimationFrame(scrollToBottom));
+  // Images and videos gain their final height after the first layout pass. Recheck
+  // the bottom briefly so re-entering a conversation always lands on the newest media.
+  [120, 420, 950].forEach(delay => window.setTimeout(scrollToBottom, delay));
+  pendingCommunityChatLatestScroll = false;
 }
 
 function accountCodeCooldownRemaining() {
@@ -4434,6 +4338,7 @@ function bindEvents() {
     }
     setState(navigationState);
   }));
+  document.querySelectorAll("[data-open-platform-wechat]").forEach(button => button.addEventListener("click", openPlatformWeChat));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", () => setState(backNavigationState(), { pageMotion: "none" })));
   document.querySelectorAll("[data-view-turtle]").forEach(el => el.addEventListener("click", () => setState({ page: "turtleDetail", selectedTurtleId: el.dataset.viewTurtle, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
   document.querySelectorAll("[data-toggle-turtle-menu]").forEach(btn => btn.addEventListener("click", event => {
@@ -6222,6 +6127,17 @@ async function copyText(text, successText = "已复制") {
   }
 }
 
+async function openPlatformWeChat() {
+  const copied = await copyText(PLATFORM_SERVICE_WECHAT, "客服微信号已复制，正在打开微信");
+  if (!copied) return;
+  // WeChat intentionally does not expose a URL that opens a personal account's
+  // add-friend page. Opening WeChat after copying provides the shortest safe flow.
+  window.location.href = "weixin://dl/chat";
+  window.setTimeout(() => {
+    if (document.visibilityState === "visible") toast("请在微信中粘贴并搜索客服微信号添加好友");
+  }, 900);
+}
+
 function marketShareUrl(listing) {
   const base = String(window.TURTLE_PUBLIC_APP_URL || "https://api.turtleworld.cn/").replace(/\/?$/, "/");
   return `${base}?market=${encodeURIComponent(String(listing?.id || ""))}`;
@@ -6300,7 +6216,7 @@ function openMarketTopService() {
         <button type="button" data-market-service-close aria-label="关闭">×</button>
       </div>
       <div class="market-service-wechat"><span>平台客服微信</span><strong>${escapeHtml(PLATFORM_SERVICE_WECHAT)}</strong></div>
-      <button class="market-top-service-copy" type="button" data-copy-market-wechat>复制微信号</button>
+      <button class="market-top-service-copy" type="button" data-copy-market-wechat>复制微信号并打开微信</button>
     </section>
   `;
   document.body.appendChild(overlay);
@@ -6319,7 +6235,7 @@ function openMarketTopService() {
   overlay.addEventListener("click", event => {
     if (event.target === overlay) close();
   });
-  overlay.querySelector("[data-copy-market-wechat]")?.addEventListener("click", () => copyText(PLATFORM_SERVICE_WECHAT, "客服微信号已复制"));
+  overlay.querySelector("[data-copy-market-wechat]")?.addEventListener("click", openPlatformWeChat);
   document.addEventListener("keydown", onKeydown);
   overlay.querySelector("[data-copy-market-wechat]")?.focus();
 }
@@ -6348,7 +6264,7 @@ function openMarketPlatformService(listingId) {
       <p class="market-service-tip">添加客服微信后，请发送咨询内容或商品咨询码，以便确认商品、健康情况和交付方式。</p>
       <div class="market-service-buttons">
         <button type="button" data-copy-market-consultation>复制咨询内容</button>
-        <button type="button" data-copy-market-wechat>复制微信号</button>
+        <button type="button" data-copy-market-wechat>复制微信号并打开微信</button>
       </div>
     </section>
   `;
@@ -6369,7 +6285,7 @@ function openMarketPlatformService(listingId) {
     if (event.target === overlay) close();
   });
   overlay.querySelector("[data-copy-market-consultation]")?.addEventListener("click", () => copyText(consultation, "咨询内容已复制，去微信发送给客服"));
-  overlay.querySelector("[data-copy-market-wechat]")?.addEventListener("click", () => copyText(PLATFORM_SERVICE_WECHAT, "客服微信号已复制"));
+  overlay.querySelector("[data-copy-market-wechat]")?.addEventListener("click", openPlatformWeChat);
   document.addEventListener("keydown", onKeydown);
   overlay.querySelector("[data-copy-market-wechat]")?.focus();
 }
@@ -7668,7 +7584,9 @@ function bindNativePushListeners(push) {
     });
     push.addListener("pushNotificationActionPerformed", event => {
       const senderId = String(event?.notification?.data?.senderId || "");
-      if (senderId && state.loggedInPhone && currentCloudToken()) openCommunityChat(senderId);
+      const route = String(event?.notification?.data?.route || "");
+      if (route === "memos") setState({ page: "memos" }, { skipCloud: true });
+      else if (senderId && state.loggedInPhone && currentCloudToken()) openCommunityChat(senderId);
       else setState({ page: "messages" }, { skipCloud: true });
     });
   } catch (error) {
@@ -8873,7 +8791,7 @@ function pullRefreshIndicator() {
 function setPullRefreshIndicator({ distance = 0, ready = false, refreshing = false } = {}) {
   const indicator = pullRefreshIndicator();
   const visibleDistance = refreshing ? 62 : Math.min(PULL_REFRESH_MAX_OFFSET, Math.max(0, distance * .56));
-  const pageOffset = refreshing ? 54 : Math.min(PULL_REFRESH_MAX_OFFSET, Math.max(0, distance * .52));
+  const pageOffset = refreshing ? 54 : Math.min(PULL_REFRESH_MAX_OFFSET, Math.max(0, distance * .42));
   const label = refreshing ? "正在刷新中" : ready ? "松开即可刷新" : "下拉刷新";
   indicator.style.setProperty("--pull-refresh-distance", `${visibleDistance}px`);
   indicator.classList.toggle("is-visible", visibleDistance > 0);
@@ -8886,13 +8804,29 @@ function setPullRefreshIndicator({ distance = 0, ready = false, refreshing = fal
   document.body.classList.toggle("pull-refresh-dragging", pageOffset > 0 && !refreshing);
 }
 
+function schedulePullRefreshIndicator(nextState) {
+  if (pullRefreshAnimationFrame) return;
+  pullRefreshAnimationFrame = requestAnimationFrame(() => {
+    pullRefreshAnimationFrame = 0;
+    setPullRefreshIndicator(nextState || pullRefreshState);
+  });
+}
+
+function cancelScheduledPullRefreshIndicator() {
+  if (!pullRefreshAnimationFrame) return;
+  cancelAnimationFrame(pullRefreshAnimationFrame);
+  pullRefreshAnimationFrame = 0;
+}
+
 function resetPullRefreshIndicator() {
+  cancelScheduledPullRefreshIndicator();
   pullRefreshState = { ...pullRefreshState, tracking: false, startX: 0, startY: 0, distance: 0, ready: false, direction: "" };
   setPullRefreshIndicator();
 }
 
 async function runPullRefresh() {
   if (pullRefreshState.refreshing || !pullRefreshSupportedPage()) return;
+  cancelScheduledPullRefreshIndicator();
   pullRefreshState = { ...pullRefreshState, tracking: false, refreshing: true, ready: false };
   setPullRefreshIndicator({ refreshing: true });
   const startedAt = Date.now();
@@ -8952,7 +8886,7 @@ function setupPullToRefresh() {
     }
     if (event.cancelable) event.preventDefault();
     pullRefreshState = { ...pullRefreshState, distance, ready: distance >= PULL_REFRESH_THRESHOLD };
-    setPullRefreshIndicator(pullRefreshState);
+    schedulePullRefreshIndicator();
   }, { passive: false });
 
   const finish = () => {
@@ -8981,19 +8915,46 @@ function setupEdgeBackAndConversationSwipe() {
     const dy = touch.clientY - gesture.y;
     if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy)) return;
     gesture.moved = true;
-    if (gesture.row && dx < 0) {
-      gesture.row.classList.toggle("is-open", dx < -44);
+    if (gesture.row && Math.abs(dx) > Math.abs(dy)) {
+      const currentOpen = gesture.row.classList.contains("is-open");
+      const reveal = Math.min(144, Math.max(0, (currentOpen ? 144 : 0) - dx));
+      gesture.row.classList.add("is-dragging");
+      gesture.row.querySelector(".message-friend-row")?.style.setProperty("transform", `translate3d(${-reveal}px, 0, 0)`);
+      gesture.row.dataset.swipeReveal = String(reveal);
+      if (event.cancelable) event.preventDefault();
       return;
     }
-    if (gesture.x <= 24 && dx > 0 && !rootPages.has(state.page) && dx > 38 && event.cancelable) event.preventDefault();
+    if (gesture.x <= 24 && dx > 0 && Math.abs(dx) > Math.abs(dy) && !rootPages.has(state.page)) {
+      gesture.edgeBack = true;
+      const offset = Math.min(Math.max(0, dx), Math.max(96, window.innerWidth * .42));
+      $app.classList.add("edge-back-dragging");
+      $app.style.transform = `translate3d(${offset}px, 0, 0)`;
+      if (event.cancelable) event.preventDefault();
+    }
   }, { passive: false });
   document.addEventListener("touchend", event => {
     if (!gesture) return;
     const touch = event.changedTouches[0];
     const dx = touch.clientX - gesture.x;
     const dy = touch.clientY - gesture.y;
-    if (gesture.x <= 24 && dx > 78 && Math.abs(dx) > Math.abs(dy) && !rootPages.has(state.page)) {
-      setState(backNavigationState(), { pageMotion: "none" });
+    if (gesture.row && gesture.row.classList.contains("is-dragging")) {
+      const reveal = Number(gesture.row.dataset.swipeReveal || 0);
+      const shouldOpen = reveal >= 72;
+      gesture.row.classList.remove("is-dragging");
+      gesture.row.classList.toggle("is-open", shouldOpen);
+      const row = gesture.row.querySelector(".message-friend-row");
+      if (row) row.style.transform = "";
+      delete gesture.row.dataset.swipeReveal;
+    } else if (gesture.edgeBack) {
+      const shouldComplete = dx > Math.max(78, window.innerWidth * .18) && Math.abs(dx) > Math.abs(dy);
+      $app.classList.remove("edge-back-dragging");
+      $app.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
+      $app.style.transform = shouldComplete ? "translate3d(100vw, 0, 0)" : "translate3d(0, 0, 0)";
+      window.setTimeout(() => {
+        $app.style.transition = "";
+        $app.style.transform = "";
+        if (shouldComplete && !rootPages.has(state.page)) setState(backNavigationState(), { pageMotion: "none" });
+      }, shouldComplete ? 190 : 210);
     } else if (!gesture.row && document.querySelector(".message-friend-swipe.is-open") && Math.abs(dx) > Math.abs(dy)) {
       document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => row.classList.remove("is-open"));
     }
