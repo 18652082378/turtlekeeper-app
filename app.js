@@ -3205,7 +3205,7 @@ function pageLedger() {
   const profitPrefix = profit > 0 ? "+" : profit < 0 ? "-" : "±";
   const dateText = dateRange.label;
   return `
-    ${topbar("经营账本", true)}
+    ${topbar("经营账本")}
     <main class="content page-fresh">
       <section class="page-intro ledger-intro"><div><p class="eyebrow dark">经营</p><h2>${records.length} 条资金明细</h2><p>${dateText}，收购、售出、损耗都可以留图、留尺寸。</p></div></section>
       <section class="ledger-profit-card ${profit < 0 ? "negative" : "positive"}">
