@@ -8980,13 +8980,14 @@ function setupEdgeBackAndConversationSwipe() {
       const currentOpen = gesture.row.classList.contains("is-open");
       const actionWidth = 144;
       const rawReveal = Math.max(0, (currentOpen ? actionWidth : 0) - dx);
-      const reveal = rawReveal > actionWidth
-        ? actionWidth + ((rawReveal - actionWidth) * .16)
-        : rawReveal;
+      // Keep the foreground card and the exposed action area in a strict 1:1
+      // relationship. This is what makes a native conversation swipe feel
+      // attached to the finger instead of drifting independently.
+      const reveal = Math.min(actionWidth, rawReveal);
       gesture.row.classList.add("is-dragging");
       gesture.row.querySelector(".message-friend-row")?.style.setProperty("transform", `translate3d(${-reveal}px, 0, 0)`);
-      gesture.row.style.setProperty("--message-swipe-reveal", `${Math.min(actionWidth, reveal)}px`);
-      gesture.row.dataset.swipeReveal = String(Math.min(actionWidth, reveal));
+      gesture.row.style.setProperty("--message-swipe-reveal", `${reveal}px`);
+      gesture.row.dataset.swipeReveal = String(reveal);
       if (event.cancelable) event.preventDefault();
       return;
     }

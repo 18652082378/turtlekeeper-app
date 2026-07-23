@@ -175,7 +175,7 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
 .message-friend-row { position: relative; z-index: 1; width: 100%; transform: translateX(0); transition: transform .2s ease; }
 .message-friend-swipe.is-open .message-friend-actions { transform: translateX(0); pointer-events: auto; }
 .message-friend-swipe.is-open .message-friend-row { transform: translateX(-144px); }
-.message-friend-swipe.is-dragging .message-friend-actions { transform: translate3d(calc(var(--message-swipe-reveal, 0px) - 144px), 0, 0); pointer-events: none; transition: none; }
+.message-friend-swipe.is-dragging .message-friend-actions { transform: translate3d(calc(144px - var(--message-swipe-reveal, 0px)), 0, 0); pointer-events: none; transition: none; }
 .message-friend-swipe.is-dragging .message-friend-row { transition: none; }
 
 /* Interactive edge-swipe back: page follows the finger and rebounds if released early. */
