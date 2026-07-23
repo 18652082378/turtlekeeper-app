@@ -38,6 +38,7 @@ const MARKET_PROHIBITED_SPECIES_CODES = new Set([
 ]);
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 const SPECIES_IMAGE_CACHE = "turtlekeeper-species-image-cache-v1";
+const BUNDLED_SPECIES_IMAGE_ROOT = "/assets/species";
 let speciesImageObserver = null;
 let speciesImageCache = loadSpeciesImageCache();
 const WEEKDAY_OPTIONS = [
@@ -913,73 +914,23 @@ function speciesSearchCandidates(item) {
 
 function speciesPhoto(item) {
   if (!item) return defaultPhoto;
-  return speciesImageCache[item.code] || item.image || defaultPhoto;
-}
-
-function wikimediaImageApi(query) {
-  if (!query) return "";
-  const params = new URLSearchParams({
-    action: "query",
-    generator: "search",
-    gsrnamespace: "6",
-    gsrlimit: "1",
-    gsrsearch: `"${query}"`,
-    prop: "imageinfo",
-    iiprop: "url",
-    iiurlwidth: "260",
-    format: "json",
-    origin: "*"
-  });
-  return `https://commons.wikimedia.org/w/api.php?${params.toString()}`;
-}
-
-function wikipediaImageApi(query) {
-  return query ? `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query)}` : "";
+  // Catalogue photos ship with the app.  They are deliberately preferred over
+  // cache and network URLs so the whole species page works offline instantly.
+  return `${BUNDLED_SPECIES_IMAGE_ROOT}/${encodeURIComponent(item.code)}.jpg`;
 }
 
 async function resolveSpeciesImage(item) {
-  if (!item || speciesImageCache[item.code]) return speciesImageCache[item?.code] || "";
-  const candidates = speciesSearchCandidates(item);
-
-  for (const query of candidates) {
-    try {
-      const response = await fetch(wikipediaImageApi(query));
-      const data = await response.json();
-      const image = data?.thumbnail?.source || data?.originalimage?.source || "";
-      if (image) {
-        speciesImageCache = { ...speciesImageCache, [item.code]: image };
-        saveSpeciesImageCache();
-        return image;
-      }
-    } catch {
-      // Try the next source below.
-    }
-  }
-
-  for (const query of candidates) {
-    try {
-      const response = await fetch(wikimediaImageApi(query));
-      const data = await response.json();
-      const pages = data?.query?.pages ? Object.values(data.query.pages) : [];
-      const image = pages[0]?.imageinfo?.[0]?.thumburl || pages[0]?.imageinfo?.[0]?.url || "";
-      if (image) {
-        speciesImageCache = { ...speciesImageCache, [item.code]: image };
-        saveSpeciesImageCache();
-        return image;
-      }
-    } catch {
-      // Keep the calm placeholder when every source fails.
-    }
-  }
-
-  return "";
+  return item ? speciesPhoto(item) : "";
 }
 
 function hydrateSpeciesImages() {
   document.querySelectorAll("[data-fallback-photo]").forEach(img => {
     img.referrerPolicy = "no-referrer";
     img.addEventListener("error", () => {
-      img.src = defaultPhoto;
+      // This path is only a development fallback when the bundle has not been
+      // prepared yet. Release builds always include assets/species locally.
+      const item = speciesByCode(img.dataset.speciesImg);
+      img.src = item?.image || defaultPhoto;
     }, { once: true });
   });
 

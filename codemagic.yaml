@@ -19,6 +19,9 @@ workflows:
           npm ci || npm install
       - name: Build web assets
         script: |
+          # Bundle all species thumbnails into the IPA. They are never fetched
+          # from the app server or from the user's phone at runtime.
+          node scripts/download-species-assets.js
           npm run build
       - name: Create and sync iOS project
         script: |
