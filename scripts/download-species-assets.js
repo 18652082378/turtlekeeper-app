@@ -76,6 +76,11 @@ async function run() {
     process.exitCode = 1;
     return;
   }
+  fs.writeFileSync(path.join(outputDir, "manifest.json"), JSON.stringify({
+    generatedAt: new Date().toISOString(),
+    count: species.length,
+    codes: species.map(item => item.code)
+  }, null, 2));
   console.log(`\nBundled ${species.length} species images in ${outputDir}`);
 }
 

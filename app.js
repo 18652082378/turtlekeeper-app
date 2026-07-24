@@ -55,6 +55,7 @@ const PULL_REFRESH_THRESHOLD = 72;
 const PULL_REFRESH_MAX_OFFSET = 72;
 let pullRefreshState = { tracking: false, refreshing: false, startX: 0, startY: 0, distance: 0, ready: false, direction: "" };
 let pullRefreshAnimationFrame = 0;
+let pullRefreshPendingState = null;
 
 const initialState = {
   page: "home",
@@ -1838,6 +1839,15 @@ function videoPosterAttribute(media) {
   return posterUrl ? ` poster="${escapeHtml(posterUrl)}"` : "";
 }
 
+function marketVideoPosterUrl(media, fallbackUrl = defaultPhoto) {
+  return String(media?.posterUrl || media?.mediaPosterUrl || media?.poster || fallbackUrl || defaultPhoto).trim() || defaultPhoto;
+}
+
+function marketDetailVideoMarkup(media, fallbackPosterUrl, sold = false) {
+  const posterUrl = marketVideoPosterUrl(media, fallbackPosterUrl);
+  return `<div class="market-detail-photo market-detail-video-shell is-loading"><img class="market-detail-video-cover" src="${escapeHtml(posterUrl)}" alt="视频封面"><video src="${escapeHtml(media.url)}" poster="${escapeHtml(posterUrl)}" controls playsinline preload="auto" crossorigin="anonymous" data-video-first-frame data-market-detail-video></video><div class="market-detail-video-loading" aria-live="polite">视频加载中</div>${sold ? `<span>已售出</span>` : ""}</div>`;
+}
+
 function isUnavailableChatListing(listing) {
   return Boolean(listing?.unavailable) || ["inactive", "sold", "removed"].includes(listing?.status);
 }
@@ -2559,12 +2569,13 @@ function pageMarketDetail() {
   const secondaryMediaItems = firstMediaIsVideo ? mediaItems.slice(1) : [];
   const detailVideosAfterDescription = firstMediaIsVideo ? [] : mediaItems.filter(media => media.type === "video");
   const hasPrimaryGalleryControls = primaryMediaItems.length > 1;
+  const detailVideoFallbackPoster = mediaItems.find(media => media.type !== "video" && media.url)?.url || defaultPhoto;
   const detailMoreAction = `<button class="market-detail-more-button" type="button" data-market-detail-more="${escapeHtml(item.id)}" aria-label="商品更多操作" aria-haspopup="dialog">•••</button>`;
   return `
     ${topbar("商品详情", true, detailMoreAction)}
     <main class="content page-fresh market-detail-page">
       <section class="market-detail-gallery-wrap">
-        <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => `<div class="market-detail-photo">${media.type === "video" ? `<video src="${media.url}"${videoPosterAttribute(media)} controls playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video>` : `<img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button">`}${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`}</section>
+        <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster, sold) : `<div class="market-detail-photo"><img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`}</section>
         <span class="market-detail-gallery-count" data-market-gallery-count aria-live="polite">1/${Math.max(1, primaryMediaItems.length)}</span>
         ${hasPrimaryGalleryControls ? `<button class="market-detail-gallery-arrow prev" type="button" data-market-gallery-prev aria-label="查看上一张图片" aria-controls="marketDetailGallery">‹</button><button class="market-detail-gallery-arrow next" type="button" data-market-gallery-next aria-label="查看下一张图片" aria-controls="marketDetailGallery">›</button>` : ""}
       </section>
@@ -2580,9 +2591,9 @@ function pageMarketDetail() {
         <div><span>所在城市</span><strong>${escapeHtml(item.city || "未填写")}</strong></div>
         <div><span>交付方式</span><strong>${escapeHtml(item.delivery || "双方协商")}</strong></div>
       </section>
-      ${secondaryMediaItems.length ? `<section class="market-detail-secondary-media">${secondaryMediaItems.map((media, index) => `<div class="market-detail-secondary-photo">${media.type === "video" ? `<video src="${media.url}"${videoPosterAttribute(media)} controls playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video>` : `<img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} 实拍 ${index + 2}" data-preview-market-image tabindex="0" role="button">`}</div>`).join("")}</section>` : ""}
+      ${secondaryMediaItems.length ? `<section class="market-detail-secondary-media">${secondaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster) : `<div class="market-detail-secondary-photo"><img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} 实拍 ${index + 2}" data-preview-market-image tabindex="0" role="button"></div>`).join("")}</section>` : ""}
       ${item.description ? `<section class="market-detail-description"><h3>卖家说明</h3><p>${escapeHtml(item.description)}</p></section>` : ""}
-      ${detailVideosAfterDescription.length ? `<section class="market-detail-secondary-media market-detail-video-media">${detailVideosAfterDescription.map(media => `<div class="market-detail-secondary-photo"><video src="${media.url}"${videoPosterAttribute(media)} controls playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video></div>`).join("")}</section>` : ""}
+      ${detailVideosAfterDescription.length ? `<section class="market-detail-secondary-media market-detail-video-media">${detailVideosAfterDescription.map(media => marketDetailVideoMarkup(media, detailVideoFallbackPoster)).join("")}</section>` : ""}
       <section class="market-seller-card">
         <button class="market-seller-avatar-slot market-seller-profile-link" type="button" data-view-market-seller="${escapeHtml(item.sellerId || "")}" aria-label="查看${escapeHtml(item.sellerName || "卖家")}发布的商品">${marketSellerAvatar(item, "market-detail-avatar")}</button>
         <button class="market-seller-profile-link market-seller-name" type="button" data-view-market-seller="${escapeHtml(item.sellerId || "")}"><strong>${escapeHtml(item.sellerName || "壳友卖家")}</strong><span>${isOwn ? "这是我发布的商品" : "已通过账号认证"}</span></button>
@@ -4218,7 +4229,10 @@ function render() {
   }
   bindEvents();
   setupMarketInfiniteScroll();
-  requestAnimationFrame(hydrateVideoFirstFrames);
+  requestAnimationFrame(() => {
+    hydrateVideoFirstFrames();
+    hydrateMarketDetailVideos();
+  });
   if (state.page === "communityChat") scrollCommunityChatToLatest();
   hydrateSpeciesImages();
   startAccountCodeCooldownTimer();
@@ -6677,6 +6691,27 @@ function hydrateVideoFirstFrames() {
   });
 }
 
+function hydrateMarketDetailVideos() {
+  document.querySelectorAll("video[data-market-detail-video]").forEach(video => {
+    const shell = video.closest(".market-detail-video-shell");
+    if (!shell || video.dataset.detailVideoHydrated === "true") return;
+    video.dataset.detailVideoHydrated = "true";
+    const ready = () => {
+      shell.classList.remove("is-loading");
+      shell.classList.add("is-ready");
+    };
+    const failed = () => shell.classList.add("has-error");
+    video.addEventListener("loadeddata", ready, { once: true });
+    video.addEventListener("canplay", ready, { once: true });
+    video.addEventListener("error", failed, { once: true });
+    // Explicitly start the request on every network type. We do not autoplay
+    // detail videos, but Wi-Fi must never be required for their first frame.
+    video.preload = "auto";
+    video.load();
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) ready();
+  });
+}
+
 function syncCommunityPublishButton() {
   const submit = document.querySelector(".community-compose-submit");
   if (!submit) return;
@@ -8815,28 +8850,29 @@ function pullRefreshIndicator() {
 
 function setPullRefreshIndicator({ distance = 0, ready = false, refreshing = false } = {}) {
   const indicator = pullRefreshIndicator();
-  const visibleDistance = refreshing ? 62 : Math.min(PULL_REFRESH_MAX_OFFSET, Math.max(0, distance * .56));
   const pageOffset = refreshing ? 54 : Math.min(PULL_REFRESH_MAX_OFFSET, Math.max(0, distance * .42));
-  // Put the hint in the gap opened under the header, matching the finger pull.
-  const headerBottom = document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0;
+  const indicatorHeight = 36;
+  // The indicator is vertically centred in the newly exposed blank area.
+  const indicatorDistance = (pageOffset + indicatorHeight) / 2;
   const label = refreshing ? "正在刷新中···" : ready ? "松开即可刷新" : "下拉刷新";
-  indicator.style.setProperty("--pull-refresh-distance", `${visibleDistance}px`);
-  indicator.classList.toggle("is-visible", visibleDistance > 0);
+  indicator.style.setProperty("--pull-refresh-distance", `${indicatorDistance}px`);
+  indicator.classList.toggle("is-visible", refreshing || pageOffset > 0);
   indicator.classList.toggle("is-ready", Boolean(ready) && !refreshing);
   indicator.classList.toggle("is-refreshing", Boolean(refreshing));
   indicator.querySelector("span").textContent = label;
 
-  document.body.style.setProperty("--pull-refresh-header-bottom", `${Math.max(0, headerBottom)}px`);
   document.body.style.setProperty("--pull-refresh-page-offset", `${pageOffset}px`);
   document.body.classList.toggle("pull-refresh-active", pageOffset > 0);
   document.body.classList.toggle("pull-refresh-dragging", pageOffset > 0 && !refreshing);
 }
 
 function schedulePullRefreshIndicator(nextState) {
+  pullRefreshPendingState = nextState || pullRefreshState;
   if (pullRefreshAnimationFrame) return;
   pullRefreshAnimationFrame = requestAnimationFrame(() => {
     pullRefreshAnimationFrame = 0;
-    setPullRefreshIndicator(nextState || pullRefreshState);
+    setPullRefreshIndicator(pullRefreshPendingState || pullRefreshState);
+    pullRefreshPendingState = null;
   });
 }
 
@@ -8844,6 +8880,7 @@ function cancelScheduledPullRefreshIndicator() {
   if (!pullRefreshAnimationFrame) return;
   cancelAnimationFrame(pullRefreshAnimationFrame);
   pullRefreshAnimationFrame = 0;
+  pullRefreshPendingState = null;
 }
 
 function resetPullRefreshIndicator() {
@@ -8885,6 +8922,8 @@ function setupPullToRefresh() {
     if (pullRefreshState.refreshing || !pullRefreshSupportedPage() || !pageAtTop() || event.touches.length !== 1) return;
     if (event.target.closest("input, textarea, select, [contenteditable='true'], .image-preview-overlay, .modal-overlay")) return;
     if (document.documentElement.classList.contains("keyboard-open")) return;
+    const headerBottom = document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0;
+    document.body.style.setProperty("--pull-refresh-header-bottom", `${Math.max(0, headerBottom)}px`);
     pullRefreshState = {
       ...pullRefreshState,
       tracking: true,
@@ -8966,7 +9005,6 @@ function setupEdgeBackAndConversationSwipe() {
       // attached to the finger instead of drifting independently.
       const reveal = Math.min(actionWidth, rawReveal);
       gesture.row.classList.add("is-dragging");
-      gesture.row.querySelector(".message-friend-row")?.style.setProperty("transform", `translate3d(${-reveal}px, 0, 0)`);
       gesture.row.style.setProperty("--message-swipe-reveal", `${reveal}px`);
       gesture.row.dataset.swipeReveal = String(reveal);
       if (event.cancelable) event.preventDefault();
@@ -8994,8 +9032,6 @@ function setupEdgeBackAndConversationSwipe() {
       const shouldOpen = reveal >= 72;
       gesture.row.classList.remove("is-dragging");
       gesture.row.classList.toggle("is-open", shouldOpen);
-      const row = gesture.row.querySelector(".message-friend-row");
-      if (row) row.style.transform = "";
       gesture.row.style.removeProperty("--message-swipe-reveal");
       delete gesture.row.dataset.swipeReveal;
     } else if (gesture.edgeBack) {

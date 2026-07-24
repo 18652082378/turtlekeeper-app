@@ -22,7 +22,11 @@ workflows:
           # Bundle all species thumbnails into the IPA. They are never fetched
           # from the app server or from the user's phone at runtime.
           node scripts/download-species-assets.js
+          test "$(find assets/species -maxdepth 1 -name '*.jpg' | wc -l | tr -d ' ')" = "146"
+          test -f assets/species/manifest.json
           npm run build
+          test "$(find www/assets/species -maxdepth 1 -name '*.jpg' | wc -l | tr -d ' ')" = "146"
+          test -f www/assets/species/manifest.json
       - name: Create and sync iOS project
         script: |
           if [ ! -d "ios" ]; then
