@@ -38,7 +38,9 @@ const MARKET_PROHIBITED_SPECIES_CODES = new Set([
 ]);
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 const SPECIES_IMAGE_CACHE = "turtlekeeper-species-image-cache-v1";
-const BUNDLED_SPECIES_IMAGE_ROOT = "/assets/species";
+// Relative rather than `/assets/...`: this works both in Capacitor and when
+// index.html is opened directly from the project folder for local testing.
+const BUNDLED_SPECIES_IMAGE_ROOT = "assets/species";
 let speciesImageObserver = null;
 let speciesImageCache = loadSpeciesImageCache();
 const WEEKDAY_OPTIONS = [
@@ -928,10 +930,9 @@ function hydrateSpeciesImages() {
   document.querySelectorAll("[data-fallback-photo]").forEach(img => {
     img.referrerPolicy = "no-referrer";
     img.addEventListener("error", () => {
-      // This path is only a development fallback when the bundle has not been
-      // prepared yet. Release builds always include assets/species locally.
-      const item = speciesByCode(img.dataset.speciesImg);
-      img.src = item?.image || defaultPhoto;
+      // Keep the catalogue completely offline, even if one bundled file is
+      // damaged. A release build must never request Wikimedia at runtime.
+      img.src = defaultPhoto;
     }, { once: true });
   });
 

@@ -1,87 +1,121 @@
 /*
- * Downloads the catalogue thumbnails into the application bundle.
- * Run with: node scripts/download-species-assets.js
+ * One-time local asset archiver. Run this on a Windows machine before commit:
+ *   node scripts/download-species-assets.js --force
+ *
+ * It deliberately uses Windows' native downloader because the source site
+ * rejects burst requests from cloud builders. Codemagic never invokes it.
  */
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
 
+const execFileAsync = promisify(execFile);
 const root = path.resolve(__dirname, "..");
 const outputDir = path.join(root, "assets", "species");
+const downloader = path.join(__dirname, "download-one-species.ps1");
+const searcher = path.join(__dirname, "search-species-image.ps1");
 const source = fs.readFileSync(path.join(root, "species-data.js"), "utf8");
 const context = { window: {} };
 vm.createContext(context);
 vm.runInContext(source, context);
 const species = context.window.TURTLE_SPECIES || [];
-const concurrency = 4;
-const requestTimeoutMs = 25000;
-const maxAttempts = 3;
+const force = process.argv.includes("--force");
+const concurrency = 2;
+const fallbackImage = path.join(outputDir, "ABQ.jpg");
 
-function thumbnailUrl(url) {
-  const separator = url.includes("?") ? "&" : "?";
-  return `${url}${separator}width=640`;
+async function downloadUrl(url, target) {
+  const temp = `${target}.part`;
+  fs.rmSync(temp, { force: true });
+  try {
+    await execFileAsync("powershell.exe", [
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", downloader,
+      "-Url", url, "-Target", temp
+    ], { windowsHide: true, timeout: 90000, maxBuffer: 1024 * 1024 });
+    const size = fs.existsSync(temp) ? fs.statSync(temp).size : 0;
+    if (size < 1024) throw new Error("Downloaded file is empty or too small");
+    fs.renameSync(temp, target);
+    return size;
+  } catch (error) {
+    fs.rmSync(temp, { force: true });
+    throw error;
+  }
+}
+
+async function searchReplacement(item) {
+  const rawTitle = decodeURIComponent(item.image.split("/").pop() || "").replace(/\.[a-z]+$/i, "");
+  const apiUrl = new URL("https://commons.wikimedia.org/w/api.php");
+  apiUrl.search = new URLSearchParams({
+    action: "query", format: "json", generator: "search", gsrnamespace: "6",
+    gsrlimit: "1", gsrsearch: rawTitle, prop: "imageinfo", iiprop: "url", iiurlwidth: "720", origin: "*"
+  }).toString();
+  try {
+    const { stdout } = await execFileAsync("powershell.exe", [
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", searcher,
+      "-Url", apiUrl.toString()
+    ], { windowsHide: true, timeout: 55000, maxBuffer: 4 * 1024 * 1024 });
+    const pages = Object.values(JSON.parse(stdout).query?.pages || {});
+    const info = pages[0]?.imageinfo?.[0];
+    return info?.thumburl || info?.url || "";
+  } catch {
+    return "";
+  }
 }
 
 async function download(item) {
   const target = path.join(outputDir, `${item.code}.jpg`);
-  if (fs.existsSync(target) && fs.statSync(target).size > 1024) return "cached";
-
-  let lastError;
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
-    try {
-      const response = await fetch(thumbnailUrl(item.image), {
-        headers: { "User-Agent": "TurtleKeeper/1.0 (bundled species assets)" },
-        redirect: "follow",
-        signal: controller.signal
-      });
-      const contentType = response.headers.get("content-type") || "";
-      if (!response.ok || !contentType.startsWith("image/")) {
-        throw new Error(`${response.status} ${contentType || "unexpected response"}`);
-      }
-      const buffer = Buffer.from(await response.arrayBuffer());
-      if (buffer.length < 1024) throw new Error("image response is too small");
-      fs.writeFileSync(target, buffer);
-      return `${Math.round(buffer.length / 1024)} KB`;
-    } catch (error) {
-      lastError = error;
-      if (attempt < maxAttempts) await new Promise(resolve => setTimeout(resolve, attempt * 700));
-    } finally {
-      clearTimeout(timeout);
+  if (!force && fs.existsSync(target) && fs.statSync(target).size > 1024) return "cached";
+  fs.rmSync(target, { force: true });
+  try {
+    const size = await downloadUrl(item.image, target);
+    return `${Math.round(size / 1024)} KB`;
+  } catch (firstError) {
+    const replacement = await searchReplacement(item);
+    if (replacement) {
+      try {
+        const size = await downloadUrl(replacement, target);
+        return `${Math.round(size / 1024)} KB (searched)`;
+      } catch { /* fall through to a bundled turtle image */ }
     }
+    if (fs.existsSync(fallbackImage) && fs.statSync(fallbackImage).size > 1024) {
+      fs.copyFileSync(fallbackImage, target);
+      return "local turtle fallback";
+    }
+    throw firstError;
   }
-  throw lastError;
 }
 
 async function run() {
   fs.mkdirSync(outputDir, { recursive: true });
   const failures = [];
+  const fallbackCodes = [];
   let cursor = 0;
   async function worker() {
     while (cursor < species.length) {
       const item = species[cursor++];
       try {
         const result = await download(item);
+        if (result === "local turtle fallback") fallbackCodes.push(item.code);
         console.log(`${item.code}: ${result}`);
       } catch (error) {
-        failures.push(`${item.code}: ${error.message}`);
-        console.warn(`${item.code}: failed (${error.message})`);
+        failures.push({ code: item.code, name: item.name, url: item.image, error: error.message });
+        console.warn(`${item.code}: FAILED`);
       }
+      await new Promise(resolve => setTimeout(resolve, 700));
     }
   }
   await Promise.all(Array.from({ length: concurrency }, worker));
-  if (failures.length) {
-    console.error(`\n${failures.length} species image(s) failed:\n${failures.join("\n")}`);
-    process.exitCode = 1;
-    return;
-  }
+  const localCodes = species.filter(item => fs.existsSync(path.join(outputDir, `${item.code}.jpg`))).map(item => item.code);
   fs.writeFileSync(path.join(outputDir, "manifest.json"), JSON.stringify({
     generatedAt: new Date().toISOString(),
-    count: species.length,
-    codes: species.map(item => item.code)
+    count: localCodes.length,
+    codes: localCodes,
+    fallbackCodes,
+    failures
   }, null, 2));
-  console.log(`\nBundled ${species.length} species images in ${outputDir}`);
+  console.log(`Bundled ${localCodes.length}/${species.length} local images.`);
+  if (failures.length) process.exitCode = 2;
 }
 
 run().catch(error => {

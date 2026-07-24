@@ -1,0 +1,1514 @@
+{
+  "generatedAt": "2026-07-24T07:44:57.335Z",
+  "count": 141,
+  "codes": [
+    "ABQ",
+    "ALG",
+    "ALD",
+    "ANG",
+    "AOS",
+    "ATG",
+    "AXG",
+    "BAG",
+    "BCG",
+    "BDL",
+    "BHN",
+    "BJN",
+    "BLS",
+    "BMG",
+    "BWG",
+    "BWN",
+    "CBQ",
+    "CBT",
+    "CEG",
+    "CGI",
+    "CHG",
+    "CJD",
+    "CJT",
+    "CSG",
+    "CUG",
+    "DBG",
+    "DDG",
+    "DHG",
+    "DJG",
+    "DNG",
+    "DTG",
+    "DUG",
+    "EBQ",
+    "EJG",
+    "EMG",
+    "FBT",
+    "FHD",
+    "FZG",
+    "GBG",
+    "GDT",
+    "GHG",
+    "GJG",
+    "GLD",
+    "GNG",
+    "HBQ",
+    "HDG",
+    "HED",
+    "HET",
+    "HWM",
+    "HGG",
+    "HHG",
+    "HJG",
+    "HNT",
+    "HSG",
+    "HYG",
+    "HZG",
+    "JBG",
+    "JBT",
+    "JDG",
+    "JQG",
+    "JTM",
+    "JTG",
+    "JWG",
+    "JYG",
+    "KBT",
+    "KJG",
+    "KNG",
+    "KSG",
+    "LBG",
+    "LHG",
+    "LJG",
+    "LKG",
+    "LNG",
+    "LSG",
+    "LWG",
+    "MBG",
+    "MDG",
+    "MHG",
+    "MJG",
+    "MLG",
+    "MNG",
+    "MRT",
+    "MSG",
+    "MXD",
+    "MXJ",
+    "MUG",
+    "NBG",
+    "NMG",
+    "NNG",
+    "NTG",
+    "PBG",
+    "PDG",
+    "PGG",
+    "PHG",
+    "PMG",
+    "PTG",
+    "QBT",
+    "QJG",
+    "QYG",
+    "RBG",
+    "RLG",
+    "RMT",
+    "RTG",
+    "SWE",
+    "SBQ",
+    "SDG",
+    "SGG",
+    "SHG",
+    "SLG",
+    "SNG",
+    "SPG",
+    "SSG",
+    "STG",
+    "TBG",
+    "TDG",
+    "TGG",
+    "THG",
+    "TMG",
+    "TNG",
+    "TYG",
+    "WBG",
+    "WJG",
+    "WNG",
+    "WTG",
+    "XBG",
+    "XDT",
+    "XEG",
+    "XFD",
+    "XGG",
+    "XNG",
+    "XPG",
+    "YBG",
+    "YDG",
+    "YHG",
+    "YLG",
+    "YNT",
+    "YSG",
+    "YTG",
+    "ZBG",
+    "ZCG",
+    "ZDG",
+    "ZHG",
+    "ZJG",
+    "ZMG",
+    "ZRG",
+    "ZYG"
+  ],
+  "fallbackCodes": [],
+  "failures": [],
+  "baiduReplacedAt": "2026-07-24T08:02:00.107Z",
+  "baiduFailures": [
+    {
+      "code": "ANG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "AXG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "BCG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "BDL",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "BHN",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "BMG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "BWG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "CGI",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "CSG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "CUG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "DJG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "DTG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "EBQ",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "EJG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "EMG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "FBT",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "FHD",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "FZG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "GBG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "GDT",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "GHG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "GJG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "GLD",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "GNG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "HBQ",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "HET",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "HWM",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "HGG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "HHG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "HJG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "HNT",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "HSG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "HZG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "JBG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "JBT",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "JDG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "JTM",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "JTG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "JWG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "JYG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "KBT",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "KJG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "KNG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "KSG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "LBG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "LHG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "LJG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "LKG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "LNG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "LSG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "LWG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "MDG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "MHG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "MJG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "MLG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "MRT",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "MSG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "MXD",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "MXJ",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "MUG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "NBG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "NMG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "NNG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "NTG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "PDG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "PGG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "PHG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "PMG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "QBT",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "QJG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "QYG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "RBG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "RLG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "RMT",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "RTG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "SWE",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "SDG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "SGG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "SHG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "SLG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "SNG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "SPG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "SSG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "STG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "TBG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "TDG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "THG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "TMG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "TYG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "WBG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "WJG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "WNG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "WTG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "XBG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "XDT",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "XEG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "XFD",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "XGG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "XNG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "XPG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "YBG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "YDG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "YHG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "YNT",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "YSG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "YTG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "ZBG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "ZCG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "ZDG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "ZHG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "ZJG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "ZMG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "ZRG",
+      "error": "no Baidu image result"
+    },
+    {
+      "code": "ZYG",
+      "error": "no Baidu image result"
+    }
+  ],
+  "iNaturalistPhotos": {
+    "ANG": {
+      "scientificName": "Mauremys annamensis",
+      "source": "iNaturalist",
+      "photoId": 150686655,
+      "license": "cc-by-nd",
+      "attribution": "(c) matthewkwan, some rights reserved (CC BY-ND), uploaded by matthewkwan",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/150686655/medium.jpg"
+    },
+    "AXG": {
+      "scientificName": "Kinosternon alamosae",
+      "source": "iNaturalist",
+      "photoId": 4231386,
+      "license": null,
+      "attribution": "(c) Rafa Lara, all rights reserved, uploaded by Rafa Lara",
+      "url": "https://static.inaturalist.org/photos/4231386/medium.jpg"
+    },
+    "BCG": {
+      "scientificName": "Kinosternon leucostomum",
+      "source": "iNaturalist",
+      "photoId": 355903416,
+      "license": "cc-by-nc",
+      "attribution": "(c) Khristian Venegas Valencia, some rights reserved (CC BY-NC), uploaded by Khristian Venegas Valencia",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/355903416/medium.jpeg"
+    },
+    "BDL": {
+      "scientificName": "Malaclemys terrapin terrapin",
+      "source": "iNaturalist",
+      "photoId": 213743567,
+      "license": null,
+      "attribution": "(c) Evan J Dittig, all rights reserved, uploaded by Evan J Dittig",
+      "url": "https://static.inaturalist.org/photos/213743567/medium.jpg"
+    },
+    "BHN": {
+      "scientificName": "Kinosternon leucostomum",
+      "source": "iNaturalist",
+      "photoId": 355903416,
+      "license": "cc-by-nc",
+      "attribution": "(c) Khristian Venegas Valencia, some rights reserved (CC BY-NC), uploaded by Khristian Venegas Valencia",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/355903416/medium.jpeg"
+    },
+    "BMG": {
+      "scientificName": "Terrapene nelsoni",
+      "source": "iNaturalist",
+      "photoId": 1929933,
+      "license": "cc-by-nc",
+      "attribution": "(c) Karl Hawkman Drakulfeith, some rights reserved (CC BY-NC), uploaded by Karl Hawkman Drakulfeith",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/1929933/medium.JPG"
+    },
+    "BWG": {
+      "scientificName": "Stigmochelys pardalis",
+      "source": "iNaturalist",
+      "photoId": 12902301,
+      "license": "cc-by-sa",
+      "attribution": "(c) Bernard DUPONT, some rights reserved (CC BY-SA)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/12902301/medium.jpg"
+    },
+    "CGI": {
+      "scientificName": "Mauremys reevesii",
+      "source": "iNaturalist",
+      "photoId": 208919672,
+      "license": "cc-by-nc-sa",
+      "attribution": "(c) Kim, Hyun-tae, some rights reserved (CC BY-NC-SA), uploaded by Kim, Hyun-tae",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/208919672/medium.jpg"
+    },
+    "CSG": {
+      "scientificName": "Heosemys spinosa",
+      "source": "iNaturalist",
+      "photoId": 70430285,
+      "license": null,
+      "attribution": "(c) Chien Lee, all rights reserved, uploaded by Chien Lee",
+      "url": "https://static.inaturalist.org/photos/70430285/medium.jpg"
+    },
+    "CUG": {
+      "scientificName": "Siebenrockiella crassicollis",
+      "source": "iNaturalist",
+      "photoId": 1458892,
+      "license": "cc-by-nc-sa",
+      "attribution": "(c) Bernard DUPONT, some rights reserved (CC BY-NC-SA)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/1458892/medium.jpg"
+    },
+    "DJG": {
+      "scientificName": "Chrysemys picta picta",
+      "source": "iNaturalist",
+      "photoId": 362444997,
+      "license": null,
+      "attribution": "(c) Jake Scott, all rights reserved, uploaded by Jake Scott",
+      "url": "https://static.inaturalist.org/photos/362444997/medium.jpg"
+    },
+    "DTG": {
+      "scientificName": "Graptemys geographica",
+      "source": "iNaturalist",
+      "photoId": 13212543,
+      "license": "cc-by",
+      "attribution": "(c) Peter Paplanus, some rights reserved (CC BY)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/13212543/medium.jpg"
+    },
+    "EBQ": {
+      "scientificName": "Cuora galbinifrons",
+      "source": "iNaturalist",
+      "photoId": 382403337,
+      "license": null,
+      "attribution": "(c) CHIK SIU LUN, all rights reserved, uploaded by CHIK SIU LUN",
+      "url": "https://static.inaturalist.org/photos/382403337/medium.jpeg"
+    },
+    "EJG": {
+      "scientificName": "Emys orbicularis",
+      "source": "iNaturalist",
+      "photoId": 230597692,
+      "license": "cc-by-nc",
+      "attribution": "(c) Laurent Barthe, some rights reserved (CC BY-NC), uploaded by Laurent Barthe",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/230597692/medium.jpeg"
+    },
+    "EMG": {
+      "scientificName": "Emys orbicularis",
+      "source": "iNaturalist",
+      "photoId": 230597692,
+      "license": "cc-by-nc",
+      "attribution": "(c) Laurent Barthe, some rights reserved (CC BY-NC), uploaded by Laurent Barthe",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/230597692/medium.jpeg"
+    },
+    "FBT": {
+      "scientificName": "Apalone ferox",
+      "source": "iNaturalist",
+      "photoId": 596500498,
+      "license": null,
+      "attribution": "(c) Lynn Marie, all rights reserved, uploaded by Lynn Marie",
+      "url": "https://static.inaturalist.org/photos/596500498/medium.jpg"
+    },
+    "FHD": {
+      "scientificName": "Pseudemys nelsoni",
+      "source": "iNaturalist",
+      "photoId": 19887010,
+      "license": null,
+      "attribution": "(c) cbrucecochrane, all rights reserved",
+      "url": "https://static.inaturalist.org/photos/19887010/medium.jpg"
+    },
+    "FZG": {
+      "scientificName": "Terrapene carolina bauri",
+      "source": "iNaturalist",
+      "photoId": 102360,
+      "license": "cc-by-nc-sa",
+      "attribution": "(c) Jon Zander, some rights reserved (CC BY-NC-SA)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/102360/medium.jpg"
+    },
+    "GBG": {
+      "scientificName": "Chelonoidis carbonarius",
+      "source": "iNaturalist",
+      "photoId": 14368564,
+      "license": "cc-by-nc",
+      "attribution": "(c) Iv��n Lau, some rights reserved (CC BY-NC), uploaded by Iv��n Lau",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/14368564/medium.jpeg"
+    },
+    "GDT": {
+      "scientificName": "Trachemys decussata",
+      "source": "iNaturalist",
+      "photoId": 57336945,
+      "license": null,
+      "attribution": "(c) G��rard, all rights reserved, uploaded by G��rard",
+      "url": "https://static.inaturalist.org/photos/57336945/medium.jpeg"
+    },
+    "GHG": {
+      "scientificName": "Sternotherus odoratus",
+      "source": "iNaturalist",
+      "photoId": 5691931,
+      "license": "cc-by-nc",
+      "attribution": "(c) Kevin Metcalf, some rights reserved (CC BY-NC), uploaded by Kevin Metcalf",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/5691931/medium.jpeg"
+    },
+    "GJG": {
+      "scientificName": "Testudo graeca",
+      "source": "iNaturalist",
+      "photoId": 1843615,
+      "license": "cc-by-nc",
+      "attribution": "(c) Paul Cools, some rights reserved (CC BY-NC), uploaded by Paul Cools",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/1843615/medium.jpg"
+    },
+    "GLD": {
+      "scientificName": "Gopherus polyphemus",
+      "source": "iNaturalist",
+      "photoId": 59131024,
+      "license": "cc-by-nc",
+      "attribution": "(c) Donald Fraser, some rights reserved (CC BY-NC), uploaded by Donald Fraser",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/59131024/medium.jpeg"
+    },
+    "GNG": {
+      "scientificName": "Rhinoclemmys melanosterna",
+      "source": "iNaturalist",
+      "photoId": 364464449,
+      "license": "cc-by",
+      "attribution": "(c) Jos�� Gabriel Julio Guzm��n, some rights reserved (CC BY), uploaded by Jos�� Gabriel Julio Guzm��n",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/364464449/medium.jpeg"
+    },
+    "HET": {
+      "scientificName": "Cuora galbinifrons",
+      "source": "iNaturalist",
+      "photoId": 382403337,
+      "license": null,
+      "attribution": "(c) CHIK SIU LUN, all rights reserved, uploaded by CHIK SIU LUN",
+      "url": "https://static.inaturalist.org/photos/382403337/medium.jpeg"
+    },
+    "HGG": {
+      "scientificName": "Acanthochelys spixii",
+      "source": "iNaturalist",
+      "photoId": 14914,
+      "license": "cc-by-nc-sa",
+      "attribution": "(c) Cl??udio Dias Timm, some rights reserved (CC BY-NC-SA)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/14914/medium.jpg"
+    },
+    "HHG": {
+      "scientificName": "Mauremys mutica",
+      "source": "iNaturalist",
+      "photoId": 78895596,
+      "license": null,
+      "attribution": "(c) ihenglan, all rights reserved, uploaded by ihenglan",
+      "url": "https://static.inaturalist.org/photos/78895596/medium.jpg"
+    },
+    "HJG": {
+      "scientificName": "Mauremys nigricans",
+      "source": "iNaturalist",
+      "photoId": 277848501,
+      "license": "cc-by-nc",
+      "attribution": "(c) Cyrus Li, some rights reserved (CC BY-NC), uploaded by Cyrus Li",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/277848501/medium.jpg"
+    },
+    "HNT": {
+      "scientificName": "Chelonoidis carbonarius",
+      "source": "iNaturalist",
+      "photoId": 14368564,
+      "license": "cc-by-nc",
+      "attribution": "(c) Iv��n Lau, some rights reserved (CC BY-NC), uploaded by Iv��n Lau",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/14368564/medium.jpeg"
+    },
+    "HSG": {
+      "scientificName": "Heosemys annandalii",
+      "source": "iNaturalist",
+      "photoId": 49768994,
+      "license": null,
+      "attribution": "(c) Joshua V. Addesi, all rights reserved, uploaded by Joshua V. Addesi",
+      "url": "https://static.inaturalist.org/photos/49768994/medium.jpg"
+    },
+    "HZG": {
+      "scientificName": "Mauremys mutica",
+      "source": "iNaturalist",
+      "photoId": 78895596,
+      "license": null,
+      "attribution": "(c) ihenglan, all rights reserved, uploaded by ihenglan",
+      "url": "https://static.inaturalist.org/photos/78895596/medium.jpg"
+    },
+    "JBG": {
+      "scientificName": "Trachemys decussata",
+      "source": "iNaturalist",
+      "photoId": 57336945,
+      "license": null,
+      "attribution": "(c) G��rard, all rights reserved, uploaded by G��rard",
+      "url": "https://static.inaturalist.org/photos/57336945/medium.jpeg"
+    },
+    "JBT": {
+      "scientificName": "Terrapene ornata",
+      "source": "iNaturalist",
+      "photoId": 266693413,
+      "license": null,
+      "attribution": "(c) Jake Scott, all rights reserved, uploaded by Jake Scott",
+      "url": "https://static.inaturalist.org/photos/266693413/medium.jpg"
+    },
+    "JDG": {
+      "scientificName": "Psammobates geometricus",
+      "source": "iNaturalist",
+      "photoId": 97382991,
+      "license": null,
+      "attribution": "(c) Tyrone Ping, all rights reserved, uploaded by Tyrone Ping",
+      "url": "https://static.inaturalist.org/photos/97382991/medium.jpg"
+    },
+    "JTM": {
+      "scientificName": "Sternotherus minor",
+      "source": "iNaturalist",
+      "photoId": 25869752,
+      "license": null,
+      "attribution": "(c) Kevin C, all rights reserved, uploaded by Kevin C",
+      "url": "https://static.inaturalist.org/photos/25869752/medium.jpeg"
+    },
+    "JTG": {
+      "scientificName": "Cyclemys dentata",
+      "source": "iNaturalist",
+      "photoId": 178705469,
+      "license": null,
+      "attribution": "(c) Artur Tomaszek, all rights reserved, uploaded by Artur Tomaszek",
+      "url": "https://static.inaturalist.org/photos/178705469/medium.jpg"
+    },
+    "JWG": {
+      "scientificName": "Chrysemys picta",
+      "source": "iNaturalist",
+      "photoId": 9927445,
+      "license": "cc-by-nc",
+      "attribution": "(c) Susan Elliott, some rights reserved (CC BY-NC), uploaded by Susan Elliott",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/9927445/medium.jpg"
+    },
+    "JYG": {
+      "scientificName": "Cyclemys dentata",
+      "source": "iNaturalist",
+      "photoId": 178705469,
+      "license": null,
+      "attribution": "(c) Artur Tomaszek, all rights reserved, uploaded by Artur Tomaszek",
+      "url": "https://static.inaturalist.org/photos/178705469/medium.jpg"
+    },
+    "KBT": {
+      "scientificName": "Lepidochelys kempii",
+      "source": "iNaturalist",
+      "photoId": 422850824,
+      "license": "cc-by-nc",
+      "attribution": "(c) randy6410, some rights reserved (CC BY-NC)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/422850824/medium.jpeg"
+    },
+    "KJG": {
+      "scientificName": "Pelomedusa subrufa",
+      "source": "iNaturalist",
+      "photoId": 27265694,
+      "license": "cc-by",
+      "attribution": "(c) Charlotte Kirchner, some rights reserved (CC BY), uploaded by Charlotte Kirchner",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/27265694/medium.jpeg"
+    },
+    "KNG": {
+      "scientificName": "Chelus fimbriata",
+      "source": "iNaturalist",
+      "photoId": 152808595,
+      "license": null,
+      "attribution": "(c) whitezelda, all rights reserved, uploaded by whitezelda",
+      "url": "https://static.inaturalist.org/photos/152808595/medium.jpg"
+    },
+    "KSG": {
+      "scientificName": "Terrapene carolina",
+      "source": "iNaturalist",
+      "photoId": 48987498,
+      "license": "cc-by-nc",
+      "attribution": "(c) Richard Coldiron, some rights reserved (CC BY-NC), uploaded by Richard Coldiron",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/48987498/medium.jpeg"
+    },
+    "LBG": {
+      "scientificName": "Sternotherus carinatus",
+      "source": "iNaturalist",
+      "photoId": 75764919,
+      "license": "cc-by-nc",
+      "attribution": "(c) Jason, some rights reserved (CC BY-NC), uploaded by Jason",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/75764919/medium.jpeg"
+    },
+    "LHG": {
+      "scientificName": "Lepidochelys olivacea",
+      "source": "iNaturalist",
+      "photoId": 154666409,
+      "license": null,
+      "attribution": "(c) odette a castro, all rights reserved, uploaded by odette a castro",
+      "url": "https://static.inaturalist.org/photos/154666409/medium.jpeg"
+    },
+    "LJG": {
+      "scientificName": "Dermochelys coriacea",
+      "source": "iNaturalist",
+      "photoId": 244918310,
+      "license": "cc-by-nc",
+      "attribution": "(c) azure27014, some rights reserved (CC BY-NC)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/244918310/medium.jpg"
+    },
+    "LKG": {
+      "scientificName": "Chelonia mydas",
+      "source": "iNaturalist",
+      "photoId": 197457958,
+      "license": "cc-by-nc",
+      "attribution": "(c) MARC MARTIN SOLA, some rights reserved (CC BY-NC), uploaded by MARC MARTIN SOLA",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/197457958/medium.jpg"
+    },
+    "LNG": {
+      "scientificName": "Mauremys mutica",
+      "source": "iNaturalist",
+      "photoId": 78895596,
+      "license": null,
+      "attribution": "(c) ihenglan, all rights reserved, uploaded by ihenglan",
+      "url": "https://static.inaturalist.org/photos/78895596/medium.jpg"
+    },
+    "LSG": {
+      "scientificName": "Mauremys reevesii",
+      "source": "iNaturalist",
+      "photoId": 208919672,
+      "license": "cc-by-nc-sa",
+      "attribution": "(c) Kim, Hyun-tae, some rights reserved (CC BY-NC-SA), uploaded by Kim, Hyun-tae",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/208919672/medium.jpg"
+    },
+    "LWG": {
+      "scientificName": "Rhinoclemmys pulcherrima",
+      "source": "iNaturalist",
+      "photoId": 26139755,
+      "license": "cc-by-nc",
+      "attribution": "(c) Oliver Komar, some rights reserved (CC BY-NC), uploaded by Oliver Komar",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/26139755/medium.jpeg"
+    },
+    "MDG": {
+      "scientificName": "Orlitia borneensis",
+      "source": "iNaturalist",
+      "photoId": 21988301,
+      "license": "cc-by-nc",
+      "attribution": "(c) DENI PARLINDUNGAN, some rights reserved (CC BY-NC), uploaded by DENI PARLINDUNGAN",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/21988301/medium.jpeg"
+    },
+    "MHG": {
+      "scientificName": "Graptemys pseudogeographica kohnii",
+      "source": "iNaturalist",
+      "photoId": 51688242,
+      "license": "cc-by-nc",
+      "attribution": "(c) texasturtles, some rights reserved (CC BY-NC), uploaded by texasturtles",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/51688242/medium.jpg"
+    },
+    "MJG": {
+      "scientificName": "Geochelone platynota",
+      "source": "iNaturalist",
+      "photoId": 211199252,
+      "license": null,
+      "attribution": "(c) Win Paing Oo, all rights reserved, uploaded by Win Paing Oo",
+      "url": "https://static.inaturalist.org/photos/211199252/medium.jpg"
+    },
+    "MLG": {
+      "scientificName": "Indotestudo elongata",
+      "source": "iNaturalist",
+      "photoId": 21702504,
+      "license": "cc-by-nc",
+      "attribution": "(c) Rejoice Gassah, some rights reserved (CC BY-NC), uploaded by Rejoice Gassah",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/21702504/medium.jpg"
+    },
+    "MRT": {
+      "scientificName": "Chelus fimbriata",
+      "source": "iNaturalist",
+      "photoId": 152808595,
+      "license": null,
+      "attribution": "(c) whitezelda, all rights reserved, uploaded by whitezelda",
+      "url": "https://static.inaturalist.org/photos/152808595/medium.jpg"
+    },
+    "MSG": {
+      "scientificName": "Sternotherus odoratus",
+      "source": "iNaturalist",
+      "photoId": 5691931,
+      "license": "cc-by-nc",
+      "attribution": "(c) Kevin Metcalf, some rights reserved (CC BY-NC), uploaded by Kevin Metcalf",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/5691931/medium.jpeg"
+    },
+    "MXD": {
+      "scientificName": "Sternotherus odoratus",
+      "source": "iNaturalist",
+      "photoId": 5691931,
+      "license": "cc-by-nc",
+      "attribution": "(c) Kevin Metcalf, some rights reserved (CC BY-NC), uploaded by Kevin Metcalf",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/5691931/medium.jpeg"
+    },
+    "MXJ": {
+      "scientificName": "Staurotypus triporcatus",
+      "source": "iNaturalist",
+      "photoId": 364869203,
+      "license": "cc-by-nc",
+      "attribution": "(c) Daniel Dur��n Arceo, some rights reserved (CC BY-NC), uploaded by Daniel Dur��n Arceo",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/364869203/medium.jpg"
+    },
+    "MUG": {
+      "scientificName": "Glyptemys insculpta",
+      "source": "iNaturalist",
+      "photoId": 295848381,
+      "license": "cc-by-nc",
+      "attribution": "(c) Charlie Mellor, some rights reserved (CC BY-NC), uploaded by Charlie Mellor",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/295848381/medium.jpg"
+    },
+    "NMG": {
+      "scientificName": "Rhinoclemmys punctularia",
+      "source": "iNaturalist",
+      "photoId": 17373735,
+      "license": "cc-by-nc",
+      "attribution": "(c) Mike G. Rutherford, some rights reserved (CC BY-NC), uploaded by Mike G. Rutherford",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/17373735/medium.jpeg"
+    },
+    "NNG": {
+      "scientificName": "Podocnemis expansa",
+      "source": "iNaturalist",
+      "photoId": 55769747,
+      "license": null,
+      "attribution": "(c) Sean A. Higgins, all rights reserved, uploaded by Sean A. Higgins",
+      "url": "https://static.inaturalist.org/photos/55769747/medium.jpeg"
+    },
+    "NTG": {
+      "scientificName": "Chelydra serpentina",
+      "source": "iNaturalist",
+      "photoId": 352641070,
+      "license": "cc-by",
+      "attribution": "(c) \nlwolfartist, some rights reserved (CC BY)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/352641070/medium.jpg"
+    },
+    "PDG": {
+      "scientificName": "Cuora pani",
+      "source": "iNaturalist",
+      "photoId": 184188,
+      "license": null,
+      "attribution": "(c) Paul Freed, todos os direitos reservados, enviado por Paul Freed",
+      "url": "https://static.inaturalist.org/photos/184188/medium.JPG"
+    },
+    "PGG": {
+      "scientificName": "Natator depressus",
+      "source": "iNaturalist",
+      "photoId": 452428306,
+      "license": "cc-by-nc",
+      "attribution": "(c) Michael Tervo, some rights reserved (CC BY-NC), uploaded by Michael Tervo",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/452428306/medium.jpeg"
+    },
+    "PHG": {
+      "scientificName": "Platysternon megacephalum",
+      "source": "iNaturalist",
+      "photoId": 349541686,
+      "license": "cc-by-nc",
+      "attribution": "(c) H.T.Cheng, some rights reserved (CC BY-NC), uploaded by H.T.Cheng",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/349541686/medium.jpg"
+    },
+    "PMG": {
+      "scientificName": "Sternotherus odoratus",
+      "source": "iNaturalist",
+      "photoId": 5691931,
+      "license": "cc-by-nc",
+      "attribution": "(c) Kevin Metcalf, some rights reserved (CC BY-NC), uploaded by Kevin Metcalf",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/5691931/medium.jpeg"
+    },
+    "QBT": {
+      "scientificName": "Cuora mouhotii",
+      "source": "iNaturalist",
+      "photoId": 416254895,
+      "license": "cc-by-nc",
+      "attribution": "(c) lightwind, some rights reserved (CC BY-NC), uploaded by lightwind",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/416254895/medium.jpg"
+    },
+    "QJG": {
+      "scientificName": "Glyptemys muhlenbergii",
+      "source": "iNaturalist",
+      "photoId": 111292194,
+      "license": "cc-by-nc-sa",
+      "attribution": "(c) Patrick Randall, some rights reserved (CC BY-NC-SA)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/111292194/medium.jpg"
+    },
+    "QYG": {
+      "scientificName": "Testudo marginata",
+      "source": "iNaturalist",
+      "photoId": 99469386,
+      "license": null,
+      "attribution": "(c) Konstantinos Kalaentzis, all rights reserved, uploaded by Konstantinos Kalaentzis",
+      "url": "https://static.inaturalist.org/photos/99469386/medium.jpg"
+    },
+    "RBG": {
+      "scientificName": "Mauremys japonica",
+      "source": "iNaturalist",
+      "photoId": 507747688,
+      "license": "cc-by",
+      "attribution": "(c) Kim, Hyun-tae, some rights reserved (CC BY)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/507747688/medium.jpg"
+    },
+    "RLG": {
+      "scientificName": "Geoemyda japonica",
+      "source": "iNaturalist",
+      "photoId": 457027179,
+      "license": "cc-by-nc",
+      "attribution": "(c) ����˹��, some rights reserved (CC BY-NC), uploaded by ����˹��",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/457027179/medium.jpg"
+    },
+    "RMT": {
+      "scientificName": "Mauremys japonica",
+      "source": "iNaturalist",
+      "photoId": 507747688,
+      "license": "cc-by",
+      "attribution": "(c) Kim, Hyun-tae, some rights reserved (CC BY)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/507747688/medium.jpg"
+    },
+    "RTG": {
+      "scientificName": "Astrochelys radiata",
+      "source": "iNaturalist",
+      "photoId": 71756380,
+      "license": "cc-by",
+      "attribution": "(c) Josip Skejo, some rights reserved (CC BY), uploaded by Josip Skejo",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/71756380/medium.jpeg"
+    },
+    "SWE": {
+      "scientificName": "Staurotypus salvinii",
+      "source": "iNaturalist",
+      "photoId": 86644739,
+      "license": null,
+      "attribution": "(c) Karla Lara, all rights reserved, uploaded by Karla Lara",
+      "url": "https://static.inaturalist.org/photos/86644739/medium.jpg"
+    },
+    "SDG": {
+      "scientificName": "Centrochelys sulcata",
+      "source": "iNaturalist",
+      "photoId": 286883668,
+      "license": "cc-by-sa",
+      "attribution": "(c) Bernard DUPONT, some rights reserved (CC BY-SA)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/286883668/medium.jpg"
+    },
+    "SGG": {
+      "scientificName": "Sacalia quadriocellata",
+      "source": "iNaturalist",
+      "photoId": 220854228,
+      "license": null,
+      "attribution": "(c) Artur Tomaszek, all rights reserved, uploaded by Artur Tomaszek",
+      "url": "https://static.inaturalist.org/photos/220854228/medium.jpg"
+    },
+    "SHG": {
+      "scientificName": "Palea steindachneri",
+      "source": "iNaturalist",
+      "photoId": 181467129,
+      "license": null,
+      "attribution": "(c) Tom Lee, all rights reserved, uploaded by Tom Lee",
+      "url": "https://static.inaturalist.org/photos/181467129/medium.jpeg"
+    },
+    "SLG": {
+      "scientificName": "Leucocephalon yuwonoi",
+      "source": "iNaturalist",
+      "photoId": 164699358,
+      "license": null,
+      "attribution": "(c) Putra Reptil Endemik, all rights reserved, uploaded by Putra Reptil Endemik",
+      "url": "https://static.inaturalist.org/photos/164699358/medium.jpeg"
+    },
+    "SPG": {
+      "scientificName": "Chelydra serpentina",
+      "source": "iNaturalist",
+      "photoId": 352641070,
+      "license": "cc-by",
+      "attribution": "(c) \nlwolfartist, some rights reserved (CC BY)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/352641070/medium.jpg"
+    },
+    "SSG": {
+      "scientificName": "Testudo horsfieldii",
+      "source": "iNaturalist",
+      "photoId": 72809697,
+      "license": null,
+      "attribution": "(c) R��mi Bigonneau, all rights reserved, uploaded by R��mi Bigonneau",
+      "url": "https://static.inaturalist.org/photos/72809697/medium.jpeg"
+    },
+    "STG": {
+      "scientificName": "Astrochelys radiata",
+      "source": "iNaturalist",
+      "photoId": 71756380,
+      "license": "cc-by",
+      "attribution": "(c) Josip Skejo, some rights reserved (CC BY), uploaded by Josip Skejo",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/71756380/medium.jpeg"
+    },
+    "TBG": {
+      "scientificName": "Pelomedusa subrufa",
+      "source": "iNaturalist",
+      "photoId": 27265694,
+      "license": "cc-by",
+      "attribution": "(c) Charlotte Kirchner, some rights reserved (CC BY), uploaded by Charlotte Kirchner",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/27265694/medium.jpeg"
+    },
+    "TDG": {
+      "scientificName": "Mauremys reevesii",
+      "source": "iNaturalist",
+      "photoId": 208919672,
+      "license": "cc-by-nc-sa",
+      "attribution": "(c) Kim, Hyun-tae, some rights reserved (CC BY-NC-SA), uploaded by Kim, Hyun-tae",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/208919672/medium.jpg"
+    },
+    "THG": {
+      "scientificName": "Cyclemys oldhamii",
+      "source": "iNaturalist",
+      "photoId": 461582736,
+      "license": "cc-by-nc",
+      "attribution": "(c) Wich��yanan (Jay) Limparungpatthanakij, some rights reserved (CC BY-NC), uploaded by Wich��yanan (Jay) Limparungpatthanakij",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/461582736/medium.jpg"
+    },
+    "TMG": {
+      "scientificName": "Sternotherus carinatus",
+      "source": "iNaturalist",
+      "photoId": 75764919,
+      "license": "cc-by-nc",
+      "attribution": "(c) Jason, some rights reserved (CC BY-NC), uploaded by Jason",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/75764919/medium.jpeg"
+    },
+    "TYG": {
+      "scientificName": "Malayemys subtrijuga",
+      "source": "iNaturalist",
+      "photoId": 918387,
+      "license": "cc-by-nc",
+      "attribution": "(c) Martin Grimm, some rights reserved (CC BY-NC)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/918387/medium.jpg"
+    },
+    "WBG": {
+      "scientificName": "Kinosternon oaxacae",
+      "source": "iNaturalist",
+      "photoId": 19752324,
+      "license": "cc-by",
+      "attribution": "(c) Vicente Mata-Silva, some rights reserved (CC BY)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/19752324/medium.jpeg"
+    },
+    "WJG": {
+      "scientificName": "Chrysemys picta bellii",
+      "source": "iNaturalist",
+      "photoId": 602756,
+      "license": "cc-by-nc-nd",
+      "attribution": "(c) J. N. Stuart, some rights reserved (CC BY-NC-ND)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/602756/medium.jpg"
+    },
+    "WNG": {
+      "scientificName": "Pangshura tecta",
+      "source": "iNaturalist",
+      "photoId": 2175120,
+      "license": null,
+      "attribution": "(c) Ameet Zaveri, all rights reserved, uploaded by Ameet Zaveri",
+      "url": "https://static.inaturalist.org/photos/2175120/medium.jpg"
+    },
+    "WTG": {
+      "scientificName": "Mauremys reevesii",
+      "source": "iNaturalist",
+      "photoId": 208919672,
+      "license": "cc-by-nc-sa",
+      "attribution": "(c) Kim, Hyun-tae, some rights reserved (CC BY-NC-SA), uploaded by Kim, Hyun-tae",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/208919672/medium.jpg"
+    },
+    "XBG": {
+      "scientificName": "Terrapene ornata",
+      "source": "iNaturalist",
+      "photoId": 266693413,
+      "license": null,
+      "attribution": "(c) Jake Scott, all rights reserved, uploaded by Jake Scott",
+      "url": "https://static.inaturalist.org/photos/266693413/medium.jpg"
+    },
+    "XDT": {
+      "scientificName": "Clemmys guttata",
+      "source": "iNaturalist",
+      "photoId": 14445492,
+      "license": "cc-by-nc-nd",
+      "attribution": "(c) Josh van der Meulen, some rights reserved (CC BY-NC-ND), uploaded by Josh van der Meulen",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/14445492/medium.jpg"
+    },
+    "XEG": {
+      "scientificName": "Chelydra serpentina",
+      "source": "iNaturalist",
+      "photoId": 352641070,
+      "license": "cc-by",
+      "attribution": "(c) \nlwolfartist, some rights reserved (CC BY)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/352641070/medium.jpg"
+    },
+    "XFD": {
+      "scientificName": "Pelusios castaneus",
+      "source": "iNaturalist",
+      "photoId": 113983100,
+      "license": "cc-by-nc",
+      "attribution": "(c) Dr Anh Galat-Luong, some rights reserved (CC BY-NC), uploaded by Dr Anh Galat-Luong",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/113983100/medium.jpeg"
+    },
+    "XGG": {
+      "scientificName": "Testudo graeca",
+      "source": "iNaturalist",
+      "photoId": 1843615,
+      "license": "cc-by-nc",
+      "attribution": "(c) Paul Cools, some rights reserved (CC BY-NC), uploaded by Paul Cools",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/1843615/medium.jpg"
+    },
+    "XNG": {
+      "scientificName": "Chrysemys picta bellii",
+      "source": "iNaturalist",
+      "photoId": 602756,
+      "license": "cc-by-nc-nd",
+      "attribution": "(c) J. N. Stuart, some rights reserved (CC BY-NC-ND)",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/602756/medium.jpg"
+    },
+    "XPG": {
+      "scientificName": "Geochelone elegans",
+      "source": "iNaturalist",
+      "photoId": 109310050,
+      "license": "cc-by-nc",
+      "attribution": "(c) Otto Byl��n Claesson, some rights reserved (CC BY-NC), uploaded by Otto Byl��n Claesson",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/109310050/medium.jpg"
+    },
+    "YDG": {
+      "scientificName": "Pangshura tecta",
+      "source": "iNaturalist",
+      "photoId": 2175120,
+      "license": null,
+      "attribution": "(c) Ameet Zaveri, all rights reserved, uploaded by Ameet Zaveri",
+      "url": "https://static.inaturalist.org/photos/2175120/medium.jpg"
+    },
+    "YHG": {
+      "scientificName": "Platysternon megacephalum",
+      "source": "iNaturalist",
+      "photoId": 349541686,
+      "license": "cc-by-nc",
+      "attribution": "(c) H.T.Cheng, some rights reserved (CC BY-NC), uploaded by H.T.Cheng",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/349541686/medium.jpg"
+    },
+    "YNT": {
+      "scientificName": "Geochelone elegans",
+      "source": "iNaturalist",
+      "photoId": 109310050,
+      "license": "cc-by-nc",
+      "attribution": "(c) Otto Byl��n Claesson, some rights reserved (CC BY-NC), uploaded by Otto Byl��n Claesson",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/109310050/medium.jpg"
+    },
+    "YSG": {
+      "scientificName": "Manouria emys",
+      "source": "iNaturalist",
+      "photoId": 50080365,
+      "license": null,
+      "attribution": "(c) Chien Lee, all rights reserved, uploaded by Chien Lee",
+      "url": "https://static.inaturalist.org/photos/50080365/medium.jpg"
+    },
+    "YTG": {
+      "scientificName": "Heosemys annandalii",
+      "source": "iNaturalist",
+      "photoId": 49768994,
+      "license": null,
+      "attribution": "(c) Joshua V. Addesi, all rights reserved, uploaded by Joshua V. Addesi",
+      "url": "https://static.inaturalist.org/photos/49768994/medium.jpg"
+    },
+    "ZBG": {
+      "scientificName": "Chrysemys picta marginata",
+      "source": "iNaturalist",
+      "photoId": 92206776,
+      "license": null,
+      "attribution": "(c) Greg Page, all rights reserved, uploaded by Greg Page",
+      "url": "https://static.inaturalist.org/photos/92206776/medium.jpg"
+    },
+    "ZCG": {
+      "scientificName": "Mauremys reevesii",
+      "source": "iNaturalist",
+      "photoId": 208919672,
+      "license": "cc-by-nc-sa",
+      "attribution": "(c) Kim, Hyun-tae, some rights reserved (CC BY-NC-SA), uploaded by Kim, Hyun-tae",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/208919672/medium.jpg"
+    },
+    "ZDG": {
+      "scientificName": "Malaclemys terrapin",
+      "source": "iNaturalist",
+      "photoId": 9316497,
+      "license": null,
+      "attribution": "(c) Chance Feimster, all rights reserved, uploaded by Chance Feimster",
+      "url": "https://static.inaturalist.org/photos/9316497/medium.jpg"
+    },
+    "ZHG": {
+      "scientificName": "Mauremys sinensis",
+      "source": "iNaturalist",
+      "photoId": 199273961,
+      "license": "cc-by-nc",
+      "attribution": "(c) Darren Fielder, some rights reserved (CC BY-NC), uploaded by Darren Fielder",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/199273961/medium.jpg"
+    },
+    "ZJG": {
+      "scientificName": "Mauremys sinensis",
+      "source": "iNaturalist",
+      "photoId": 199273961,
+      "license": "cc-by-nc",
+      "attribution": "(c) Darren Fielder, some rights reserved (CC BY-NC), uploaded by Darren Fielder",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/199273961/medium.jpg"
+    },
+    "ZMG": {
+      "scientificName": "Rhinoclemmys pulcherrima",
+      "source": "iNaturalist",
+      "photoId": 26139755,
+      "license": "cc-by-nc",
+      "attribution": "(c) Oliver Komar, some rights reserved (CC BY-NC), uploaded by Oliver Komar",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/26139755/medium.jpeg"
+    },
+    "ZRG": {
+      "scientificName": "Manouria emys",
+      "source": "iNaturalist",
+      "photoId": 50080365,
+      "license": null,
+      "attribution": "(c) Chien Lee, all rights reserved, uploaded by Chien Lee",
+      "url": "https://static.inaturalist.org/photos/50080365/medium.jpg"
+    },
+    "ZYG": {
+      "scientificName": "Claudius angustatus",
+      "source": "iNaturalist",
+      "photoId": 8006862,
+      "license": "cc-by-nc",
+      "attribution": "(c) La Mancha en Movimiento, some rights reserved (CC BY-NC), uploaded by La Mancha en Movimiento",
+      "url": "https://inaturalist-open-data.s3.amazonaws.com/photos/8006862/medium.jpg"
+    }
+  },
+  "unavailableSpecies": [
+    {
+      "code": "HBQ",
+      "scientificName": "Cuora yunnanensis",
+      "reason": "no matching iNaturalist taxon photo"
+    },
+    {
+      "code": "HWM",
+      "scientificName": "Sternotherus minor peltifer",
+      "reason": "no matching iNaturalist taxon photo"
+    },
+    {
+      "code": "NBG",
+      "scientificName": "Chrysemys picta dorsalis",
+      "reason": "no matching iNaturalist taxon photo"
+    },
+    {
+      "code": "SNG",
+      "scientificName": "Terrapene carolina triunguis",
+      "reason": "no matching iNaturalist taxon photo"
+    },
+    {
+      "code": "YBG",
+      "scientificName": "Melanochelys trijuga",
+      "reason": "Command failed: powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Users\\Administrator\\Documents\\Codex\\2026-06-02\\apple-store\\outputs\\turtlekeeper-app\\scripts\\download-one-species.ps1 -Url https://inaturalist-open-data.s3.amazonaws.com/photos/8411267/medium.jpg -Target C:\\Users\\Administrator\\Documents\\Codex\\2026-06-02\\apple-store\\outputs\\turtlekeeper-app\\assets\\species\\YBG.jpg.inat.part\nInvoke-WebRequest : ���������Ѿ��ر�: ����ʱ��������\r\n����λ�� C:\\Users\\Administrator\\Documents\\Codex\\2026-06-02\\apple-store\\outputs\\turtlekeeper-app\\scripts\\download-one-sp\r\necies.ps1:8 �ַ�: 1\r\n+ Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Target -Maximu ...\r\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\r\n    + CategoryInfo          : InvalidOperation: (System.Net.HttpWebRequest:HttpWebRequest) [Invoke-WebRequest]��WebExce\r\n    ption\r\n    + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeWebRequestCommand\r\n \r\n"
+    }
+  ]
+}
