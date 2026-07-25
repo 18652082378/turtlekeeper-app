@@ -2000,6 +2000,30 @@ function backNavigationState() {
 function navigateBack() {
   const snapshot = edgeBackSnapshots.pop();
   const fallback = backNavigationState();
+  const nextState = snapshot?.page ? { ...fallback, page: snapshot.page } : fallback;
+  if (snapshot?.html) {
+    // Hand the exact frozen page to the real app before removing the preview.
+    // This is intentionally not render(): recreating a long list (especially
+    // messages) at this point is what caused the one-frame bounce on return.
+    state = { ...state, ...nextState };
+    pendingPageEnterMotion = false;
+    pendingCommunityChatEnterMotion = false;
+    pendingPageScrollReset = false;
+    $app.style.transition = "";
+    $app.style.transform = "";
+    $app.classList.remove("edge-back-dragging", "page-enter-motion", "community-chat-enter-motion");
+    $app.innerHTML = snapshot.html;
+    saveState({ skipCloud: true });
+    bindEvents();
+    setupMarketInfiniteScroll();
+    window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
+    window.requestAnimationFrame(() => {
+      hydrateVideoFirstFrames();
+      hydrateMarketDetailVideos();
+      clearEdgeBackPreview();
+    });
+    return;
+  }
   setState(snapshot?.page ? { ...fallback, page: snapshot.page } : fallback, {
     pageMotion: "none",
     pageScroll: "preserve",
@@ -9095,10 +9119,6 @@ function setupEdgeBackAndConversationSwipe() {
   const paintGesture = () => {
     gestureAnimationFrame = 0;
     if (!gesture) return;
-    if (gesture.rowDragging) {
-      gesture.row.style.setProperty("--message-swipe-reveal", `${gesture.reveal}px`);
-      return;
-    }
     if (gesture.edgeBack) {
       $app.style.transform = `translate3d(${gesture.edgeOffset}px, 0, 0)`;
       gesture.preview?.style.setProperty("transform", `translate3d(${-22 + (gesture.edgeProgress * 22)}%, 0, 0)`);
@@ -9110,7 +9130,7 @@ function setupEdgeBackAndConversationSwipe() {
   const flushGesturePaint = () => {
     if (gestureAnimationFrame) window.cancelAnimationFrame(gestureAnimationFrame);
     gestureAnimationFrame = 0;
-    paintGesture();
+    if (gesture?.edgeBack) paintGesture();
   };
   document.addEventListener("touchstart", event => {
     if (event.touches.length !== 1 || event.target.closest("input, textarea, select, [contenteditable='true'], .modal-overlay")) return;
@@ -9128,14 +9148,14 @@ function setupEdgeBackAndConversationSwipe() {
       const actionWidth = 144;
       if (gesture.rowStartedOpen === undefined) gesture.rowStartedOpen = gesture.row.classList.contains("is-open");
       const rawReveal = Math.max(0, (gesture.rowStartedOpen ? actionWidth : 0) - dx);
-      // Only update the compositor once per display frame. The foreground card
-      // and action layer read the very same CSS variable, so they remain 1:1
-      // attached to the finger even when the device emits many touch events.
+      // This must be written immediately rather than queued to the next frame:
+      // iOS already composites touch events per frame, while queuing adds a
+      // perceptible one-frame lag to the foreground card.
       const reveal = Math.min(actionWidth, rawReveal);
       gesture.row.classList.add("is-dragging");
       gesture.rowDragging = true;
       gesture.reveal = reveal;
-      scheduleGesturePaint();
+      gesture.row.style.setProperty("--message-swipe-reveal", `${reveal}px`);
       if (event.cancelable) event.preventDefault();
       return;
     }
