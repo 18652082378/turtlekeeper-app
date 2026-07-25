@@ -61,6 +61,52 @@ let pullRefreshPendingState = null;
 let pullRefreshIndicatorElement = null;
 let pullRefreshIndicatorLabel = null;
 let pullRefreshVisualState = "";
+// Every touch-driven interaction (pull refresh, row actions and edge back)
+// shares one short-lived owner.  Previously each feature kept an independent
+// document-level touch listener, so a cancelled or rapid follow-up gesture
+// could leave an old listener in control and swallow later taps.
+let activeTouchGesture = null;
+
+function touchGestureOwnedByOther(owner) {
+  return Boolean(activeTouchGesture && activeTouchGesture.owner !== owner);
+}
+
+function claimTouchGesture(owner, release) {
+  if (touchGestureOwnedByOther(owner)) return false;
+  activeTouchGesture = { owner, release };
+  return true;
+}
+
+function releaseTouchGesture(owner = "", reason = "end") {
+  if (!activeTouchGesture || (owner && activeTouchGesture.owner !== owner)) return false;
+  const current = activeTouchGesture;
+  activeTouchGesture = null;
+  try {
+    current.release?.(reason);
+  } catch (error) {
+    console.warn("手势收尾失败", error);
+  }
+  return true;
+}
+
+function setupTouchGestureIsolation() {
+  if (document.body.dataset.touchGestureIsolationBound === "true") return;
+  document.body.dataset.touchGestureIsolationBound = "true";
+  // Individual handlers release synchronously on touchend. This deferred
+  // fallback only handles WebKit cases where it dispatches no usable end event.
+  const releaseAfterHandlers = () => {
+    const release = () => releaseTouchGesture("", "end");
+    if (typeof window.queueMicrotask === "function") window.queueMicrotask(release);
+    else Promise.resolve().then(release);
+  };
+  document.addEventListener("touchend", releaseAfterHandlers, { passive: true });
+  document.addEventListener("touchcancel", () => releaseTouchGesture("", "cancel"), { passive: true });
+  window.addEventListener("pagehide", () => releaseTouchGesture("", "cancel"));
+  window.addEventListener("blur", () => releaseTouchGesture("", "cancel"));
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) releaseTouchGesture("", "cancel");
+  });
+}
 
 const initialState = {
   page: "home",
@@ -409,7 +455,9 @@ function forgetCloudToken(phone) {
 function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE));
-    return saved ? normalizeState({ ...initialState, ...saved }) : { ...initialState };
+    // The app always cold-starts on the dashboard. Older releases stored the
+    // last route in localStorage, which could reopen the "空间" tab instead.
+    return saved ? normalizeState({ ...initialState, ...saved, page: "home" }) : { ...initialState };
   } catch {
     return { ...initialState };
   }
@@ -1657,6 +1705,68 @@ function syncPersistentBottomNav(nav) {
   }
 }
 
+function navigateBottomTab(targetPage) {
+  if (!BOTTOM_NAV_ROOT_PAGES.has(targetPage) || state.page === targetPage) return;
+  const navigationState = {
+    page: targetPage,
+    openTurtleMenuId: "",
+    openLedgerMenuId: "",
+    openBreedingMenuId: "",
+    openFeedbackMenuId: "",
+    updatingTurtleId: "",
+    turtleDetailDraftId: "",
+    turtleDetailDraft: null,
+    updateDraftPhoto: ""
+  };
+  if (targetPage === "market") {
+    marketLastLoadedAt = 0;
+    Object.assign(navigationState, {
+      marketListings: [],
+      marketFeedInitialized: false,
+      marketFeedNextOffset: 0,
+      marketFeedHasMore: true,
+      marketFeedLoadingMore: false
+    });
+  }
+  setState(navigationState);
+}
+
+function restoreBottomNavAfterForeground() {
+  clearEdgeBackPreview();
+  $app.style.transition = "";
+  $app.style.transform = "";
+  $app.classList.remove("edge-back-dragging");
+  document.querySelectorAll(".bottom-nav").forEach(nav => {
+    nav.removeAttribute("inert");
+    nav.style.pointerEvents = "auto";
+    nav.style.zIndex = "1100";
+    syncPersistentBottomNav(nav);
+  });
+}
+
+function setupBottomNavForegroundRecovery() {
+  if (document.body.dataset.bottomNavRecoveryBound === "true") return;
+  document.body.dataset.bottomNavRecoveryBound = "true";
+  // Capture phase is intentionally independent of per-element listeners. A
+  // preserved iOS WebView can resume with its fixed tab bar visible while its
+  // old element listeners are no longer dispatching normally.
+  document.addEventListener("click", event => {
+    const tab = event.target.closest(".bottom-nav button[data-page]");
+    if (!tab || !$app.contains(tab)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    navigateBottomTab(tab.dataset.page);
+  }, true);
+  // App resume only restores the fixed navigation layer. It deliberately does
+  // not change state.page, so returning from another app preserves the page
+  // where the user left off.
+  const restore = () => window.requestAnimationFrame(restoreBottomNavAfterForeground);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) restore();
+  });
+  window.addEventListener("pageshow", restore);
+}
+
 function communityAvatar(item, className = "community-avatar") {
   if (item.authorAvatar || item.avatar) return `<img class="${className}" src="${item.authorAvatar || item.avatar}" alt="头像">`;
   return `<span class="${className} fallback-avatar">${escapeHtml(String(item.authorName || item.name || "壳").slice(0, 1))}</span>`;
@@ -1854,9 +1964,10 @@ function marketVideoPosterUrl(media, fallbackUrl = defaultPhoto) {
   return String(media?.posterUrl || media?.mediaPosterUrl || media?.poster || fallbackUrl || defaultPhoto).trim() || defaultPhoto;
 }
 
-function marketDetailVideoMarkup(media, fallbackPosterUrl, sold = false) {
-  const posterUrl = marketVideoPosterUrl(media, fallbackPosterUrl);
-  return `<div class="market-detail-photo market-detail-video-shell is-loading"><img class="market-detail-video-cover" src="${escapeHtml(posterUrl)}" alt="视频封面"><video src="${escapeHtml(media.url)}" poster="${escapeHtml(posterUrl)}" controls playsinline preload="auto" crossorigin="anonymous" data-video-first-frame data-market-detail-video></video><div class="market-detail-video-loading" aria-live="polite">视频加载中</div>${sold ? `<span>已售出</span>` : ""}</div>`;
+function marketDetailVideoMarkup(media, fallbackPosterUrl, sold = false, autoPlay = false) {
+  // Detail videos deliberately have no poster/cover. The viewer sees the
+  // native loading state and then the actual first playable frame directly.
+  return `<div class="market-detail-photo market-detail-video-shell is-loading"><video src="${escapeHtml(media.url)}" controls playsinline preload="auto"${autoPlay ? " autoplay muted" : ""} crossorigin="anonymous" data-market-detail-video${autoPlay ? " data-market-detail-autoplay" : ""}></video><div class="market-detail-video-loading" aria-live="polite">视频加载中</div>${sold ? `<span>已售出</span>` : ""}</div>`;
 }
 
 function communityMessageAspectRatio(message, mediaType) {
@@ -2662,7 +2773,7 @@ function pageMarketDetail() {
     ${topbar("商品详情", true, detailMoreAction)}
     <main class="content page-fresh market-detail-page">
       <section class="market-detail-gallery-wrap">
-        <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster, sold) : `<div class="market-detail-photo"><img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`}</section>
+      <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster, sold, index === 0) : `<div class="market-detail-photo"><img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`}</section>
         <span class="market-detail-gallery-count" data-market-gallery-count aria-live="polite">1/${Math.max(1, primaryMediaItems.length)}</span>
         ${hasPrimaryGalleryControls ? `<button class="market-detail-gallery-arrow prev" type="button" data-market-gallery-prev aria-label="查看上一张图片" aria-controls="marketDetailGallery">‹</button><button class="market-detail-gallery-arrow next" type="button" data-market-gallery-next aria-label="查看下一张图片" aria-controls="marketDetailGallery">›</button>` : ""}
       </section>
@@ -5514,11 +5625,13 @@ function bindMarketMediaDraftEvents() {
       if (!event.isPrimary || event.pointerType === "mouse") return;
       event.preventDefault();
       pointerId = event.pointerId;
+      // Capture before the long-press delay. Otherwise lifting the finger just
+      // outside the small handle can lose pointerup and leave a stale drag.
+      handle.setPointerCapture?.(pointerId);
       destinationIndex = index;
       pressTimer = window.setTimeout(() => {
         active = true;
         item.classList.add("is-dragging");
-        handle.setPointerCapture?.(pointerId);
         navigator.vibrate?.(12);
       }, 180);
     });
@@ -5539,6 +5652,7 @@ function bindMarketMediaDraftEvents() {
       if (shouldMove) moveMarketDraftMedia(index, targetIndex);
     });
     handle.addEventListener("pointercancel", clearTouchDrag);
+    handle.addEventListener("lostpointercapture", clearTouchDrag);
   });
 }
 
@@ -6782,6 +6896,15 @@ function hydrateMarketDetailVideos() {
     const ready = () => {
       shell.classList.remove("is-loading");
       shell.classList.add("is-ready");
+      if (!video.hasAttribute("data-market-detail-autoplay")) return;
+      // iOS only permits automatic media playback when it is muted and inline.
+      // Set both properties as well as attributes before explicitly starting it.
+      video.muted = true;
+      video.defaultMuted = true;
+      video.playsInline = true;
+      video.autoplay = true;
+      const playback = video.play();
+      if (playback?.catch) playback.catch(() => shell.classList.add("autoplay-blocked"));
     };
     const failed = () => shell.classList.add("has-error");
     video.addEventListener("loadeddata", ready, { once: true });
@@ -7184,6 +7307,7 @@ function bindCommunityChatCameraButton() {
 
   button.addEventListener("pointerdown", event => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    button.setPointerCapture?.(event.pointerId);
     clearPress();
     pressStartedAt = Date.now();
     isLongPress = false;
@@ -7204,6 +7328,7 @@ function bindCommunityChatCameraButton() {
     setTimeout(() => { suppressNextClick = false; }, 0);
   });
   button.addEventListener("pointercancel", clearPress);
+  button.addEventListener("lostpointercapture", clearPress);
   button.addEventListener("click", event => {
     if (suppressNextClick) {
       event.preventDefault();
@@ -7937,6 +8062,10 @@ function cloudUserToLocal(user, fallbackToken = "") {
 
 function applyCloudUser(user, activityText = "", options = {}) {
   const localUser = cloudUserToLocal(user, currentCloudToken());
+  // Loading cloud data is a data refresh, not navigation. In particular, a
+  // cold launch starts on the dashboard and must not jump to the Space tab
+  // when the asynchronous account request comes back.
+  const destinationPage = Object.prototype.hasOwnProperty.call(options, "page") ? options.page : "mine";
   if (localUser.phone && localUser.cloudToken) rememberCloudToken(localUser.phone, localUser.cloudToken);
   const accountData = normalizeAccountData(localUser.data || {});
   const activityLogs = activityText
@@ -7967,7 +8096,7 @@ function applyCloudUser(user, activityText = "", options = {}) {
     pendingAuthPhone: "",
     authCodeExpiresAt: "",
     accountCodeCooldownUntil: "",
-    page: "mine"
+    page: destinationPage
   }, options);
   if (!options.skipMigration && CONFIGURED_SMS_BACKEND && localUser.cloudToken) {
     scheduleCloudImageMigration(600);
@@ -8021,7 +8150,9 @@ async function refreshCloudAccountFromServer() {
       phone: state.loggedInPhone,
       token: currentCloudToken()
     });
-    if (result.user) applyCloudUser(result.user, "", { skipCloud: true });
+    // Keep the route that is already on screen. During boot this is "home";
+    // during a normal refresh it is the page the person is currently using.
+    if (result.user) applyCloudUser(result.user, "", { skipCloud: true, page: state.page });
   } catch (error) {
     console.warn(error.message || "云端数据读取失败");
   }
@@ -9046,7 +9177,14 @@ function setupPullToRefresh() {
   if (document.body.dataset.pullRefreshBound === "true") return;
   document.body.dataset.pullRefreshBound = "true";
 
+  const finishPullGesture = reason => {
+    if (!pullRefreshState.tracking || pullRefreshState.refreshing) return;
+    if (reason === "end" && pullRefreshState.ready) void runPullRefresh();
+    else resetPullRefreshIndicator();
+  };
+
   document.addEventListener("touchstart", event => {
+    if (activeTouchGesture) return;
     if (pullRefreshState.refreshing || !pullRefreshSupportedPage() || !pageAtTop() || event.touches.length !== 1) return;
     if (event.target.closest("input, textarea, select, [contenteditable='true'], .image-preview-overlay, .modal-overlay")) return;
     if (document.documentElement.classList.contains("keyboard-open")) return;
@@ -9064,6 +9202,7 @@ function setupPullToRefresh() {
   }, { passive: true });
 
   document.addEventListener("touchmove", event => {
+    if (touchGestureOwnedByOther("pull-refresh")) return;
     if (!pullRefreshState.tracking || pullRefreshState.refreshing || event.touches.length !== 1) return;
     const touch = event.touches[0];
     const horizontalDistance = touch.clientX - pullRefreshState.startX;
@@ -9082,18 +9221,16 @@ function setupPullToRefresh() {
       schedulePullRefreshIndicator();
       return;
     }
+    // A downward refresh owns this touch from its first visible movement.
+    // Horizontal row/edge gestures are never allowed to run alongside it.
+    if (!claimTouchGesture("pull-refresh", finishPullGesture)) return;
     if (event.cancelable) event.preventDefault();
     pullRefreshState = { ...pullRefreshState, distance, ready: distance >= PULL_REFRESH_THRESHOLD };
     schedulePullRefreshIndicator();
   }, { passive: false });
 
-  const finish = () => {
-    if (!pullRefreshState.tracking || pullRefreshState.refreshing) return;
-    if (pullRefreshState.ready) runPullRefresh();
-    else resetPullRefreshIndicator();
-  };
-  document.addEventListener("touchend", finish, { passive: true });
-  document.addEventListener("touchcancel", resetPullRefreshIndicator, { passive: true });
+  document.addEventListener("touchend", () => releaseTouchGesture("pull-refresh", "end"), { passive: true });
+  document.addEventListener("touchcancel", () => releaseTouchGesture("pull-refresh", "cancel"), { passive: true });
 }
 
 function showEdgeBackPreview(snapshot) {
@@ -9115,6 +9252,7 @@ function setupEdgeBackAndConversationSwipe() {
   document.body.dataset.edgeGesturesBound = "true";
   let gesture = null;
   let gestureAnimationFrame = 0;
+  let edgeSettleTimer = 0;
   const rootPages = new Set(["home", "ledger", "market", "messages", "mine"]);
   const paintGesture = () => {
     gestureAnimationFrame = 0;
@@ -9132,8 +9270,65 @@ function setupEdgeBackAndConversationSwipe() {
     gestureAnimationFrame = 0;
     if (gesture?.edgeBack) paintGesture();
   };
+  const clearEdgeBackDrag = () => {
+    if (gestureAnimationFrame) window.cancelAnimationFrame(gestureAnimationFrame);
+    gestureAnimationFrame = 0;
+    $app.style.transition = "";
+    $app.style.transform = "";
+    $app.classList.remove("edge-back-dragging");
+    clearEdgeBackPreview();
+  };
+  const cancelSettlingEdgeBack = () => {
+    if (edgeSettleTimer) window.clearTimeout(edgeSettleTimer);
+    edgeSettleTimer = 0;
+    clearEdgeBackDrag();
+  };
+  const finishConversationSwipe = reason => {
+    const active = gesture;
+    if (!active?.row || !active.rowDragging) return;
+    const reveal = Number(active.reveal || 0);
+    const shouldOpen = reason === "end" ? reveal >= 72 : Boolean(active.rowStartedOpen);
+    active.row.classList.remove("is-dragging");
+    active.row.classList.toggle("is-open", shouldOpen);
+    active.row.querySelector(".message-friend-row")?.style.removeProperty("transform");
+  };
+  const finishConversationDismiss = reason => {
+    if (reason !== "end") return;
+    document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => row.classList.remove("is-open"));
+  };
+  const finishEdgeBack = reason => {
+    const active = gesture;
+    if (!active?.edgeBack) return;
+    flushGesturePaint();
+    if (reason !== "end") {
+      clearEdgeBackDrag();
+      return;
+    }
+    const shouldComplete = reason === "end"
+      && active.lastDx > Math.max(78, window.innerWidth * .18)
+      && Math.abs(active.lastDx) > Math.abs(active.lastDy);
+    $app.classList.remove("edge-back-dragging");
+    $app.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
+    $app.style.transform = shouldComplete ? "translate3d(100vw, 0, 0)" : "translate3d(0, 0, 0)";
+    if (active.preview) {
+      active.preview.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
+      active.preview.style.transform = shouldComplete ? "translate3d(0, 0, 0)" : "translate3d(-22%, 0, 0)";
+    }
+    if (edgeSettleTimer) window.clearTimeout(edgeSettleTimer);
+    edgeSettleTimer = window.setTimeout(() => {
+      edgeSettleTimer = 0;
+      $app.style.transition = "";
+      $app.style.transform = "";
+      if (shouldComplete && !rootPages.has(state.page)) navigateBack();
+      else clearEdgeBackPreview();
+    }, shouldComplete ? 190 : 210);
+  };
   document.addEventListener("touchstart", event => {
+    if (activeTouchGesture) return;
     if (event.touches.length !== 1 || event.target.closest("input, textarea, select, [contenteditable='true'], .modal-overlay")) return;
+    // A fresh touch always cancels a still-settling previous edge drag rather
+    // than letting its old timer transform the new page underneath the finger.
+    cancelSettlingEdgeBack();
     const touch = event.touches[0];
     gesture = { x: touch.clientX, y: touch.clientY, row: event.target.closest(".message-friend-swipe"), moved: false };
   }, { passive: true });
@@ -9145,6 +9340,7 @@ function setupEdgeBackAndConversationSwipe() {
     if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy)) return;
     gesture.moved = true;
     if (gesture.row && Math.abs(dx) > Math.abs(dy)) {
+      if (!claimTouchGesture("conversation-swipe", finishConversationSwipe)) return;
       const actionWidth = 144;
       if (gesture.rowStartedOpen === undefined) gesture.rowStartedOpen = gesture.row.classList.contains("is-open");
       const rawReveal = Math.max(0, (gesture.rowStartedOpen ? actionWidth : 0) - dx);
@@ -9155,11 +9351,16 @@ function setupEdgeBackAndConversationSwipe() {
       gesture.row.classList.add("is-dragging");
       gesture.rowDragging = true;
       gesture.reveal = reveal;
-      gesture.row.style.setProperty("--message-swipe-reveal", `${reveal}px`);
+      // Keep the actions stationary behind the card. Writing only this one
+      // compositor-friendly transform prevents the two layers from falling a
+      // frame out of sync when a finger changes direction.
+      const rowContent = gesture.row.querySelector(".message-friend-row");
+      if (rowContent) rowContent.style.transform = `translate3d(${-reveal}px, 0, 0)`;
       if (event.cancelable) event.preventDefault();
       return;
     }
     if (gesture.x <= 24 && dx > 0 && Math.abs(dx) > Math.abs(dy) && !rootPages.has(state.page) && edgeBackSnapshots.length) {
+      if (!claimTouchGesture("edge-back", finishEdgeBack)) return;
       gesture.edgeBack = true;
       if (!gesture.preview) gesture.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
       // No midpoint cap: the screen follows the finger all the way across.
@@ -9169,61 +9370,36 @@ function setupEdgeBackAndConversationSwipe() {
       gesture.edgeProgress = Math.min(1, offset / Math.max(1, window.innerWidth));
       scheduleGesturePaint();
       if (event.cancelable) event.preventDefault();
+      return;
+    }
+    if (!gesture.row && document.querySelector(".message-friend-swipe.is-open")) {
+      if (!claimTouchGesture("conversation-dismiss", finishConversationDismiss)) return;
+      if (event.cancelable) event.preventDefault();
     }
   }, { passive: false });
   document.addEventListener("touchend", event => {
     if (!gesture) return;
-    const touch = event.changedTouches[0];
-    const dx = touch.clientX - gesture.x;
-    const dy = touch.clientY - gesture.y;
-    flushGesturePaint();
-    if (gesture.row && gesture.rowDragging) {
-      const reveal = Number(gesture.reveal || 0);
-      const shouldOpen = reveal >= 72;
-      gesture.row.classList.remove("is-dragging");
-      gesture.row.classList.toggle("is-open", shouldOpen);
-      gesture.row.style.removeProperty("--message-swipe-reveal");
-    } else if (gesture.edgeBack) {
-      const shouldComplete = dx > Math.max(78, window.innerWidth * .18) && Math.abs(dx) > Math.abs(dy);
-      $app.classList.remove("edge-back-dragging");
-      $app.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
-      $app.style.transform = shouldComplete ? "translate3d(100vw, 0, 0)" : "translate3d(0, 0, 0)";
-      if (gesture.preview) {
-        gesture.preview.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
-        gesture.preview.style.transform = shouldComplete ? "translate3d(0, 0, 0)" : "translate3d(-22%, 0, 0)";
-      }
-      window.setTimeout(() => {
-        $app.style.transition = "";
-        $app.style.transform = "";
-        if (shouldComplete && !rootPages.has(state.page)) {
-          navigateBack();
-        } else {
-          clearEdgeBackPreview();
-        }
-      }, shouldComplete ? 190 : 210);
-    } else if (!gesture.row && document.querySelector(".message-friend-swipe.is-open") && Math.abs(dx) > Math.abs(dy)) {
-      document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => row.classList.remove("is-open"));
-    }
+    const touch = event.changedTouches?.[0];
+    gesture.lastDx = touch ? touch.clientX - gesture.x : 0;
+    gesture.lastDy = touch ? touch.clientY - gesture.y : 0;
+    const owner = gesture.rowDragging ? "conversation-swipe" : gesture.edgeBack ? "edge-back" : activeTouchGesture?.owner || "";
+    if (owner) releaseTouchGesture(owner, "end");
     gesture = null;
   }, { passive: true });
   document.addEventListener("touchcancel", () => {
-    if (!gesture) return;
-    // iOS can cancel a gesture when its own system edge handling takes over.
-    // Restore the real page and remove the copied previous-page layer.
-    $app.style.transition = "";
-    $app.style.transform = "";
-    $app.classList.remove("edge-back-dragging");
-    clearEdgeBackPreview();
-    if (gestureAnimationFrame) window.cancelAnimationFrame(gestureAnimationFrame);
-    gestureAnimationFrame = 0;
+    if (gesture?.rowDragging) releaseTouchGesture("conversation-swipe", "cancel");
+    else if (gesture?.edgeBack) releaseTouchGesture("edge-back", "cancel");
+    else if (activeTouchGesture?.owner === "conversation-dismiss") releaseTouchGesture("conversation-dismiss", "cancel");
     gesture = null;
   }, { passive: true });
 }
 
 restorePendingCloudData();
 setupMobileKeyboardGuard();
+setupTouchGestureIsolation();
 setupPullToRefresh();
 setupEdgeBackAndConversationSwipe();
+setupBottomNavForegroundRecovery();
 render();
 checkRequiredAppUpdate();
 startMarketNetworkMonitoring();
