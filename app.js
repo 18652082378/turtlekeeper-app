@@ -54,10 +54,13 @@ const WEEKDAY_OPTIONS = [
 ];
 const BOTTOM_NAV_ROOT_PAGES = new Set(["home", "ledger", "market", "messages", "mine"]);
 const PULL_REFRESH_THRESHOLD = 72;
-const PULL_REFRESH_MAX_OFFSET = 72;
+const PULL_REFRESH_MAX_OFFSET = 96;
 let pullRefreshState = { tracking: false, refreshing: false, startX: 0, startY: 0, distance: 0, ready: false, direction: "" };
 let pullRefreshAnimationFrame = 0;
 let pullRefreshPendingState = null;
+let pullRefreshIndicatorElement = null;
+let pullRefreshIndicatorLabel = null;
+let pullRefreshVisualState = "";
 
 const initialState = {
   page: "home",
@@ -647,8 +650,15 @@ function saveState(options = {}) {
 function setState(patch, options = {}) {
   const pageChanged = Object.prototype.hasOwnProperty.call(patch, "page") && patch.page && patch.page !== state.page;
   if (pageChanged) {
-    if (options.pageMotion !== "none" && !BOTTOM_NAV_ROOT_PAGES.has(patch.page) && $app?.innerHTML) {
-      edgeBackSnapshots.push({ page: state.page, html: $app.innerHTML });
+    // A completed interactive edge-back keeps the frozen previous page visible
+    // for one frame while its real DOM is rendered underneath it. Clearing it
+    // earlier creates the familiar white flash / jump on the destination page.
+    if (!options.keepEdgeBackPreview) clearEdgeBackPreview();
+    $app.style.transition = "";
+    $app.style.transform = "";
+    $app.classList.remove("edge-back-dragging");
+    if (!options.skipEdgeSnapshot && !BOTTOM_NAV_ROOT_PAGES.has(patch.page) && $app?.innerHTML) {
+      edgeBackSnapshots.push({ page: state.page, html: $app.innerHTML, scrollY: window.scrollY || 0 });
       edgeBackSnapshots = edgeBackSnapshots.slice(-8);
     } else if (BOTTOM_NAV_ROOT_PAGES.has(patch.page)) {
       edgeBackSnapshots = [];
@@ -1849,6 +1859,51 @@ function marketDetailVideoMarkup(media, fallbackPosterUrl, sold = false) {
   return `<div class="market-detail-photo market-detail-video-shell is-loading"><img class="market-detail-video-cover" src="${escapeHtml(posterUrl)}" alt="视频封面"><video src="${escapeHtml(media.url)}" poster="${escapeHtml(posterUrl)}" controls playsinline preload="auto" crossorigin="anonymous" data-video-first-frame data-market-detail-video></video><div class="market-detail-video-loading" aria-live="polite">视频加载中</div>${sold ? `<span>已售出</span>` : ""}</div>`;
 }
 
+function communityMessageAspectRatio(message, mediaType) {
+  const ratio = Number(message?.mediaAspectRatio || 0);
+  if (Number.isFinite(ratio) && ratio > 0) return Math.min(2, Math.max(0.45, ratio)).toFixed(4);
+  // A stable fallback prevents late media decoding from changing the list height.
+  return mediaType === "video" ? "0.5625" : "1.0000";
+}
+
+function prepareCommunityChatMedia(messages = []) {
+  const items = Array.isArray(messages) ? messages : [];
+  return Promise.all(items.map(message => {
+    if (!message?.mediaUrl || message.mediaAspectRatio) return Promise.resolve(message);
+    const mediaType = message.mediaType === "video" ? "video" : "image";
+    const source = apiAssetUrl(message.mediaUrl);
+    if (!source) return Promise.resolve(message);
+    return new Promise(resolve => {
+      let settled = false;
+      let timer = null;
+      const finish = (width, height) => {
+        if (settled) return;
+        settled = true;
+        if (timer) window.clearTimeout(timer);
+        const ratio = Number(width) > 0 && Number(height) > 0 ? Number(width) / Number(height) : 0;
+        resolve(ratio ? { ...message, mediaAspectRatio: ratio } : message);
+      };
+      timer = window.setTimeout(() => finish(), 850);
+      if (mediaType === "image") {
+        const image = new Image();
+        image.decoding = "async";
+        image.onload = () => finish(image.naturalWidth, image.naturalHeight);
+        image.onerror = () => finish();
+        image.src = source;
+        return;
+      }
+      const video = document.createElement("video");
+      video.preload = "metadata";
+      video.muted = true;
+      video.playsInline = true;
+      video.onloadedmetadata = () => finish(video.videoWidth, video.videoHeight);
+      video.onerror = () => finish();
+      video.src = source;
+      video.load();
+    });
+  }));
+}
+
 function isUnavailableChatListing(listing) {
   return Boolean(listing?.unavailable) || ["inactive", "sold", "removed"].includes(listing?.status);
 }
@@ -1897,7 +1952,7 @@ function pageCommunityChat() {
     const text = mediaUrl && ["[图片]", "[视频]"].includes(rawContent) ? "" : rawContent;
     const mediaPosterUrl = message.posterUrl ? apiAssetUrl(message.posterUrl) : "";
     const media = mediaUrl
-      ? `<button class="community-message-media ${mediaType === "video" ? "is-video" : ""}" type="button" data-preview-chat-media="${escapeHtml(mediaUrl)}" data-chat-media-poster="${escapeHtml(mediaPosterUrl)}" data-chat-media-type="${mediaType}" aria-label="查看聊天${mediaType === "video" ? "视频" : "图片"}">${mediaType === "video" ? `<video src="${escapeHtml(mediaUrl)}"${videoPosterAttribute({ posterUrl: mediaPosterUrl })} muted playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video><i aria-hidden="true">▶</i>` : `<img src="${escapeHtml(mediaUrl)}" alt="聊天图片">`}</button>`
+      ? `<button class="community-message-media ${mediaType === "video" ? "is-video" : ""}" style="--community-media-ratio:${communityMessageAspectRatio(message, mediaType)}" type="button" data-preview-chat-media="${escapeHtml(mediaUrl)}" data-chat-media-poster="${escapeHtml(mediaPosterUrl)}" data-chat-media-type="${mediaType}" aria-label="查看聊天${mediaType === "video" ? "视频" : "图片"}">${mediaType === "video" ? `<video src="${escapeHtml(mediaUrl)}"${videoPosterAttribute({ posterUrl: mediaPosterUrl })} muted playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video><i aria-hidden="true">▶</i>` : `<img src="${escapeHtml(mediaUrl)}" alt="聊天图片">`}</button>`
       : "";
     const showTime = shouldShowCommunityMessageTime(visibleMessages, index);
     const sender = { id: message.senderId || friend?.id || state.selectedCommunityFriendId, avatar: message.senderAvatar || friend?.avatar || "", name: friend?.name || "壳友" };
@@ -1917,7 +1972,7 @@ function pageCommunityChat() {
   return `
     ${chatHeader}
     <main class="content page-fresh community-chat-page ${marketListing ? "has-chat-product-context" : ""} ${toolsOpen ? "chat-tools-open" : ""}">
-      <section class="community-chat-list">${visibleMessages.map(messageMarkup).join("") || (marketListing ? "" : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`)}</section>
+      <section class="community-chat-list">${visibleMessages.map(messageMarkup).join("") || (marketListing ? "" : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`)}<div class="community-chat-bottom-anchor" aria-hidden="true"></div></section>
       <form class="community-chat-form" id="communityChatForm">
         <input name="content" maxlength="1000" value="${escapeHtml(marketChatDraft)}" placeholder="输入消息…" autocomplete="off" enterkeyhint="send">
         <button class="community-chat-plus-btn ${toolsOpen ? "is-open" : ""}" type="button" data-toggle-community-chat-tools aria-label="${toolsOpen ? "收起更多功能" : "更多功能"}" aria-expanded="${toolsOpen ? "true" : "false"}">${toolsOpen ? "×" : "+"}</button>
@@ -1945,7 +2000,14 @@ function backNavigationState() {
 function navigateBack() {
   const snapshot = edgeBackSnapshots.pop();
   const fallback = backNavigationState();
-  setState(snapshot?.page ? { ...fallback, page: snapshot.page } : fallback, { pageMotion: "none" });
+  setState(snapshot?.page ? { ...fallback, page: snapshot.page } : fallback, {
+    pageMotion: "none",
+    pageScroll: "preserve",
+    skipEdgeSnapshot: true,
+    keepEdgeBackPreview: true
+  });
+  window.scrollTo({ top: Math.max(0, Number(snapshot?.scrollY || 0)), left: 0, behavior: "auto" });
+  window.requestAnimationFrame(clearEdgeBackPreview);
 }
 
 function pageFollowing() {
@@ -4274,18 +4336,14 @@ function policyConsentGate() {
 function scrollCommunityChatToLatest() {
   if (!pendingCommunityChatLatestScroll || state.page !== "communityChat") return;
   if (!communityChatLoadedKey && !(state.communityChatMessages || []).length) return;
-  const scrollToBottom = () => {
-    if (state.page !== "communityChat") return;
-    const list = document.querySelector(".community-chat-list");
-    if (!list) return;
-    const top = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, list.scrollHeight);
-    window.scrollTo({ top, left: 0, behavior: "auto" });
-  };
-  requestAnimationFrame(() => requestAnimationFrame(scrollToBottom));
-  // Images and videos gain their final height after the first layout pass. Recheck
-  // the bottom briefly so re-entering a conversation always lands on the newest media.
-  [120, 420, 950].forEach(delay => window.setTimeout(scrollToBottom, delay));
   pendingCommunityChatLatestScroll = false;
+  const list = document.querySelector(".community-chat-list");
+  if (!list) return;
+  // Every media bubble has its final height before it is painted (see
+  // prepareCommunityChatMedia), so a single positioning pass is sufficient.
+  const anchor = list.querySelector(".community-chat-bottom-anchor");
+  if (anchor) anchor.scrollIntoView({ block: "end", inline: "nearest", behavior: "auto" });
+  else window.scrollTo({ top: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight), left: 0, behavior: "auto" });
 }
 
 function accountCodeCooldownRemaining() {
@@ -6921,12 +6979,41 @@ function mergeCommunityFriends(incomingFriends = []) {
   return merged.sort((left, right) => Number(right.pinned) - Number(left.pinned) || new Date(right.lastMessageAt || right.createdAt || 0) - new Date(left.lastMessageAt || left.createdAt || 0));
 }
 
-function openCommunityChat(userId) {
+async function openCommunityChat(userId) {
   if (!canUseCommunity()) return;
   marketChatDraft = "";
   communityChatLoadedKey = "";
-  pendingCommunityChatLatestScroll = true;
-  setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId), communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false }, { skipCloud: true, pageMotion: "chat" });
+  const previousFriend = (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId);
+  if (!CONFIGURED_SMS_BACKEND) {
+    pendingCommunityChatLatestScroll = true;
+    setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: previousFriend, communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false }, { skipCloud: true, pageMotion: "none" });
+    return;
+  }
+  communityChatLoading = true;
+  try {
+    // Fetch before changing routes. This prevents the empty chat shell from
+    // being painted and scrolled before the final message height is known.
+    const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
+    communityChatLoadedKey = `${userId}:${Math.floor(Date.now() / 10000)}`;
+    const friend = result.friend || previousFriend;
+    const messages = await prepareCommunityChatMedia(result.messages || []);
+    pendingCommunityChatLatestScroll = true;
+    setState({
+      page: "communityChat",
+      selectedCommunityFriendId: userId,
+      selectedCommunityFriend: friend,
+      communityChatMessages: messages,
+      communityChatListing: normalizeCommunityChatListing(result.marketListing),
+      communityChatToolsOpen: false,
+      communityFriends: communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 })
+    }, { skipCloud: true, pageMotion: "none" });
+    refreshMessageUnread(true);
+    refreshCommunity(true);
+  } catch (error) {
+    toast(error.message || "聊天记录读取失败");
+  } finally {
+    communityChatLoading = false;
+  }
 }
 
 async function toggleCommunityConversationPin(userId) {
@@ -6966,7 +7053,14 @@ async function refreshMessageUnread(force = false) {
     const friends = Array.isArray(result.friends) ? mergeCommunityFriends(result.friends) : state.communityFriends;
     const friendSignature = items => JSON.stringify((items || []).map(item => [item.id, item.name, item.avatar, item.lastMessage, item.lastMessageAt, Number(item.unreadCount || 0)]));
     if (unreadCount !== Number(state.messageUnreadCount || 0) || friendSignature(friends) !== friendSignature(state.communityFriends)) {
-      setState({ messageUnreadCount: unreadCount, communityFriends: friends }, { skipCloud: true });
+      if (state.page === "communityChat") {
+        // The badge is not visible in a conversation. Keep its data current
+        // without replacing the chat DOM while the user is reading it.
+        state = { ...state, messageUnreadCount: unreadCount, communityFriends: friends };
+        saveState({ skipCloud: true });
+      } else {
+        setState({ messageUnreadCount: unreadCount, communityFriends: friends }, { skipCloud: true });
+      }
     }
   } catch (error) {
     if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "未读消息读取失败");
@@ -6995,7 +7089,7 @@ async function refreshCommunityChat(force = false) {
     const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
     communityChatLoadedKey = key;
     const friend = result.friend || state.selectedCommunityFriend;
-    const messages = result.messages || [];
+    const messages = await prepareCommunityChatMedia(result.messages || []);
     setState({
       selectedCommunityFriend: friend,
       communityChatMessages: messages,
@@ -8839,30 +8933,39 @@ function pageAtTop() {
 }
 
 function pullRefreshIndicator() {
-  let indicator = document.querySelector(".pull-refresh-indicator");
+  let indicator = pullRefreshIndicatorElement || document.querySelector(".pull-refresh-indicator");
   if (indicator) return indicator;
   indicator = document.createElement("div");
   indicator.className = "pull-refresh-indicator";
   indicator.setAttribute("aria-live", "polite");
   indicator.innerHTML = `<i aria-hidden="true"></i><span>下拉刷新</span>`;
   document.body.appendChild(indicator);
+  pullRefreshIndicatorElement = indicator;
+  pullRefreshIndicatorLabel = indicator.querySelector("span");
   return indicator;
 }
 
 function setPullRefreshIndicator({ distance = 0, ready = false, refreshing = false } = {}) {
   const indicator = pullRefreshIndicator();
-  const pageOffset = refreshing ? 54 : Math.min(PULL_REFRESH_MAX_OFFSET, Math.max(0, distance * .42));
+  // Native-style resistance: the page never hits a hard cap while the finger
+  // is still moving, which removes the sticky / stuttering feeling at the end
+  // of a long pull.
+  const pageOffset = refreshing
+    ? 58
+    : Math.min(PULL_REFRESH_MAX_OFFSET, Math.round(104 * (1 - Math.exp(-Math.max(0, distance) / 80))));
   const indicatorHeight = 36;
   // The indicator is vertically centred in the newly exposed blank area.
   const indicatorDistance = (pageOffset + indicatorHeight) / 2;
   const label = refreshing ? "正在刷新中···" : ready ? "松开即可刷新" : "下拉刷新";
   indicator.style.setProperty("--pull-refresh-distance", `${indicatorDistance}px`);
+  document.body.style.setProperty("--pull-refresh-page-offset", `${pageOffset}px`);
+  const visualState = `${refreshing ? "refreshing" : ready ? "ready" : pageOffset > 0 ? "dragging" : "idle"}:${label}`;
+  if (visualState === pullRefreshVisualState) return;
+  pullRefreshVisualState = visualState;
   indicator.classList.toggle("is-visible", refreshing || pageOffset > 0);
   indicator.classList.toggle("is-ready", Boolean(ready) && !refreshing);
   indicator.classList.toggle("is-refreshing", Boolean(refreshing));
-  indicator.querySelector("span").textContent = label;
-
-  document.body.style.setProperty("--pull-refresh-page-offset", `${pageOffset}px`);
+  (pullRefreshIndicatorLabel || indicator.querySelector("span")).textContent = label;
   document.body.classList.toggle("pull-refresh-active", pageOffset > 0);
   document.body.classList.toggle("pull-refresh-dragging", pageOffset > 0 && !refreshing);
 }
@@ -8949,7 +9052,10 @@ function setupPullToRefresh() {
       return;
     }
     if (distance <= 0) {
-      resetPullRefreshIndicator();
+      // Keep the same gesture alive as the finger returns upward. Resetting
+      // here used to add a CSS rebound halfway through a single drag.
+      pullRefreshState = { ...pullRefreshState, distance: 0, ready: false };
+      schedulePullRefreshIndicator();
       return;
     }
     if (event.cancelable) event.preventDefault();
@@ -8984,7 +9090,28 @@ function setupEdgeBackAndConversationSwipe() {
   if (document.body.dataset.edgeGesturesBound === "true") return;
   document.body.dataset.edgeGesturesBound = "true";
   let gesture = null;
+  let gestureAnimationFrame = 0;
   const rootPages = new Set(["home", "ledger", "market", "messages", "mine"]);
+  const paintGesture = () => {
+    gestureAnimationFrame = 0;
+    if (!gesture) return;
+    if (gesture.rowDragging) {
+      gesture.row.style.setProperty("--message-swipe-reveal", `${gesture.reveal}px`);
+      return;
+    }
+    if (gesture.edgeBack) {
+      $app.style.transform = `translate3d(${gesture.edgeOffset}px, 0, 0)`;
+      gesture.preview?.style.setProperty("transform", `translate3d(${-22 + (gesture.edgeProgress * 22)}%, 0, 0)`);
+    }
+  };
+  const scheduleGesturePaint = () => {
+    if (!gestureAnimationFrame) gestureAnimationFrame = window.requestAnimationFrame(paintGesture);
+  };
+  const flushGesturePaint = () => {
+    if (gestureAnimationFrame) window.cancelAnimationFrame(gestureAnimationFrame);
+    gestureAnimationFrame = 0;
+    paintGesture();
+  };
   document.addEventListener("touchstart", event => {
     if (event.touches.length !== 1 || event.target.closest("input, textarea, select, [contenteditable='true'], .modal-overlay")) return;
     const touch = event.touches[0];
@@ -8998,16 +9125,17 @@ function setupEdgeBackAndConversationSwipe() {
     if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy)) return;
     gesture.moved = true;
     if (gesture.row && Math.abs(dx) > Math.abs(dy)) {
-      const currentOpen = gesture.row.classList.contains("is-open");
       const actionWidth = 144;
-      const rawReveal = Math.max(0, (currentOpen ? actionWidth : 0) - dx);
-      // Keep the foreground card and the exposed action area in a strict 1:1
-      // relationship. This is what makes a native conversation swipe feel
-      // attached to the finger instead of drifting independently.
+      if (gesture.rowStartedOpen === undefined) gesture.rowStartedOpen = gesture.row.classList.contains("is-open");
+      const rawReveal = Math.max(0, (gesture.rowStartedOpen ? actionWidth : 0) - dx);
+      // Only update the compositor once per display frame. The foreground card
+      // and action layer read the very same CSS variable, so they remain 1:1
+      // attached to the finger even when the device emits many touch events.
       const reveal = Math.min(actionWidth, rawReveal);
       gesture.row.classList.add("is-dragging");
-      gesture.row.style.setProperty("--message-swipe-reveal", `${reveal}px`);
-      gesture.row.dataset.swipeReveal = String(reveal);
+      gesture.rowDragging = true;
+      gesture.reveal = reveal;
+      scheduleGesturePaint();
       if (event.cancelable) event.preventDefault();
       return;
     }
@@ -9016,10 +9144,10 @@ function setupEdgeBackAndConversationSwipe() {
       if (!gesture.preview) gesture.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
       // No midpoint cap: the screen follows the finger all the way across.
       const offset = Math.max(0, dx);
-      const progress = Math.min(1, offset / Math.max(1, window.innerWidth));
       $app.classList.add("edge-back-dragging");
-      $app.style.transform = `translate3d(${offset}px, 0, 0)`;
-      gesture.preview?.style.setProperty("transform", `translate3d(${-22 + (progress * 22)}%, 0, 0)`);
+      gesture.edgeOffset = offset;
+      gesture.edgeProgress = Math.min(1, offset / Math.max(1, window.innerWidth));
+      scheduleGesturePaint();
       if (event.cancelable) event.preventDefault();
     }
   }, { passive: false });
@@ -9028,13 +9156,13 @@ function setupEdgeBackAndConversationSwipe() {
     const touch = event.changedTouches[0];
     const dx = touch.clientX - gesture.x;
     const dy = touch.clientY - gesture.y;
-    if (gesture.row && gesture.row.classList.contains("is-dragging")) {
-      const reveal = Number(gesture.row.dataset.swipeReveal || 0);
+    flushGesturePaint();
+    if (gesture.row && gesture.rowDragging) {
+      const reveal = Number(gesture.reveal || 0);
       const shouldOpen = reveal >= 72;
       gesture.row.classList.remove("is-dragging");
       gesture.row.classList.toggle("is-open", shouldOpen);
       gesture.row.style.removeProperty("--message-swipe-reveal");
-      delete gesture.row.dataset.swipeReveal;
     } else if (gesture.edgeBack) {
       const shouldComplete = dx > Math.max(78, window.innerWidth * .18) && Math.abs(dx) > Math.abs(dy);
       $app.classList.remove("edge-back-dragging");
@@ -9048,7 +9176,6 @@ function setupEdgeBackAndConversationSwipe() {
         $app.style.transition = "";
         $app.style.transform = "";
         if (shouldComplete && !rootPages.has(state.page)) {
-          clearEdgeBackPreview();
           navigateBack();
         } else {
           clearEdgeBackPreview();
@@ -9057,6 +9184,18 @@ function setupEdgeBackAndConversationSwipe() {
     } else if (!gesture.row && document.querySelector(".message-friend-swipe.is-open") && Math.abs(dx) > Math.abs(dy)) {
       document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => row.classList.remove("is-open"));
     }
+    gesture = null;
+  }, { passive: true });
+  document.addEventListener("touchcancel", () => {
+    if (!gesture) return;
+    // iOS can cancel a gesture when its own system edge handling takes over.
+    // Restore the real page and remove the copied previous-page layer.
+    $app.style.transition = "";
+    $app.style.transform = "";
+    $app.classList.remove("edge-back-dragging");
+    clearEdgeBackPreview();
+    if (gestureAnimationFrame) window.cancelAnimationFrame(gestureAnimationFrame);
+    gestureAnimationFrame = 0;
     gesture = null;
   }, { passive: true });
 }
