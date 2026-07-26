@@ -9258,6 +9258,7 @@ function setupEdgeBackAndConversationSwipe() {
   let gesture = null;
   let gestureAnimationFrame = 0;
   let edgeSettleTimer = 0;
+  let suppressRowClickUntil = 0;
   const rootPages = new Set(["home", "ledger", "market", "messages", "mine"]);
   const clearPendingEdgeBack = () => {
     if (edgeSettleTimer) window.clearTimeout(edgeSettleTimer);
@@ -9269,93 +9270,122 @@ function setupEdgeBackAndConversationSwipe() {
     $app.classList.remove("edge-back-dragging");
     clearEdgeBackPreview();
   };
+  const releasePointer = active => {
+    const target = active?.captureTarget;
+    if (target?.hasPointerCapture?.(active.pointerId)) target.releasePointerCapture(active.pointerId);
+  };
   const cancelActiveGesture = () => {
     if (gesture?.row && gesture.rowDragging && gesture.row.isConnected) {
       gesture.row.classList.remove("is-dragging");
       gesture.row.classList.toggle("is-open", Boolean(gesture.rowStartedOpen));
-      gesture.row.style.removeProperty("--message-swipe-reveal");
+      gesture.rowContent?.style.removeProperty("transform");
     }
+    releasePointer(gesture);
     clearPendingEdgeBack();
     gesture = null;
   };
-  const paintGesture = () => {
+  const paintGesture = active => {
     gestureAnimationFrame = 0;
-    if (!gesture) return;
-    if (gesture.edgeBack) {
-      $app.style.transform = `translate3d(${gesture.edgeOffset}px, 0, 0)`;
-      gesture.preview?.style.setProperty("transform", `translate3d(${-22 + (gesture.edgeProgress * 22)}%, 0, 0)`);
+    if (!active) return;
+    if (active.mode === "row" && active.rowContent) {
+      active.rowContent.style.transform = `translate3d(${-active.reveal}px, 0, 0)`;
+    } else if (active.mode === "edge") {
+      $app.style.transform = `translate3d(${active.edgeOffset}px, 0, 0)`;
+      active.preview?.style.setProperty("transform", `translate3d(${-22 + (active.edgeProgress * 22)}%, 0, 0)`);
     }
   };
   const scheduleGesturePaint = () => {
-    if (!gestureAnimationFrame) gestureAnimationFrame = window.requestAnimationFrame(paintGesture);
+    if (!gestureAnimationFrame) gestureAnimationFrame = window.requestAnimationFrame(() => paintGesture(gesture));
   };
-  const flushGesturePaint = () => {
+  const flushGesturePaint = active => {
     if (gestureAnimationFrame) window.cancelAnimationFrame(gestureAnimationFrame);
     gestureAnimationFrame = 0;
-    if (gesture?.edgeBack) paintGesture();
+    paintGesture(active);
   };
-  document.addEventListener("touchstart", event => {
+  const claimPointer = (active, target) => {
+    active.captureTarget = target;
+    target?.setPointerCapture?.(active.pointerId);
+  };
+  document.addEventListener("pointerdown", event => {
+    if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
     // A new touch must never inherit a previous drag or its delayed rebound.
-    // This is local to this feature; it does not block other page gestures.
     if (gesture || edgeSettleTimer) cancelActiveGesture();
-    if (event.touches.length !== 1 || event.target.closest("input, textarea, select, [contenteditable='true'], .modal-overlay")) return;
-    const touch = event.touches[0];
-    gesture = { x: touch.clientX, y: touch.clientY, row: event.target.closest(".message-friend-swipe"), moved: false };
+    if (event.target.closest("input, textarea, select, [contenteditable='true'], .modal-overlay")) return;
+    const row = event.target.closest(".message-friend-swipe");
+    gesture = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      row,
+      rowContent: row?.querySelector(".message-friend-row") || null,
+      mode: "pending"
+    };
   }, { passive: true });
-  document.addEventListener("touchmove", event => {
-    if (!gesture || event.touches.length !== 1) return;
-    const touch = event.touches[0];
-    const dx = touch.clientX - gesture.x;
-    const dy = touch.clientY - gesture.y;
-    if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy)) return;
-    gesture.moved = true;
-    if (gesture.row && Math.abs(dx) > Math.abs(dy)) {
+  document.addEventListener("pointermove", event => {
+    const active = gesture;
+    if (!active || event.pointerId !== active.pointerId || !event.isPrimary) return;
+    const dx = event.clientX - active.x;
+    const dy = event.clientY - active.y;
+    if (active.mode === "pending") {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < 8) return;
+      if (Math.abs(dx) <= Math.abs(dy)) {
+        active.mode = "vertical";
+        return;
+      }
+      if (active.row) {
+        active.mode = "row";
+        active.rowStartedOpen = active.row.classList.contains("is-open");
+        claimPointer(active, active.row);
+        document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => {
+          if (row !== active.row) row.classList.remove("is-open");
+        });
+      } else if (active.x <= 24 && dx > 0 && !rootPages.has(state.page) && edgeBackSnapshots.length) {
+        active.mode = "edge";
+        active.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
+        claimPointer(active, $app);
+        $app.classList.add("edge-back-dragging");
+      } else {
+        active.mode = "horizontal";
+        return;
+      }
+    }
+    if (active.mode === "row") {
       const actionWidth = 144;
-      if (gesture.rowStartedOpen === undefined) gesture.rowStartedOpen = gesture.row.classList.contains("is-open");
-      const rawReveal = Math.max(0, (gesture.rowStartedOpen ? actionWidth : 0) - dx);
-      // This must be written immediately rather than queued to the next frame:
-      // iOS already composites touch events per frame, while queuing adds a
-      // perceptible one-frame lag to the foreground card.
-      const reveal = Math.min(actionWidth, rawReveal);
-      gesture.row.classList.add("is-dragging");
-      gesture.rowDragging = true;
-      gesture.reveal = reveal;
-      gesture.row.style.setProperty("--message-swipe-reveal", `${reveal}px`);
+      active.reveal = Math.min(actionWidth, Math.max(0, (active.rowStartedOpen ? actionWidth : 0) - dx));
+      active.row.classList.add("is-dragging");
+      active.rowDragging = true;
+      scheduleGesturePaint();
       if (event.cancelable) event.preventDefault();
       return;
     }
-    if (gesture.x <= 24 && dx > 0 && Math.abs(dx) > Math.abs(dy) && !rootPages.has(state.page) && edgeBackSnapshots.length) {
-      gesture.edgeBack = true;
-      if (!gesture.preview) gesture.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
-      // No midpoint cap: the screen follows the finger all the way across.
-      const offset = Math.max(0, dx);
-      $app.classList.add("edge-back-dragging");
-      gesture.edgeOffset = offset;
-      gesture.edgeProgress = Math.min(1, offset / Math.max(1, window.innerWidth));
+    if (active.mode === "edge") {
+      active.edgeOffset = Math.max(0, dx);
+      active.edgeProgress = Math.min(1, active.edgeOffset / Math.max(1, window.innerWidth));
       scheduleGesturePaint();
       if (event.cancelable) event.preventDefault();
     }
   }, { passive: false });
-  document.addEventListener("touchend", event => {
-    if (!gesture) return;
-    const touch = event.changedTouches?.[0];
-    const dx = touch ? touch.clientX - gesture.x : 0;
-    const dy = touch ? touch.clientY - gesture.y : 0;
-    flushGesturePaint();
-    if (gesture.row && gesture.rowDragging) {
-      const reveal = Number(gesture.reveal || 0);
-      const shouldOpen = reveal >= 72;
-      gesture.row.classList.remove("is-dragging");
-      gesture.row.classList.toggle("is-open", shouldOpen);
-      gesture.row.style.removeProperty("--message-swipe-reveal");
-    } else if (gesture.edgeBack) {
+  document.addEventListener("pointerup", event => {
+    const active = gesture;
+    if (!active || event.pointerId !== active.pointerId) return;
+    const dx = event.clientX - active.x;
+    const dy = event.clientY - active.y;
+    flushGesturePaint(active);
+    releasePointer(active);
+    if (active.mode === "row" && active.rowDragging) {
+      const shouldOpen = Number(active.reveal || 0) >= 72;
+      active.row.classList.remove("is-dragging");
+      active.row.classList.toggle("is-open", shouldOpen);
+      active.rowContent?.style.removeProperty("transform");
+      suppressRowClickUntil = Date.now() + 350;
+    } else if (active.mode === "edge") {
       const shouldComplete = dx > Math.max(78, window.innerWidth * .18) && Math.abs(dx) > Math.abs(dy);
       $app.classList.remove("edge-back-dragging");
       $app.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
       $app.style.transform = shouldComplete ? "translate3d(100vw, 0, 0)" : "translate3d(0, 0, 0)";
-      if (gesture.preview) {
-        gesture.preview.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
-        gesture.preview.style.transform = shouldComplete ? "translate3d(0, 0, 0)" : "translate3d(-22%, 0, 0)";
+      if (active.preview) {
+        active.preview.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
+        active.preview.style.transform = shouldComplete ? "translate3d(0, 0, 0)" : "translate3d(-22%, 0, 0)";
       }
       edgeSettleTimer = window.setTimeout(() => {
         edgeSettleTimer = 0;
@@ -9364,22 +9394,20 @@ function setupEdgeBackAndConversationSwipe() {
         if (shouldComplete && !rootPages.has(state.page)) navigateBack();
         else clearEdgeBackPreview();
       }, shouldComplete ? 190 : 210);
-    } else if (!gesture.row && document.querySelector(".message-friend-swipe.is-open") && Math.abs(dx) > Math.abs(dy)) {
+    } else if (!active.row && document.querySelector(".message-friend-swipe.is-open") && Math.abs(dx) > Math.abs(dy)) {
       document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => row.classList.remove("is-open"));
     }
     gesture = null;
   }, { passive: true });
-  document.addEventListener("touchcancel", () => {
-    if (!gesture) return;
-    // Any interrupted swipe is released immediately, including its temporary
-    // card offset. It cannot leave a transparent or click-blocking layer.
-    if (gesture.row && gesture.rowDragging) {
-      gesture.row.classList.remove("is-dragging");
-      gesture.row.classList.toggle("is-open", Boolean(gesture.rowStartedOpen));
-      gesture.row.style.removeProperty("--message-swipe-reveal");
-    }
+  document.addEventListener("pointercancel", event => {
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
     cancelActiveGesture();
   }, { passive: true });
+  document.addEventListener("click", event => {
+    if (Date.now() >= suppressRowClickUntil || !event.target.closest(".message-friend-swipe")) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
   window.addEventListener("pagehide", cancelActiveGesture);
   window.addEventListener("blur", cancelActiveGesture);
   document.addEventListener("visibilitychange", () => {

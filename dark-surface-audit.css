@@ -167,21 +167,21 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
 .community-chat-avatar-spacer { width: 32px; height: 32px; flex: 0 0 32px; }
 .community-message.mine .community-message-media { justify-self: end; }
 
-/* Message list swipe actions. Both surfaces are positioned from the same
-   reveal value, so the buttons are hidden at rest and reveal exactly as far
-   as the foreground card moves. */
-.message-friend-swipe { --message-swipe-actions-width: 144px; --message-swipe-reveal: 0px; position: relative; overflow: hidden; background: var(--section-bg); touch-action: pan-y; }
-.message-friend-actions { position: absolute; inset: 0 0 0 auto; width: var(--message-swipe-actions-width); display: flex; transform: translate3d(calc(var(--message-swipe-actions-width) - var(--message-swipe-reveal)), 0, 0); pointer-events: none; transition: transform .2s cubic-bezier(.2,.72,.25,1); will-change: transform; }
+/* Message list swipe actions. The action rail stays still behind a full-width
+   foreground card; only the card is composited while dragging. That gives the
+   usual native reveal effect without synchronising two transformed layers. */
+.message-friend-swipe { --message-swipe-actions-width: 144px; position: relative; overflow: hidden; background: var(--section-bg); touch-action: pan-y; contain: layout paint; }
+.message-friend-actions { position: absolute; inset: 0 0 0 auto; width: var(--message-swipe-actions-width); display: flex; pointer-events: none; }
 .message-friend-actions button { width: 72px; border-radius: 0; color: #fff; background: #4b9f7d; font-size: 13px; font-weight: 700; }
 .message-friend-actions .delete { background: #e45762; }
-.message-friend-row { position: relative; z-index: 1; width: 100%; transform: translate3d(calc(-1 * var(--message-swipe-reveal)), 0, 0); transition: transform .2s cubic-bezier(.2,.72,.25,1); will-change: transform; }
-.message-friend-swipe.is-open { --message-swipe-reveal: var(--message-swipe-actions-width); }
+.message-friend-row { position: relative; z-index: 1; display: flex; box-sizing: border-box; min-width: 100%; max-width: 100%; transform: translate3d(0, 0, 0); transition: transform .2s cubic-bezier(.2,.72,.25,1); backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.message-friend-swipe.is-open .message-friend-row { transform: translate3d(calc(-1 * var(--message-swipe-actions-width)), 0, 0); }
 .message-friend-swipe.is-open .message-friend-actions { pointer-events: auto; }
-.message-friend-swipe.is-dragging .message-friend-actions { pointer-events: none; transition: none; }
-.message-friend-swipe.is-dragging .message-friend-row { transition: none; }
+.message-friend-swipe.is-dragging .message-friend-actions { pointer-events: none; }
+.message-friend-swipe.is-dragging .message-friend-row { transition: none; will-change: transform; }
 
 /* Interactive edge-swipe back: page follows the finger and rebounds if released early. */
-#app { position: relative; z-index: 2; }
+#app { position: relative; z-index: 2; touch-action: pan-y; }
 #app.edge-back-dragging { transition: none !important; will-change: transform; }
 .edge-back-preview {
   position: fixed;
