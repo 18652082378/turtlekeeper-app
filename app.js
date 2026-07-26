@@ -61,52 +61,6 @@ let pullRefreshPendingState = null;
 let pullRefreshIndicatorElement = null;
 let pullRefreshIndicatorLabel = null;
 let pullRefreshVisualState = "";
-// Every touch-driven interaction (pull refresh, row actions and edge back)
-// shares one short-lived owner.  Previously each feature kept an independent
-// document-level touch listener, so a cancelled or rapid follow-up gesture
-// could leave an old listener in control and swallow later taps.
-let activeTouchGesture = null;
-
-function touchGestureOwnedByOther(owner) {
-  return Boolean(activeTouchGesture && activeTouchGesture.owner !== owner);
-}
-
-function claimTouchGesture(owner, release) {
-  if (touchGestureOwnedByOther(owner)) return false;
-  activeTouchGesture = { owner, release };
-  return true;
-}
-
-function releaseTouchGesture(owner = "", reason = "end") {
-  if (!activeTouchGesture || (owner && activeTouchGesture.owner !== owner)) return false;
-  const current = activeTouchGesture;
-  activeTouchGesture = null;
-  try {
-    current.release?.(reason);
-  } catch (error) {
-    console.warn("手势收尾失败", error);
-  }
-  return true;
-}
-
-function setupTouchGestureIsolation() {
-  if (document.body.dataset.touchGestureIsolationBound === "true") return;
-  document.body.dataset.touchGestureIsolationBound = "true";
-  // Individual handlers release synchronously on touchend. This deferred
-  // fallback only handles WebKit cases where it dispatches no usable end event.
-  const releaseAfterHandlers = () => {
-    const release = () => releaseTouchGesture("", "end");
-    if (typeof window.queueMicrotask === "function") window.queueMicrotask(release);
-    else Promise.resolve().then(release);
-  };
-  document.addEventListener("touchend", releaseAfterHandlers, { passive: true });
-  document.addEventListener("touchcancel", () => releaseTouchGesture("", "cancel"), { passive: true });
-  window.addEventListener("pagehide", () => releaseTouchGesture("", "cancel"));
-  window.addEventListener("blur", () => releaseTouchGesture("", "cancel"));
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) releaseTouchGesture("", "cancel");
-  });
-}
 
 const initialState = {
   page: "home",
@@ -706,8 +660,19 @@ function setState(patch, options = {}) {
     $app.style.transform = "";
     $app.classList.remove("edge-back-dragging");
     if (!options.skipEdgeSnapshot && !BOTTOM_NAV_ROOT_PAGES.has(patch.page) && $app?.innerHTML) {
-      edgeBackSnapshots.push({ page: state.page, html: $app.innerHTML, scrollY: window.scrollY || 0 });
-      edgeBackSnapshots = edgeBackSnapshots.slice(-8);
+      const pageHtml = $app.innerHTML;
+      // Keep the fully rendered page only for the actual return. The visual
+      // layer shown under the user's finger is prepared here as a tiny static
+      // copy, instead of parsing and mounting a second live page mid-gesture.
+      edgeBackSnapshots.push({
+        page: state.page,
+        html: pageHtml,
+        previewHtml: buildEdgeBackPreviewHtml(pageHtml),
+        scrollY: window.scrollY || 0
+      });
+      // A user only needs the most recent navigation levels. Keeping a long
+      // chain of media-heavy pages is wasteful on an iPhone WebView.
+      edgeBackSnapshots = edgeBackSnapshots.slice(-3);
     } else if (BOTTOM_NAV_ROOT_PAGES.has(patch.page)) {
       edgeBackSnapshots = [];
     }
@@ -9177,14 +9142,7 @@ function setupPullToRefresh() {
   if (document.body.dataset.pullRefreshBound === "true") return;
   document.body.dataset.pullRefreshBound = "true";
 
-  const finishPullGesture = reason => {
-    if (!pullRefreshState.tracking || pullRefreshState.refreshing) return;
-    if (reason === "end" && pullRefreshState.ready) void runPullRefresh();
-    else resetPullRefreshIndicator();
-  };
-
   document.addEventListener("touchstart", event => {
-    if (activeTouchGesture) return;
     if (pullRefreshState.refreshing || !pullRefreshSupportedPage() || !pageAtTop() || event.touches.length !== 1) return;
     if (event.target.closest("input, textarea, select, [contenteditable='true'], .image-preview-overlay, .modal-overlay")) return;
     if (document.documentElement.classList.contains("keyboard-open")) return;
@@ -9202,7 +9160,6 @@ function setupPullToRefresh() {
   }, { passive: true });
 
   document.addEventListener("touchmove", event => {
-    if (touchGestureOwnedByOther("pull-refresh")) return;
     if (!pullRefreshState.tracking || pullRefreshState.refreshing || event.touches.length !== 1) return;
     const touch = event.touches[0];
     const horizontalDistance = touch.clientX - pullRefreshState.startX;
@@ -9221,24 +9178,72 @@ function setupPullToRefresh() {
       schedulePullRefreshIndicator();
       return;
     }
-    // A downward refresh owns this touch from its first visible movement.
-    // Horizontal row/edge gestures are never allowed to run alongside it.
-    if (!claimTouchGesture("pull-refresh", finishPullGesture)) return;
     if (event.cancelable) event.preventDefault();
     pullRefreshState = { ...pullRefreshState, distance, ready: distance >= PULL_REFRESH_THRESHOLD };
     schedulePullRefreshIndicator();
   }, { passive: false });
 
-  document.addEventListener("touchend", () => releaseTouchGesture("pull-refresh", "end"), { passive: true });
-  document.addEventListener("touchcancel", () => releaseTouchGesture("pull-refresh", "cancel"), { passive: true });
+  const finish = () => {
+    if (!pullRefreshState.tracking || pullRefreshState.refreshing) return;
+    if (pullRefreshState.ready) void runPullRefresh();
+    else resetPullRefreshIndicator();
+  };
+  document.addEventListener("touchend", finish, { passive: true });
+  document.addEventListener("touchcancel", resetPullRefreshIndicator, { passive: true });
+}
+
+function buildEdgeBackPreviewHtml(html) {
+  if (!html) return "";
+  // Do not mount a second live copy of the previous page here. The old
+  // approach duplicated videos, images, fixed bars and element ids while a
+  // finger was moving. On iOS that quickly exhausts the compositor and can
+  // leave the real page unable to receive taps after several edge swipes.
+  // This preview is deliberately visual-only: no media decode, no ids and no
+  // data attributes that could be picked up by the real page's event binding.
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const previewRoot = template.content;
+  previewRoot.querySelectorAll("video, audio, source, iframe, canvas").forEach(node => {
+    const placeholder = document.createElement("span");
+    placeholder.className = "edge-back-media-placeholder";
+    node.replaceWith(placeholder);
+  });
+  previewRoot.querySelectorAll("img").forEach(image => {
+    const placeholder = document.createElement("span");
+    placeholder.className = "edge-back-image-placeholder";
+    placeholder.setAttribute("aria-hidden", "true");
+    image.replaceWith(placeholder);
+  });
+  // Keep only the first few repeated rows. It is enough to make the previous
+  // page recognisable while preventing a large list from being painted twice.
+  [".community-message", ".market-card-wrap", ".home-turtle-card", ".turtle-row", ".ledger-row", ".memo-row", ".breed-row", ".message-friend-swipe", ".community-moment"].forEach(selector => {
+    [...previewRoot.querySelectorAll(selector)].slice(6).forEach(node => node.remove());
+  });
+  // The current page already owns fixed navigation, inputs and toolbars.
+  // Removing their copies keeps the backdrop a single inexpensive paint layer.
+  previewRoot.querySelectorAll(".bottom-nav, .community-chat-form, .community-chat-tools, .community-chat-product-context, form, .hidden-file").forEach(node => node.remove());
+  previewRoot.querySelectorAll("*").forEach(node => {
+    node.removeAttribute("id");
+    node.removeAttribute("name");
+    node.removeAttribute("for");
+    node.removeAttribute("autofocus");
+    node.removeAttribute("contenteditable");
+    node.removeAttribute("href");
+    node.setAttribute("tabindex", "-1");
+    [...node.attributes].forEach(attribute => {
+      if (attribute.name.startsWith("data-")) node.removeAttribute(attribute.name);
+    });
+  });
+  return template.innerHTML;
 }
 
 function showEdgeBackPreview(snapshot) {
   document.querySelector(".edge-back-preview")?.remove();
-  if (!snapshot?.html) return null;
+  const previewHtml = snapshot?.previewHtml || buildEdgeBackPreviewHtml(snapshot?.html || "");
+  if (!previewHtml) return null;
   const preview = document.createElement("div");
   preview.className = "edge-back-preview";
-  preview.innerHTML = snapshot.html;
+  preview.innerHTML = previewHtml;
   document.body.insertBefore(preview, $app);
   return preview;
 }
@@ -9254,6 +9259,25 @@ function setupEdgeBackAndConversationSwipe() {
   let gestureAnimationFrame = 0;
   let edgeSettleTimer = 0;
   const rootPages = new Set(["home", "ledger", "market", "messages", "mine"]);
+  const clearPendingEdgeBack = () => {
+    if (edgeSettleTimer) window.clearTimeout(edgeSettleTimer);
+    edgeSettleTimer = 0;
+    if (gestureAnimationFrame) window.cancelAnimationFrame(gestureAnimationFrame);
+    gestureAnimationFrame = 0;
+    $app.style.transition = "";
+    $app.style.transform = "";
+    $app.classList.remove("edge-back-dragging");
+    clearEdgeBackPreview();
+  };
+  const cancelActiveGesture = () => {
+    if (gesture?.row && gesture.rowDragging && gesture.row.isConnected) {
+      gesture.row.classList.remove("is-dragging");
+      gesture.row.classList.toggle("is-open", Boolean(gesture.rowStartedOpen));
+      gesture.row.style.removeProperty("--message-swipe-reveal");
+    }
+    clearPendingEdgeBack();
+    gesture = null;
+  };
   const paintGesture = () => {
     gestureAnimationFrame = 0;
     if (!gesture) return;
@@ -9270,65 +9294,11 @@ function setupEdgeBackAndConversationSwipe() {
     gestureAnimationFrame = 0;
     if (gesture?.edgeBack) paintGesture();
   };
-  const clearEdgeBackDrag = () => {
-    if (gestureAnimationFrame) window.cancelAnimationFrame(gestureAnimationFrame);
-    gestureAnimationFrame = 0;
-    $app.style.transition = "";
-    $app.style.transform = "";
-    $app.classList.remove("edge-back-dragging");
-    clearEdgeBackPreview();
-  };
-  const cancelSettlingEdgeBack = () => {
-    if (edgeSettleTimer) window.clearTimeout(edgeSettleTimer);
-    edgeSettleTimer = 0;
-    clearEdgeBackDrag();
-  };
-  const finishConversationSwipe = reason => {
-    const active = gesture;
-    if (!active?.row || !active.rowDragging) return;
-    const reveal = Number(active.reveal || 0);
-    const shouldOpen = reason === "end" ? reveal >= 72 : Boolean(active.rowStartedOpen);
-    active.row.classList.remove("is-dragging");
-    active.row.classList.toggle("is-open", shouldOpen);
-    active.row.querySelector(".message-friend-row")?.style.removeProperty("transform");
-  };
-  const finishConversationDismiss = reason => {
-    if (reason !== "end") return;
-    document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => row.classList.remove("is-open"));
-  };
-  const finishEdgeBack = reason => {
-    const active = gesture;
-    if (!active?.edgeBack) return;
-    flushGesturePaint();
-    if (reason !== "end") {
-      clearEdgeBackDrag();
-      return;
-    }
-    const shouldComplete = reason === "end"
-      && active.lastDx > Math.max(78, window.innerWidth * .18)
-      && Math.abs(active.lastDx) > Math.abs(active.lastDy);
-    $app.classList.remove("edge-back-dragging");
-    $app.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
-    $app.style.transform = shouldComplete ? "translate3d(100vw, 0, 0)" : "translate3d(0, 0, 0)";
-    if (active.preview) {
-      active.preview.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
-      active.preview.style.transform = shouldComplete ? "translate3d(0, 0, 0)" : "translate3d(-22%, 0, 0)";
-    }
-    if (edgeSettleTimer) window.clearTimeout(edgeSettleTimer);
-    edgeSettleTimer = window.setTimeout(() => {
-      edgeSettleTimer = 0;
-      $app.style.transition = "";
-      $app.style.transform = "";
-      if (shouldComplete && !rootPages.has(state.page)) navigateBack();
-      else clearEdgeBackPreview();
-    }, shouldComplete ? 190 : 210);
-  };
   document.addEventListener("touchstart", event => {
-    if (activeTouchGesture) return;
+    // A new touch must never inherit a previous drag or its delayed rebound.
+    // This is local to this feature; it does not block other page gestures.
+    if (gesture || edgeSettleTimer) cancelActiveGesture();
     if (event.touches.length !== 1 || event.target.closest("input, textarea, select, [contenteditable='true'], .modal-overlay")) return;
-    // A fresh touch always cancels a still-settling previous edge drag rather
-    // than letting its old timer transform the new page underneath the finger.
-    cancelSettlingEdgeBack();
     const touch = event.touches[0];
     gesture = { x: touch.clientX, y: touch.clientY, row: event.target.closest(".message-friend-swipe"), moved: false };
   }, { passive: true });
@@ -9340,7 +9310,6 @@ function setupEdgeBackAndConversationSwipe() {
     if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy)) return;
     gesture.moved = true;
     if (gesture.row && Math.abs(dx) > Math.abs(dy)) {
-      if (!claimTouchGesture("conversation-swipe", finishConversationSwipe)) return;
       const actionWidth = 144;
       if (gesture.rowStartedOpen === undefined) gesture.rowStartedOpen = gesture.row.classList.contains("is-open");
       const rawReveal = Math.max(0, (gesture.rowStartedOpen ? actionWidth : 0) - dx);
@@ -9351,16 +9320,11 @@ function setupEdgeBackAndConversationSwipe() {
       gesture.row.classList.add("is-dragging");
       gesture.rowDragging = true;
       gesture.reveal = reveal;
-      // Keep the actions stationary behind the card. Writing only this one
-      // compositor-friendly transform prevents the two layers from falling a
-      // frame out of sync when a finger changes direction.
-      const rowContent = gesture.row.querySelector(".message-friend-row");
-      if (rowContent) rowContent.style.transform = `translate3d(${-reveal}px, 0, 0)`;
+      gesture.row.style.setProperty("--message-swipe-reveal", `${reveal}px`);
       if (event.cancelable) event.preventDefault();
       return;
     }
     if (gesture.x <= 24 && dx > 0 && Math.abs(dx) > Math.abs(dy) && !rootPages.has(state.page) && edgeBackSnapshots.length) {
-      if (!claimTouchGesture("edge-back", finishEdgeBack)) return;
       gesture.edgeBack = true;
       if (!gesture.preview) gesture.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
       // No midpoint cap: the screen follows the finger all the way across.
@@ -9370,33 +9334,61 @@ function setupEdgeBackAndConversationSwipe() {
       gesture.edgeProgress = Math.min(1, offset / Math.max(1, window.innerWidth));
       scheduleGesturePaint();
       if (event.cancelable) event.preventDefault();
-      return;
-    }
-    if (!gesture.row && document.querySelector(".message-friend-swipe.is-open")) {
-      if (!claimTouchGesture("conversation-dismiss", finishConversationDismiss)) return;
-      if (event.cancelable) event.preventDefault();
     }
   }, { passive: false });
   document.addEventListener("touchend", event => {
     if (!gesture) return;
     const touch = event.changedTouches?.[0];
-    gesture.lastDx = touch ? touch.clientX - gesture.x : 0;
-    gesture.lastDy = touch ? touch.clientY - gesture.y : 0;
-    const owner = gesture.rowDragging ? "conversation-swipe" : gesture.edgeBack ? "edge-back" : activeTouchGesture?.owner || "";
-    if (owner) releaseTouchGesture(owner, "end");
+    const dx = touch ? touch.clientX - gesture.x : 0;
+    const dy = touch ? touch.clientY - gesture.y : 0;
+    flushGesturePaint();
+    if (gesture.row && gesture.rowDragging) {
+      const reveal = Number(gesture.reveal || 0);
+      const shouldOpen = reveal >= 72;
+      gesture.row.classList.remove("is-dragging");
+      gesture.row.classList.toggle("is-open", shouldOpen);
+      gesture.row.style.removeProperty("--message-swipe-reveal");
+    } else if (gesture.edgeBack) {
+      const shouldComplete = dx > Math.max(78, window.innerWidth * .18) && Math.abs(dx) > Math.abs(dy);
+      $app.classList.remove("edge-back-dragging");
+      $app.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
+      $app.style.transform = shouldComplete ? "translate3d(100vw, 0, 0)" : "translate3d(0, 0, 0)";
+      if (gesture.preview) {
+        gesture.preview.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
+        gesture.preview.style.transform = shouldComplete ? "translate3d(0, 0, 0)" : "translate3d(-22%, 0, 0)";
+      }
+      edgeSettleTimer = window.setTimeout(() => {
+        edgeSettleTimer = 0;
+        $app.style.transition = "";
+        $app.style.transform = "";
+        if (shouldComplete && !rootPages.has(state.page)) navigateBack();
+        else clearEdgeBackPreview();
+      }, shouldComplete ? 190 : 210);
+    } else if (!gesture.row && document.querySelector(".message-friend-swipe.is-open") && Math.abs(dx) > Math.abs(dy)) {
+      document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => row.classList.remove("is-open"));
+    }
     gesture = null;
   }, { passive: true });
   document.addEventListener("touchcancel", () => {
-    if (gesture?.rowDragging) releaseTouchGesture("conversation-swipe", "cancel");
-    else if (gesture?.edgeBack) releaseTouchGesture("edge-back", "cancel");
-    else if (activeTouchGesture?.owner === "conversation-dismiss") releaseTouchGesture("conversation-dismiss", "cancel");
-    gesture = null;
+    if (!gesture) return;
+    // Any interrupted swipe is released immediately, including its temporary
+    // card offset. It cannot leave a transparent or click-blocking layer.
+    if (gesture.row && gesture.rowDragging) {
+      gesture.row.classList.remove("is-dragging");
+      gesture.row.classList.toggle("is-open", Boolean(gesture.rowStartedOpen));
+      gesture.row.style.removeProperty("--message-swipe-reveal");
+    }
+    cancelActiveGesture();
   }, { passive: true });
+  window.addEventListener("pagehide", cancelActiveGesture);
+  window.addEventListener("blur", cancelActiveGesture);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) cancelActiveGesture();
+  });
 }
 
 restorePendingCloudData();
 setupMobileKeyboardGuard();
-setupTouchGestureIsolation();
 setupPullToRefresh();
 setupEdgeBackAndConversationSwipe();
 setupBottomNavForegroundRecovery();
