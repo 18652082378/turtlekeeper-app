@@ -354,6 +354,7 @@ let marketLastLoadedAt = 0;
 let marketLoadObserver = null;
 let marketChatDraft = "";
 let pendingCommunityChatLatestScroll = false;
+let communityChatOpening = false;
 let pendingPageEnterMotion = false;
 let pendingCommunityChatEnterMotion = false;
 let pageEnterMotionTimer = null;
@@ -2056,6 +2057,11 @@ function pageCommunityChat() {
       : "";
     return `<div class="community-message ${message.mine ? "mine" : "theirs"}">${showTime ? `<small>${formatTime(message.createdAt)}</small>` : ""}<div class="community-message-body">${senderMark}<div class="community-message-content">${text ? `<p>${escapeHtml(text)}</p>` : ""}${media}</div></div></div>`;
   };
+  const chatMessageList = visibleMessages.map(messageMarkup).join("") || (marketListing
+    ? ""
+    : communityChatOpening
+      ? `<div class="community-chat-opening" role="status"><i aria-hidden="true"></i><span>正在打开聊天…</span></div>`
+      : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`);
   const chatHeader = `
     <div class="topbar community-chat-topbar">
       <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button></div>
@@ -2065,7 +2071,7 @@ function pageCommunityChat() {
   return `
     ${chatHeader}
     <main class="content page-fresh community-chat-page ${marketListing ? "has-chat-product-context" : ""} ${toolsOpen ? "chat-tools-open" : ""}">
-      <section class="community-chat-list">${visibleMessages.map(messageMarkup).join("") || (marketListing ? "" : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`)}<div class="community-chat-bottom-anchor" aria-hidden="true"></div></section>
+      <section class="community-chat-list">${chatMessageList}<div class="community-chat-bottom-anchor" aria-hidden="true"></div></section>
       <form class="community-chat-form" id="communityChatForm">
         <input name="content" maxlength="1000" value="${escapeHtml(marketChatDraft)}" placeholder="输入消息…" autocomplete="off" enterkeyhint="send">
         <button class="community-chat-plus-btn ${toolsOpen ? "is-open" : ""}" type="button" data-toggle-community-chat-tools aria-label="${toolsOpen ? "收起更多功能" : "更多功能"}" aria-expanded="${toolsOpen ? "true" : "false"}">${toolsOpen ? "×" : "+"}</button>
@@ -4464,8 +4470,8 @@ function scrollCommunityChatToLatest() {
   pendingCommunityChatLatestScroll = false;
   const list = document.querySelector(".community-chat-list");
   if (!list) return;
-  // Every media bubble has its final height before it is painted (see
-  // prepareCommunityChatMedia), so a single positioning pass is sufficient.
+  // Media bubbles reserve their own stable aspect-ratio box, so one final
+  // positioning pass reaches the newest message without waiting for media.
   const anchor = list.querySelector(".community-chat-bottom-anchor");
   if (anchor) anchor.scrollIntoView({ block: "end", inline: "nearest", behavior: "auto" });
   else window.scrollTo({ top: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight), left: 0, behavior: "auto" });
@@ -6292,30 +6298,47 @@ async function contactMarketSeller(listingId, buying = false) {
   const listing = (state.marketListings || []).find(item => item.id === listingId);
   if (!listing || listing.isOwn || listing.pendingLocal) return;
   if (!canUseCommunity()) return;
-  await recordMarketWant(listingId);
+  void recordMarketWant(listingId);
   const buyMessage = `你好，我想咨询「${listing.title || listing.speciesName || "这只龟"}」，请问现在还在售吗？`;
   marketChatDraft = buyMessage;
+  const initialFriend = (state.communityFriends || []).find(item => item.id === listing.sellerId) || {
+    id: listing.sellerId,
+    name: listing.sellerName,
+    avatar: listing.sellerAvatar
+  };
+  const initialListing = normalizeCommunityChatListing({
+    ...listing,
+    mediaUrl: marketListingMediaItems(listing)[0]?.url || listing.photoUrl || "",
+    mediaType: marketListingMediaItems(listing)[0]?.type || "image"
+  });
+  // Open the conversation before the automatic inquiry request finishes. The
+  // old sequence waited on two network calls, so the tap could look ignored.
+  communityChatOpening = true;
+  communityChatLoading = true;
+  pendingCommunityChatLatestScroll = false;
+  setState({
+    page: "communityChat",
+    selectedCommunityFriendId: listing.sellerId,
+    selectedCommunityFriend: initialFriend,
+    communityChatMessages: [],
+    communityChatListing: initialListing,
+    communityChatToolsOpen: false
+  }, { skipCloud: true, pageMotion: "chat" });
   try {
-    let friend = (state.communityFriends || []).find(item => item.id === listing.sellerId) || {
-      id: listing.sellerId,
-      name: listing.sellerName,
-      avatar: listing.sellerAvatar
-    };
     const sent = await apiPost("/api/community/chat/send", communityAuthPayload({
       userId: listing.sellerId,
       content: buyMessage,
       marketListingId: listing.id
     }));
-    friend = sent.friend || friend;
+    const friend = sent.friend || initialFriend;
     const messages = sent.messages || [];
-    const marketListing = normalizeCommunityChatListing(sent.marketListing) || normalizeCommunityChatListing({
-      ...listing,
-      mediaUrl: marketListingMediaItems(listing)[0]?.url || listing.photoUrl || "",
-      mediaType: marketListingMediaItems(listing)[0]?.type || "image"
-    });
+    const marketListing = normalizeCommunityChatListing(sent.marketListing) || initialListing;
     marketChatDraft = "";
     communityChatLoadedKey = `${listing.sellerId}:${Math.floor(Date.now() / 10000)}`;
-    pendingCommunityChatLatestScroll = true;
+    const chatStillVisible = state.page === "communityChat" && state.selectedCommunityFriendId === listing.sellerId;
+    communityChatOpening = false;
+    if (chatStillVisible) $app.classList.remove("community-chat-enter-motion");
+    pendingCommunityChatLatestScroll = chatStillVisible;
     setState({
       page: "communityChat",
       selectedCommunityFriendId: listing.sellerId,
@@ -6327,7 +6350,14 @@ async function contactMarketSeller(listingId, buying = false) {
     }, { skipCloud: true, pageMotion: "chat" });
     refreshMessageUnread(true);
   } catch (error) {
+    communityChatOpening = false;
+    if (state.page === "communityChat" && state.selectedCommunityFriendId === listing.sellerId) {
+      $app.classList.remove("community-chat-enter-motion");
+      render();
+    }
     toast(error.message === "方法不支持" ? "联系卖家功能将在服务更新后开放" : (error.message || "暂时无法联系卖家"));
+  } finally {
+    communityChatLoading = false;
   }
 }
 
@@ -7131,19 +7161,39 @@ async function openCommunityChat(userId) {
   communityChatLoadedKey = "";
   const previousFriend = (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId);
   if (!CONFIGURED_SMS_BACKEND) {
+    communityChatOpening = false;
     pendingCommunityChatLatestScroll = true;
     setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: previousFriend, communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false }, { skipCloud: true, pageMotion: "chat" });
     return;
   }
+  const openingSameConversation = state.selectedCommunityFriendId === userId;
+  const cachedMessages = openingSameConversation ? (state.communityChatMessages || []) : [];
+  const cachedListing = openingSameConversation ? state.communityChatListing : null;
+  // Enter immediately. Waiting for image/video metadata here used to add an
+  // 850ms pause before the first chat frame was allowed to render.
+  communityChatOpening = true;
+  pendingCommunityChatLatestScroll = cachedMessages.length > 0;
   communityChatLoading = true;
+  setState({
+    page: "communityChat",
+    selectedCommunityFriendId: userId,
+    selectedCommunityFriend: previousFriend,
+    communityChatMessages: cachedMessages,
+    communityChatListing: cachedListing,
+    communityChatToolsOpen: false
+  }, { skipCloud: true, pageMotion: "chat" });
   try {
-    // Fetch before changing routes. This prevents the empty chat shell from
-    // being painted and scrolled before the final message height is known.
     const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
     communityChatLoadedKey = `${userId}:${Math.floor(Date.now() / 10000)}`;
     const friend = result.friend || previousFriend;
-    const messages = await prepareCommunityChatMedia(result.messages || []);
-    pendingCommunityChatLatestScroll = true;
+    // Message media reserves a stable fallback aspect ratio in CSS. Do not
+    // block the route on metadata probes; they were the visible one-second
+    // delay before a conversation opened.
+    const messages = result.messages || [];
+    const chatStillVisible = state.page === "communityChat" && state.selectedCommunityFriendId === userId;
+    communityChatOpening = false;
+    if (chatStillVisible) $app.classList.remove("community-chat-enter-motion");
+    pendingCommunityChatLatestScroll = chatStillVisible;
     setState({
       page: "communityChat",
       selectedCommunityFriendId: userId,
@@ -7156,6 +7206,11 @@ async function openCommunityChat(userId) {
     refreshMessageUnread(true);
     refreshCommunity(true);
   } catch (error) {
+    communityChatOpening = false;
+    if (state.page === "communityChat" && state.selectedCommunityFriendId === userId) {
+      $app.classList.remove("community-chat-enter-motion");
+      render();
+    }
     toast(error.message || "聊天记录读取失败");
   } finally {
     communityChatLoading = false;
@@ -7268,7 +7323,7 @@ async function refreshCommunityChat(force = false) {
     const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
     communityChatLoadedKey = key;
     const friend = result.friend || state.selectedCommunityFriend;
-    const messages = await prepareCommunityChatMedia(result.messages || []);
+    const messages = result.messages || [];
     setState({
       selectedCommunityFriend: friend,
       communityChatMessages: messages,

@@ -9066,7 +9066,7 @@ html[data-theme-color="dark"] .market-seller-card strong {
   animation: community-chat-header-in .22s cubic-bezier(.2,.72,.25,1) both;
 }
 
-#app.community-chat-enter-motion .community-chat-page {
+#app.community-chat-enter-motion .community-chat-list {
   animation: community-chat-surface-in .28s cubic-bezier(.2,.72,.25,1) both;
 }
 
@@ -9091,7 +9091,7 @@ html[data-theme-color="dark"] .market-seller-card strong {
 
 @media (prefers-reduced-motion: reduce) {
   #app.community-chat-enter-motion .community-chat-topbar,
-  #app.community-chat-enter-motion .community-chat-page,
+  #app.community-chat-enter-motion .community-chat-list,
   #app.community-chat-enter-motion .community-chat-form {
     animation: none;
   }
@@ -13429,6 +13429,26 @@ html[data-theme-color="dark"] .action-panel.care-action-panel.home-module-panel 
   color: var(--muted);
   font-size: 13px;
 }
+
+.community-chat-opening {
+  margin: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.community-chat-opening i {
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: chat-opening-spin .65s linear infinite;
+}
+
+@keyframes chat-opening-spin { to { transform: rotate(360deg); } }
 
 .community-chat-form {
   position: fixed;
