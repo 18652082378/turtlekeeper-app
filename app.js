@@ -663,17 +663,18 @@ function setState(patch, options = {}) {
     $app.style.transform = "";
     $app.classList.remove("edge-back-dragging");
     if (!options.skipEdgeSnapshot && !BOTTOM_NAV_ROOT_PAGES.has(patch.page) && $app?.innerHTML) {
-      // A navigation snapshot must never preserve a temporary swipe state.
-      // Otherwise a conversation row that was previously revealed could be
-      // restored with the Pin/Delete rail already exposed.
+      // Keep the actual page nodes for a real back-navigation hand-off. An
+      // HTML string remains only as a recovery fallback; replacing innerHTML
+      // after an edge swipe was the source of the visible previous-page jump.
+      cleanNavigationSnapshotDom($app);
       const pageHtml = cleanNavigationSnapshotHtml($app.innerHTML);
-      // Keep the fully rendered page only for the actual return. The visual
-      // layer shown under the user's finger is prepared here as a tiny static
-      // copy, instead of parsing and mounting a second live page mid-gesture.
+      const liveSnapshot = detachNavigationSnapshotDom();
       edgeBackSnapshots.push({
         page: state.page,
         html: pageHtml,
         previewHtml: buildEdgeBackPreviewHtml(pageHtml),
+        liveDom: liveSnapshot.dom,
+        bottomNavHtml: liveSnapshot.bottomNavHtml,
         scrollY: window.scrollY || 0
       });
       // A user only needs the most recent navigation levels. Keeping a long
@@ -703,16 +704,33 @@ function setState(patch, options = {}) {
   refreshCareReminderTimers();
 }
 
-function cleanNavigationSnapshotHtml(html = "") {
-  const template = document.createElement("template");
-  template.innerHTML = html;
-  template.content.querySelectorAll(".message-friend-swipe").forEach(row => {
+function cleanNavigationSnapshotDom(root) {
+  root?.querySelectorAll?.(".message-friend-swipe").forEach(row => {
     row.classList.remove("is-open", "is-dragging");
     const foreground = row.querySelector(".message-friend-row");
     foreground?.style.removeProperty("transform");
     foreground?.style.removeProperty("will-change");
   });
+}
+
+function cleanNavigationSnapshotHtml(html = "") {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  cleanNavigationSnapshotDom(template.content);
   return template.innerHTML;
+}
+
+function detachNavigationSnapshotDom() {
+  const dom = document.createDocumentFragment();
+  // The bottom tab bar is intentionally kept as one physical node across
+  // routes. It remains in #app while the source page content is detached and
+  // is placed beside that same content again on return.
+  const persistentBottomNav = $app.querySelector(":scope > .bottom-nav");
+  const bottomNavHtml = persistentBottomNav?.outerHTML || "";
+  persistentBottomNav?.remove();
+  while ($app.firstChild) dom.appendChild($app.firstChild);
+  if (persistentBottomNav) $app.appendChild(persistentBottomNav);
+  return { dom, bottomNavHtml };
 }
 
 function requireLogin() {
@@ -2096,10 +2114,70 @@ function backNavigationState() {
   };
 }
 
+function takeLiveSnapshotDom(snapshot) {
+  const dom = document.createDocumentFragment();
+  const preview = document.querySelector(".edge-back-preview");
+  if (preview?.__edgeBackSnapshot === snapshot) {
+    preview.__edgeBackBottomNav?.remove();
+    while (preview.firstChild) dom.appendChild(preview.firstChild);
+    preview.__edgeBackSnapshot = null;
+    preview.__edgeBackBottomNav = null;
+  }
+  if (snapshot?.liveDom) {
+    while (snapshot.liveDom.firstChild) dom.appendChild(snapshot.liveDom.firstChild);
+  }
+  return dom;
+}
+
+function restoreLiveSnapshotToStash(preview) {
+  const snapshot = preview?.__edgeBackSnapshot;
+  if (!snapshot?.liveDom) return;
+  preview.__edgeBackBottomNav?.remove();
+  while (preview.firstChild) snapshot.liveDom.appendChild(preview.firstChild);
+  preview.__edgeBackSnapshot = null;
+  preview.__edgeBackBottomNav = null;
+}
+
+function bottomNavFromHtml(html) {
+  if (!html) return null;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  return template.content.querySelector(".bottom-nav");
+}
+
+function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
+  const liveDom = takeLiveSnapshotDom(snapshot);
+  if (!liveDom.hasChildNodes()) return false;
+  state = { ...state, ...nextState };
+  pendingPageEnterMotion = false;
+  pendingCommunityChatEnterMotion = false;
+  pendingPageScrollReset = false;
+  $app.style.transition = "";
+  if (!options.fromEdgeGesture) $app.style.transform = "";
+  $app.classList.remove("edge-back-dragging", "page-enter-motion", "community-chat-enter-motion");
+  const persistentBottomNav = $app.querySelector(":scope > .bottom-nav");
+  persistentBottomNav?.remove();
+  $app.replaceChildren(liveDom);
+  const bottomNav = persistentBottomNav || bottomNavFromHtml(snapshot.bottomNavHtml);
+  if (bottomNav) {
+    $app.appendChild(bottomNav);
+    syncPersistentBottomNav(bottomNav);
+  }
+  saveState({ skipCloud: true });
+  setupMarketInfiniteScroll();
+  window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
+  window.requestAnimationFrame(() => {
+    $app.style.transform = "";
+    window.requestAnimationFrame(clearEdgeBackPreview);
+  });
+  return true;
+}
+
 function navigateBack(options = {}) {
   const snapshot = edgeBackSnapshots.pop();
   const fallback = backNavigationState();
   const nextState = snapshot?.page ? { ...fallback, page: snapshot.page } : fallback;
+  if (snapshot && restoreLiveNavigationSnapshot(snapshot, nextState, options)) return;
   if (snapshot?.html) {
     // Hand the exact frozen page to the real app before removing the preview.
     // This is intentionally not render(): recreating a long list (especially
@@ -9350,12 +9428,25 @@ function buildEdgeBackPreviewHtml(html) {
 }
 
 function showEdgeBackPreview(snapshot) {
-  document.querySelector(".edge-back-preview")?.remove();
-  const previewHtml = snapshot?.previewHtml || buildEdgeBackPreviewHtml(snapshot?.html || "");
-  if (!previewHtml) return null;
+  clearEdgeBackPreview();
   const preview = document.createElement("div");
   preview.className = "edge-back-preview";
-  preview.innerHTML = previewHtml;
+  if (snapshot?.liveDom?.hasChildNodes()) {
+    // Move, do not clone, the stored source page under the finger. On a
+    // completed return these exact nodes are moved back into #app, so there is
+    // no second layout or media decode at the end of the gesture.
+    preview.__edgeBackSnapshot = snapshot;
+    preview.appendChild(snapshot.liveDom);
+    const bottomNav = bottomNavFromHtml(snapshot.bottomNavHtml);
+    if (bottomNav) {
+      preview.__edgeBackBottomNav = bottomNav;
+      preview.appendChild(bottomNav);
+    }
+  } else {
+    const previewHtml = snapshot?.previewHtml || buildEdgeBackPreviewHtml(snapshot?.html || "");
+    if (!previewHtml) return null;
+    preview.innerHTML = previewHtml;
+  }
   document.body.insertBefore(preview, $app);
   // Match the page position that was visible when the user entered the child
   // module. Without this, the preview starts at the document top and then the
@@ -9365,7 +9456,10 @@ function showEdgeBackPreview(snapshot) {
 }
 
 function clearEdgeBackPreview() {
-  document.querySelector(".edge-back-preview")?.remove();
+  const preview = document.querySelector(".edge-back-preview");
+  if (!preview) return;
+  restoreLiveSnapshotToStash(preview);
+  preview.remove();
 }
 
 function setupEdgeBackAndConversationSwipe() {
