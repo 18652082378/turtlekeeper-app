@@ -9414,6 +9414,14 @@ function setupEdgeBackAndConversationSwipe() {
       if (active.row) {
         active.mode = "row";
         active.rowStartedOpen = active.row.classList.contains("is-open");
+        // Keep the reveal position as an incremental value instead of deriving
+        // it from the original touch point.  If an already-open row is pushed
+        // further left, that extra motion is clamped at the rail width.  With
+        // an origin-based formula the user then has to undo that invisible
+        // excess before the card can travel right again.  Updating from the
+        // previous pointer position makes a reversal respond immediately.
+        active.reveal = active.rowStartedOpen ? 144 : 0;
+        active.lastRowX = active.x;
         claimPointer(active, active.row);
         document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => {
           if (row !== active.row) row.classList.remove("is-open");
@@ -9430,7 +9438,10 @@ function setupEdgeBackAndConversationSwipe() {
     }
     if (active.mode === "row") {
       const actionWidth = 144;
-      active.reveal = Math.min(actionWidth, Math.max(0, (active.rowStartedOpen ? actionWidth : 0) - dx));
+      const previousX = Number.isFinite(active.lastRowX) ? active.lastRowX : active.x;
+      const deltaX = event.clientX - previousX;
+      active.lastRowX = event.clientX;
+      active.reveal = Math.min(actionWidth, Math.max(0, Number(active.reveal || 0) - deltaX));
       if (!active.rowDragging) {
         active.row.classList.add("is-dragging");
         active.rowDragging = true;
