@@ -339,6 +339,7 @@ let communityUserProfileLoading = false;
 let communityUserProfileLoadedKey = "";
 let messageUnreadLoading = false;
 let messageUnreadLastLoadedAt = 0;
+let restoredSnapshotRenderHoldUntil = 0;
 let contentReportsLoading = false;
 let contentReportsLastLoadedAt = 0;
 let marketNetworkType = "unknown";
@@ -353,6 +354,11 @@ let marketLoading = false;
 let marketLastLoadedAt = 0;
 let marketLoadObserver = null;
 let marketChatDraft = "";
+// A publish can involve several large uploads.  Keep one operation alive until
+// the server has answered so repeated taps cannot start parallel listings.
+let marketPublishInFlight = false;
+let marketPublishFingerprint = "";
+let marketPublishSubmissionId = "";
 let pendingCommunityChatLatestScroll = false;
 let communityChatOpening = false;
 let pendingPageEnterMotion = false;
@@ -700,6 +706,10 @@ function setState(patch, options = {}) {
   }
   state = { ...state, ...patch };
   saveState(options);
+  // The visible page may be the exact DOM that was just handed back from an
+  // edge-swipe preview. Let that hand-off settle before a late unread/polling
+  // response replaces it with a freshly rendered copy.
+  if (!pageChanged && !options.forceRender && Date.now() < restoredSnapshotRenderHoldUntil) return;
   render();
   refreshCareReminderTimers();
 }
@@ -2118,8 +2128,12 @@ function takeLiveSnapshotDom(snapshot) {
   const dom = document.createDocumentFragment();
   const preview = document.querySelector(".edge-back-preview");
   if (preview?.__edgeBackSnapshot === snapshot) {
-    preview.__edgeBackBottomNav?.remove();
+    // Preserve the actual tab-bar node being shown in the preview. Recreating
+    // it during the hand-off forces a small iOS layout repaint.
+    const previewBottomNav = preview.__edgeBackBottomNav || null;
+    previewBottomNav?.remove();
     while (preview.firstChild) dom.appendChild(preview.firstChild);
+    dom.__edgeBackBottomNav = previewBottomNav;
     preview.__edgeBackSnapshot = null;
     preview.__edgeBackBottomNav = null;
   }
@@ -2158,7 +2172,7 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
   const persistentBottomNav = $app.querySelector(":scope > .bottom-nav");
   persistentBottomNav?.remove();
   $app.replaceChildren(liveDom);
-  const bottomNav = persistentBottomNav || bottomNavFromHtml(snapshot.bottomNavHtml);
+  const bottomNav = persistentBottomNav || liveDom.__edgeBackBottomNav || bottomNavFromHtml(snapshot.bottomNavHtml);
   if (bottomNav) {
     $app.appendChild(bottomNav);
     syncPersistentBottomNav(bottomNav);
@@ -2166,6 +2180,7 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
   saveState({ skipCloud: true });
   setupMarketInfiniteScroll();
   window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
+  restoredSnapshotRenderHoldUntil = Date.now() + 520;
   window.requestAnimationFrame(() => {
     $app.style.transform = "";
     window.requestAnimationFrame(clearEdgeBackPreview);
@@ -2808,8 +2823,8 @@ function pageMarketAdd() {
           <div class="market-form-two">
             <label><span>阶段<i class="required-mark" aria-hidden="true">*</i></span><select class="select" name="stage" required><option value="" ${!formValue("stage") ? "selected" : ""} disabled>请选择阶段</option><option value="hatchling" ${formValue("stage") === "hatchling" ? "selected" : ""}>苗子</option><option value="juvenile" ${formValue("stage") === "juvenile" ? "selected" : ""}>亚成</option><option value="adult" ${formValue("stage") === "adult" ? "selected" : ""}>种龟</option></select></label>
             <label><span>性别</span><select class="select" name="gender"><option value="未知" ${formValue("gender") === "未知" || !formValue("gender") ? "selected" : ""}>未知</option><option value="公" ${formValue("gender") === "公" ? "selected" : ""}>公</option><option value="母" ${formValue("gender") === "母" ? "selected" : ""}>母</option></select></label>
-            <label><span>当前克重</span><input class="field" name="weight" type="number" min="0" step="0.1" value="${escapeHtml(formValue("weight"))}" placeholder="g"></label>
             <label><span>背甲长度<i class="required-mark" aria-hidden="true">*</i></span><input class="field" name="shellLength" type="number" min="0.1" step="0.1" value="${escapeHtml(formValue("shellLength", "carapaceLength"))}" placeholder="cm" required></label>
+            <label><span>当前克重</span><input class="field" name="weight" type="number" min="0" step="0.1" value="${escapeHtml(formValue("weight"))}" placeholder="g"></label>
           </div>
           <label><span>出售价格</span><div class="market-price-input"><b>¥</b><input name="price" type="number" min="0" step="0.01" value="${escapeHtml(editingListing?.price ?? "")}" placeholder="0.00" required></div></label>
           <label class="market-check"><input name="negotiable" type="checkbox" ${editingListing?.negotiable ? "checked" : ""}><span>接受合理议价</span></label>
@@ -3318,7 +3333,6 @@ function pageAdd() {
   const kept = state.keptSpecies.length ? state.keptSpecies.map(code => speciesByCode(code)).filter(Boolean) : speciesList.slice(0, 8);
   const today = formatDate(new Date());
   const draftSpeciesCode = turtleFormValue("speciesCode", state.selectedSpeciesCode);
-  const draftStatus = turtleFormValue("status", "正常饲养");
   const draftHealth = turtleFormValue("health", "健康");
   const draftSource = turtleFormValue("source", "购买");
   const draftPoolId = turtleFormValue("poolId");
@@ -3367,11 +3381,7 @@ function pageAdd() {
         </section>
         <section class="form-block fresh-card">
           <h3>当前状态</h3>
-          <div class="label">饲养状态</div>
-          <input type="hidden" name="status" value="${draftStatus}">
-          <div class="radio-row status-choice-row">
-            ${["正常饲养", "已转让", "已死亡"].map(value => `<button class="choice ${draftStatus === value ? "active" : ""}" type="button" data-turtle-choice="status" data-choice-value="${value}">${value}</button>`).join("")}
-          </div>
+          <input type="hidden" name="status" value="正常饲养">
           <div class="label">健康状态</div>
           <input type="hidden" name="health" value="${draftHealth}">
           <div class="radio-row two-options">
@@ -5965,9 +5975,14 @@ async function requestMarketSearchLocation({ showSettingsHint = false } = {}) {
 
 async function submitMarketListing(event) {
   event.preventDefault();
+  if (marketPublishInFlight) {
+    toast("商品正在发布，请勿重复点击");
+    return;
+  }
   if (!canUseCommunity()) return;
+  const formElement = event.currentTarget;
   const editingListingId = state.editingMarketListingId;
-  const form = new FormData(event.currentTarget);
+  const form = new FormData(formElement);
   const turtle = (state.turtles || []).find(item => item.id === String(form.get("turtleId") || ""));
   const localMedia = (state.marketDraftMedia || []).length
     ? state.marketDraftMedia.slice(0, 9)
@@ -6008,11 +6023,45 @@ async function submitMarketListing(event) {
   ].filter(Boolean);
   if (missingFields.length || payload.price < 0) return toast(`请填写必填项：${[...new Set(missingFields)].join("、") || "出售价格"}`);
   if (!localMedia.length) return toast("请至少添加一张实拍图片或一段视频");
+
+  const fingerprint = JSON.stringify({
+    editingListingId,
+    payload,
+    media: localMedia.map(media => {
+      const source = String(media?.dataUrl || media?.url || "");
+      const file = media?.file;
+      return {
+        type: media?.type || "image",
+        name: String(file?.name || ""),
+        size: Number(file?.size || 0),
+        modifiedAt: Number(file?.lastModified || 0),
+        sourceLength: source.length,
+        sourceStart: source.slice(0, 72),
+        sourceEnd: source.slice(-72)
+      };
+    })
+  });
+  if (fingerprint !== marketPublishFingerprint) {
+    marketPublishFingerprint = fingerprint;
+    marketPublishSubmissionId = crypto.randomUUID();
+  }
+  const submissionId = marketPublishSubmissionId;
+  const publishButton = formElement.querySelector(".market-publish-submit");
+  const publishButtonText = publishButton?.textContent || (editingListingId ? "保存并刷新" : "确认发布");
+  const setPublishingLabel = text => {
+    if (!publishButton?.isConnected) return;
+    publishButton.disabled = true;
+    publishButton.setAttribute("aria-busy", "true");
+    publishButton.textContent = text;
+  };
+  marketPublishInFlight = true;
+  setPublishingLabel("正在准备发布…");
   try {
     const mediaItems = [];
-    for (const media of localMedia) {
+    for (const [mediaIndex, media] of localMedia.entries()) {
       const source = media.dataUrl || media.url || "";
       if (!source) continue;
+      setPublishingLabel(`正在上传 ${mediaIndex + 1}/${localMedia.length}…`);
       let posterUrl = String(media.posterUrl || "");
       if (media.type === "video" && media.posterFile) {
         try {
@@ -6033,9 +6082,11 @@ async function submitMarketListing(event) {
       }
     }
     const photoUrl = mediaItems[0]?.url || "";
+    setPublishingLabel(editingListingId ? "正在保存商品…" : "正在发布商品…");
     const result = await apiPost(editingListingId ? "/api/market/update" : "/api/market/create", marketAuthPayload({
       ...payload,
       listingId: editingListingId,
+      submissionId,
       photoUrl,
       mediaItems
     }));
@@ -6051,6 +6102,8 @@ async function submitMarketListing(event) {
     state.marketDraftDescriptionTemplate = "";
     state.marketLocationStatus = "idle";
     state.editingMarketListingId = "";
+    marketPublishFingerprint = "";
+    marketPublishSubmissionId = "";
     marketLastLoadedAt = Date.now();
     setState({
       page: editingListingId ? "marketMy" : "market",
@@ -6063,7 +6116,19 @@ async function submitMarketListing(event) {
       toast("服务器尚未更新，暂时无法发布九宫格商品");
       return;
     }
-    toast(error.message || "发布失败");
+    const message = String(error?.message || "");
+    if (/^load failed$/i.test(message) || error?.name === "TypeError") {
+      toast("网络连接中断，暂未确认发布结果；请稍后再次点击，系统会避免重复创建商品");
+      return;
+    }
+    toast(message || "发布失败");
+  } finally {
+    marketPublishInFlight = false;
+    if (publishButton?.isConnected) {
+      publishButton.disabled = false;
+      publishButton.removeAttribute("aria-busy");
+      publishButton.textContent = publishButtonText;
+    }
   }
 }
 

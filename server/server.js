@@ -2356,6 +2356,22 @@ async function handleMarketCreate(req, res) {
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
+  // The app sends one stable id for a publish attempt.  A slow connection can
+  // lose the response after this handler has written the listing; returning
+  // the original listing for a retry prevents duplicate products.
+  const submissionId = trimPublicText(body.submissionId, 96);
+  if (submissionId) {
+    const existing = (Array.isArray(db.marketListings) ? db.marketListings : [])
+      .find(item => item.sellerPhoneRaw === user.phone && item.submissionId === submissionId);
+    if (existing) {
+      return sendJson(res, 200, {
+        ok: true,
+        duplicate: true,
+        listings: publicMarketListings(db, user),
+        myListings: ownMarketListings(db, user)
+      });
+    }
+  }
   const title = trimPublicText(body.title, 40);
   const species = resolveMarketSpecies(body.speciesCode, body.speciesName);
   if (!species) return sendJson(res, 400, { ok: false, message: "请从品种库中选择品种" });
@@ -2373,6 +2389,7 @@ async function handleMarketCreate(req, res) {
   if (!title || !speciesName || !Number.isFinite(price) || price < 0) return sendJson(res, 400, { ok: false, message: "请填写正确的标题、品种和价格" });
   const listing = {
     id: crypto.randomUUID(),
+    submissionId,
     turtleId: trimPublicText(body.turtleId, 100),
     title,
     speciesCode: species.code,
