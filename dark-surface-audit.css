@@ -170,14 +170,14 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
 /* Message list swipe actions. The action rail stays still behind a full-width
    foreground card; only the card is composited while dragging. That gives the
    usual native reveal effect without synchronising two transformed layers. */
-.message-friend-swipe { --message-swipe-actions-width: 144px; position: relative; overflow: hidden; background: var(--section-bg); touch-action: pan-y; contain: layout paint; }
-.message-friend-actions { position: absolute; inset: 0 0 0 auto; width: var(--message-swipe-actions-width); display: flex; pointer-events: none; }
+.message-friend-swipe { --message-swipe-actions-width: 144px; position: relative; isolation: isolate; overflow: hidden; background: var(--section-bg); touch-action: pan-y; contain: layout paint; }
+.message-friend-actions { position: absolute; inset: 0 0 0 auto; width: var(--message-swipe-actions-width); display: flex; visibility: hidden; opacity: 0; pointer-events: none; transform: translateZ(0); backface-visibility: hidden; -webkit-backface-visibility: hidden; }
 .message-friend-actions button { width: 72px; border-radius: 0; color: #fff; background: #4b9f7d; font-size: 13px; font-weight: 700; }
 .message-friend-actions .delete { background: #e45762; }
-.message-friend-row { position: relative; z-index: 1; display: flex; box-sizing: border-box; min-width: 100%; max-width: 100%; transform: translate3d(0, 0, 0); transition: transform .2s cubic-bezier(.2,.72,.25,1); backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.message-friend-row { position: relative; z-index: 1; display: flex; box-sizing: border-box; min-width: 100%; max-width: 100%; transform: translate3d(0, 0, 0); transition: transform .2s cubic-bezier(.2,.72,.25,1); will-change: transform; contain: paint; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
 .message-friend-swipe.is-open .message-friend-row { transform: translate3d(calc(-1 * var(--message-swipe-actions-width)), 0, 0); }
-.message-friend-swipe.is-open .message-friend-actions { pointer-events: auto; }
-.message-friend-swipe.is-dragging .message-friend-actions { pointer-events: none; }
+.message-friend-swipe.is-open .message-friend-actions { visibility: visible; opacity: 1; pointer-events: auto; }
+.message-friend-swipe.is-dragging .message-friend-actions { visibility: visible; opacity: 1; pointer-events: none; }
 .message-friend-swipe.is-dragging .message-friend-row { transition: none; will-change: transform; }
 
 /* Interactive edge-swipe back: page follows the finger and rebounds if released early. */
@@ -188,6 +188,8 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
   z-index: 1;
   inset: 0;
   overflow: hidden;
+  overscroll-behavior: none;
+  scrollbar-width: none;
   pointer-events: none;
   background: var(--bg);
   box-shadow: inset -18px 0 32px rgba(0, 0, 0, .10);
@@ -195,6 +197,7 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
   will-change: transform;
   contain: layout paint;
 }
+.edge-back-preview::-webkit-scrollbar { display: none; }
 .edge-back-preview video,
 .edge-back-preview img { display: none !important; }
 .edge-back-media-placeholder,

@@ -359,6 +359,8 @@ let pendingCommunityChatEnterMotion = false;
 let pageEnterMotionTimer = null;
 let pendingPageScrollReset = false;
 let edgeBackSnapshots = [];
+let messageListRefreshDeferred = false;
+let messageListRefreshFlushTimer = 0;
 let nativePushListenersAttached = false;
 let nativePushSetupInFlight = false;
 let nativePushDeviceToken = "";
@@ -660,7 +662,10 @@ function setState(patch, options = {}) {
     $app.style.transform = "";
     $app.classList.remove("edge-back-dragging");
     if (!options.skipEdgeSnapshot && !BOTTOM_NAV_ROOT_PAGES.has(patch.page) && $app?.innerHTML) {
-      const pageHtml = $app.innerHTML;
+      // A navigation snapshot must never preserve a temporary swipe state.
+      // Otherwise a conversation row that was previously revealed could be
+      // restored with the Pin/Delete rail already exposed.
+      const pageHtml = cleanNavigationSnapshotHtml($app.innerHTML);
       // Keep the fully rendered page only for the actual return. The visual
       // layer shown under the user's finger is prepared here as a tiny static
       // copy, instead of parsing and mounting a second live page mid-gesture.
@@ -695,6 +700,18 @@ function setState(patch, options = {}) {
   saveState(options);
   render();
   refreshCareReminderTimers();
+}
+
+function cleanNavigationSnapshotHtml(html = "") {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  template.content.querySelectorAll(".message-friend-swipe").forEach(row => {
+    row.classList.remove("is-open", "is-dragging");
+    const foreground = row.querySelector(".message-friend-row");
+    foreground?.style.removeProperty("transform");
+    foreground?.style.removeProperty("will-change");
+  });
+  return template.innerHTML;
 }
 
 function requireLogin() {
@@ -2073,7 +2090,7 @@ function backNavigationState() {
   };
 }
 
-function navigateBack() {
+function navigateBack(options = {}) {
   const snapshot = edgeBackSnapshots.pop();
   const fallback = backNavigationState();
   const nextState = snapshot?.page ? { ...fallback, page: snapshot.page } : fallback;
@@ -2085,8 +2102,12 @@ function navigateBack() {
     pendingPageEnterMotion = false;
     pendingCommunityChatEnterMotion = false;
     pendingPageScrollReset = false;
+    // During an edge-back completion the outgoing page is already fully off
+    // screen. Keep that layer offscreen until the previous page HTML and its
+    // scroll position are ready, rather than briefly snapping the outgoing
+    // page back to x=0 before replacing it.
     $app.style.transition = "";
-    $app.style.transform = "";
+    if (!options.fromEdgeGesture) $app.style.transform = "";
     $app.classList.remove("edge-back-dragging", "page-enter-motion", "community-chat-enter-motion");
     $app.innerHTML = snapshot.html;
     saveState({ skipCloud: true });
@@ -2094,9 +2115,13 @@ function navigateBack() {
     setupMarketInfiniteScroll();
     window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
     window.requestAnimationFrame(() => {
+      // The snapshot has now been mounted at the same scroll position as the
+      // static preview. Reveal it in one compositor update, then remove the
+      // preview on the following frame so there is no visible hand-off jump.
+      $app.style.transform = "";
       hydrateVideoFirstFrames();
       hydrateMarketDetailVideos();
-      clearEdgeBackPreview();
+      window.requestAnimationFrame(clearEdgeBackPreview);
     });
     return;
   }
@@ -4498,8 +4523,16 @@ function bindEvents() {
     }, { once: true });
   }
   document.querySelectorAll("[data-page]").forEach(el => {
-    if (el.dataset.pageNavigationBound === "true") return;
-    el.dataset.pageNavigationBound = "true";
+    // Do not persist the event-binding flag in markup.  A page-back snapshot
+    // is restored with brand-new DOM nodes; a data attribute copied into that
+    // snapshot made bindEvents() wrongly skip those nodes, leaving the home
+    // dashboard's add / care / breeding / pool buttons untappable.
+    // A JavaScript-only property survives only on the one physical node that
+    // is intentionally kept alive (the bottom navigation), while restored
+    // snapshot nodes are correctly bound again.
+    if (el.__turtlekeeperPageNavigationBound) return;
+    el.__turtlekeeperPageNavigationBound = true;
+    el.removeAttribute("data-page-navigation-bound");
     el.addEventListener("click", event => {
     event.preventDefault();
     const targetPage = el.dataset.page;
@@ -6583,6 +6616,7 @@ async function refreshCommunity(force = false) {
         followerCount: Math.max(0, Number(result.profileStats.followerCount || 0))
       }
       : state.communityProfileStats;
+    if (deferMessageListRefreshWhileDragging()) return;
     setState({
       communityPosts: normalizeCommunityPosts(result.posts || []),
       communityProfileStats: profileStats,
@@ -7165,6 +7199,7 @@ async function refreshMessageUnread(force = false) {
     const friends = Array.isArray(result.friends) ? mergeCommunityFriends(result.friends) : state.communityFriends;
     const friendSignature = items => JSON.stringify((items || []).map(item => [item.id, item.name, item.avatar, item.lastMessage, item.lastMessageAt, Number(item.unreadCount || 0)]));
     if (unreadCount !== Number(state.messageUnreadCount || 0) || friendSignature(friends) !== friendSignature(state.communityFriends)) {
+      if (deferMessageListRefreshWhileDragging()) return;
       if (state.page === "communityChat") {
         // The badge is not visible in a conversation. Keep its data current
         // without replacing the chat DOM while the user is reading it.
@@ -7189,6 +7224,38 @@ function startMessageUnreadPolling() {
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refreshMessageUnread(true);
   });
+}
+
+function messageListSwipeIsActive() {
+  return state.page === "messages" && Boolean(document.querySelector(".message-friend-swipe.is-dragging"));
+}
+
+function deferMessageListRefreshWhileDragging() {
+  if (!messageListSwipeIsActive()) return false;
+  // Never replace the row currently following the user's finger. A server
+  // response may arrive at any time, but applying it during a drag destroys
+  // that row's compositor layer and is perceived as a sharp stutter.
+  messageListRefreshDeferred = true;
+  return true;
+}
+
+function flushDeferredMessageListRefresh() {
+  if (!messageListRefreshDeferred || messageListSwipeIsActive()) return;
+  // Keep an opened action rail stable for the follow-up tap. The newest data
+  // will be fetched once the user closes it or performs the action.
+  if (document.querySelector(".message-friend-swipe.is-open")) return;
+  messageListRefreshDeferred = false;
+  if (state.page !== "messages") return;
+  void refreshCommunity(true);
+  void refreshMessageUnread(true);
+}
+
+function scheduleDeferredMessageListRefresh() {
+  if (messageListRefreshFlushTimer) window.clearTimeout(messageListRefreshFlushTimer);
+  messageListRefreshFlushTimer = window.setTimeout(() => {
+    messageListRefreshFlushTimer = 0;
+    flushDeferredMessageListRefresh();
+  }, 0);
 }
 
 async function refreshCommunityChat(force = false) {
@@ -9145,6 +9212,10 @@ function setupPullToRefresh() {
   document.addEventListener("touchstart", event => {
     if (pullRefreshState.refreshing || !pullRefreshSupportedPage() || !pageAtTop() || event.touches.length !== 1) return;
     if (event.target.closest("input, textarea, select, [contenteditable='true'], .image-preview-overlay, .modal-overlay")) return;
+    // A conversation row owns horizontal tracking from the very first touch.
+    // Do not initialise pull-to-refresh for that gesture, even if the list is
+    // at its top edge.
+    if (event.target.closest(".message-friend-swipe")) return;
     if (document.documentElement.classList.contains("keyboard-open")) return;
     const headerBottom = document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0;
     document.body.style.setProperty("--pull-refresh-header-bottom", `${Math.max(0, headerBottom)}px`);
@@ -9245,6 +9316,10 @@ function showEdgeBackPreview(snapshot) {
   preview.className = "edge-back-preview";
   preview.innerHTML = previewHtml;
   document.body.insertBefore(preview, $app);
+  // Match the page position that was visible when the user entered the child
+  // module. Without this, the preview starts at the document top and then the
+  // restored page suddenly jumps down to its saved scroll offset.
+  preview.scrollTop = Math.max(0, Number(snapshot?.scrollY || 0));
   return preview;
 }
 
@@ -9279,6 +9354,7 @@ function setupEdgeBackAndConversationSwipe() {
       gesture.row.classList.remove("is-dragging");
       gesture.row.classList.toggle("is-open", Boolean(gesture.rowStartedOpen));
       gesture.rowContent?.style.removeProperty("transform");
+      if (!gesture.rowStartedOpen) scheduleDeferredMessageListRefresh();
     }
     releasePointer(gesture);
     clearPendingEdgeBack();
@@ -9288,7 +9364,10 @@ function setupEdgeBackAndConversationSwipe() {
     gestureAnimationFrame = 0;
     if (!active) return;
     if (active.mode === "row" && active.rowContent) {
-      active.rowContent.style.transform = `translate3d(${-active.reveal}px, 0, 0)`;
+      if (active.lastPaintedReveal !== active.reveal) {
+        active.lastPaintedReveal = active.reveal;
+        active.rowContent.style.transform = `translate3d(${-active.reveal}px, 0, 0)`;
+      }
     } else if (active.mode === "edge") {
       $app.style.transform = `translate3d(${active.edgeOffset}px, 0, 0)`;
       active.preview?.style.setProperty("transform", `translate3d(${-22 + (active.edgeProgress * 22)}%, 0, 0)`);
@@ -9352,8 +9431,10 @@ function setupEdgeBackAndConversationSwipe() {
     if (active.mode === "row") {
       const actionWidth = 144;
       active.reveal = Math.min(actionWidth, Math.max(0, (active.rowStartedOpen ? actionWidth : 0) - dx));
-      active.row.classList.add("is-dragging");
-      active.rowDragging = true;
+      if (!active.rowDragging) {
+        active.row.classList.add("is-dragging");
+        active.rowDragging = true;
+      }
       scheduleGesturePaint();
       if (event.cancelable) event.preventDefault();
       return;
@@ -9377,6 +9458,7 @@ function setupEdgeBackAndConversationSwipe() {
       active.row.classList.remove("is-dragging");
       active.row.classList.toggle("is-open", shouldOpen);
       active.rowContent?.style.removeProperty("transform");
+      if (!shouldOpen) scheduleDeferredMessageListRefresh();
       suppressRowClickUntil = Date.now() + 350;
     } else if (active.mode === "edge") {
       const shouldComplete = dx > Math.max(78, window.innerWidth * .18) && Math.abs(dx) > Math.abs(dy);
@@ -9389,13 +9471,18 @@ function setupEdgeBackAndConversationSwipe() {
       }
       edgeSettleTimer = window.setTimeout(() => {
         edgeSettleTimer = 0;
-        $app.style.transition = "";
-        $app.style.transform = "";
-        if (shouldComplete && !rootPages.has(state.page)) navigateBack();
-        else clearEdgeBackPreview();
+        if (shouldComplete && !rootPages.has(state.page)) {
+          // navigateBack owns the offscreen-to-previous-page hand-off.
+          navigateBack({ fromEdgeGesture: true });
+        } else {
+          $app.style.transition = "";
+          $app.style.transform = "";
+          clearEdgeBackPreview();
+        }
       }, shouldComplete ? 190 : 210);
     } else if (!active.row && document.querySelector(".message-friend-swipe.is-open") && Math.abs(dx) > Math.abs(dy)) {
       document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => row.classList.remove("is-open"));
+      scheduleDeferredMessageListRefresh();
     }
     gesture = null;
   }, { passive: true });
