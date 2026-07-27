@@ -152,6 +152,15 @@ html, body, #app { width: 100%; min-width: 0; }
 body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior-y: none; overflow-x: hidden; }
 button, a { -webkit-tap-highlight-color: transparent; }
 input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; user-select: text; }
+/* Long-pressing a chat bubble must behave like a normal messenger: message
+   text can be selected and copied, while the rest of the app stays protected
+   from accidental selection during gestures. */
+.community-chat-page .community-message p,
+.community-chat-page .community-official-reminder p {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
 @media (max-width: 600px) {
   body { background: var(--bg); }
   .phone-shell { width: 100vw; max-width: none; margin: 0; box-shadow: none; }
@@ -198,8 +207,11 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
   contain: layout paint;
 }
 .edge-back-preview::-webkit-scrollbar { display: none; }
+.edge-back-preview * { animation: none !important; transition: none !important; caret-color: transparent !important; }
 .edge-back-preview video,
-.edge-back-preview img { display: none !important; }
+.edge-back-preview audio,
+.edge-back-preview iframe,
+.edge-back-preview canvas { display: none !important; }
 .edge-back-media-placeholder,
 .edge-back-image-placeholder { display: block; min-width: 36px; min-height: 36px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 12%, var(--raised-bg)); }
 .edge-back-preview::after {

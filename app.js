@@ -6324,7 +6324,7 @@ async function contactMarketSeller(listingId, buying = false) {
       communityChatListing: marketListing,
       communityChatToolsOpen: false,
       communityFriends: communityFriendsWithPreview(listing.sellerId, friend, messages, { unreadCount: 0 })
-    }, { skipCloud: true });
+    }, { skipCloud: true, pageMotion: "chat" });
     refreshMessageUnread(true);
   } catch (error) {
     toast(error.message === "方法不支持" ? "联系卖家功能将在服务更新后开放" : (error.message || "暂时无法联系卖家"));
@@ -7132,7 +7132,7 @@ async function openCommunityChat(userId) {
   const previousFriend = (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId);
   if (!CONFIGURED_SMS_BACKEND) {
     pendingCommunityChatLatestScroll = true;
-    setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: previousFriend, communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false }, { skipCloud: true, pageMotion: "none" });
+    setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: previousFriend, communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false }, { skipCloud: true, pageMotion: "chat" });
     return;
   }
   communityChatLoading = true;
@@ -7152,7 +7152,7 @@ async function openCommunityChat(userId) {
       communityChatListing: normalizeCommunityChatListing(result.marketListing),
       communityChatToolsOpen: false,
       communityFriends: communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 })
-    }, { skipCloud: true, pageMotion: "none" });
+    }, { skipCloud: true, pageMotion: "chat" });
     refreshMessageUnread(true);
     refreshCommunity(true);
   } catch (error) {
@@ -9265,12 +9265,12 @@ function setupPullToRefresh() {
 
 function buildEdgeBackPreviewHtml(html) {
   if (!html) return "";
-  // Do not mount a second live copy of the previous page here. The old
-  // approach duplicated videos, images, fixed bars and element ids while a
-  // finger was moving. On iOS that quickly exhausts the compositor and can
-  // leave the real page unable to receive taps after several edge swipes.
-  // This preview is deliberately visual-only: no media decode, no ids and no
-  // data attributes that could be picked up by the real page's event binding.
+  // The preview must retain exactly the same layout as the page restored by
+  // the back button.  A shortened preview (missing rows, images or fixed
+  // navigation) looked acceptable while moving, but visibly jumped when the
+  // complete saved page replaced it at the end of an edge swipe.  It remains
+  // inert: identifiers, handlers and expensive moving-video decoders are
+  // removed, while the visual layout stays intact.
   const template = document.createElement("template");
   template.innerHTML = html;
   const previewRoot = template.content;
@@ -9279,20 +9279,6 @@ function buildEdgeBackPreviewHtml(html) {
     placeholder.className = "edge-back-media-placeholder";
     node.replaceWith(placeholder);
   });
-  previewRoot.querySelectorAll("img").forEach(image => {
-    const placeholder = document.createElement("span");
-    placeholder.className = "edge-back-image-placeholder";
-    placeholder.setAttribute("aria-hidden", "true");
-    image.replaceWith(placeholder);
-  });
-  // Keep only the first few repeated rows. It is enough to make the previous
-  // page recognisable while preventing a large list from being painted twice.
-  [".community-message", ".market-card-wrap", ".home-turtle-card", ".turtle-row", ".ledger-row", ".memo-row", ".breed-row", ".message-friend-swipe", ".community-moment"].forEach(selector => {
-    [...previewRoot.querySelectorAll(selector)].slice(6).forEach(node => node.remove());
-  });
-  // The current page already owns fixed navigation, inputs and toolbars.
-  // Removing their copies keeps the backdrop a single inexpensive paint layer.
-  previewRoot.querySelectorAll(".bottom-nav, .community-chat-form, .community-chat-tools, .community-chat-product-context, form, .hidden-file").forEach(node => node.remove());
   previewRoot.querySelectorAll("*").forEach(node => {
     node.removeAttribute("id");
     node.removeAttribute("name");
