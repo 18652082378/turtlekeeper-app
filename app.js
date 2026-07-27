@@ -9430,7 +9430,11 @@ function buildEdgeBackPreviewHtml(html) {
 function showEdgeBackPreview(snapshot) {
   clearEdgeBackPreview();
   const preview = document.createElement("div");
-  preview.className = "edge-back-preview";
+  // The snapshot is mounted beside #app while it is being revealed.  It must
+  // still carry the same phone-shell variables (notably the fixed top-bar
+  // height); without them the preview content starts at y=0 and jumps when
+  // the real messages page is restored.
+  preview.className = "edge-back-preview phone-shell";
   if (snapshot?.liveDom?.hasChildNodes()) {
     // Move, do not clone, the stored source page under the finger. On a
     // completed return these exact nodes are moved back into #app, so there is
@@ -9470,6 +9474,42 @@ function setupEdgeBackAndConversationSwipe() {
   let edgeSettleTimer = 0;
   let suppressRowClickUntil = 0;
   const rootPages = new Set(["home", "ledger", "market", "messages", "mine"]);
+  const edgePinnedProperties = ["position", "top", "left", "right", "bottom", "width", "transform"];
+  const pinEdgeFixedLayers = active => {
+    if (active?.edgePinnedLayers?.length) return;
+    const appBounds = $app.getBoundingClientRect();
+    active.edgePinnedLayers = Array.from($app.querySelectorAll(".topbar, .community-chat-product-context, .community-chat-form, .community-chat-tools, .bottom-nav"))
+      .filter(layer => getComputedStyle(layer).position === "fixed")
+      .map(layer => {
+        const bounds = layer.getBoundingClientRect();
+        const previous = edgePinnedProperties.map(property => ({
+          property,
+          value: layer.style.getPropertyValue(property),
+          priority: layer.style.getPropertyPriority(property)
+        }));
+        // A transformed parent turns fixed descendants into scrolling layers on
+        // iOS.  Pin them to their current coordinates before #app follows the
+        // finger so the chat name, product card and composer cannot disappear.
+        layer.style.setProperty("position", "absolute", "important");
+        layer.style.setProperty("top", `${bounds.top - appBounds.top}px`, "important");
+        layer.style.setProperty("left", `${bounds.left - appBounds.left}px`, "important");
+        layer.style.setProperty("right", "auto", "important");
+        layer.style.setProperty("bottom", "auto", "important");
+        layer.style.setProperty("width", `${bounds.width}px`, "important");
+        layer.style.setProperty("transform", "none", "important");
+        return { layer, previous };
+      });
+  };
+  const unpinEdgeFixedLayers = active => {
+    active?.edgePinnedLayers?.forEach(({ layer, previous }) => {
+      if (!layer?.isConnected) return;
+      previous.forEach(({ property, value, priority }) => {
+        if (value) layer.style.setProperty(property, value, priority);
+        else layer.style.removeProperty(property);
+      });
+    });
+    if (active) active.edgePinnedLayers = [];
+  };
   const clearPendingEdgeBack = () => {
     if (edgeSettleTimer) window.clearTimeout(edgeSettleTimer);
     edgeSettleTimer = 0;
@@ -9478,6 +9518,7 @@ function setupEdgeBackAndConversationSwipe() {
     $app.style.transition = "";
     $app.style.transform = "";
     $app.classList.remove("edge-back-dragging");
+    unpinEdgeFixedLayers(gesture);
     clearEdgeBackPreview();
   };
   const releasePointer = active => {
@@ -9489,6 +9530,7 @@ function setupEdgeBackAndConversationSwipe() {
       gesture.row.classList.remove("is-dragging");
       gesture.row.classList.toggle("is-open", Boolean(gesture.rowStartedOpen));
       gesture.rowContent?.style.removeProperty("transform");
+      gesture.rowActions?.style.removeProperty("transform");
       if (!gesture.rowStartedOpen) scheduleDeferredMessageListRefresh();
     }
     releasePointer(gesture);
@@ -9502,6 +9544,10 @@ function setupEdgeBackAndConversationSwipe() {
       if (active.lastPaintedReveal !== active.reveal) {
         active.lastPaintedReveal = active.reveal;
         active.rowContent.style.transform = `translate3d(${-active.reveal}px, 0, 0)`;
+        // The action rail enters from the right by exactly the same amount as
+        // the foreground card moves left.  Keeping both layers on the
+        // compositor makes the buttons visibly follow a reversing finger too.
+        active.rowActions?.style.setProperty("transform", `translate3d(${144 - active.reveal}px, 0, 0)`);
       }
     } else if (active.mode === "edge") {
       $app.style.transform = `translate3d(${active.edgeOffset}px, 0, 0)`;
@@ -9532,6 +9578,7 @@ function setupEdgeBackAndConversationSwipe() {
       y: event.clientY,
       row,
       rowContent: row?.querySelector(".message-friend-row") || null,
+      rowActions: row?.querySelector(".message-friend-actions") || null,
       mode: "pending"
     };
   }, { passive: true });
@@ -9565,6 +9612,7 @@ function setupEdgeBackAndConversationSwipe() {
         active.mode = "edge";
         active.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
         claimPointer(active, $app);
+        pinEdgeFixedLayers(active);
         $app.classList.add("edge-back-dragging");
       } else {
         active.mode = "horizontal";
@@ -9604,6 +9652,7 @@ function setupEdgeBackAndConversationSwipe() {
       active.row.classList.remove("is-dragging");
       active.row.classList.toggle("is-open", shouldOpen);
       active.rowContent?.style.removeProperty("transform");
+      active.rowActions?.style.removeProperty("transform");
       if (!shouldOpen) scheduleDeferredMessageListRefresh();
       suppressRowClickUntil = Date.now() + 350;
     } else if (active.mode === "edge") {
@@ -9619,10 +9668,12 @@ function setupEdgeBackAndConversationSwipe() {
         edgeSettleTimer = 0;
         if (shouldComplete && !rootPages.has(state.page)) {
           // navigateBack owns the offscreen-to-previous-page hand-off.
+          unpinEdgeFixedLayers(active);
           navigateBack({ fromEdgeGesture: true });
         } else {
           $app.style.transition = "";
           $app.style.transform = "";
+          unpinEdgeFixedLayers(active);
           clearEdgeBackPreview();
         }
       }, shouldComplete ? 190 : 210);

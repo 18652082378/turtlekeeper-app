@@ -180,13 +180,13 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
    foreground card; only the card is composited while dragging. That gives the
    usual native reveal effect without synchronising two transformed layers. */
 .message-friend-swipe { --message-swipe-actions-width: 144px; position: relative; isolation: isolate; overflow: hidden; background: var(--section-bg); touch-action: pan-y; contain: layout paint; }
-.message-friend-actions { position: absolute; inset: 0 0 0 auto; width: var(--message-swipe-actions-width); display: flex; visibility: hidden; opacity: 0; pointer-events: none; transform: translateZ(0); backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.message-friend-actions { position: absolute; inset: 0 0 0 auto; width: var(--message-swipe-actions-width); display: flex; visibility: hidden; opacity: 0; pointer-events: none; transform: translate3d(var(--message-swipe-actions-width), 0, 0); transition: transform .2s cubic-bezier(.2,.72,.25,1); will-change: transform; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
 .message-friend-actions button { width: 72px; border-radius: 0; color: #fff; background: #4b9f7d; font-size: 13px; font-weight: 700; }
 .message-friend-actions .delete { background: #e45762; }
 .message-friend-row { position: relative; z-index: 1; display: flex; box-sizing: border-box; min-width: 100%; max-width: 100%; transform: translate3d(0, 0, 0); transition: transform .2s cubic-bezier(.2,.72,.25,1); will-change: transform; contain: paint; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
 .message-friend-swipe.is-open .message-friend-row { transform: translate3d(calc(-1 * var(--message-swipe-actions-width)), 0, 0); }
-.message-friend-swipe.is-open .message-friend-actions { visibility: visible; opacity: 1; pointer-events: auto; }
-.message-friend-swipe.is-dragging .message-friend-actions { visibility: visible; opacity: 1; pointer-events: none; }
+.message-friend-swipe.is-open .message-friend-actions { visibility: visible; opacity: 1; pointer-events: auto; transform: translate3d(0, 0, 0); }
+.message-friend-swipe.is-dragging .message-friend-actions { visibility: visible; opacity: 1; pointer-events: none; transition: none; }
 .message-friend-swipe.is-dragging .message-friend-row { transition: none; will-change: transform; }
 
 /* Interactive edge-swipe back: page follows the finger and rebounds if released early. */
