@@ -214,15 +214,6 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
 .edge-back-preview canvas { display: none !important; }
 .edge-back-media-placeholder,
 .edge-back-image-placeholder { display: block; min-width: 36px; min-height: 36px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 12%, var(--raised-bg)); }
-.edge-back-preview::after {
-  content: "";
-  position: absolute;
-  z-index: 99;
-  inset: 0;
-  background: rgba(0, 0, 0, .08);
-  pointer-events: none;
-}
-
 /* On real touch devices, a fixed live backdrop blur has to be repainted while
    content moves underneath it. Stable opaque surfaces keep scrolling and pull
    refresh on the compositor instead. */

@@ -2805,8 +2805,8 @@ function pageMarketAdd() {
         <section class="market-form-card market-media-card">
           <div class="market-form-heading"><b>实拍图片或视频</b><small>${mediaCount}/9</small></div>
           <div class="market-media-grid" data-market-media-grid>${marketDraftMediaMarkup()}</div>
-          <input class="hidden-file" type="file" accept="image/*,video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.mov,.m4v,.webm" multiple data-market-media-input>
-          <p>长按右下角拖动图标可调整顺序，第一项会作为展示首图；最多添加9个，视频不得超过30秒，不限制文件大小。</p>
+          <input class="hidden-file" type="file" accept="image/*,video/*" multiple data-market-media-input>
+          <p>点击“图片/视频”从系统相册多选；第一项会作为展示首图，最多 9 项。视频仅允许 30 秒以内，超时视频不会加入商品。</p>
         </section>
         <section class="market-form-card market-fields-card">
           <div class="market-field-group"><span>品种<i class="required-mark" aria-hidden="true">*</i></span><div class="market-species-picker" data-market-species-picker>
@@ -5757,8 +5757,8 @@ async function readMarketMedia(event) {
   const files = selected.slice(0, remaining);
   if (selected.length > remaining) toast(`最多只能添加9个，已选取前${remaining}个`);
   const nextItems = [];
-  try {
-    for (const file of files) {
+  for (const file of files) {
+    try {
       // iOS may leave File.type empty for a video picked from Photos.  Fall
       // back to the extension so a valid MOV/MP4 is still treated as video.
       const mediaKind = localMediaFileKind(file);
@@ -5790,12 +5790,15 @@ async function readMarketMedia(event) {
         posterUrl: poster?.previewUrl || "",
         type: isVideo ? "video" : "image"
       });
+    } catch (error) {
+      // One unreadable or overlength item must not cancel other valid items
+      // selected from the same native iOS photo picker.
+      toast(error?.message || `无法读取：${file.name}`);
     }
-    state.marketDraftMedia = [...current, ...nextItems].slice(0, 9);
-    renderMarketMediaDraft();
-  } catch (error) {
-    toast(error.message || "媒体读取失败");
   }
+  if (!nextItems.length) return;
+  state.marketDraftMedia = [...current, ...nextItems].slice(0, 9);
+  renderMarketMediaDraft();
 }
 
 function normalizeMarketCity(value) {
