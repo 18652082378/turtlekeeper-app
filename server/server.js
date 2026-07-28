@@ -2895,6 +2895,12 @@ try {
 }
 setInterval(runScheduledBackup, 60 * 60 * 1000).unref();
 
+// Videos are streamed directly from iOS. Keep the origin request alive long
+// enough for a slow but healthy Wi-Fi upload instead of letting Node cut it off.
+server.requestTimeout = 15 * 60 * 1000;
+server.headersTimeout = 75 * 1000;
+server.keepAliveTimeout = 70 * 1000;
+
 server.listen(PORT, HOST, () => {
   console.log(`龟管家服务已启动：http://${HOST}:${PORT}`);
   const mode = process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured()

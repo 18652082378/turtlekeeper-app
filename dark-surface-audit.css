@@ -18,6 +18,21 @@ html[data-theme-color="dark"] .member-benefit-page.tone-pro {
   background: #111111 !important;
 }
 
+html[data-theme-color="dark"] .market-publish-progress {
+  color: #e8f6ef;
+  background: rgba(28, 28, 30, .97);
+  border-color: #315e4d;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .34);
+}
+
+html[data-theme-color="dark"] .market-publish-progress-copy span {
+  color: #a9b7b0;
+}
+
+html[data-theme-color="dark"] .market-publish-progress > b {
+  color: #7fe2b4;
+}
+
 html[data-theme-color="dark"] .my-market-notice,
 html[data-theme-color="dark"] .my-market-tabs,
 html[data-theme-color="dark"] .my-market-listing,

@@ -359,6 +359,9 @@ let marketChatDraft = "";
 let marketPublishInFlight = false;
 let marketPublishFingerprint = "";
 let marketPublishSubmissionId = "";
+// Publishing continues after leaving the form, so progress must not depend on
+// the page DOM that is about to be replaced.
+let marketPublishProgress = { active: false, current: 0, total: 0, stage: "" };
 let pendingCommunityChatLatestScroll = false;
 let communityChatOpening = false;
 let pendingPageEnterMotion = false;
@@ -2683,6 +2686,41 @@ function marketAssistControls(regions = []) {
   `;
 }
 
+function marketPublishProgressMarkup() {
+  if (!marketPublishProgress.active) return "";
+  const total = Math.max(0, Number(marketPublishProgress.total) || 0);
+  const current = Math.min(total, Math.max(0, Number(marketPublishProgress.current) || 0));
+  return `
+    <aside class="market-publish-progress" data-market-publish-progress role="status" aria-live="polite" aria-atomic="true">
+      <i class="market-publish-progress-spinner" aria-hidden="true"></i>
+      <div class="market-publish-progress-copy">
+        <strong>商品发布中</strong>
+        <span data-market-publish-progress-stage>${escapeHtml(marketPublishProgress.stage || "正在准备上传…")}</span>
+      </div>
+      ${total ? `<b data-market-publish-progress-count>${current}/${total}</b>` : ""}
+    </aside>
+  `;
+}
+
+function updateMarketPublishProgress(patch = {}) {
+  marketPublishProgress = { ...marketPublishProgress, ...patch, active: true };
+  const card = document.querySelector("[data-market-publish-progress]");
+  if (!card) return;
+  const stage = card.querySelector("[data-market-publish-progress-stage]");
+  if (stage) stage.textContent = marketPublishProgress.stage || "正在准备上传…";
+  const count = card.querySelector("[data-market-publish-progress-count]");
+  const total = Math.max(0, Number(marketPublishProgress.total) || 0);
+  if (count && total) {
+    const current = Math.min(total, Math.max(0, Number(marketPublishProgress.current) || 0));
+    count.textContent = `${current}/${total}`;
+  }
+}
+
+function clearMarketPublishProgress() {
+  marketPublishProgress = { active: false, current: 0, total: 0, stage: "" };
+  document.querySelector("[data-market-publish-progress]")?.remove();
+}
+
 function pageMarket() {
   const keyword = String(state.marketSearch || "").trim().toLowerCase();
   const stage = state.marketStage || "all";
@@ -2690,6 +2728,7 @@ function pageMarket() {
   const regions = [...new Set((state.marketListings || []).map(item => String(item.city || "").trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
   const showAssistSearch = Boolean(keyword || state.marketPriceOrder || state.marketFreshOnly || state.marketRegion || state.marketDelivery);
   return `
+    ${marketPublishProgressMarkup()}
     ${topbar("龟集市", false, `<button class="market-top-add" type="button" data-page="marketAdd" aria-label="发布出售">＋</button>`, `<button class="market-top-service" type="button" data-market-top-service aria-label="联系平台客服"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.2v-1.1a7.5 7.5 0 0 1 15 0v1.1"></path><path d="M4.5 12.6H3.8a1.8 1.8 0 0 0-1.8 1.8v2.1a1.8 1.8 0 0 0 1.8 1.8h1.7v-5.7ZM19.5 12.6h.7a1.8 1.8 0 0 1 1.8 1.8v2.1a1.8 1.8 0 0 1-1.8 1.8h-1.7v-5.7ZM19.5 18.1c0 1.3-1.2 2.4-2.7 2.4h-1.5"></path><path d="M13.2 20.5h2.4"></path></svg></button>`)}
     <main class="content page-fresh market-page">
       <div class="market-search-area">
@@ -6051,20 +6090,33 @@ async function submitMarketListing(event) {
   const submissionId = marketPublishSubmissionId;
   const publishButton = formElement.querySelector(".market-publish-submit");
   const publishButtonText = publishButton?.textContent || (editingListingId ? "保存并刷新" : "确认发布");
-  const setPublishingLabel = text => {
+  const setPublishingLabel = (text, current = marketPublishProgress.current) => {
+    updateMarketPublishProgress({ stage: text, current });
     if (!publishButton?.isConnected) return;
     publishButton.disabled = true;
     publishButton.setAttribute("aria-busy", "true");
     publishButton.textContent = text;
   };
   marketPublishInFlight = true;
-  setPublishingLabel("正在准备发布…");
+  updateMarketPublishProgress({
+    active: true,
+    current: 0,
+    total: localMedia.length,
+    stage: "正在准备上传…"
+  });
+  // Do not make the user wait on a media-heavy form. The upload owns its
+  // files, so it remains safe to replace this page with the market now.
+  setState({ page: "market" }, {
+    skipCloud: true,
+    skipEdgeSnapshot: true,
+    pageMotion: "none"
+  });
   try {
     const mediaItems = [];
     for (const [mediaIndex, media] of localMedia.entries()) {
       const source = media.dataUrl || media.url || "";
       if (!source) continue;
-      setPublishingLabel(`正在上传 ${mediaIndex + 1}/${localMedia.length}…`);
+      setPublishingLabel(`正在上传第 ${mediaIndex + 1} 项（共 ${localMedia.length} 项）…`, mediaIndex + 1);
       let posterUrl = String(media.posterUrl || "");
       if (media.type === "video" && media.posterFile) {
         try {
@@ -6075,7 +6127,14 @@ async function submitMarketListing(event) {
         }
       }
       if (media.file) {
-        const uploaded = await apiUploadMediaFile(media.file, media.duration || 0);
+        const uploaded = await apiUploadMediaFile(media.file, media.duration || 0, {
+          onRetry: ({ attempt, maxAttempts }) => {
+            setPublishingLabel(
+              `第 ${mediaIndex + 1} 项上传连接波动，正在重试（${attempt + 1}/${maxAttempts}）…`,
+              mediaIndex + 1
+            );
+          }
+        });
         mediaItems.push({ url: uploaded.url || source, type: uploaded.mediaType || media.type || "video", posterUrl });
       } else if (source.startsWith("data:")) {
         const uploaded = await apiPost("/api/upload/media", marketAuthPayload({ media: source }));
@@ -6085,7 +6144,7 @@ async function submitMarketListing(event) {
       }
     }
     const photoUrl = mediaItems[0]?.url || "";
-    setPublishingLabel(editingListingId ? "正在保存商品…" : "正在发布商品…");
+    setPublishingLabel(editingListingId ? "正在保存商品信息…" : "正在发布商品信息…", localMedia.length);
     const result = await apiPost(editingListingId ? "/api/market/update" : "/api/market/create", marketAuthPayload({
       ...payload,
       listingId: editingListingId,
@@ -6108,13 +6167,15 @@ async function submitMarketListing(event) {
     marketPublishFingerprint = "";
     marketPublishSubmissionId = "";
     marketLastLoadedAt = Date.now();
+    clearMarketPublishProgress();
     setState({
-      page: editingListingId ? "marketMy" : "market",
+      page: "market",
       marketListings: normalizeMarketListings(result.listings || []),
       myMarketListings: normalizeMarketListings(result.myListings || [])
     }, { skipCloud: true });
     toast(editingListingId ? "商品已保存并刷新" : "商品已发布，7 天未刷新将自动下架");
   } catch (error) {
+    clearMarketPublishProgress();
     if (error.status === 405 || error.message === "方法不支持") {
       toast("服务器尚未更新，暂时无法发布九宫格商品");
       return;
@@ -8222,31 +8283,54 @@ async function apiPost(path, payload) {
   return data;
 }
 
-async function apiUploadMediaFile(file, duration = 0) {
+function isRetryableMediaUploadError(error) {
+  const status = Number(error?.status || 0);
+  if ([408, 425, 429, 500, 502, 503, 504].includes(status)) return true;
+  const message = String(error?.message || "");
+  return error?.name === "TypeError" || /load failed|failed to fetch|network|network request failed|timeout|timed out|abort/i.test(message);
+}
+
+function waitForMediaUploadRetry(delayMs) {
+  return new Promise(resolve => window.setTimeout(resolve, delayMs));
+}
+
+async function apiUploadMediaFile(file, duration = 0, options = {}) {
   const base = window.TURTLE_API_BASE_URL || "";
   const mediaKind = localMediaFileKind(file);
   const contentType = localMediaUploadMimeType(file, mediaKind);
-  const response = await fetch(`${base}/api/upload/media`, {
-    method: "POST",
-    headers: {
-      "Content-Type": contentType,
-      "X-Auth-Phone": state.loggedInPhone,
-      "X-Auth-Token": currentCloudToken(),
-      "X-Media-Duration": String(Math.max(0, Number(duration || 0)))
-    },
-    body: file
-  });
-  const data = await response.json().catch(() => ({}));
-  if (response.status === 401) {
-    forgetCloudToken(state.loggedInPhone);
-    state.cloudToken = "";
+  const maxAttempts = mediaKind === "video" ? 3 : 2;
+  let lastError;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(`${base}/api/upload/media`, {
+        method: "POST",
+        headers: {
+          "Content-Type": contentType,
+          "X-Auth-Phone": state.loggedInPhone,
+          "X-Auth-Token": currentCloudToken(),
+          "X-Media-Duration": String(Math.max(0, Number(duration || 0)))
+        },
+        body: file
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        forgetCloudToken(state.loggedInPhone);
+        state.cloudToken = "";
+      }
+      if (!response.ok || data.ok === false) {
+        const error = new Error(data.message || "视频上传失败");
+        error.status = response.status;
+        throw error;
+      }
+      return data;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableMediaUploadError(error) || attempt >= maxAttempts - 1) break;
+      options.onRetry?.({ attempt: attempt + 1, maxAttempts, error });
+      await waitForMediaUploadRetry(800 * (attempt + 1));
+    }
   }
-  if (!response.ok || data.ok === false) {
-    const error = new Error(data.message || "视频上传失败");
-    error.status = response.status;
-    throw error;
-  }
-  return data;
+  throw lastError || new Error("视频上传失败");
 }
 
 function localMediaFileKind(file) {

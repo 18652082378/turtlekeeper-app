@@ -6717,6 +6717,73 @@ html[data-theme-color="dark"] .ledger-row .ledger-inline-type.loss {
   z-index: 20;
 }
 
+/* The upload continues in the background after leaving the publish form. */
+.market-publish-progress {
+  position: fixed;
+  top: calc(var(--fixed-topbar-height, 78px) + 8px);
+  left: max(12px, calc(50% - 203px));
+  z-index: 5990;
+  width: min(244px, calc(100vw - 28px));
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  color: #263c34;
+  background: rgba(255, 255, 255, .97);
+  border: 1px solid rgba(47, 167, 127, .24);
+  border-radius: 13px;
+  box-shadow: 0 8px 22px rgba(30, 62, 50, .15);
+  pointer-events: none;
+  transform: translateZ(0);
+}
+
+.market-publish-progress-spinner {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border: 2px solid rgba(47, 167, 127, .24);
+  border-top-color: #2fa77f;
+  border-radius: 50%;
+  animation: market-publish-progress-spin .78s linear infinite;
+}
+
+.market-publish-progress-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.market-publish-progress-copy strong,
+.market-publish-progress-copy span,
+.market-publish-progress > b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-publish-progress-copy strong {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.market-publish-progress-copy span {
+  color: #6f7c76;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.market-publish-progress > b {
+  margin-left: auto;
+  color: #247d5f;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes market-publish-progress-spin {
+  to { transform: rotate(360deg); }
+}
+
 .market-search-wrap {
   height: 44px;
   margin: 0;
@@ -9201,6 +9268,13 @@ html[data-theme-color="dark"] .market-seller-card strong {
   color: #576b95;
   background: transparent;
   font-size: 11px;
+}
+
+/* The author name is also a profile button. Keep it at the same readable
+ * size as the post copy instead of inheriting the compact action-button size. */
+.community-moment-author > .community-profile-name-button {
+  flex: 1 1 auto;
+  font-size: 15px;
 }
 
 .community-moment .community-post-copy {
