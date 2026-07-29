@@ -38,6 +38,12 @@ const SMS_STATE_FILE = path.resolve(DATA_DIR, "sms-state.json");
 const UPLOAD_DIR = path.resolve(__dirname, "uploads");
 const BACKUP_DIR = path.resolve(__dirname, "backups");
 const BACKUP_RETENTION_DAYS = Math.max(7, Math.floor(Number(process.env.BACKUP_RETENTION_DAYS || 30)));
+// Small, per-account recovery snapshots are separate from the daily full
+// backup. They are written only before a record-count reduction, so an
+// accidental client-side wipe can be restored without rolling back anyone
+// else's account.
+const ACCOUNT_SNAPSHOT_DIR = path.resolve(BACKUP_DIR, "account-snapshots");
+const ACCOUNT_SNAPSHOT_LIMIT = Math.min(200, Math.max(20, Math.floor(Number(process.env.ACCOUNT_SNAPSHOT_LIMIT || 100))));
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
 const REVIEW_ADMIN_PHONE = process.env.ADMIN_PHONE || "18652082378";
 const POLICY_VERSION = "2026-07-17";
@@ -246,6 +252,51 @@ function normalizeAccountData(data = {}) {
   };
 }
 
+function accountDataHasContent(data = {}) {
+  const account = normalizeAccountData(data);
+  return [
+    account.turtles,
+    account.keptSpecies,
+    account.memos,
+    account.ledgerRecords,
+    account.breedingRecords,
+    account.satisfactionReviews,
+    account.feedbackItems,
+    account.marketFavoriteIds,
+    account.marketHistoryIds,
+    account.turtlePools,
+    account.activityLogs
+  ].some(items => Array.isArray(items) && items.length > 0);
+}
+
+function accountRecordCounts(data = {}) {
+  const account = normalizeAccountData(data);
+  const fields = ["turtles", "keptSpecies", "memos", "ledgerRecords", "breedingRecords", "turtlePools"];
+  return Object.fromEntries(fields.map(field => [field, Array.isArray(account[field]) ? account[field].length : 0]));
+}
+
+function accountDataWasReduced(before = {}, after = {}) {
+  const previous = accountRecordCounts(before);
+  const next = accountRecordCounts(after);
+  return Object.keys(previous).some(field => next[field] < previous[field]);
+}
+
+function isSuspiciousAccountDataLoss(before = {}, after = {}) {
+  const previous = accountRecordCounts(before);
+  const next = accountRecordCounts(after);
+  const beforeTotal = Object.values(previous).reduce((total, count) => total + count, 0);
+  const afterTotal = Object.values(next).reduce((total, count) => total + count, 0);
+  const emptiedCollections = Object.keys(previous)
+    .filter(field => previous[field] > 0 && next[field] === 0).length;
+
+  // A normal edit/deletion may reduce one list by a little. A client that
+  // failed to hydrate, however, looks like a near-total loss across the
+  // account. Refuse that write rather than risking silent data loss.
+  return beforeTotal >= 3
+    && afterTotal <= Math.max(1, Math.floor(beforeTotal * 0.2))
+    && emptiedCollections >= 1;
+}
+
 function emptyDatabase() {
   return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [], reports: [], careReminderDeliveries: {} };
 }
@@ -280,6 +331,44 @@ function writeDatabase(db) {
   fs.renameSync(tempFile, DATA_FILE);
 }
 
+function accountSnapshotFolder(phone) {
+  // Do not expose phone numbers in server backup paths.
+  return path.resolve(ACCOUNT_SNAPSHOT_DIR, crypto.createHash("sha256").update(String(phone)).digest("hex").slice(0, 32));
+}
+
+function pruneAccountSnapshots(folder) {
+  if (!fs.existsSync(folder)) return;
+  const files = fs.readdirSync(folder, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith(".json"))
+    .map(entry => ({ path: path.resolve(folder, entry.name), mtimeMs: fs.statSync(path.resolve(folder, entry.name)).mtimeMs }))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  files.slice(ACCOUNT_SNAPSHOT_LIMIT).forEach(file => fs.rmSync(file.path, { force: true }));
+}
+
+function createAccountRecoverySnapshot(user) {
+  if (!user?.phone || !accountDataHasContent(user.data || {})) return "";
+  const folder = accountSnapshotFolder(user.phone);
+  fs.mkdirSync(folder, { recursive: true });
+  const now = new Date();
+  const file = path.resolve(folder, `${backupTimeKey(now)}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.json`);
+  const snapshot = {
+    createdAt: now.toISOString(),
+    reason: "before-record-reduction",
+    phoneHash: crypto.createHash("sha256").update(String(user.phone)).digest("hex"),
+    account: {
+      accountName: user.accountName || "",
+      accountAvatar: user.accountAvatar || "",
+      data: normalizeAccountData(user.data || {}),
+      updatedAt: user.updatedAt || ""
+    }
+  };
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(snapshot, null, 2), "utf8");
+  fs.renameSync(temporary, file);
+  pruneAccountSnapshots(folder);
+  return file;
+}
+
 function backupDateKey(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -296,6 +385,7 @@ function pruneServerBackups() {
   const expiresAt = Date.now() - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   fs.readdirSync(BACKUP_DIR, { withFileTypes: true }).forEach(entry => {
     if (!entry.isDirectory()) return;
+    if (entry.name === path.basename(ACCOUNT_SNAPSHOT_DIR)) return;
     const target = path.resolve(BACKUP_DIR, entry.name);
     const stat = fs.statSync(target);
     if (stat.mtimeMs < expiresAt) fs.rmSync(target, { recursive: true, force: true });
@@ -978,9 +1068,36 @@ async function handleSaveAccount(req, res) {
   const db = readDatabase();
   const user = authenticate(db, phone, token);
   if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
+  const incomingData = normalizeAccountData(body.data || {});
+  const existingData = normalizeAccountData(user.data || {});
+  // Never allow a cold-start client shell (all empty arrays) to erase an
+  // account that already has real data. This is deliberately server-side so
+  // older app builds are protected too.
+  if (accountDataHasContent(existingData) && !accountDataHasContent(incomingData)) {
+    return sendJson(res, 409, {
+      ok: false,
+      message: "检测到空数据写入请求，已保护云端数据；请重新打开应用后再试"
+    });
+  }
+  if (isSuspiciousAccountDataLoss(existingData, incomingData)) {
+    return sendJson(res, 409, {
+      ok: false,
+      message: "检测到异常的大幅数据减少，已停止保存以保护档案和账本；请重新打开应用后再试"
+    });
+  }
+  if (accountDataWasReduced(existingData, incomingData)) {
+    try {
+      createAccountRecoverySnapshot(user);
+    } catch (error) {
+      // A backup failure must never turn into a destructive write. Refuse the
+      // save so the existing server data remains the source of truth.
+      console.error("账户恢复快照创建失败：", error.message);
+      return sendJson(res, 503, { ok: false, message: "数据保护备份暂不可用，未保存本次修改，请稍后重试" });
+    }
+  }
   user.accountName = String(body.accountName || "").trim() || user.accountName || maskPhone(phone);
   user.accountAvatar = String(body.accountAvatar || "");
-  user.data = normalizeAccountData(body.data || {});
+  user.data = incomingData;
   user.updatedAt = new Date().toISOString();
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, user: publicUser(user, token) });

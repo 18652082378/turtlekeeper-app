@@ -7127,6 +7127,33 @@ html[data-theme-color="dark"] .ledger-row .ledger-inline-type.loss {
   gap: 10px 8px;
 }
 
+.market-grid.is-initial-loading {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.market-grid.is-initial-loading .market-empty {
+  display: none;
+}
+
+.market-feed-initial-loading {
+  min-height: 250px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.market-feed-initial-loading > i {
+  width: 22px;
+  height: 22px;
+  border: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: market-publish-progress-spin .78s linear infinite;
+}
+
 .market-card {
   min-width: 0;
   padding: 0;

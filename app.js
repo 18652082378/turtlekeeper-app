@@ -319,6 +319,10 @@ let cloudSyncTimer = null;
 let cloudSyncInFlight = false;
 let cloudSyncQueued = false;
 let cloudHydrationStarted = false;
+// A cloud-backed account initially boots from a deliberately lightweight
+// local shell. Until /api/account/load has supplied the real account data,
+// that shell must never be allowed to overwrite the cloud with empty arrays.
+let cloudHydrationComplete = false;
 let cloudImageMigrationInFlight = false;
 let cloudImageMigrationTimer = null;
 let cloudImageMigrationQueued = false;
@@ -340,6 +344,11 @@ let communityUserProfileLoadedKey = "";
 let messageUnreadLoading = false;
 let messageUnreadLastLoadedAt = 0;
 let restoredSnapshotRenderHoldUntil = 0;
+// A messages page handed back by the interactive back gesture already owns
+// the exact DOM the user was looking at before opening a chat.  Background
+// polling must be allowed to refresh state, but must not replace that DOM
+// with a newly rendered list while the hand-off is visible.
+let preservedMessageSnapshotActive = false;
 let contentReportsLoading = false;
 let contentReportsLastLoadedAt = 0;
 let marketNetworkType = "unknown";
@@ -664,6 +673,9 @@ function saveState(options = {}) {
 function setState(patch, options = {}) {
   const pageChanged = Object.prototype.hasOwnProperty.call(patch, "page") && patch.page && patch.page !== state.page;
   if (pageChanged) {
+    // A preserved list is only valid for its current messages page. Any
+    // normal navigation will build the destination page from current state.
+    preservedMessageSnapshotActive = false;
     // A completed interactive edge-back keeps the frozen previous page visible
     // for one frame while its real DOM is rendered underneath it. Clearing it
     // earlier creates the familiar white flash / jump on the destination page.
@@ -709,6 +721,13 @@ function setState(patch, options = {}) {
   }
   state = { ...state, ...patch };
   saveState(options);
+  if (!pageChanged && !options.forceRender && state.page === "messages" && preservedMessageSnapshotActive) {
+    // Keep the previously visible message list completely still on return
+    // from chat. The state (including unread counts) is still current, and
+    // the persistent bottom tab can update without rebuilding the list.
+    syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
+    return;
+  }
   // The visible page may be the exact DOM that was just handed back from an
   // edge-swipe preview. Let that hand-off settle before a late unread/polling
   // response replaces it with a freshly rendered copy.
@@ -1735,7 +1754,6 @@ function navigateBottomTab(targetPage) {
   if (targetPage === "market") {
     marketLastLoadedAt = 0;
     Object.assign(navigationState, {
-      marketListings: [],
       marketFeedInitialized: false,
       marketFeedNextOffset: 0,
       marketFeedHasMore: true,
@@ -2166,6 +2184,7 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
   const liveDom = takeLiveSnapshotDom(snapshot);
   if (!liveDom.hasChildNodes()) return false;
   state = { ...state, ...nextState };
+  preservedMessageSnapshotActive = snapshot.page === "messages";
   pendingPageEnterMotion = false;
   pendingCommunityChatEnterMotion = false;
   pendingPageScrollReset = false;
@@ -2201,6 +2220,7 @@ function navigateBack(options = {}) {
     // This is intentionally not render(): recreating a long list (especially
     // messages) at this point is what caused the one-frame bounce on return.
     state = { ...state, ...nextState };
+    preservedMessageSnapshotActive = snapshot.page === "messages";
     pendingPageEnterMotion = false;
     pendingCommunityChatEnterMotion = false;
     pendingPageScrollReset = false;
@@ -2216,6 +2236,7 @@ function navigateBack(options = {}) {
     bindEvents();
     setupMarketInfiniteScroll();
     window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
+    restoredSnapshotRenderHoldUntil = Date.now() + 520;
     window.requestAnimationFrame(() => {
       // The snapshot has now been mounted at the same scroll position as the
       // static preview. Reveal it in one compositor update, then remove the
@@ -2481,8 +2502,11 @@ function renderMarketTitleTemplates(species, autoFill = false) {
 }
 
 function normalizeMarketListings(listings = []) {
-  return listings.map(item => ({
+  return listings.map(item => {
+    const status = ["active", "inactive", "sold"].includes(item?.status) ? item.status : "active";
+    return {
     ...item,
+    status,
     price: Number(item.price || 0),
     viewCount: Math.max(0, Number(item.viewCount || 0)),
     wantCount: Math.max(0, Number(item.wantCount || 0)),
@@ -2492,7 +2516,8 @@ function normalizeMarketListings(listings = []) {
       url: media.url ? apiAssetUrl(media.url) : "",
       posterUrl: media.posterUrl || media.poster ? apiAssetUrl(media.posterUrl || media.poster) : ""
     })) : []
-  }));
+    };
+  });
 }
 
 function isMarketFavorite(listingId) {
@@ -2642,7 +2667,11 @@ function marketSearchResultListings() {
   const delivery = String(state.marketDelivery || "").trim();
   const freshAfter = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const listings = (state.marketListings || []).filter(item => {
-    if (item.status === "sold") return false;
+    // The public market only contains listings currently for sale. Saved
+    // history/chat references can coexist in local state, so treat the
+    // client-side filter as the last line of defence against sold or offline
+    // items flashing into the public grid before a remote refresh completes.
+    if (item.status !== "active") return false;
     const matchesStage = stage === "all" || item.stage === stage;
     const haystack = `${item.title || ""} ${item.speciesName || ""} ${item.city || ""}`.toLowerCase();
     const matchesKeyword = !keyword || haystack.includes(keyword);
@@ -2727,6 +2756,7 @@ function pageMarket() {
   const listings = marketSearchResultListings();
   const regions = [...new Set((state.marketListings || []).map(item => String(item.city || "").trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
   const showAssistSearch = Boolean(keyword || state.marketPriceOrder || state.marketFreshOnly || state.marketRegion || state.marketDelivery);
+  const marketInitialLoading = Boolean(CONFIGURED_SMS_BACKEND && !state.marketFeedInitialized && !listings.length);
   return `
     ${marketPublishProgressMarkup()}
     ${topbar("龟集市", false, `<button class="market-top-add" type="button" data-page="marketAdd" aria-label="发布出售">＋</button>`, `<button class="market-top-service" type="button" data-market-top-service aria-label="联系平台客服"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.2v-1.1a7.5 7.5 0 0 1 15 0v1.1"></path><path d="M4.5 12.6H3.8a1.8 1.8 0 0 0-1.8 1.8v2.1a1.8 1.8 0 0 0 1.8 1.8h1.7v-5.7ZM19.5 12.6h.7a1.8 1.8 0 0 1 1.8 1.8v2.1a1.8 1.8 0 0 1-1.8 1.8h-1.7v-5.7ZM19.5 18.1c0 1.3-1.2 2.4-2.7 2.4h-1.5"></path><path d="M13.2 20.5h2.4"></path></svg></button>`)}
@@ -2747,7 +2777,8 @@ function pageMarket() {
       <section class="market-stage-tabs">
         ${[["all", "全部"], ["hatchling", "苗子"], ["juvenile", "亚成"], ["adult", "种龟"]].map(([value, label]) => `<button class="${stage === value ? "active" : ""}" type="button" data-market-stage="${value}">${label}</button>`).join("")}
       </section>
-      <section class="market-grid">
+      <section class="market-grid ${marketInitialLoading ? "is-initial-loading" : ""}">
+        ${marketInitialLoading ? `<div class="market-feed-initial-loading" role="status" aria-live="polite"><i aria-hidden="true"></i><span>正在加载商品…</span></div>` : ""}
         ${listings.map(marketListingCard).join("") || `<div class="market-empty"><span>龟</span><strong>${keyword || stage !== "all" ? "没有找到合适的商品" : "龟集市还没有商品"}</strong><p>从自己的乌龟档案一键发布，尺寸和状态会自动带入。</p><button type="button" data-page="marketAdd">发布第一只</button></div>`}
       </section>
       ${listings.length ? `<div class="market-feed-status" data-market-load-sentinel>${state.marketFeedLoadingMore ? "正在加载更多商品…" : state.marketFeedHasMore ? "继续上滑，加载更多" : "已经到底了"}</div>` : ""}
@@ -4687,7 +4718,6 @@ function bindEvents() {
     if (targetPage === "market" && state.page !== "market") {
       marketLastLoadedAt = 0;
       Object.assign(navigationState, {
-        marketListings: [],
         marketFeedInitialized: false,
         marketFeedNextOffset: 0,
         marketFeedHasMore: true,
@@ -7401,15 +7431,23 @@ async function openCommunityChat(userId) {
     communityChatOpening = false;
     if (chatStillVisible) $app.classList.remove("community-chat-enter-motion");
     pendingCommunityChatLatestScroll = chatStillVisible;
-    setState({
-      page: "communityChat",
+    const chatData = {
       selectedCommunityFriendId: userId,
       selectedCommunityFriend: friend,
       communityChatMessages: messages,
       communityChatListing: normalizeCommunityChatListing(result.marketListing),
       communityChatToolsOpen: false,
       communityFriends: communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 })
-    }, { skipCloud: true, pageMotion: "chat" });
+    };
+    if (chatStillVisible) {
+      setState({ page: "communityChat", ...chatData }, { skipCloud: true, pageMotion: "chat" });
+    } else {
+      // The user has already gone back to the messages page. Keep that exact
+      // page mounted; a late chat response must never reopen the conversation
+      // or force the message list through a full render.
+      state = { ...state, ...chatData };
+      saveState({ skipCloud: true });
+    }
     refreshMessageUnread(true);
     refreshCommunity(true);
   } catch (error) {
@@ -8105,6 +8143,7 @@ function logoutAccount() {
   const pushAccount = state.loggedInPhone;
   const pushToken = currentCloudToken();
   if (!confirm("确定要退出当前账号吗？")) return;
+  cloudHydrationComplete = false;
   void unregisterNativePushNotifications(pushAccount, pushToken);
   forgetCloudToken(state.loggedInPhone);
   const registeredUsers = syncRegisteredUsers(state);
@@ -8379,6 +8418,9 @@ function cloudUserToLocal(user, fallbackToken = "") {
 
 function applyCloudUser(user, activityText = "", options = {}) {
   const localUser = cloudUserToLocal(user, currentCloudToken());
+  // From this point the account data came from an authenticated server
+  // response, so subsequent edits may safely use the normal save pipeline.
+  cloudHydrationComplete = true;
   // Loading cloud data is a data refresh, not navigation. In particular, a
   // cold launch starts on the dashboard and must not jump to the Space tab
   // when the asynchronous account request comes back.
@@ -8423,6 +8465,12 @@ function applyCloudUser(user, activityText = "", options = {}) {
 
 function queueCloudSave() {
   if (!CONFIGURED_SMS_BACKEND || !state.loggedInPhone || !currentCloudToken()) return;
+  if (!cloudHydrationComplete) {
+    // Preserve genuine offline edits, but never turn the empty startup shell
+    // into an account/save request before the authoritative cloud data lands.
+    if (accountHasContent(state)) persistPendingCloudData();
+    return;
+  }
   if (accountHasEmbeddedImages(state)) {
     persistPendingCloudData();
     scheduleCloudImageMigration();
@@ -8434,6 +8482,10 @@ function queueCloudSave() {
 
 async function pushCloudDataNow(throwOnError = false) {
   if (!CONFIGURED_SMS_BACKEND || !state.loggedInPhone || !currentCloudToken()) return;
+  if (!cloudHydrationComplete) {
+    if (accountHasContent(state)) persistPendingCloudData();
+    return;
+  }
   if (cloudSyncInFlight) {
     cloudSyncQueued = true;
     return;
@@ -8469,9 +8521,14 @@ async function refreshCloudAccountFromServer() {
     });
     // Keep the route that is already on screen. During boot this is "home";
     // during a normal refresh it is the page the person is currently using.
-    if (result.user) applyCloudUser(result.user, "", { skipCloud: true, page: state.page });
+    if (result.user) {
+      applyCloudUser(result.user, "", { skipCloud: true, page: state.page });
+      return true;
+    }
+    return false;
   } catch (error) {
     console.warn(error.message || "云端数据读取失败");
+    return false;
   }
 }
 
@@ -8479,13 +8536,10 @@ async function startCloudSessionHydration() {
   if (cloudHydrationStarted || !hasCloudSession()) return;
   cloudHydrationStarted = true;
   try {
-    if (accountHasContent(state)) {
-      const hadEmbeddedImages = accountHasEmbeddedImages(state);
-      const migratedImages = await migrateEmbeddedImagesToCloud({ silent: true });
-      if (hadEmbeddedImages && !migratedImages) return;
-      await pushCloudDataNow(true);
-    }
-    await refreshCloudAccountFromServer();
+    // Loading always happens before saving. In particular, never upload the
+    // empty account shell created during a cold start over real cloud data.
+    const loaded = await refreshCloudAccountFromServer();
+    if (!loaded) return;
     await migrateEmbeddedImagesToCloud({ silent: true });
   } catch (error) {
     console.warn(error.message || "云端数据初始化失败");
