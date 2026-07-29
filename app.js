@@ -13,7 +13,7 @@ const APP_BUILD = Math.max(0, Number.parseInt(String(window.TURTLE_APP_BUILD || 
 const APP_STORE_URL = String(window.TURTLE_APP_STORE_URL || "https://apps.apple.com/app/id6783481335");
 let forceUpdateState = { required: false, checking: false, minimumBuild: 0, latestBuild: 0, message: "", appStoreUrl: "" };
 // 龟集市的购买咨询统一由平台客服承接；修改此处即可同步更新商品页和“关于”页。
-const PLATFORM_SERVICE_WECHAT = "Czjxcw";
+const PLATFORM_SERVICE_WECHAT = "keyousz001";
 const defaultPhoto = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
   <rect width="240" height="240" rx="28" fill="#edf7f1"/>
@@ -2114,8 +2114,7 @@ function pageCommunityChat() {
       : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`);
   const chatHeader = `
     <div class="topbar community-chat-topbar">
-      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button></div>
-      <button class="community-chat-service" type="button" data-open-platform-service-dialog aria-label="联系平台客服"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.2v-1.1a7.5 7.5 0 0 1 15 0v1.1"></path><path d="M4.5 12.6H3.8a1.8 1.8 0 0 0-1.8 1.8v2.1a1.8 1.8 0 0 0 1.8 1.8h1.7v-5.7ZM19.5 12.6h.7a1.8 1.8 0 0 1 1.8 1.8v2.1a1.8 1.8 0 0 1-1.8 1.8h-1.7v-5.7ZM19.5 18.1c0 1.3-1.2 2.4-2.7 2.4h-1.5"></path><path d="M13.2 20.5h2.4"></path></svg><span>客服</span></button>
+      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button><button class="community-chat-service" type="button" data-open-platform-service-dialog aria-label="联系平台客服"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.2v-1.1a7.5 7.5 0 0 1 15 0v1.1"></path><path d="M4.5 12.6H3.8a1.8 1.8 0 0 0-1.8 1.8v2.1a1.8 1.8 0 0 0 1.8 1.8h1.7v-5.7ZM19.5 12.6h.7a1.8 1.8 0 0 1 1.8 1.8v2.1a1.8 1.8 0 0 1-1.8 1.8h-1.7v-5.7ZM19.5 18.1c0 1.3-1.2 2.4-2.7 2.4h-1.5"></path><path d="M13.2 20.5h2.4"></path></svg><span>客服</span></button></div>
     </div>
   `;
   return `
