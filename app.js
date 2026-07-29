@@ -9890,6 +9890,7 @@ function setupEdgeBackAndConversationSwipe() {
   let gesture = null;
   let gestureAnimationFrame = 0;
   let edgeSettleTimer = 0;
+  let edgeSettleCleanup = null;
   let suppressRowClickUntil = 0;
   const rootPages = new Set(["home", "ledger", "market", "messages", "mine"]);
   const edgePinnedProperties = ["position", "top", "left", "right", "bottom", "width", "transform"];
@@ -9931,6 +9932,8 @@ function setupEdgeBackAndConversationSwipe() {
   const clearPendingEdgeBack = () => {
     if (edgeSettleTimer) window.clearTimeout(edgeSettleTimer);
     edgeSettleTimer = 0;
+    edgeSettleCleanup?.();
+    edgeSettleCleanup = null;
     if (gestureAnimationFrame) window.cancelAnimationFrame(gestureAnimationFrame);
     gestureAnimationFrame = 0;
     $app.style.transition = "";
@@ -10082,8 +10085,20 @@ function setupEdgeBackAndConversationSwipe() {
         active.preview.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
         active.preview.style.transform = shouldComplete ? "translate3d(0, 0, 0)" : "translate3d(-22%, 0, 0)";
       }
-      edgeSettleTimer = window.setTimeout(() => {
+      // Do not guess when the transition has finished.  The old 190 ms timer
+      // ran before the 200 ms transform animation had reached its final
+      // frame, so the real Messages DOM replaced the preview for one visible
+      // frame and looked exactly like a page refresh.  Wait for the actual
+      // transform transition, with a short fallback only for browsers that
+      // fail to emit transitionend.
+      let edgeSettled = false;
+      const finishEdgeSettle = () => {
+        if (edgeSettled) return;
+        edgeSettled = true;
+        if (edgeSettleTimer) window.clearTimeout(edgeSettleTimer);
         edgeSettleTimer = 0;
+        edgeSettleCleanup?.();
+        edgeSettleCleanup = null;
         if (shouldComplete && !rootPages.has(state.page)) {
           // navigateBack owns the offscreen-to-previous-page hand-off.
           unpinEdgeFixedLayers(active);
@@ -10094,7 +10109,14 @@ function setupEdgeBackAndConversationSwipe() {
           unpinEdgeFixedLayers(active);
           clearEdgeBackPreview();
         }
-      }, shouldComplete ? 190 : 210);
+      };
+      const handleEdgeTransitionEnd = transitionEvent => {
+        if (transitionEvent.target !== $app || transitionEvent.propertyName !== "transform") return;
+        finishEdgeSettle();
+      };
+      edgeSettleCleanup = () => $app.removeEventListener("transitionend", handleEdgeTransitionEnd);
+      $app.addEventListener("transitionend", handleEdgeTransitionEnd);
+      edgeSettleTimer = window.setTimeout(finishEdgeSettle, 280);
     } else if (!active.row && document.querySelector(".message-friend-swipe.is-open") && Math.abs(dx) > Math.abs(dy)) {
       document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => row.classList.remove("is-open"));
       scheduleDeferredMessageListRefresh();
