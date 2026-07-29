@@ -383,6 +383,7 @@ let messageListRefreshFlushTimer = 0;
 let nativePushListenersAttached = false;
 let nativePushSetupInFlight = false;
 let nativePushDeviceToken = "";
+let nativeMediaPickerOpening = false;
 
 if (CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE) {
   state = { ...state, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" };
@@ -2148,7 +2149,7 @@ function backNavigationState() {
 function takeLiveSnapshotDom(snapshot) {
   const dom = document.createDocumentFragment();
   const preview = document.querySelector(".edge-back-preview");
-  if (preview?.__edgeBackSnapshot === snapshot) {
+  if (preview?.__edgeBackSnapshot === snapshot && !preview.__edgeBackUsesClone) {
     // Preserve the actual tab-bar node being shown in the preview. Recreating
     // it during the hand-off forces a small iOS layout repaint.
     const previewBottomNav = preview.__edgeBackBottomNav || null;
@@ -2157,6 +2158,15 @@ function takeLiveSnapshotDom(snapshot) {
     dom.__edgeBackBottomNav = previewBottomNav;
     preview.__edgeBackSnapshot = null;
     preview.__edgeBackBottomNav = null;
+  }
+  if (preview?.__edgeBackSnapshot === snapshot && preview.__edgeBackUsesClone) {
+    // The visible underlay is a clone. Keep it on screen while the real,
+    // previously detached page is mounted back into #app offscreen. Moving a
+    // visible node between parents was what made iOS repaint Messages like a
+    // full refresh at the end of a chat back-swipe.
+    preview.__edgeBackSnapshot = null;
+    preview.__edgeBackBottomNav = null;
+    preview.__edgeBackUsesClone = false;
   }
   if (snapshot?.liveDom) {
     while (snapshot.liveDom.firstChild) dom.appendChild(snapshot.liveDom.firstChild);
@@ -2167,6 +2177,14 @@ function takeLiveSnapshotDom(snapshot) {
 function restoreLiveSnapshotToStash(preview) {
   const snapshot = preview?.__edgeBackSnapshot;
   if (!snapshot?.liveDom) return;
+  if (preview.__edgeBackUsesClone) {
+    // Nothing visible belongs to the saved fragment in clone mode, so it can
+    // simply be removed on a cancelled gesture without touching the source.
+    preview.__edgeBackSnapshot = null;
+    preview.__edgeBackBottomNav = null;
+    preview.__edgeBackUsesClone = false;
+    return;
+  }
   preview.__edgeBackBottomNav?.remove();
   while (preview.firstChild) snapshot.liveDom.appendChild(preview.firstChild);
   preview.__edgeBackSnapshot = null;
@@ -4819,8 +4837,14 @@ function bindEvents() {
       openPreview();
     });
   });
-  document.querySelectorAll("[data-preview-market-image]").forEach(img => {
-    const openPreview = () => openImagePreview(img.currentSrc || img.src, img.alt || "商品实拍图");
+  const marketPreviewImages = Array.from(document.querySelectorAll("[data-preview-market-image]"))
+    .map(img => ({ src: img.currentSrc || img.src, alt: img.alt || "商品实拍图" }))
+    .filter(item => item.src);
+  document.querySelectorAll("[data-preview-market-image]").forEach((img, index) => {
+    const openPreview = () => openImagePreview(img.currentSrc || img.src, img.alt || "商品实拍图", {
+      gallery: marketPreviewImages,
+      index
+    });
     img.addEventListener("click", openPreview);
     img.addEventListener("keydown", event => {
       if (event.key !== "Enter" && event.key !== " ") return;
@@ -5942,6 +5966,87 @@ function nativeGeolocationPlugin() {
   if (!capacitor || typeof capacitor.isNativePlatform !== "function" || !capacitor.isNativePlatform()) return null;
   const plugin = capacitor.Plugins?.Geolocation || capacitor.registerPlugin?.("Geolocation");
   return plugin && typeof plugin.getCurrentPosition === "function" ? plugin : null;
+}
+
+// iOS's WebView file input uses the modern system Photos sheet.  That sheet
+// changes depending on the OS and is not styled by the app.  The native picker
+// below is our own full-screen, dark media grid, so every non-camera upload
+// entry has one consistent experience (archive, ledger, breeding, avatar,
+// market, community and chat).
+function nativeMediaPickerPlugin() {
+  const capacitor = window.Capacitor;
+  if (!capacitor || typeof capacitor.isNativePlatform !== "function" || !capacitor.isNativePlatform()) return null;
+  if (typeof capacitor.getPlatform === "function" && capacitor.getPlatform() !== "ios") return null;
+  const plugin = capacitor.Plugins?.TurtleMediaPicker || capacitor.registerPlugin?.("TurtleMediaPicker");
+  return plugin && typeof plugin.pick === "function" ? plugin : null;
+}
+
+function nativeMediaPickerOptions(input) {
+  const accepted = String(input?.accept || "").toLowerCase();
+  const allowVideos = /video|\.mp4|\.mov|\.m4v|\.webm/.test(accepted);
+  const allowImages = /image|\.jpe?g|\.png|\.webp|\.heic/.test(accepted) || !allowVideos;
+  return {
+    allowImages,
+    allowVideos,
+    // Existing one-photo fields still use the same grid UI, but keep their
+    // one-item data rule. Market is the only multi-media upload and remains
+    // capped at nine items.
+    selectionLimit: input?.multiple ? 9 : 1,
+    maximumVideoDuration: allowVideos ? 30 : 0
+  };
+}
+
+async function nativePickedFiles(items = []) {
+  const capacitor = window.Capacitor;
+  const files = [];
+  for (const [index, item] of items.entries()) {
+    const path = String(item?.path || "");
+    if (!path) continue;
+    const source = typeof capacitor?.convertFileSrc === "function" ? capacitor.convertFileSrc(path) : path;
+    const response = await fetch(source);
+    if (!response.ok) throw new Error("读取已选媒体失败");
+    const blob = await response.blob();
+    const mimeType = String(item?.mimeType || blob.type || (item?.mediaType === "video" ? "video/mp4" : "image/jpeg"));
+    const extension = mimeType.startsWith("video/") ? "mp4" : "jpg";
+    const name = String(item?.name || `${item?.mediaType === "video" ? "video" : "photo"}-${Date.now()}-${index + 1}.${extension}`);
+    files.push(new File([blob], name, { type: mimeType, lastModified: Date.now() }));
+  }
+  return files;
+}
+
+async function openNativeMediaPickerForInput(input) {
+  const picker = nativeMediaPickerPlugin();
+  if (!picker || !input?.isConnected) return false;
+  const result = await picker.pick(nativeMediaPickerOptions(input));
+  const files = await nativePickedFiles(Array.isArray(result?.files) ? result.files : []);
+  if (!files.length || !input.isConnected) return true;
+  const transfer = new DataTransfer();
+  files.forEach(file => transfer.items.add(file));
+  try {
+    input.files = transfer.files;
+  } catch {
+    Object.defineProperty(input, "files", { configurable: true, value: transfer.files });
+  }
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  return true;
+}
+
+function setupNativeMediaPicker() {
+  if (document.body.dataset.nativeMediaPickerBound === "true") return;
+  document.body.dataset.nativeMediaPickerBound = "true";
+  document.addEventListener("click", event => {
+    const input = event.target instanceof HTMLInputElement ? event.target : null;
+    // Camera buttons deliberately remain native camera capture. Every regular
+    // image/video upload opens the consistent app-owned media grid instead.
+    if (!input || input.type !== "file" || input.hasAttribute("capture") || !nativeMediaPickerPlugin()) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (nativeMediaPickerOpening) return;
+    nativeMediaPickerOpening = true;
+    void openNativeMediaPickerForInput(input)
+      .catch(error => toast(error?.message || "打开媒体选择器失败"))
+      .finally(() => { nativeMediaPickerOpening = false; });
+  }, true);
 }
 
 function locationPermissionError(code) {
@@ -9335,11 +9440,20 @@ function toast(text) {
   setTimeout(() => el.remove(), 2200);
 }
 
-function openImagePreview(src, alt = "图片预览") {
-  document.querySelector(".image-preview-overlay")?.remove();
+function openImagePreview(src, alt = "图片预览", options = {}) {
+  const existing = document.querySelector(".image-preview-overlay");
+  if (typeof existing?.__closePreview === "function") existing.__closePreview();
+  else existing?.remove();
+
+  const gallery = (Array.isArray(options.gallery) ? options.gallery : [{ src, alt }])
+    .map(item => ({ src: String(item?.src || ""), alt: String(item?.alt || alt) }))
+    .filter(item => item.src);
+  if (!gallery.length) return;
+  let activeIndex = Math.max(0, Math.min(gallery.length - 1, Number(options.index) || 0));
+  const isGallery = gallery.length > 1;
 
   const overlay = document.createElement("div");
-  overlay.className = "image-preview-overlay";
+  overlay.className = `image-preview-overlay${isGallery ? " image-preview-gallery-overlay" : ""}`;
   overlay.setAttribute("role", "dialog");
   overlay.setAttribute("aria-modal", "true");
   overlay.setAttribute("aria-label", alt);
@@ -9350,37 +9464,131 @@ function openImagePreview(src, alt = "图片预览") {
   closeButton.setAttribute("aria-label", "关闭图片预览");
   closeButton.textContent = "×";
 
+  const stage = document.createElement("div");
+  stage.className = "image-preview-stage";
   const image = document.createElement("img");
-  image.src = src;
-  image.alt = alt;
+  stage.appendChild(image);
 
   const caption = document.createElement("span");
   caption.className = "image-preview-caption";
-  caption.textContent = alt;
+  const previous = document.createElement("button");
+  previous.className = "image-preview-gallery-arrow prev";
+  previous.type = "button";
+  previous.textContent = "‹";
+  previous.setAttribute("aria-label", "查看上一张图片");
+  const next = document.createElement("button");
+  next.className = "image-preview-gallery-arrow next";
+  next.type = "button";
+  next.textContent = "›";
+  next.setAttribute("aria-label", "查看下一张图片");
 
-  overlay.append(closeButton, image, caption);
+  overlay.append(closeButton, stage, caption);
+  if (isGallery) overlay.append(previous, next);
   document.body.appendChild(overlay);
   document.body.classList.add("image-preview-open");
 
+  let switchTimer = 0;
+  let pointerId = null;
+  let startX = 0;
+  let deltaX = 0;
+  let dragging = false;
+  const update = (direction = 0, animate = false) => {
+    const item = gallery[activeIndex];
+    image.src = item.src;
+    image.alt = item.alt;
+    caption.textContent = isGallery ? `${item.alt}  ${activeIndex + 1}/${gallery.length}` : item.alt;
+    previous.disabled = activeIndex === 0;
+    next.disabled = activeIndex === gallery.length - 1;
+    if (!animate) return;
+    image.classList.remove("is-entering-from-left", "is-entering-from-right");
+    image.classList.add(direction > 0 ? "is-entering-from-right" : "is-entering-from-left");
+    requestAnimationFrame(() => image.classList.remove("is-entering-from-left", "is-entering-from-right"));
+  };
+  const switchImage = offset => {
+    const target = Math.max(0, Math.min(gallery.length - 1, activeIndex + offset));
+    if (target === activeIndex) {
+      stage.classList.remove("is-bouncing");
+      requestAnimationFrame(() => stage.classList.add("is-bouncing"));
+      return;
+    }
+    const direction = target > activeIndex ? 1 : -1;
+    image.classList.add(direction > 0 ? "is-leaving-to-left" : "is-leaving-to-right");
+    window.clearTimeout(switchTimer);
+    switchTimer = window.setTimeout(() => {
+      if (!overlay.isConnected) return;
+      activeIndex = target;
+      image.classList.remove("is-leaving-to-left", "is-leaving-to-right");
+      update(direction, true);
+    }, 110);
+  };
+  update();
+
   const close = () => {
+    window.clearTimeout(switchTimer);
     document.removeEventListener("keydown", handleKeydown);
     document.body.classList.remove("image-preview-open");
     overlay.remove();
   };
   const handleKeydown = event => {
     if (event.key === "Escape") close();
+    if (event.key === "ArrowLeft") switchImage(-1);
+    if (event.key === "ArrowRight") switchImage(1);
   };
+
+  const restorePosition = () => {
+    stage.classList.remove("is-dragging");
+    image.style.removeProperty("transform");
+  };
+  const finishPointer = event => {
+    if (pointerId === null || (event?.pointerId !== undefined && event.pointerId !== pointerId)) return;
+    const distance = deltaX;
+    try { stage.releasePointerCapture(pointerId); } catch {}
+    pointerId = null;
+    deltaX = 0;
+    restorePosition();
+    if (!dragging) return;
+    const threshold = Math.max(44, stage.clientWidth * 0.14);
+    if (distance <= -threshold) switchImage(1);
+    else if (distance >= threshold) switchImage(-1);
+  };
+
+  if (isGallery) {
+    previous.addEventListener("click", () => switchImage(-1));
+    next.addEventListener("click", () => switchImage(1));
+    stage.addEventListener("pointerdown", event => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      pointerId = event.pointerId;
+      startX = event.clientX;
+      deltaX = 0;
+      dragging = false;
+      stage.classList.add("is-dragging");
+      stage.setPointerCapture?.(pointerId);
+    });
+    stage.addEventListener("pointermove", event => {
+      if (pointerId === null || event.pointerId !== pointerId) return;
+      deltaX = event.clientX - startX;
+      if (Math.abs(deltaX) > 4) dragging = true;
+      const resistance = (activeIndex === 0 && deltaX > 0) || (activeIndex === gallery.length - 1 && deltaX < 0) ? 0.28 : 0.72;
+      image.style.transform = `translate3d(${Math.round(deltaX * resistance)}px, 0, 0)`;
+      if (dragging) event.preventDefault();
+    }, { passive: false });
+    stage.addEventListener("pointerup", finishPointer);
+    stage.addEventListener("pointercancel", finishPointer);
+  }
 
   closeButton.addEventListener("click", close);
   overlay.addEventListener("click", event => {
     if (event.target === overlay) close();
   });
+  overlay.__closePreview = close;
   document.addEventListener("keydown", handleKeydown);
   closeButton.focus();
 }
 
 function openVideoPreview(src, alt = "视频预览", poster = "") {
-  document.querySelector(".image-preview-overlay")?.remove();
+  const existing = document.querySelector(".image-preview-overlay");
+  if (typeof existing?.__closePreview === "function") existing.__closePreview();
+  else existing?.remove();
 
   const overlay = document.createElement("div");
   overlay.className = "image-preview-overlay video-preview-overlay";
@@ -9428,6 +9636,7 @@ function openVideoPreview(src, alt = "视频预览", poster = "") {
   overlay.addEventListener("click", event => {
     if (event.target === overlay) close();
   });
+  overlay.__closePreview = close;
   document.addEventListener("keydown", handleKeydown);
   closeButton.focus();
 }
@@ -9642,11 +9851,14 @@ function showEdgeBackPreview(snapshot) {
   // the real messages page is restored.
   preview.className = "edge-back-preview phone-shell";
   if (snapshot?.liveDom?.hasChildNodes()) {
-    // Move, do not clone, the stored source page under the finger. On a
-    // completed return these exact nodes are moved back into #app, so there is
-    // no second layout or media decode at the end of the gesture.
+    // The preview is deliberately a clone. The previous implementation moved
+    // the visible Messages DOM out of this layer at the end of a back swipe;
+    // iOS then recomposited the entire screen and it looked like a refresh.
+    // Keeping the clone visible while the original DOM is restored offscreen
+    // gives a seamless one-frame hand-off instead.
     preview.__edgeBackSnapshot = snapshot;
-    preview.appendChild(snapshot.liveDom);
+    preview.__edgeBackUsesClone = true;
+    preview.appendChild(snapshot.liveDom.cloneNode(true));
     const bottomNav = bottomNavFromHtml(snapshot.bottomNavHtml);
     if (bottomNav) {
       preview.__edgeBackBottomNav = bottomNav;
@@ -9909,6 +10121,7 @@ restorePendingCloudData();
 setupMobileKeyboardGuard();
 setupPullToRefresh();
 setupEdgeBackAndConversationSwipe();
+setupNativeMediaPicker();
 setupBottomNavForegroundRecovery();
 render();
 checkRequiredAppUpdate();

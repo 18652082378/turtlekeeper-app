@@ -216,7 +216,10 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
   scrollbar-width: none;
   pointer-events: none;
   background: var(--bg);
-  box-shadow: inset -18px 0 32px rgba(0, 0, 0, .10);
+  /* The previous inset shadow made the returned page visibly brighten as the
+     preview layer was removed, which users understandably perceived as a
+     refresh. The source page now stays at its real brightness throughout. */
+  box-shadow: none;
   transform: translate3d(-22%, 0, 0);
   will-change: transform;
   contain: layout paint;

@@ -33,6 +33,7 @@ workflows:
             npx cap add ios
           fi
           npx cap sync ios
+          node scripts/configure-ios-local-plugins.js
       - name: Apply signing profiles
         script: |
           xcode-project use-profiles

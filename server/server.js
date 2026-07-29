@@ -301,33 +301,52 @@ function emptyDatabase() {
   return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [], reports: [], careReminderDeliveries: {} };
 }
 
+class DatabaseIntegrityError extends Error {
+  constructor(cause) {
+    // Do not return an empty database after an unreadable/corrupted data file:
+    // a subsequent write could otherwise overwrite every user's records.
+    super("数据库暂时无法读取；为保护现有数据，已停止本次操作，请联系平台客服处理恢复");
+    this.name = "DatabaseIntegrityError";
+    this.cause = cause;
+  }
+}
+
 function readDatabase() {
+  if (!fs.existsSync(DATA_FILE)) return emptyDatabase();
   try {
-    if (!fs.existsSync(DATA_FILE)) return emptyDatabase();
     const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-    return data && typeof data === "object"
-      ? {
-          users: data.users || {},
-          reviews: Array.isArray(data.reviews) ? data.reviews : [],
-          feedbacks: Array.isArray(data.feedbacks) ? data.feedbacks : [],
-          communityPosts: Array.isArray(data.communityPosts) ? data.communityPosts : [],
-          marketListings: Array.isArray(data.marketListings) ? data.marketListings : [],
-          friendships: Array.isArray(data.friendships) ? data.friendships : [],
-          messages: Array.isArray(data.messages) ? data.messages : [],
-          follows: Array.isArray(data.follows) ? data.follows : [],
-          reports: Array.isArray(data.reports) ? data.reports : [],
-          careReminderDeliveries: data.careReminderDeliveries && typeof data.careReminderDeliveries === "object" ? data.careReminderDeliveries : {}
-        }
-      : emptyDatabase();
-  } catch {
-    return emptyDatabase();
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("数据库根节点无效");
+    return {
+      users: data.users || {},
+      reviews: Array.isArray(data.reviews) ? data.reviews : [],
+      feedbacks: Array.isArray(data.feedbacks) ? data.feedbacks : [],
+      communityPosts: Array.isArray(data.communityPosts) ? data.communityPosts : [],
+      marketListings: Array.isArray(data.marketListings) ? data.marketListings : [],
+      friendships: Array.isArray(data.friendships) ? data.friendships : [],
+      messages: Array.isArray(data.messages) ? data.messages : [],
+      follows: Array.isArray(data.follows) ? data.follows : [],
+      reports: Array.isArray(data.reports) ? data.reports : [],
+      careReminderDeliveries: data.careReminderDeliveries && typeof data.careReminderDeliveries === "object" ? data.careReminderDeliveries : {}
+    };
+  } catch (error) {
+    console.error("数据库读取保护已触发：", error.message);
+    throw new DatabaseIntegrityError(error);
   }
 }
 
 function writeDatabase(db) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const tempFile = `${DATA_FILE}.${process.pid}.tmp`;
-  fs.writeFileSync(tempFile, JSON.stringify(db, null, 2), "utf8");
+  // Write and flush the new file before its atomic rename. If storage reports
+  // an error or the process is interrupted before the rename, the previous
+  // complete database remains in place rather than being partially replaced.
+  const descriptor = fs.openSync(tempFile, "w");
+  try {
+    fs.writeFileSync(descriptor, JSON.stringify(db, null, 2), "utf8");
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
   fs.renameSync(tempFile, DATA_FILE);
 }
 

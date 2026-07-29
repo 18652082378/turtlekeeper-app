@@ -9,7 +9,7 @@
     "test:backup-restore": "node scripts/test-backup-restore.js",
     "verify:backup": "node scripts/restore-server-backup.js",
     "cap:add:ios": "npm run build && npx cap add ios",
-    "cap:sync:ios": "npm run build && npx cap sync ios",
+    "cap:sync:ios": "npm run build && npx cap sync ios && node scripts/configure-ios-local-plugins.js",
     "cap:open:ios": "npm run build && npx cap open ios"
   },
   "dependencies": {
