@@ -121,6 +121,7 @@ const initialState = {
   communityPosts: [],
   communityProfileStats: { receivedLikes: 0, followerCount: 0 },
   contentReports: [],
+  blockedUsers: [],
   isCommunityAdmin: false,
   communityFriends: [],
   communityFollowingUsers: [],
@@ -533,6 +534,7 @@ function normalizeState(next) {
       followerCount: Math.max(0, Number(base.communityProfileStats?.followerCount || 0))
     },
     contentReports: Array.isArray(base.contentReports) ? base.contentReports : [],
+    blockedUsers: Array.isArray(base.blockedUsers) ? base.blockedUsers : [],
     isCommunityAdmin: Boolean(base.isCommunityAdmin),
     communityFriends: Array.isArray(base.communityFriends) ? base.communityFriends : [],
     communityFollowingUsers: Array.isArray(base.communityFollowingUsers) ? base.communityFollowingUsers : [],
@@ -1839,7 +1841,7 @@ function communityFeedCard(item) {
         ${item.content ? `<p class="community-post-copy">${escapeHtml(item.content)}</p>` : ""}
         ${item.mediaUrl ? `<div class="community-post-media">${communityMedia(item, true)}${item.mediaType === "video" ? `<i class="community-detail-play-mark">▶</i>` : ""}</div>` : ""}
         ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
-        <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? `<div class="community-moment-popover"><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "取消" : "赞"}</button><button type="button" data-show-community-comment="${item.id}">评论</button>${!isOwn ? `<button type="button" data-open-content-report data-report-type="community" data-report-id="${item.id}">举报</button>` : ""}</div>` : ""}</div></div>
+        <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? `<div class="community-moment-popover"><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "取消" : "赞"}</button><button type="button" data-show-community-comment="${item.id}">评论</button>${!isOwn ? `<button type="button" data-open-content-report data-report-type="community" data-report-id="${item.id}">举报</button><button class="danger-link" type="button" data-block-content-user data-block-type="community" data-block-id="${item.id}" data-block-name="${escapeHtml(item.authorName || "该用户")}">屏蔽</button>` : ""}</div>` : ""}</div></div>
         ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</div>` : ""}
         ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="评论" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
       </div>
@@ -1884,7 +1886,7 @@ function pageCommunityPostDetail() {
         <div class="community-detail-actions">
           <button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "已赞" : "♡ 赞"}${item.likeCount ? ` ${item.likeCount}` : ""}</button>
           <button type="button" data-show-community-comment="${item.id}">评论${comments.length ? ` ${comments.length}` : ""}</button>
-          ${!isOwn ? `<button type="button" data-open-content-report data-report-type="community" data-report-id="${item.id}">举报</button>` : ""}
+          ${!isOwn ? `<button type="button" data-open-content-report data-report-type="community" data-report-id="${item.id}">举报</button><button class="danger-link" type="button" data-block-content-user data-block-type="community" data-block-id="${item.id}" data-block-name="${escapeHtml(item.authorName || "该用户")}">屏蔽用户</button>` : ""}
           ${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}
         </div>
         ${(item.likeCount || comments.length) ? `<section class="community-detail-social">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</section>` : ""}
@@ -2114,7 +2116,7 @@ function pageCommunityChat() {
       : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`);
   const chatHeader = `
     <div class="topbar community-chat-topbar">
-      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button><button class="community-chat-service" type="button" data-open-platform-service-dialog aria-label="联系平台客服"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.2v-1.1a7.5 7.5 0 0 1 15 0v1.1"></path><path d="M4.5 12.6H3.8a1.8 1.8 0 0 0-1.8 1.8v2.1a1.8 1.8 0 0 0 1.8 1.8h1.7v-5.7ZM19.5 12.6h.7a1.8 1.8 0 0 1 1.8 1.8v2.1a1.8 1.8 0 0 1-1.8 1.8h-1.7v-5.7ZM19.5 18.1c0 1.3-1.2 2.4-2.7 2.4h-1.5"></path><path d="M13.2 20.5h2.4"></path></svg><span>客服</span></button></div>
+      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button><button class="community-chat-more" type="button" data-open-chat-more data-user-id="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" data-user-name="${escapeHtml(friend?.name || "该用户")}" aria-label="更多操作">•••</button></div>
     </div>
   `;
   return `
@@ -4256,6 +4258,21 @@ function pageAccount() {
           <p class="muted">手机号：${maskedPhone}</p>
           <button class="logout-card" type="button" data-logout-account>退出账号</button>
         </section>
+        <section class="fresh-card settings-card account-safety-card">
+          <div class="settings-title">内容与隐私安全</div>
+          <button class="account-settings-row" type="button" data-refresh-blocked-users>
+            <span><strong>屏蔽与拉黑</strong><small>管理已隐藏内容或禁止联系的用户</small></span>
+            <em>${(state.blockedUsers || []).length} 人</em>
+          </button>
+          <div class="blocked-user-list">
+            ${(state.blockedUsers || []).map(user => `<div class="blocked-user-row">${communityAvatar(user, "blocked-user-avatar")}<span><strong>${escapeHtml(user.name || "壳友")}</strong><small>${user.type === "blacklist" ? "已拉黑" : "已屏蔽"}</small></span><button type="button" data-unblock-user="${escapeHtml(user.id || "")}">${user.type === "blacklist" ? "解除拉黑" : "解除屏蔽"}</button></div>`).join("") || `<p class="muted blocked-user-empty">暂无已屏蔽或拉黑的用户</p>`}
+          </div>
+        </section>
+        <section class="fresh-card settings-card account-danger-zone">
+          <div class="settings-title">账号注销</div>
+          <p class="muted">永久删除账号及相关档案、动态、商品和聊天记录。注销完成后无法恢复。</p>
+          <button class="account-delete-button" type="button" data-open-account-delete>永久注销账号</button>
+        </section>
         ${state.isCommunityAdmin ? `
           <section class="fresh-card settings-card push-test-card">
             <div class="settings-title">推送通知实机测试</div>
@@ -4281,6 +4298,7 @@ function pageAccount() {
             ${!CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE ? `<p class="muted auth-code-hint">原型验证码：${state.pendingAuthCode}</p>` : ""}
           ` : ""}
           <button class="primary" type="submit">${state.accountMode === "register" ? "注册并登录" : "登录"}</button>
+          ${state.accountMode === "login" ? `<p class="auth-login-agreement">登录即代表你已阅读并同意<button type="button" data-page="rules">《服务与社区规则》</button>及<button type="button" data-page="privacy">《隐私政策》</button></p>` : ""}
         </form>
       `}
       <section class="fresh-card settings-card">
@@ -4428,6 +4446,7 @@ function pageRules() {
       <section class="fresh-card policy-card">
         <h3>四、举报与处置</h3>
         <p>用户可在动态详情或商品详情中举报内容。平台会留存举报记录并核验；对违规内容可采取删除动态、下架商品、限制发布或关闭账号等措施。举报并不代表平台已对交易事实作出认定。</p>
+        <p>用户可以屏蔽其他用户。屏蔽后，该用户的动态、商品和消息会立即从当前用户的页面中移除，同时平台会收到相关内容或近期互动信息以便核验；用户可在“账号与安全—已屏蔽用户”中解除屏蔽。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>五、规则变更与联系我们</h3>
@@ -4464,7 +4483,7 @@ function pagePrivacy() {
       </section>
       <section class="fresh-card policy-card">
         <h3>五、你的权利</h3>
-        <p>你可在“我的空间—账号与安全”中修改昵称和头像，并删除自己发布的动态或商品。对于访问、更正、导出或删除账号数据、注销账号等请求，请联系平台客服微信：<strong>${PLATFORM_SERVICE_WECHAT}</strong>，我们会在核验身份后处理。</p>
+        <p>你可在“我的空间—账号与安全”中修改昵称和头像、管理已屏蔽用户，并删除自己发布的动态或商品。你也可在该页面选择“永久注销账号”，完成密码验证和二次确认后，直接在应用内删除账号及相关个人数据，无需联系客服。依法需要留存的安全与投诉记录将仅在必要期限内限制保存。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>六、未成年人</h3>
@@ -5050,6 +5069,18 @@ function bindEvents() {
     event.stopPropagation();
     openContentReportDialog(btn.dataset.reportType, btn.dataset.reportId);
   }));
+  document.querySelectorAll("[data-block-content-user]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    confirmBlockUser({ targetType: btn.dataset.blockType, targetId: btn.dataset.blockId, name: btn.dataset.blockName });
+  }));
+  document.querySelectorAll("[data-block-user-id]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    confirmBlockUser({ userId: btn.dataset.blockUserId, name: btn.dataset.blockName });
+  }));
+  document.querySelector("[data-open-chat-more]")?.addEventListener("click", event => {
+    const button = event.currentTarget;
+    openCommunityChatMore(button.dataset.userId, button.dataset.userName);
+  });
   document.querySelectorAll("[data-show-community-comment]").forEach(btn => btn.addEventListener("click", () => setState({ communityCommentPostId: btn.dataset.showCommunityComment, openCommunityActionId: "" }, { skipCloud: true })));
   document.querySelectorAll("[data-community-comment-form]").forEach(form => form.addEventListener("submit", submitCommunityComment));
   document.querySelectorAll("[data-toggle-community-follow]").forEach(btn => btn.addEventListener("click", event => {
@@ -5248,6 +5279,9 @@ function bindEvents() {
   }));
   document.querySelector("#profileForm")?.addEventListener("submit", submitProfile);
   document.querySelectorAll("[data-logout-account]").forEach(btn => btn.addEventListener("click", logoutAccount));
+  document.querySelector("[data-open-account-delete]")?.addEventListener("click", openAccountDeleteDialog);
+  document.querySelector("[data-refresh-blocked-users]")?.addEventListener("click", () => refreshBlockedUsers(true));
+  document.querySelectorAll("[data-unblock-user]").forEach(button => button.addEventListener("click", () => unblockUser(button.dataset.unblockUser)));
   const policyConsentCheck = document.querySelector("[data-policy-consent-check]");
   const policyConsentSubmit = document.querySelector("[data-policy-consent-submit]");
   policyConsentCheck?.addEventListener("change", () => {
@@ -6784,7 +6818,7 @@ function openMarketDetailMore(listingId) {
       <div class="market-detail-more-actions">
         <button type="button" data-market-share-listing="${escapeHtml(listing.id)}"><span aria-hidden="true">↗</span><small>微信 / 其他</small></button>
         <button type="button" data-market-copy-listing="${escapeHtml(listing.id)}"><span aria-hidden="true">⌁</span><small>复制链接</small></button>
-        ${isOwn ? "" : `<button type="button" class="danger" data-market-report-from-menu="${escapeHtml(listing.id)}"><span aria-hidden="true">!</span><small>举报</small></button>`}
+        ${isOwn ? "" : `<button type="button" class="danger" data-market-report-from-menu="${escapeHtml(listing.id)}"><span aria-hidden="true">!</span><small>举报</small></button><button type="button" class="danger" data-market-block-from-menu="${escapeHtml(listing.id)}" data-block-name="${escapeHtml(listing.sellerName || "该用户")}"><span aria-hidden="true">⊘</span><small>屏蔽</small></button>`}
       </div>
       <button class="market-detail-more-cancel" type="button" data-market-detail-more-close>取消</button>
     </section>
@@ -6806,7 +6840,53 @@ function openMarketDetailMore(listingId) {
     close();
     openContentReportDialog("market", listing.id);
   });
+  overlay.querySelector("[data-market-block-from-menu]")?.addEventListener("click", event => {
+    close();
+    confirmBlockUser({ targetType: "market", targetId: listing.id, name: event.currentTarget.dataset.blockName });
+  });
   overlay.querySelector("[data-market-share-listing]")?.focus();
+}
+
+function openCommunityChatMore(userId, userName = "该用户") {
+  if (!userId) return;
+  document.querySelector(".community-chat-more-overlay")?.remove();
+  const previousFocus = document.activeElement;
+  const overlay = document.createElement("div");
+  overlay.className = "market-detail-more-overlay community-chat-more-overlay";
+  overlay.innerHTML = `
+    <section class="market-detail-more-sheet community-chat-more-sheet" role="dialog" aria-modal="true" aria-labelledby="communityChatMoreTitle">
+      <h2 id="communityChatMoreTitle">聊天设置</h2>
+      <div class="market-detail-more-actions">
+        <button type="button" data-chat-screen-user><span aria-hidden="true">⊘</span><small>屏蔽</small></button>
+        <button type="button" class="danger" data-chat-block-user><span aria-hidden="true">!</span><small>拉黑</small></button>
+        <button type="button" data-chat-contact-service><span aria-hidden="true">⌁</span><small>联系客服</small></button>
+      </div>
+      <button class="market-detail-more-cancel" type="button" data-chat-more-close>取消</button>
+    </section>`;
+  document.body.appendChild(overlay);
+  document.body.classList.add("market-detail-more-open");
+  const close = () => {
+    document.body.classList.remove("market-detail-more-open");
+    overlay.remove();
+    if (previousFocus?.isConnected) previousFocus.focus();
+  };
+  overlay.addEventListener("click", event => { if (event.target === overlay) close(); });
+  overlay.querySelector("[data-chat-more-close]")?.addEventListener("click", close);
+  const screen = () => {
+    close();
+    confirmBlockUser({ userId, name: userName, mode: "screen" });
+  };
+  const blacklist = () => {
+    close();
+    confirmBlockUser({ userId, name: userName, mode: "blacklist" });
+  };
+  overlay.querySelector("[data-chat-screen-user]")?.addEventListener("click", screen);
+  overlay.querySelector("[data-chat-block-user]")?.addEventListener("click", blacklist);
+  overlay.querySelector("[data-chat-contact-service]")?.addEventListener("click", () => {
+    close();
+    openMarketTopService();
+  });
+  overlay.querySelector("[data-chat-screen-user]")?.focus();
 }
 
 function openMarketTopService() {
@@ -6957,6 +7037,130 @@ function openContentReportDialog(targetType, targetId) {
   });
   document.addEventListener("keydown", onKeydown);
   overlay.querySelector("select")?.focus();
+}
+
+function confirmBlockUser({ targetType = "community", targetId = "", userId = "", name = "该用户", mode = "screen" } = {}) {
+  if (!canUseCommunity()) return;
+  document.querySelector(".safety-action-overlay")?.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "content-report-overlay safety-action-overlay";
+  overlay.innerHTML = `
+    <section class="content-report-dialog safety-action-dialog" role="dialog" aria-modal="true" aria-labelledby="blockUserTitle">
+      <div class="content-report-head"><div><small>内容安全</small><h2 id="blockUserTitle">${mode === "blacklist" ? "拉黑" : "屏蔽"}${escapeHtml(name || "该用户")}？</h2></div><button type="button" data-safety-close aria-label="关闭">×</button></div>
+      <p>${mode === "blacklist" ? "拉黑后，双方将无法继续聊天，现有聊天记录会被立即删除，对方的动态和商品也不会再显示。" : "屏蔽后，对方发布的动态、商品和消息会立即从你的页面移除；平台也会收到相关内容并进行核验。"}</p>
+      <div class="safety-dialog-actions"><button class="secondary" type="button" data-safety-close>取消</button><button class="account-delete-button" type="button" data-confirm-block>${mode === "blacklist" ? "拉黑此用户" : "屏蔽此用户"}</button></div>
+    </section>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelectorAll("[data-safety-close]").forEach(button => button.addEventListener("click", close));
+  overlay.addEventListener("click", event => { if (event.target === overlay) close(); });
+  overlay.querySelector("[data-confirm-block]")?.addEventListener("click", async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = mode === "blacklist" ? "正在拉黑…" : "正在屏蔽…";
+    try {
+      const result = await apiPost("/api/users/block", communityAuthPayload({ targetType, targetId, userId, mode }));
+      close();
+      setState({
+        blockedUsers: Array.isArray(result.blockedUsers) ? result.blockedUsers : state.blockedUsers,
+        communityPosts: Array.isArray(result.posts) ? normalizeCommunityPosts(result.posts) : state.communityPosts,
+        marketListings: Array.isArray(result.listings) ? result.listings : state.marketListings,
+        communityFriends: Array.isArray(result.friends) ? result.friends : state.communityFriends,
+        selectedCommunityFriendId: "",
+        selectedCommunityFriend: null,
+        communityChatMessages: [],
+        page: state.page === "marketDetail" ? "market" : state.page === "communityPostDetail" ? "community" : state.page === "communityChat" ? "messages" : state.page,
+        openCommunityActionId: ""
+      }, { skipCloud: true });
+      toast(mode === "blacklist" ? "已拉黑该用户并删除聊天记录" : "已屏蔽该用户，相关内容已移除并通知平台");
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = mode === "blacklist" ? "拉黑此用户" : "屏蔽此用户";
+      toast(error.message || (mode === "blacklist" ? "拉黑失败，请稍后重试" : "屏蔽失败，请稍后重试"));
+    }
+  });
+  overlay.querySelector("[data-confirm-block]")?.focus();
+}
+
+async function refreshBlockedUsers(showToast = false) {
+  if (!canUseCommunity()) return;
+  try {
+    const result = await apiPost("/api/users/blocked", communityAuthPayload());
+    setState({ blockedUsers: Array.isArray(result.blockedUsers) ? result.blockedUsers : [] }, { skipCloud: true });
+    if (showToast) toast("屏蔽名单已更新");
+  } catch (error) {
+    toast(error.message || "无法读取屏蔽名单");
+  }
+}
+
+async function unblockUser(userId) {
+  if (!canUseCommunity() || !userId) return;
+  try {
+    const result = await apiPost("/api/users/unblock", communityAuthPayload({ userId }));
+    setState({ blockedUsers: Array.isArray(result.blockedUsers) ? result.blockedUsers : [] }, { skipCloud: true });
+    toast("已解除屏蔽");
+  } catch (error) {
+    toast(error.message || "解除屏蔽失败");
+  }
+}
+
+function openAccountDeleteDialog() {
+  if (!state.loggedInPhone) return;
+  document.querySelector(".account-delete-overlay")?.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "content-report-overlay account-delete-overlay";
+  overlay.innerHTML = `
+    <section class="content-report-dialog account-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="deleteAccountTitle">
+      <div class="content-report-head"><div><small>不可恢复</small><h2 id="deleteAccountTitle">永久注销账号</h2></div><button type="button" data-delete-dialog-close aria-label="关闭">×</button></div>
+      <div class="account-delete-warning"><strong>注销后以下内容将被永久删除：</strong><p>账号资料、乌龟档案、护理与繁殖记录、经营账本、动态、商品及聊天记录。</p></div>
+      <form data-account-delete-form>
+        <label><span>输入登录密码以验证身份</span><input class="field" type="password" name="password" minlength="6" autocomplete="current-password" required></label>
+        <label class="account-delete-check"><input type="checkbox" name="confirmed" required><span>我了解注销完成后数据无法恢复</span></label>
+        <button class="account-delete-button" type="submit" disabled>确认永久注销</button>
+      </form>
+    </section>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector("[data-delete-dialog-close]")?.addEventListener("click", close);
+  overlay.addEventListener("click", event => { if (event.target === overlay) close(); });
+  const checkbox = overlay.querySelector("[name='confirmed']");
+  const submit = overlay.querySelector("button[type='submit']");
+  checkbox?.addEventListener("change", () => { submit.disabled = !checkbox.checked; });
+  overlay.querySelector("[data-account-delete-form]")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const password = String(form.get("password") || "");
+    if (password.length < 6 || !form.get("confirmed")) return toast("请完成身份验证和注销确认");
+    submit.disabled = true;
+    submit.textContent = "正在永久注销…";
+    const phone = state.loggedInPhone;
+    const token = currentCloudToken();
+    try {
+      if (CONFIGURED_SMS_BACKEND) await apiPost("/api/account/delete", communityAuthPayload({ password, confirmation: "DELETE" }));
+      else {
+        const localUser = (state.registeredUsers || []).find(user => user.phone === phone);
+        if (!localUser || localUser.password !== password) throw new Error("登录密码不正确");
+      }
+      void unregisterNativePushNotifications(phone, token);
+      forgetCloudToken(phone);
+      close();
+      cloudHydrationComplete = false;
+      setState({
+        ...emptyAccountData(),
+        registeredUsers: (state.registeredUsers || []).filter(user => user.phone !== phone),
+        loggedInPhone: "", cloudToken: "", accountName: "未登录用户", accountAvatar: "",
+        blockedUsers: [], communityPosts: [], communityFriends: [], communityChatMessages: [],
+        marketListings: [], messageUnreadCount: 0, isCommunityAdmin: false,
+        policyConsentRequired: false, page: "account"
+      }, { skipCloud: true });
+      toast("账号已永久注销");
+    } catch (error) {
+      submit.disabled = false;
+      submit.textContent = "确认永久注销";
+      toast(error.message || "注销失败，请稍后重试");
+    }
+  });
+  overlay.querySelector("input[name='password']")?.focus();
 }
 
 function normalizeCommunityPosts(posts = []) {
@@ -8260,6 +8464,7 @@ function logoutAccount() {
     communityPosts: [],
     communityProfileStats: { receivedLikes: 0, followerCount: 0 },
     contentReports: [],
+    blockedUsers: [],
     isCommunityAdmin: false,
     communityFriends: [],
     communityChatMessages: [],
@@ -8418,6 +8623,9 @@ async function apiPost(path, payload) {
   if (path === "/api/account/terms/accept" && response.status === 405) {
     throw new Error("服务器尚未部署协议确认接口，请同步服务器后重试");
   }
+  if (path.startsWith("/api/users/") && (response.status === 405 || data.message === "方法不支持")) {
+    throw new Error("服务器版本过旧，请先部署最新版后端并重启服务");
+  }
   if (!response.ok || data.ok === false) {
     const error = new Error(data.message || "服务暂时不可用");
     error.status = response.status;
@@ -8516,6 +8724,7 @@ function cloudUserToLocal(user, fallbackToken = "") {
     termsAcceptedAt: user.termsAcceptedAt || "",
     termsVersion: user.termsVersion || "",
     isCommunityAdmin: Boolean(user.isCommunityAdmin),
+    blockedUsers: Array.isArray(user.blockedUsers) ? user.blockedUsers : [],
     createdAt: user.createdAt || new Date().toISOString()
   };
 }
@@ -8538,6 +8747,7 @@ function applyCloudUser(user, activityText = "", options = {}) {
     ...accountData,
     communityPosts: [],
     communityFriends: [],
+    blockedUsers: localUser.blockedUsers,
     communityChatMessages: [],
     messageUnreadCount: 0,
     marketListings: [],

@@ -516,7 +516,7 @@ function hasVerifiedPhone(phone) {
   return true;
 }
 
-function publicUser(user, token = "") {
+function publicUser(user, token = "", db = null) {
   return {
     phone: user.phone,
     accountName: user.accountName || maskPhone(user.phone),
@@ -524,9 +524,24 @@ function publicUser(user, token = "") {
     data: normalizeAccountData(user.data || {}),
     termsAcceptedAt: user.termsAcceptedAt || "",
     termsVersion: user.termsVersion || "",
+    blockedUsers: [...new Set([...(Array.isArray(user.blockedPhones) ? user.blockedPhones : []), ...(Array.isArray(user.blacklistedPhones) ? user.blacklistedPhones : [])])].map(phone => ({
+      id: communityUserId(phone),
+      name: db?.users?.[phone]?.accountName || "已屏蔽用户",
+      avatar: db?.users?.[phone]?.accountAvatar || "",
+      type: (Array.isArray(user.blacklistedPhones) ? user.blacklistedPhones : []).includes(phone) ? "blacklist" : "screen"
+    })),
     isCommunityAdmin: isAdminUser(user),
     token
   };
+}
+
+function blockedPhoneSet(user) {
+  return new Set([...(Array.isArray(user?.blockedPhones) ? user.blockedPhones : []), ...(Array.isArray(user?.blacklistedPhones) ? user.blacklistedPhones : [])]);
+}
+
+function usersBlockEachOther(userA, userB) {
+  if (!userA?.phone || !userB?.phone) return false;
+  return blockedPhoneSet(userA).has(userB.phone) || blockedPhoneSet(userB).has(userA.phone);
 }
 
 function maskPhone(phone) {
@@ -1049,7 +1064,7 @@ async function handleRegister(req, res) {
   writeDatabase(db);
   verifiedPhones.delete(phone);
   forgetCode(phone);
-  return sendJson(res, 200, { ok: true, user: publicUser(user, token) });
+  return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });
 }
 
 async function handleLogin(req, res) {
@@ -1067,7 +1082,7 @@ async function handleLogin(req, res) {
   user.tokens = [...(Array.isArray(user.tokens) ? user.tokens : []), { hash: hashValue(token), createdAt: now }].slice(-5);
   user.updatedAt = now;
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, user: publicUser(user, token) });
+  return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });
 }
 
 async function handleLoadAccount(req, res) {
@@ -1077,7 +1092,7 @@ async function handleLoadAccount(req, res) {
   const db = readDatabase();
   const user = authenticate(db, phone, token);
   if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
-  return sendJson(res, 200, { ok: true, user: publicUser(user, token) });
+  return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });
 }
 
 async function handleSaveAccount(req, res) {
@@ -1119,7 +1134,7 @@ async function handleSaveAccount(req, res) {
   user.data = incomingData;
   user.updatedAt = new Date().toISOString();
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, user: publicUser(user, token) });
+  return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });
 }
 
 async function handleAcceptTerms(req, res) {
@@ -1132,7 +1147,51 @@ async function handleAcceptTerms(req, res) {
   user.termsVersion = POLICY_VERSION;
   user.updatedAt = user.termsAcceptedAt;
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, user: publicUser(user, String(body.token || "")) });
+  return sendJson(res, 200, { ok: true, user: publicUser(user, String(body.token || ""), db) });
+}
+
+async function handleDeleteAccount(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (String(body.confirmation || "") !== "DELETE") {
+    return sendJson(res, 400, { ok: false, message: "请确认永久注销账号" });
+  }
+  if (!verifyPassword(String(body.password || ""), user)) {
+    return sendJson(res, 401, { ok: false, message: "登录密码不正确" });
+  }
+
+  const phone = user.phone;
+  db.communityPosts = (Array.isArray(db.communityPosts) ? db.communityPosts : [])
+    .filter(item => item.authorPhoneRaw !== phone)
+    .map(item => ({
+      ...item,
+      likes: (Array.isArray(item.likes) ? item.likes : []).filter(value => value !== phone),
+      comments: (Array.isArray(item.comments) ? item.comments : []).filter(comment => comment.authorPhoneRaw !== phone)
+    }));
+  db.marketListings = (Array.isArray(db.marketListings) ? db.marketListings : []).filter(item => item.sellerPhoneRaw !== phone);
+  db.friendships = (Array.isArray(db.friendships) ? db.friendships : []).filter(item => !item.phones?.includes(phone));
+  db.messages = (Array.isArray(db.messages) ? db.messages : []).filter(item => item.fromPhone !== phone && item.toPhone !== phone);
+  db.follows = (Array.isArray(db.follows) ? db.follows : []).filter(item => item.followerPhone !== phone && item.targetPhone !== phone);
+  db.reviews = (Array.isArray(db.reviews) ? db.reviews : []).filter(item => item.authorPhoneRaw !== phone).map(item => ({
+    ...item,
+    comments: (Array.isArray(item.comments) ? item.comments : []).filter(comment => comment.authorPhoneRaw !== phone)
+  }));
+  db.feedbacks = (Array.isArray(db.feedbacks) ? db.feedbacks : []).filter(item => item.authorPhoneRaw !== phone).map(item => ({
+    ...item,
+    likes: (Array.isArray(item.likes) ? item.likes : []).filter(value => value !== phone),
+    comments: (Array.isArray(item.comments) ? item.comments : []).filter(comment => comment.authorPhoneRaw !== phone)
+  }));
+  db.reports = (Array.isArray(db.reports) ? db.reports : []).filter(item => item.reporterPhone !== phone && item.targetOwnerPhone !== phone);
+  Object.values(db.users || {}).forEach(account => {
+    if (account?.phone === phone) return;
+    account.blockedPhones = (Array.isArray(account.blockedPhones) ? account.blockedPhones : []).filter(value => value !== phone);
+    account.blacklistedPhones = (Array.isArray(account.blacklistedPhones) ? account.blacklistedPhones : []).filter(value => value !== phone);
+  });
+  delete db.users[phone];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, deleted: true });
 }
 
 function trimPublicText(value, maxLength = 500) {
@@ -1817,8 +1876,9 @@ function communityFriends(db, viewer) {
   });
   const pinned = new Set(Array.isArray(viewer.data?.pinnedConversationPhones) ? viewer.data.pinnedConversationPhones : []);
   const hidden = new Set(Array.isArray(viewer.data?.hiddenConversationPhones) ? viewer.data.hiddenConversationPhones : []);
+  const blocked = blockedPhoneSet(viewer);
   return [...contactPhones]
-    .filter(phone => !hidden.has(phone))
+    .filter(phone => !hidden.has(phone) && !blocked.has(phone))
     .map(phone => {
       const user = db.users?.[phone];
       const lastMessage = messages
@@ -1845,8 +1905,9 @@ function isFollowingCommunityUser(db, followerPhone, targetPhone) {
 }
 
 function followedCommunityUsers(db, viewer) {
+  const blocked = blockedPhoneSet(viewer);
   return (Array.isArray(db.follows) ? db.follows : [])
-    .filter(item => item.followerPhone === viewer.phone)
+    .filter(item => item.followerPhone === viewer.phone && !blocked.has(item.targetPhone))
     .slice()
     .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))
     .map(item => {
@@ -1878,7 +1939,9 @@ function hasCommunityConversation(db, phoneA, phoneB) {
 
 function publicCommunityPosts(db, viewer = null) {
   const viewerPhone = viewer?.phone || "";
+  const blocked = blockedPhoneSet(viewer);
   return (Array.isArray(db.communityPosts) ? db.communityPosts : [])
+    .filter(item => !blocked.has(item.authorPhoneRaw))
     .slice()
     .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
     .map(item => {
@@ -1901,7 +1964,7 @@ function publicCommunityPosts(db, viewer = null) {
         isOwn: Boolean(viewerPhone && item.authorPhoneRaw === viewerPhone),
         followed: Boolean(viewerPhone && item.authorPhoneRaw !== viewerPhone && isFollowingCommunityUser(db, viewerPhone, item.authorPhoneRaw)),
         isFriend: Boolean(viewerPhone && item.authorPhoneRaw !== viewerPhone && isCommunityFriend(db, viewerPhone, item.authorPhoneRaw)),
-        comments: (Array.isArray(item.comments) ? item.comments : []).map(comment => ({
+        comments: (Array.isArray(item.comments) ? item.comments : []).filter(comment => !blocked.has(comment.authorPhoneRaw)).map(comment => ({
           id: comment.id,
           content: comment.content || "",
           authorName: db.users?.[comment.authorPhoneRaw]?.accountName || comment.authorName || "壳友",
@@ -2107,6 +2170,99 @@ async function handleContentReportCreate(req, res) {
   return sendJson(res, 200, { ok: true });
 }
 
+function publicBlockedUsers(db, user) {
+  const blacklisted = new Set(Array.isArray(user?.blacklistedPhones) ? user.blacklistedPhones : []);
+  return [...new Set([...(Array.isArray(user?.blockedPhones) ? user.blockedPhones : []), ...blacklisted])].map(phone => {
+    const account = db.users?.[phone];
+    return account ? {
+      id: communityUserId(phone),
+      name: account.accountName || maskPhone(phone),
+      avatar: account.accountAvatar || "",
+      type: blacklisted.has(phone) ? "blacklist" : "screen"
+    } : null;
+  }).filter(Boolean);
+}
+
+async function handleUserBlock(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const targetType = body.targetType === "market" ? "market" : "community";
+  const targetId = trimPublicText(body.targetId, 100);
+  const content = targetId ? reportedContent(db, targetType, targetId) : null;
+  const target = content ? db.users?.[content.ownerPhone] : communityUserById(db, body.userId);
+  if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "无法屏蔽该用户" });
+
+  const mode = body.mode === "blacklist" ? "blacklist" : "screen";
+  if (mode === "blacklist") {
+    user.blacklistedPhones = [...new Set([...(Array.isArray(user.blacklistedPhones) ? user.blacklistedPhones : []), target.phone])];
+    user.blockedPhones = (Array.isArray(user.blockedPhones) ? user.blockedPhones : []).filter(phone => phone !== target.phone);
+    db.messages = (Array.isArray(db.messages) ? db.messages : []).filter(item =>
+      !((item.fromPhone === user.phone && item.toPhone === target.phone) || (item.fromPhone === target.phone && item.toPhone === user.phone))
+    );
+    db.friendships = (Array.isArray(db.friendships) ? db.friendships : []).filter(item => item.key !== friendshipKey(user.phone, target.phone));
+    [user, target].forEach(account => {
+      account.data = normalizeAccountData(account.data || {});
+      const otherPhone = account.phone === user.phone ? target.phone : user.phone;
+      account.data.pinnedConversationPhones = account.data.pinnedConversationPhones.filter(phone => phone !== otherPhone);
+      account.data.hiddenConversationPhones = account.data.hiddenConversationPhones.filter(phone => phone !== otherPhone);
+    });
+  } else if (!(Array.isArray(user.blacklistedPhones) ? user.blacklistedPhones : []).includes(target.phone)) {
+    user.blockedPhones = [...new Set([...(Array.isArray(user.blockedPhones) ? user.blockedPhones : []), target.phone])];
+  }
+  db.follows = (Array.isArray(db.follows) ? db.follows : []).filter(item =>
+    !((item.followerPhone === user.phone && item.targetPhone === target.phone) || (item.followerPhone === target.phone && item.targetPhone === user.phone))
+  );
+  if (content) {
+    db.reports = Array.isArray(db.reports) ? db.reports : [];
+    const duplicate = db.reports.some(item => item.reporterPhone === user.phone && item.targetType === targetType && item.targetId === targetId && item.status === "pending");
+    if (!duplicate) db.reports.unshift({
+      id: crypto.randomUUID(), targetType, targetId, targetTitle: content.title,
+      targetOwnerPhone: target.phone, reporterPhone: user.phone, reason: "abuse",
+      detail: mode === "blacklist" ? "用户执行拉黑，相关聊天记录已自动删除" : "用户执行屏蔽时自动通知平台审核相关内容", status: "pending",
+      createdAt: new Date().toISOString(), processedAt: "", processedBy: ""
+    });
+  } else {
+    db.reports = Array.isArray(db.reports) ? db.reports : [];
+    db.reports.unshift({
+      id: crypto.randomUUID(), targetType: "community", targetId: `user:${communityUserId(target.phone)}`,
+      targetTitle: `用户：${target.accountName || maskPhone(target.phone)}`, targetOwnerPhone: target.phone,
+      reporterPhone: user.phone, reason: "abuse", detail: mode === "blacklist" ? "用户从聊天页执行拉黑，相关聊天记录已自动删除" : "用户从聊天页执行屏蔽，平台需核验双方近期聊天内容",
+      status: "pending", createdAt: new Date().toISOString(), processedAt: "", processedBy: ""
+    });
+  }
+  db.reports = db.reports.slice(0, 2000);
+  writeDatabase(db);
+  return sendJson(res, 200, {
+    ok: true,
+    blockedUsers: publicBlockedUsers(db, user),
+    posts: publicCommunityPosts(db, user),
+    listings: publicMarketListings(db, user),
+    friends: communityFriends(db, user)
+  });
+}
+
+async function handleBlockedUserList(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  return sendJson(res, 200, { ok: true, blockedUsers: publicBlockedUsers(db, user) });
+}
+
+async function handleUserUnblock(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const target = communityUserById(db, body.userId);
+  user.blockedPhones = (Array.isArray(user.blockedPhones) ? user.blockedPhones : []).filter(phone => phone !== target?.phone);
+  user.blacklistedPhones = (Array.isArray(user.blacklistedPhones) ? user.blacklistedPhones : []).filter(phone => phone !== target?.phone);
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, blockedUsers: publicBlockedUsers(db, user) });
+}
+
 async function handleContentReportList(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
@@ -2192,6 +2348,7 @@ async function handleCommunityUserProfile(req, res) {
   const viewer = optionalReviewUser(db, body);
   const target = communityUserById(db, body.userId);
   if (!target) return sendJson(res, 404, { ok: false, message: "壳友不存在或已注销" });
+  if (viewer && usersBlockEachOther(viewer, target)) return sendJson(res, 403, { ok: false, message: "该用户已被屏蔽" });
   const targetId = communityUserId(target.phone);
   const posts = publicCommunityPosts(db, viewer).filter(item => item.authorId === targetId);
   const listings = publicMarketListings(db, viewer).filter(item => item.sellerId === targetId && item.status === "active");
@@ -2218,6 +2375,7 @@ async function handleCommunityChatList(req, res) {
   if (!user) return;
   const target = communityUserById(db, body.userId);
   if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "无法与该用户聊天" });
+  if (usersBlockEachOther(user, target)) return sendJson(res, 403, { ok: false, message: "屏蔽关系存在，无法继续聊天" });
   db.messages = Array.isArray(db.messages) ? db.messages : [];
   let readStateChanged = false;
   const readAt = new Date().toISOString();
@@ -2249,6 +2407,7 @@ async function handleCommunityChatSend(req, res) {
   const mediaType = mediaUrl && body.mediaType === "video" ? "video" : "image";
   const marketListingId = trimPublicText(body.marketListingId, 100);
   if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "无法与该用户聊天" });
+  if (usersBlockEachOther(user, target)) return sendJson(res, 403, { ok: false, message: "屏蔽关系存在，无法发送消息" });
   const marketListing = marketListingId ? marketChatListingSnapshot(db, marketListingId, target.phone) : null;
   if (marketListingId && !marketListing) return sendJson(res, 400, { ok: false, message: "商品信息无效" });
   if (!content && !mediaUrl && !marketListing) return sendJson(res, 400, { ok: false, message: "请输入消息" });
@@ -2405,8 +2564,9 @@ function autoOfflineRestrictedMarketListings(db, now = Date.now()) {
 }
 
 function publicMarketListings(db, viewer = null) {
+  const blocked = blockedPhoneSet(viewer);
   return (Array.isArray(db.marketListings) ? db.marketListings : [])
-    .filter(item => (item.status || "active") === "active")
+    .filter(item => (item.status || "active") === "active" && !blocked.has(item.sellerPhoneRaw))
     .slice()
     .sort((a, b) => new Date(b.refreshedAt || b.createdAt || 0) - new Date(a.refreshedAt || a.createdAt || 0))
     .map(item => marketListingView(db, item, viewer));
@@ -2962,6 +3122,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/account/load") return await handleLoadAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/save") return await handleSaveAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/terms/accept") return await handleAcceptTerms(req, res);
+    if (req.method === "POST" && url.pathname === "/api/account/delete") return await handleDeleteAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/device/register") return await handlePushDeviceRegister(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/device/unregister") return await handlePushDeviceUnregister(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/test") return await handlePushNotificationTest(req, res);
@@ -2986,6 +3147,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/content-reports/create") return await handleContentReportCreate(req, res);
     if (req.method === "POST" && url.pathname === "/api/content-reports/list") return await handleContentReportList(req, res);
     if (req.method === "POST" && url.pathname === "/api/content-reports/action") return await handleContentReportAction(req, res);
+    if (req.method === "POST" && url.pathname === "/api/users/block") return await handleUserBlock(req, res);
+    if (req.method === "POST" && url.pathname === "/api/users/blocked") return await handleBlockedUserList(req, res);
+    if (req.method === "POST" && url.pathname === "/api/users/unblock") return await handleUserUnblock(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/follow/toggle") return await handleCommunityFollowToggle(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/following/list") return await handleCommunityFollowingList(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/user/profile") return await handleCommunityUserProfile(req, res);
