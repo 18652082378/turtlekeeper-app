@@ -5720,6 +5720,126 @@ html[data-theme-color="dark"] .ledger-row .ledger-turtle-meta span {
   background: #202020 !important;
 }
 
+/* Community post media: one short video or up to nine still images. */
+.community-draft-media-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 112px));
+  gap: 9px;
+  align-items: start;
+}
+
+.community-draft-media-item,
+.community-media-add {
+  position: relative;
+  width: 112px;
+  height: 112px;
+  min-height: 112px;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.community-draft-media-item {
+  background: #101010;
+}
+
+.community-draft-media-item img,
+.community-draft-media-item video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.community-draft-media-item > i {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 26px;
+  font-style: normal;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, .55);
+  pointer-events: none;
+}
+
+.community-draft-media-item > button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, .62);
+  font-size: 20px;
+  line-height: 22px;
+}
+
+.community-compose-page .community-media-add > span {
+  width: 100%;
+  height: 100%;
+  justify-content: center;
+}
+
+.community-draft-media-tip {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.community-media-gallery {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  width: 100%;
+  background: var(--page-bg);
+}
+
+.community-media-gallery .community-media {
+  width: 100%;
+  height: auto;
+  max-height: none;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}
+
+.community-detail-media-gallery {
+  display: grid;
+  width: min(100%, 360px);
+  gap: 4px;
+}
+
+.community-detail-media-gallery.is-gallery {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.community-detail-media-gallery.is-gallery .community-detail-media-button {
+  width: 100%;
+  min-height: 0;
+  aspect-ratio: 1 / 1;
+}
+
+.community-detail-media-gallery.is-gallery .community-detail-media-button .community-media {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: cover;
+}
+
+@media (max-width: 390px) {
+  .community-draft-media-grid {
+    grid-template-columns: repeat(3, minmax(0, 96px));
+  }
+
+  .community-draft-media-item,
+  .community-media-add {
+    width: 96px;
+    height: 96px;
+    min-height: 96px;
+  }
+}
+
 /* Chat header: the return chevron matches the nickname's size and center line. */
 .community-chat-nav .icon-btn[data-back] {
   display: inline-flex !important;
@@ -15781,6 +15901,61 @@ html[data-theme-color="dark"] .community-chat-product-context {
   .pool-form > label {
     grid-template-columns: 84px minmax(0, 1fr);
     gap: 9px;
+  }
+}
+
+/* Keep the multi-media composer compact after the legacy compose rules. */
+.community-compose-page .community-draft-media-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 112px));
+  gap: 9px;
+  align-items: start;
+}
+
+.community-compose-page .community-draft-media-item,
+.community-compose-page .community-media-add {
+  width: 112px;
+  height: 112px;
+  min-height: 112px;
+}
+
+.community-compose-page .community-media-add {
+  display: grid;
+  place-items: center;
+}
+
+.community-post-media .community-media-gallery {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  width: 100%;
+}
+
+.community-post-media .community-media-gallery .community-media {
+  width: 100%;
+  height: auto;
+  max-height: none;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}
+
+.community-detail-media-gallery.is-gallery .community-detail-media-button .community-media {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: cover;
+}
+
+@media (max-width: 390px) {
+  .community-compose-page .community-draft-media-grid {
+    grid-template-columns: repeat(3, minmax(0, 96px));
+  }
+
+  .community-compose-page .community-draft-media-item,
+  .community-compose-page .community-media-add {
+    width: 96px;
+    height: 96px;
+    min-height: 96px;
   }
 }
 

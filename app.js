@@ -359,6 +359,7 @@ let communityDraftMedia = "";
 let communityDraftMediaType = "";
 let communityDraftMediaFile = null;
 let communityDraftMediaDuration = 0;
+let communityDraftMediaItems = [];
 let communityDraftText = "";
 let marketLoading = false;
 let marketLastLoadedAt = 0;
@@ -1812,16 +1813,34 @@ function marketSellerAvatar(item, className) {
   return `<span class="${className} market-default-avatar">龟</span>`;
 }
 
+function communityPostMediaItems(item) {
+  const values = Array.isArray(item?.mediaItems) && item.mediaItems.length
+    ? item.mediaItems
+    : (item?.mediaUrl ? [{ url: item.mediaUrl, posterUrl: item.posterUrl || "", type: item.mediaType }] : []);
+  return values
+    .map(media => ({
+      url: String(media?.url || ""),
+      posterUrl: String(media?.posterUrl || media?.poster || ""),
+      type: media?.type === "video" ? "video" : "image"
+    }))
+    .filter(media => media.url)
+    .slice(0, 9);
+}
+
 function communityMedia(item, compact = false) {
-  if (!item.mediaUrl) return `<div class="community-media-placeholder"><span>壳友动态</span></div>`;
-  if (item.mediaType === "video") return `<video class="community-media" src="${item.mediaUrl}" ${compact ? "muted playsinline preload=\"metadata\"" : "controls playsinline preload=\"metadata\""}></video>`;
-  return `<img class="community-media" src="${item.mediaUrl}" alt="动态图片" loading="lazy">`;
+  const mediaItems = communityPostMediaItems(item);
+  if (!mediaItems.length) return `<div class="community-media-placeholder"><span>壳友动态</span></div>`;
+  const first = mediaItems[0];
+  if (first.type === "video") return `<video class="community-media" src="${first.url}" ${compact ? "muted playsinline preload=\"metadata\"" : "controls playsinline preload=\"metadata\""}></video>`;
+  if (mediaItems.length === 1) return `<img class="community-media" src="${first.url}" alt="动态图片" loading="lazy">`;
+  return `<div class="community-media-gallery community-media-gallery-${mediaItems.length}">${mediaItems.map((media, index) => `<img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy">`).join("")}</div>`;
 }
 
 function communityCompactCard(item) {
+  const primaryMedia = communityPostMediaItems(item)[0];
   return `
     <article class="community-tile">
-      <button class="community-tile-media" type="button" data-page="community">${communityMedia(item, true)}${item.mediaType === "video" ? `<span class="community-video-mark">▶</span>` : ""}</button>
+      <button class="community-tile-media" type="button" data-page="community">${communityMedia(item, true)}${primaryMedia?.type === "video" ? `<span class="community-video-mark">▶</span>` : ""}</button>
       <div class="community-tile-body">
         <p>${escapeHtml(item.content || "分享了一条新动态")}</p>
         <div class="community-tile-author">${communityAvatar(item, "community-mini-avatar")}<span>${escapeHtml(item.authorName || "壳友")}</span><b>♡ ${item.likeCount || 0}</b></div>
@@ -1833,13 +1852,14 @@ function communityCompactCard(item) {
 function communityFeedCard(item) {
   const comments = Array.isArray(item.comments) ? item.comments : [];
   const isOwn = Boolean(item.isOwn || item.pendingLocal);
+  const primaryMedia = communityPostMediaItems(item)[0];
   return `
     <article class="community-moment" data-view-community-post="${item.id}" tabindex="0" role="button" aria-label="查看${escapeHtml(item.authorName || "壳友")}发布的动态">
       <button class="community-profile-avatar-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item)}</button>
       <div class="community-moment-main">
         <div class="community-moment-author"><button class="community-profile-name-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}">${escapeHtml(item.authorName || "壳友")}</button>${!isOwn ? `<span class="community-author-actions"><button class="community-follow-button ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></span>` : ""}</div>
         ${item.content ? `<p class="community-post-copy">${escapeHtml(item.content)}</p>` : ""}
-        ${item.mediaUrl ? `<div class="community-post-media">${communityMedia(item, true)}${item.mediaType === "video" ? `<i class="community-detail-play-mark">▶</i>` : ""}</div>` : ""}
+        ${primaryMedia ? `<div class="community-post-media">${communityMedia(item, true)}${primaryMedia.type === "video" ? `<i class="community-detail-play-mark">▶</i>` : ""}</div>` : ""}
         ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
         <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? `<div class="community-moment-popover"><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "取消" : "赞"}</button><button type="button" data-show-community-comment="${item.id}">评论</button>${!isOwn ? `<button type="button" data-open-content-report data-report-type="community" data-report-id="${item.id}">举报</button><button class="danger-link" type="button" data-block-content-user data-block-type="community" data-block-id="${item.id}" data-block-name="${escapeHtml(item.authorName || "该用户")}">屏蔽</button>` : ""}</div>` : ""}</div></div>
         ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</div>` : ""}
@@ -1856,13 +1876,16 @@ function findCommunityPost(postId) {
 }
 
 function communityDetailMedia(item) {
-  if (!item?.mediaUrl) return "";
-  const label = item.mediaType === "video" ? "放大播放视频" : "放大查看图片";
+  const mediaItems = communityPostMediaItems(item);
+  if (!mediaItems.length) return "";
+  const isGallery = mediaItems.length > 1;
   return `
-    <button class="community-detail-media-button" type="button" data-preview-community-media="${item.id}" aria-label="${label}">
-      ${communityMedia(item, true)}
-      ${item.mediaType === "video" ? `<i class="community-detail-play-mark">▶</i>` : `<i class="community-detail-zoom-mark">⤢</i>`}
-    </button>
+    <div class="community-detail-media-gallery ${isGallery ? "is-gallery" : ""}">
+      ${mediaItems.map((media, index) => {
+        const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
+        return `<button class="community-detail-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}">${media.type === "video" ? `<video class="community-media" src="${media.url}" muted playsinline preload="metadata"></video><i class="community-detail-play-mark">▶</i>` : `<img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i>`}</button>`;
+      }).join("")}
+    </div>
   `;
 }
 
@@ -1927,7 +1950,7 @@ function pageCommunity() {
   return `
     ${topbar("壳友圈", true, `<button class="community-camera-button" type="button" data-community-camera-button aria-label="拍摄或从相册选择"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"></path><circle cx="12" cy="13.5" r="3.5"></circle></svg></button>`)}
     <main class="content page-fresh community-page community-moments-page">
-      <input class="hidden-file" type="file" accept="image/*,video/*" data-community-quick-media>
+      <input class="hidden-file" type="file" accept="image/*,video/*" multiple data-community-quick-media>
       <section class="community-feed">${posts.map(communityFeedCard).join("") || `<div class="empty small-empty"><div><strong>暂时还没有动态</strong><br>点击右上角相机发布第一条内容</div></div>`}</section>
     </main>
     ${bottomNav()}
@@ -1935,14 +1958,20 @@ function pageCommunity() {
 }
 
 function pageCommunityAdd() {
-  const canPublish = Boolean(communityDraftText.trim() || communityDraftMedia);
+  const mediaItems = communityDraftMediaItems;
+  const canPublish = Boolean(communityDraftText.trim() || mediaItems.length);
+  const canAddMedia = !mediaItems.length || (mediaItems[0].type === "image" && mediaItems.length < 9);
   return `
     <div class="community-compose-nav"><button type="button" data-back>取消</button><button class="community-compose-submit ${canPublish ? "is-ready" : ""}" type="submit" form="communityPostForm" data-ready="${canPublish ? "true" : "false"}" aria-disabled="${canPublish ? "false" : "true"}" ${canPublish ? "" : "disabled"}>发表</button></div>
     <main class="community-compose-page">
       <form class="community-publish-form" id="communityPostForm">
         <textarea name="content" maxlength="1200" placeholder="这一刻的想法…">${escapeHtml(communityDraftText)}</textarea>
-        <button class="community-media-preview" type="button" data-community-media-button>${communityDraftMedia ? (communityDraftMediaType === "video" ? `<video src="${communityDraftMedia}" muted playsinline></video><i>▶</i>` : `<img src="${communityDraftMedia}" alt="待发布图片">`) : `<span>＋<small>添加图片或视频</small></span>`}</button>
-        <input class="hidden-file" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime" data-community-media-input>
+        <div class="community-draft-media-grid">
+          ${mediaItems.map((media, index) => `<div class="community-draft-media-item">${media.type === "video" ? `<video src="${media.previewUrl}" muted playsinline></video><i>▶</i>` : `<img src="${media.previewUrl}" alt="待发布图片 ${index + 1}">`}<button type="button" data-remove-community-media="${index}" aria-label="移除媒体">×</button></div>`).join("")}
+          ${canAddMedia ? `<button class="community-media-preview community-media-add" type="button" data-community-media-button><span>＋<small>${mediaItems.length ? "继续添加图片" : "添加图片或视频"}</small></span></button>` : ""}
+        </div>
+        ${mediaItems.length ? `<p class="community-draft-media-tip">${mediaItems[0].type === "video" ? "已选择 1 个视频（视频与图片不可混合发布）" : `已选择 ${mediaItems.length}/9 张图片（图片与视频不可混合发布）`}</p>` : ""}
+        <input class="hidden-file" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime" multiple data-community-media-input>
       </form>
     </main>
   `;
@@ -5032,8 +5061,9 @@ function bindEvents() {
   document.querySelector("#satisfactionForm")?.addEventListener("submit", submitPublicSatisfaction);
   document.querySelectorAll("[data-delete-review]").forEach(btn => btn.addEventListener("click", () => deletePublicReview(btn.dataset.deleteReview)));
   document.querySelector("#feedbackForm")?.addEventListener("submit", submitPublicFeedback);
-  document.querySelector("[data-community-media-button]")?.addEventListener("click", () => document.querySelector("[data-community-media-input]")?.click());
+  document.querySelectorAll("[data-community-media-button]").forEach(button => button.addEventListener("click", () => document.querySelector("[data-community-media-input]")?.click()));
   document.querySelector("[data-community-media-input]")?.addEventListener("change", readCommunityMedia);
+  document.querySelectorAll("[data-remove-community-media]").forEach(button => button.addEventListener("click", () => removeCommunityDraftMedia(Number(button.dataset.removeCommunityMedia))));
   document.querySelector("[data-community-camera-button]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
     document.querySelector("[data-community-quick-media]")?.click();
@@ -5059,9 +5089,12 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-preview-community-media]").forEach(button => button.addEventListener("click", () => {
     const post = findCommunityPost(button.dataset.previewCommunityMedia);
-    if (!post?.mediaUrl) return;
-    if (post.mediaType === "video") openVideoPreview(post.mediaUrl, "动态视频");
-    else openImagePreview(post.mediaUrl, "动态图片");
+    const mediaItems = communityPostMediaItems(post);
+    const index = Math.max(0, Number(button.dataset.previewCommunityMediaIndex || 0));
+    const media = mediaItems[index];
+    if (!media) return;
+    if (media.type === "video") openVideoPreview(media.url, "动态视频");
+    else openImagePreview(media.url, "动态图片");
   }));
   document.querySelectorAll("[data-like-community-post]").forEach(btn => btn.addEventListener("click", () => toggleCommunityLike(btn.dataset.likeCommunityPost)));
   document.querySelectorAll("[data-community-more]").forEach(btn => btn.addEventListener("click", () => setState({ openCommunityActionId: state.openCommunityActionId === btn.dataset.communityMore ? "" : btn.dataset.communityMore }, { skipCloud: true })));
@@ -6037,8 +6070,12 @@ async function nativePickedFiles(items = []) {
     if (!path) continue;
     const source = typeof capacitor?.convertFileSrc === "function" ? capacitor.convertFileSrc(path) : path;
     const response = await fetch(source);
-    if (!response.ok) throw new Error("读取已选媒体失败");
     const blob = await response.blob();
+    // Capacitor's iOS local-file handler returns URLResponse for media files,
+    // which has no HTTP status even when the file body is valid.  Trust a
+    // non-empty body in that case instead of rejecting every selected photo
+    // or video as a failed network response.
+    if ((!response.ok && response.status !== 0) || !blob.size) throw new Error("读取已选媒体失败");
     const mimeType = String(item?.mimeType || blob.type || (item?.mediaType === "video" ? "video/mp4" : "image/jpeg"));
     const extension = mimeType.startsWith("video/") ? "mp4" : "jpg";
     const name = String(item?.name || `${item?.mediaType === "video" ? "video" : "photo"}-${Date.now()}-${index + 1}.${extension}`);
@@ -7072,7 +7109,7 @@ function confirmBlockUser({ targetType = "community", targetId = "", userId = ""
         page: state.page === "marketDetail" ? "market" : state.page === "communityPostDetail" ? "community" : state.page === "communityChat" ? "messages" : state.page,
         openCommunityActionId: ""
       }, { skipCloud: true });
-      toast(mode === "blacklist" ? "已拉黑该用户并删除聊天记录" : "已屏蔽该用户，相关内容已移除并通知平台");
+      toast(mode === "blacklist" ? "已拉黑此用户，账号与安全内可解除拉黑" : "已屏蔽此用户，账号与安全内可解除屏蔽");
     } catch (error) {
       button.disabled = false;
       button.textContent = mode === "blacklist" ? "拉黑此用户" : "屏蔽此用户";
@@ -7164,16 +7201,33 @@ function openAccountDeleteDialog() {
 }
 
 function normalizeCommunityPosts(posts = []) {
-  return posts.map(item => ({
-    ...item,
-    authorName: item.authorName || "壳友",
-    authorAvatar: item.authorAvatar ? apiAssetUrl(item.authorAvatar) : "",
-    mediaUrl: item.mediaUrl ? apiAssetUrl(item.mediaUrl) : "",
-    comments: Array.isArray(item.comments) ? item.comments.map(comment => ({
-      ...comment,
-      authorAvatar: comment.authorAvatar ? apiAssetUrl(comment.authorAvatar) : ""
-    })) : []
-  }));
+  return posts.map(item => {
+    const rawMediaItems = Array.isArray(item.mediaItems) && item.mediaItems.length
+      ? item.mediaItems
+      : (item.mediaUrl ? [{ url: item.mediaUrl, posterUrl: item.posterUrl || "", type: item.mediaType }] : []);
+    const mediaItems = rawMediaItems
+      .map(media => ({
+        url: media?.url ? apiAssetUrl(media.url) : "",
+        posterUrl: media?.posterUrl || media?.poster ? apiAssetUrl(media.posterUrl || media.poster) : "",
+        type: media?.type === "video" ? "video" : "image"
+      }))
+      .filter(media => media.url)
+      .slice(0, 9);
+    const primaryMedia = mediaItems[0] || null;
+    return {
+      ...item,
+      authorName: item.authorName || "壳友",
+      authorAvatar: item.authorAvatar ? apiAssetUrl(item.authorAvatar) : "",
+      mediaUrl: primaryMedia?.url || "",
+      posterUrl: primaryMedia?.posterUrl || "",
+      mediaType: primaryMedia?.type || "",
+      mediaItems,
+      comments: Array.isArray(item.comments) ? item.comments.map(comment => ({
+        ...comment,
+        authorAvatar: comment.authorAvatar ? apiAssetUrl(comment.authorAvatar) : ""
+      })) : []
+    };
+  });
 }
 
 async function refreshCommunity(force = false) {
@@ -7496,10 +7550,7 @@ function syncCommunityPublishButton() {
   const submit = document.querySelector(".community-compose-submit");
   if (!submit) return;
   const text = document.querySelector("#communityPostForm textarea")?.value.trim() || "";
-  const hasMedia = Boolean(
-    communityDraftMedia ||
-    document.querySelector(".community-media-preview img, .community-media-preview video")
-  );
+  const hasMedia = communityDraftMediaItems.length > 0;
   const ready = Boolean(text || hasMedia);
   submit.classList.toggle("is-ready", ready);
   submit.dataset.ready = ready ? "true" : "false";
@@ -7508,34 +7559,71 @@ function syncCommunityPublishButton() {
   submit.setAttribute("aria-disabled", ready ? "false" : "true");
 }
 
+function syncCommunityDraftMediaLegacyState() {
+  const first = communityDraftMediaItems[0] || null;
+  communityDraftMedia = first?.previewUrl || "";
+  communityDraftMediaType = first?.type || "";
+  communityDraftMediaFile = first?.file || null;
+  communityDraftMediaDuration = Number(first?.duration || 0);
+}
+
+function clearCommunityDraftMedia({ revoke = true } = {}) {
+  if (revoke) {
+    communityDraftMediaItems.forEach(media => {
+      if (String(media?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(media.previewUrl);
+    });
+  }
+  communityDraftMediaItems = [];
+  syncCommunityDraftMediaLegacyState();
+}
+
+function removeCommunityDraftMedia(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= communityDraftMediaItems.length) return;
+  const [removed] = communityDraftMediaItems.splice(index, 1);
+  if (String(removed?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(removed.previewUrl);
+  syncCommunityDraftMediaLegacyState();
+  render();
+}
+
 async function readCommunityMedia(event) {
-  const file = event.target.files?.[0];
-  if (!file) return;
+  const files = Array.from(event.target.files || []);
+  if (!files.length) return;
   const openComposerAfterRead = event.currentTarget.hasAttribute("data-community-quick-media");
   communityDraftText = document.querySelector("#communityPostForm textarea")?.value || communityDraftText;
-  if (!/^(image\/(jpeg|png|webp)|video\/(mp4|webm|quicktime))$/i.test(file.type)) {
-    event.target.value = "";
+  event.target.value = "";
+  const kinds = files.map(localMediaFileKind);
+  if (kinds.some(kind => !kind)) {
     return toast("请选择 JPG、PNG、WebP、MP4、WebM 或 MOV");
   }
-  const isVideo = file.type.startsWith("video/");
-  if (!isVideo && file.size > 10 * 1024 * 1024) {
-    event.target.value = "";
-    return toast("图片不能超过 10MB");
+  const mediaType = kinds[0];
+  if (kinds.some(kind => kind !== mediaType)) return toast("图片和视频不能混合发布，请重新选择");
+  if (mediaType === "video" && files.length !== 1) return toast("壳友圈每条动态只能发布 1 个视频");
+  if (communityDraftMediaItems.length && communityDraftMediaItems[0].type !== mediaType) {
+    return toast("图片和视频不能混合发布，请先移除已选媒体");
   }
+  if (mediaType === "video" && communityDraftMediaItems.length) return toast("壳友圈每条动态只能发布 1 个视频");
+  const remaining = mediaType === "image" ? Math.max(0, 9 - communityDraftMediaItems.length) : 1;
+  if (!remaining) return toast("图片最多可发布 9 张");
+  const selectedFiles = files.slice(0, remaining);
+  if (files.length > selectedFiles.length) toast("图片最多可发布 9 张，已保留前 9 张");
+  if (selectedFiles.some(file => mediaType === "image" && file.size > 10 * 1024 * 1024)) return toast("每张图片不能超过 10MB");
   try {
-    let duration = 0;
-    if (isVideo) {
-      duration = await readVideoDuration(file);
-      if (duration > 30) {
-        event.target.value = "";
-        return toast("视频时长不能超过30秒");
+    const addedMedia = [];
+    for (const file of selectedFiles) {
+      let duration = 0;
+      if (mediaType === "video") {
+        duration = await readVideoDuration(file);
+        if (duration > 30) return toast("视频时长不能超过 30 秒");
       }
+      addedMedia.push({
+        file,
+        type: mediaType,
+        duration,
+        previewUrl: URL.createObjectURL(file)
+      });
     }
-    if (communityDraftMediaFile && communityDraftMedia.startsWith("blob:")) URL.revokeObjectURL(communityDraftMedia);
-    communityDraftMedia = isVideo ? URL.createObjectURL(file) : await fileAsDataUrl(file);
-    communityDraftMediaType = isVideo ? "video" : "image";
-    communityDraftMediaFile = isVideo ? file : null;
-    communityDraftMediaDuration = duration;
+    communityDraftMediaItems = [...communityDraftMediaItems, ...addedMedia];
+    syncCommunityDraftMediaLegacyState();
     if (openComposerAfterRead) setState({ page: "communityAdd" }, { skipCloud: true });
     else render();
   } catch (error) {
@@ -7549,34 +7637,48 @@ async function submitCommunityPost(event) {
   const form = new FormData(event.currentTarget);
   const content = String(form.get("content") || "").trim();
   const visibility = "public";
-  if (!content && !communityDraftMedia) return toast("写点内容，或添加图片、视频");
+  const draftMedia = [...communityDraftMediaItems];
+  if (!content && !draftMedia.length) return toast("写点内容，或添加图片、视频");
   try {
-    let mediaUrl = "";
-    let mediaType = "";
-    if (communityDraftMedia) {
-      const uploaded = communityDraftMediaFile
-        ? await apiUploadMediaFile(communityDraftMediaFile, communityDraftMediaDuration)
-        : await apiPost("/api/upload/media", communityAuthPayload({ media: communityDraftMedia }));
-      mediaUrl = uploaded.url || "";
-      mediaType = uploaded.mediaType || communityDraftMediaType;
+    const mediaItems = [];
+    for (let index = 0; index < draftMedia.length; index += 1) {
+      const media = draftMedia[index];
+      const uploaded = await apiUploadMediaFile(media.file, media.duration || 0);
+      if (!uploaded?.url) throw new Error("媒体上传失败，请稍后重试");
+      mediaItems.push({
+        url: uploaded.url,
+        posterUrl: uploaded.posterUrl || "",
+        type: uploaded.mediaType === "video" ? "video" : media.type
+      });
     }
-    const result = await apiPost("/api/community/create", communityAuthPayload({ content, mediaUrl, mediaType, visibility }));
-    if (communityDraftMediaFile && communityDraftMedia.startsWith("blob:")) URL.revokeObjectURL(communityDraftMedia);
-    communityDraftMedia = "";
-    communityDraftMediaType = "";
-    communityDraftMediaFile = null;
-    communityDraftMediaDuration = 0;
+    const primaryMedia = mediaItems[0] || null;
+    const result = await apiPost("/api/community/create", communityAuthPayload({
+      content,
+      mediaUrl: primaryMedia?.url || "",
+      posterUrl: primaryMedia?.posterUrl || "",
+      mediaType: primaryMedia?.type || "",
+      mediaItems,
+      visibility
+    }));
+    clearCommunityDraftMedia();
     communityDraftText = "";
     communityLastLoadedAt = Date.now();
     setState({ page: "community", communityPosts: normalizeCommunityPosts(result.posts || []), communityFriends: result.friends || state.communityFriends }, { skipCloud: true });
     toast("动态已发布");
   } catch (error) {
     if (error.status === 405 || error.message === "方法不支持") {
+      const localMediaItems = draftMedia.map(media => ({
+        url: media.previewUrl,
+        posterUrl: "",
+        type: media.type
+      }));
+      const primaryMedia = localMediaItems[0] || null;
       const localPost = {
         id: `local-${Date.now()}`,
         content,
-        mediaUrl: communityDraftMedia,
-        mediaType: communityDraftMediaType,
+        mediaUrl: primaryMedia?.url || "",
+        mediaType: primaryMedia?.type || "",
+        mediaItems: localMediaItems,
         visibility,
         authorId: state.loggedInPhone,
         authorName: state.accountName || "壳友",
@@ -7589,10 +7691,7 @@ async function submitCommunityPost(event) {
         comments: [],
         pendingLocal: true
       };
-      communityDraftMedia = "";
-      communityDraftMediaType = "";
-      communityDraftMediaFile = null;
-      communityDraftMediaDuration = 0;
+      clearCommunityDraftMedia({ revoke: false });
       communityDraftText = "";
       setState({ page: "community", communityPosts: [localPost, ...(state.communityPosts || [])] }, { skipCloud: true });
       toast("动态已发布");
@@ -8404,6 +8503,7 @@ function submitProfile(event) {
   setState({
     accountName: nickname,
     registeredUsers,
+    page: "mine",
     activityLogs: logActivity(`更新账号资料：${nickname}`, "空间")
   });
   toast("昵称和头像已保存");

@@ -1937,6 +1937,25 @@ function hasCommunityConversation(db, phoneA, phoneB) {
   );
 }
 
+function communityMediaItemsFromPost(item) {
+  const rawMediaItems = Array.isArray(item?.mediaItems) && item.mediaItems.length
+    ? item.mediaItems
+    : (item?.mediaUrl ? [{
+      url: item.mediaUrl,
+      posterUrl: item.posterUrl || "",
+      type: item.mediaType
+    }] : []);
+  const mediaItems = rawMediaItems
+    .map(media => ({
+      url: trimPublicText(media?.url, 800),
+      posterUrl: trimPublicText(media?.posterUrl || media?.poster, 800),
+      type: media?.type === "video" ? "video" : "image"
+    }))
+    .filter(media => media.url);
+  const video = mediaItems.find(media => media.type === "video");
+  return video ? [video] : mediaItems.slice(0, 9);
+}
+
 function publicCommunityPosts(db, viewer = null) {
   const viewerPhone = viewer?.phone || "";
   const blocked = blockedPhoneSet(viewer);
@@ -1947,11 +1966,15 @@ function publicCommunityPosts(db, viewer = null) {
     .map(item => {
       const author = db.users?.[item.authorPhoneRaw];
       const likes = Array.isArray(item.likes) ? item.likes : [];
+      const mediaItems = communityMediaItemsFromPost(item);
+      const primaryMedia = mediaItems[0] || null;
       return {
         id: item.id,
         content: item.content || "",
-        mediaUrl: item.mediaUrl || "",
-        mediaType: item.mediaType || "",
+        mediaUrl: primaryMedia?.url || "",
+        posterUrl: primaryMedia?.posterUrl || "",
+        mediaType: primaryMedia?.type || "",
+        mediaItems,
         location: item.location || "",
         mentions: item.mentions || "",
         visibility: item.visibility || "public",
@@ -2005,19 +2028,33 @@ async function handleCommunityCreate(req, res) {
   const user = requireReviewUser(db, body, res);
   if (!user) return;
   const content = trimPublicText(body.content, 1200);
-  const mediaUrl = trimPublicText(body.mediaUrl, 800);
-  const posterUrl = trimPublicText(body.posterUrl, 800);
-  const mediaType = ["image", "video"].includes(body.mediaType) ? body.mediaType : "";
+  const rawMediaItems = Array.isArray(body.mediaItems)
+    ? body.mediaItems
+    : (body.mediaUrl ? [{ url: body.mediaUrl, posterUrl: body.posterUrl, type: body.mediaType }] : []);
+  if (rawMediaItems.length > 9) return sendJson(res, 400, { ok: false, message: "图片最多可发布 9 张" });
+  const mediaItems = rawMediaItems
+    .map(media => ({
+      url: trimPublicText(media?.url, 800),
+      posterUrl: trimPublicText(media?.posterUrl || media?.poster, 800),
+      type: media?.type === "video" ? "video" : "image"
+    }))
+    .filter(media => media.url);
+  const videoCount = mediaItems.filter(media => media.type === "video").length;
+  if (videoCount && mediaItems.length !== 1) {
+    return sendJson(res, 400, { ok: false, message: "视频和图片不可混合发布，每条动态只能发布 1 个视频" });
+  }
+  const primaryMedia = mediaItems[0] || null;
   const location = trimPublicText(body.location, 100);
   const mentions = trimPublicText(body.mentions, 200);
   const visibility = "public";
-  if (!content && !mediaUrl) return sendJson(res, 400, { ok: false, message: "请填写内容或选择图片、视频" });
+  if (!content && !primaryMedia) return sendJson(res, 400, { ok: false, message: "请填写内容或选择图片、视频" });
   const post = {
     id: crypto.randomUUID(),
     content,
-    mediaUrl,
-    posterUrl,
-    mediaType,
+    mediaUrl: primaryMedia?.url || "",
+    posterUrl: primaryMedia?.posterUrl || "",
+    mediaType: primaryMedia?.type || "",
+    mediaItems,
     location,
     mentions,
     visibility,
