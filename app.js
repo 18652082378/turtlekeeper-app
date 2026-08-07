@@ -1633,7 +1633,7 @@ function topbar(title, back = false, action = "", leading = "") {
   return `
     <div class="topbar">
       <div class="nav-title">
-        ${back ? `<button class="icon-btn" data-back>‹</button>` : (leading || `<span></span>`)}
+        ${back ? `<button class="icon-btn" type="button" data-back aria-label="返回"><svg class="back-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 4.5-7 7.5 7 7.5"></path></svg></button>` : (leading || `<span></span>`)}
         <h1>${title}</h1>
         ${action || `<span></span>`}
       </div>
@@ -2116,7 +2116,7 @@ function pageCommunityChat() {
       : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`);
   const chatHeader = `
     <div class="topbar community-chat-topbar">
-      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回">‹</button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button><button class="community-chat-more" type="button" data-open-chat-more data-user-id="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" data-user-name="${escapeHtml(friend?.name || "该用户")}" aria-label="更多操作">•••</button></div>
+      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回"><svg class="back-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 4.5-7 7.5 7 7.5"></path></svg></button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button><button class="community-chat-more" type="button" data-open-chat-more data-user-id="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" data-user-name="${escapeHtml(friend?.name || "该用户")}" aria-label="更多操作">•••</button></div>
     </div>
   `;
   return `
