@@ -1804,12 +1804,14 @@ function setupBottomNavForegroundRecovery() {
 }
 
 function communityAvatar(item, className = "community-avatar") {
-  if (item.authorAvatar || item.avatar) return `<img class="${className}" src="${item.authorAvatar || item.avatar}" alt="头像">`;
+  const avatar = accountAvatarSource(item.authorAvatar || item.avatar || "");
+  if (avatar) return `<img class="${className}" src="${escapeHtml(avatar)}" alt="头像">`;
   return `<span class="${className} fallback-avatar">${escapeHtml(String(item.authorName || item.name || "壳").slice(0, 1))}</span>`;
 }
 
 function marketSellerAvatar(item, className) {
-  if (item.sellerAvatar) return `<img class="${className}" src="${item.sellerAvatar}" alt="卖家头像">`;
+  const avatar = accountAvatarSource(item.sellerAvatar || "");
+  if (avatar) return `<img class="${className}" src="${escapeHtml(avatar)}" alt="卖家头像">`;
   return `<span class="${className} market-default-avatar">龟</span>`;
 }
 

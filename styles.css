@@ -95,6 +95,17 @@
   font-weight: 700;
 }
 .account-delete-button:disabled { opacity: .45; }
+html[data-theme-color="dark"] .account-delete-button {
+  border: 1px solid rgba(255, 132, 142, .38);
+  color: #fff;
+  background: #c8424d;
+  box-shadow: 0 5px 14px rgba(200, 66, 77, .22);
+}
+html[data-theme-color="dark"] .account-delete-button:disabled {
+  color: #ffe9eb;
+  background: #7b343b;
+  opacity: 1;
+}
 .safety-dialog-actions { display: grid; grid-template-columns: 1fr 1.35fr; gap: 10px; margin-top: 18px; }
 .account-delete-warning {
   margin: 12px 0 16px;

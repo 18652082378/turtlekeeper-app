@@ -4,7 +4,8 @@
   "webDir": "www",
   "bundledWebRuntime": false,
   "ios": {
-    "scheme": "TurtleKeeper"
+    "scheme": "TurtleKeeper",
+    "handleApplicationNotifications": true
   },
   "plugins": {
     "PushNotifications": {

@@ -717,7 +717,10 @@ function sendApnsNotification(deviceToken, payload) {
       request.on("end", () => {
         let reason = "";
         try { reason = JSON.parse(responseBody || "{}").reason || ""; } catch {}
-        const invalid = status === 410 || ["BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"].includes(reason);
+        // APNs tokens are tied to the app's signing environment. Remove a token
+        // rejected for an environment mismatch as well, so the next app launch
+        // registers its current production token instead of retrying a stale one.
+        const invalid = status === 410 || ["BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered", "BadEnvironmentKeyInToken"].includes(reason);
         finish({ ok: status >= 200 && status < 300, invalid, reason, status });
       });
       request.on("error", error => finish({ ok: false, reason: error.message || "APNs request error" }));
