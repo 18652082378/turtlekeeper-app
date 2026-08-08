@@ -386,6 +386,8 @@ let nativePushListenersAttached = false;
 let nativePushSetupInFlight = false;
 let nativePushDeviceToken = "";
 let nativeMediaPickerOpening = false;
+// Do not open a preview from the synthetic click at the end of a carousel drag.
+let marketGalleryPreviewSuppressUntil = 0;
 
 if (CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE) {
   state = { ...state, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" };
@@ -3473,7 +3475,7 @@ function pageAdd() {
             <option value="">请选择品种</option>
             ${kept.map(s => `<option value="${s.code}" ${draftSpeciesCode === s.code ? "selected" : ""}>${s.code} · ${s.name}</option>`).join("")}
           </select>
-          <button class="text-green" type="button" data-page="species" style="margin-top:8px;">没有这个品种？去图鉴添加</button>
+          <button class="text-green add-species-hint" type="button" data-page="species">没有这个品种？去图鉴添加</button>
           <div class="label">龟池</div>
           <select class="select" name="poolId">
             <option value="">暂不关联龟池</option>
@@ -4890,10 +4892,13 @@ function bindEvents() {
     .map(img => ({ src: img.currentSrc || img.src, alt: img.alt || "商品实拍图" }))
     .filter(item => item.src);
   document.querySelectorAll("[data-preview-market-image]").forEach((img, index) => {
-    const openPreview = () => openImagePreview(img.currentSrc || img.src, img.alt || "商品实拍图", {
-      gallery: marketPreviewImages,
-      index
-    });
+    const openPreview = () => {
+      if (Date.now() < marketGalleryPreviewSuppressUntil) return;
+      openImagePreview(img.currentSrc || img.src, img.alt || "商品实拍图", {
+        gallery: marketPreviewImages,
+        index
+      });
+    };
     img.addEventListener("click", openPreview);
     img.addEventListener("keydown", event => {
       if (event.key !== "Enter" && event.key !== " ") return;
@@ -5215,6 +5220,99 @@ function bindEvents() {
     marketDetailGallery.addEventListener("scroll", updateGalleryControls, { passive: true });
     window.addEventListener("resize", updateGalleryControls, { once: true });
     requestAnimationFrame(updateGalleryControls);
+
+    // Keep a drag constrained to its immediate neighbour.  A long or fast
+    // swipe must never skip across several listing photos in one movement.
+    let galleryPointer = null;
+    const slideWidth = () => Math.max(1, marketDetailGallery.clientWidth);
+    const releaseGalleryPointer = active => {
+      if (active?.pointerId === undefined) return;
+      try { marketDetailGallery.releasePointerCapture(active.pointerId); } catch {}
+    };
+    const settleGallery = (active, cancelled = false) => {
+      if (!active?.dragging) return;
+      const width = slideWidth();
+      const startIndex = Math.round(active.startScroll / width);
+      const distance = active.lastX - active.startX;
+      const projectedDistance = cancelled ? distance : distance + (active.velocityX * 140);
+      const threshold = Math.max(36, width * .12);
+      let target = startIndex;
+      if (cancelled) {
+        // A cancelled gesture simply settles to the closest of the current
+        // photo and its two direct neighbours.
+        target = Math.round(marketDetailGallery.scrollLeft / width);
+        target = Math.max(startIndex - 1, Math.min(startIndex + 1, target));
+      } else if (Math.abs(projectedDistance) >= threshold) {
+        target = startIndex + (projectedDistance < 0 ? 1 : -1);
+      }
+      target = Math.max(0, Math.min(slides.length - 1, target));
+      marketDetailGallery.classList.remove("is-dragging");
+      marketDetailGallery.scrollTo({ left: target * width, behavior: "smooth" });
+      marketGalleryPreviewSuppressUntil = Date.now() + 320;
+    };
+    marketDetailGallery.addEventListener("pointerdown", event => {
+      if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+      if (event.target.closest("button, video")) return;
+      const now = performance.now();
+      galleryPointer = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        lastX: event.clientX,
+        lastAt: now,
+        velocityX: 0,
+        startScroll: marketDetailGallery.scrollLeft,
+        dragging: false
+      };
+    }, { passive: true });
+    marketDetailGallery.addEventListener("pointermove", event => {
+      const active = galleryPointer;
+      if (!active || event.pointerId !== active.pointerId || !event.isPrimary) return;
+      const dx = event.clientX - active.startX;
+      // Keep vertical page scrolling natural until a horizontal drag is clear.
+      if (!active.dragging) {
+        const movementY = Math.abs(event.clientY - active.startY);
+        if (Math.max(Math.abs(dx), movementY) < 6) return;
+        if (movementY > Math.abs(dx)) {
+          galleryPointer = null;
+          return;
+        }
+        active.dragging = true;
+        marketDetailGallery.classList.add("is-dragging");
+        marketDetailGallery.setPointerCapture?.(active.pointerId);
+      }
+      const now = performance.now();
+      const elapsed = Math.max(1, now - active.lastAt);
+      active.velocityX = (event.clientX - active.lastX) / elapsed;
+      active.lastX = event.clientX;
+      active.lastAt = now;
+      const maxScroll = Math.max(0, marketDetailGallery.scrollWidth - marketDetailGallery.clientWidth);
+      const width = slideWidth();
+      // Do not expose more than one neighbouring photo during an individual
+      // drag either, even if the finger travels a large distance.
+      const minDragScroll = Math.max(0, active.startScroll - width);
+      const maxDragScroll = Math.min(maxScroll, active.startScroll + width);
+      marketDetailGallery.scrollLeft = Math.max(minDragScroll, Math.min(maxDragScroll, active.startScroll - dx));
+      if (event.cancelable) event.preventDefault();
+    }, { passive: false });
+    marketDetailGallery.addEventListener("pointerup", event => {
+      const active = galleryPointer;
+      if (!active || event.pointerId !== active.pointerId) return;
+      const now = performance.now();
+      const elapsed = Math.max(1, now - active.lastAt);
+      active.velocityX = (event.clientX - active.lastX) / elapsed;
+      active.lastX = event.clientX;
+      releaseGalleryPointer(active);
+      settleGallery(active);
+      galleryPointer = null;
+    }, { passive: true });
+    marketDetailGallery.addEventListener("pointercancel", event => {
+      const active = galleryPointer;
+      if (!active || event.pointerId !== active.pointerId) return;
+      releaseGalleryPointer(active);
+      settleGallery(active, true);
+      galleryPointer = null;
+    }, { passive: true });
   }
   document.querySelectorAll("[data-market-favorite]").forEach(btn => btn.addEventListener("click", event => {
     event.preventDefault();
@@ -9799,10 +9897,15 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
   document.body.classList.add("image-preview-open");
 
   let switchTimer = 0;
+  let switchSequence = 0;
   let pointerId = null;
   let startX = 0;
   let deltaX = 0;
+  let lastX = 0;
+  let lastAt = 0;
+  let velocityX = 0;
   let dragging = false;
+  let ignoreStageBlankClick = false;
   const update = (direction = 0, animate = false) => {
     const item = gallery[activeIndex];
     image.src = item.src;
@@ -9815,6 +9918,31 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     image.classList.add(direction > 0 ? "is-entering-from-right" : "is-entering-from-left");
     requestAnimationFrame(() => image.classList.remove("is-entering-from-left", "is-entering-from-right"));
   };
+  const preloadPreviewImage = source => new Promise(resolve => {
+    const cachedImage = new Image();
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    cachedImage.addEventListener("load", () => {
+      if (typeof cachedImage.decode === "function") {
+        cachedImage.decode().catch(() => {}).then(finish);
+      } else {
+        finish();
+      }
+    }, { once: true });
+    cachedImage.addEventListener("error", finish, { once: true });
+    cachedImage.src = source;
+    if (cachedImage.complete) {
+      if (typeof cachedImage.decode === "function") {
+        cachedImage.decode().catch(() => {}).then(finish);
+      } else {
+        finish();
+      }
+    }
+  });
   const switchImage = offset => {
     const target = Math.max(0, Math.min(gallery.length - 1, activeIndex + offset));
     if (target === activeIndex) {
@@ -9823,18 +9951,30 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
       return;
     }
     const direction = target > activeIndex ? 1 : -1;
-    image.classList.add(direction > 0 ? "is-leaving-to-left" : "is-leaving-to-right");
-    window.clearTimeout(switchTimer);
-    switchTimer = window.setTimeout(() => {
-      if (!overlay.isConnected) return;
-      activeIndex = target;
-      image.classList.remove("is-leaving-to-left", "is-leaving-to-right");
-      update(direction, true);
-    }, 110);
+    const sequence = ++switchSequence;
+    // Keep the current image visible until the target has decoded. This avoids
+    // the black flash caused by assigning a still-loading image source.
+    void preloadPreviewImage(gallery[target].src).then(() => {
+      if (!overlay.isConnected || sequence !== switchSequence) return;
+      image.classList.add(direction > 0 ? "is-leaving-to-left" : "is-leaving-to-right");
+      window.clearTimeout(switchTimer);
+      switchTimer = window.setTimeout(() => {
+        if (!overlay.isConnected || sequence !== switchSequence) return;
+        activeIndex = target;
+        image.classList.remove("is-leaving-to-left", "is-leaving-to-right");
+        update(direction, true);
+      }, 110);
+    });
   };
   update();
+  // Warm the browser cache for adjacent images as soon as the preview opens.
+  if (isGallery) gallery.forEach(item => {
+    if (item.src !== gallery[activeIndex].src) void preloadPreviewImage(item.src);
+  });
 
   const close = () => {
+    if (!overlay.isConnected) return;
+    switchSequence += 1;
     window.clearTimeout(switchTimer);
     document.removeEventListener("keydown", handleKeydown);
     document.body.classList.remove("image-preview-open");
@@ -9852,15 +9992,21 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
   };
   const finishPointer = event => {
     if (pointerId === null || (event?.pointerId !== undefined && event.pointerId !== pointerId)) return;
-    const distance = deltaX;
+    const distance = Number.isFinite(event?.clientX) ? event.clientX - startX : deltaX;
+    // A quick flick has a small measured distance. Project its velocity only
+    // to determine its direction; one gesture always means one photo.
+    const projectedDistance = distance + (velocityX * 160);
     try { stage.releasePointerCapture(pointerId); } catch {}
+    const wasDragging = dragging;
     pointerId = null;
     deltaX = 0;
     restorePosition();
-    if (!dragging) return;
+    ignoreStageBlankClick = wasDragging;
+    if (!wasDragging) return;
     const threshold = Math.max(44, stage.clientWidth * 0.14);
-    if (distance <= -threshold) switchImage(1);
-    else if (distance >= threshold) switchImage(-1);
+    const travel = Math.abs(projectedDistance) >= threshold ? projectedDistance : distance;
+    if (Math.abs(travel) < threshold) return;
+    switchImage(travel < 0 ? 1 : -1);
   };
 
   if (isGallery) {
@@ -9870,14 +10016,23 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
       if (event.pointerType === "mouse" && event.button !== 0) return;
       pointerId = event.pointerId;
       startX = event.clientX;
+      lastX = startX;
+      lastAt = performance.now();
+      velocityX = 0;
       deltaX = 0;
       dragging = false;
+      ignoreStageBlankClick = false;
       stage.classList.add("is-dragging");
       stage.setPointerCapture?.(pointerId);
     });
     stage.addEventListener("pointermove", event => {
       if (pointerId === null || event.pointerId !== pointerId) return;
       deltaX = event.clientX - startX;
+      const now = performance.now();
+      const elapsed = Math.max(1, now - lastAt);
+      velocityX = (event.clientX - lastX) / elapsed;
+      lastX = event.clientX;
+      lastAt = now;
       if (Math.abs(deltaX) > 4) dragging = true;
       const resistance = (activeIndex === 0 && deltaX > 0) || (activeIndex === gallery.length - 1 && deltaX < 0) ? 0.28 : 0.72;
       image.style.transform = `translate3d(${Math.round(deltaX * resistance)}px, 0, 0)`;
@@ -9887,9 +10042,23 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     stage.addEventListener("pointercancel", finishPointer);
   }
 
-  closeButton.addEventListener("click", close);
+  const closeFromButton = event => {
+    event.preventDefault();
+    event.stopPropagation();
+    close();
+  };
+  // Use pointerup as well as click so the close control responds reliably on
+  // both touch devices and desktop browsers.
+  closeButton.addEventListener("pointerup", closeFromButton);
+  closeButton.addEventListener("click", closeFromButton);
   overlay.addEventListener("click", event => {
-    if (event.target === overlay) close();
+    if (event.target === stage && ignoreStageBlankClick) {
+      ignoreStageBlankClick = false;
+      return;
+    }
+    // The stage deliberately fills the empty area around a contained image.
+    // Treat that empty area exactly like the dark overlay when closing.
+    if (event.target === overlay || event.target === stage) close();
   });
   overlay.__closePreview = close;
   document.addEventListener("keydown", handleKeydown);

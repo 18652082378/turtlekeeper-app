@@ -12113,6 +12113,22 @@ html[data-theme-color="dark"] .profile-plan-badge.pro {
   margin-top: -4px !important;
 }
 
+/* New turtle profile: make the species catalogue shortcut easy to find,
+   independent of the two-column form layout above. */
+.form-block > .add-species-hint {
+  grid-column: 1 / -1 !important;
+  justify-self: center !important;
+  margin-top: 8px !important;
+  background: transparent !important;
+  border-color: transparent !important;
+}
+
+html[data-theme-color="dark"] .form-block > .add-species-hint {
+  color: #07c160 !important;
+  background: transparent !important;
+  border-color: transparent !important;
+}
+
 .memo-form label,
 .breeding-form-grid label,
 .ledger-date-filter label,
@@ -12816,6 +12832,7 @@ body.image-preview-open {
   position: absolute;
   top: max(14px, env(safe-area-inset-top));
   right: 16px;
+  z-index: 3;
   width: 42px;
   height: 42px;
   padding: 0;
@@ -12827,6 +12844,8 @@ body.image-preview-open {
   font-size: 30px;
   font-weight: 300;
   line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
 }
 
 .image-preview-caption {
@@ -14743,8 +14762,20 @@ html[data-theme-color="dark"] .profile-content-tabs button.active {
   display: flex;
   overflow-x: auto;
   scroll-snap-type: x mandatory;
+  touch-action: pan-y;
+  overscroll-behavior-x: contain;
   scrollbar-width: none;
   background: #0f1110;
+}
+
+.market-detail-gallery.is-dragging {
+  scroll-snap-type: none;
+  scroll-behavior: auto;
+  cursor: grabbing;
+}
+
+.market-detail-gallery.is-dragging .market-detail-photo img {
+  pointer-events: none;
 }
 
 .market-detail-gallery-wrap {

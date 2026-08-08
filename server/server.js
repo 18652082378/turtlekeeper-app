@@ -745,13 +745,34 @@ function removeInvalidPushDevice(phone, deviceToken) {
   writeDatabase(db);
 }
 
+function communityUnreadMessageCount(db, user) {
+  if (!user?.phone) return 0;
+  return (Array.isArray(db.messages) ? db.messages : [])
+    .filter(item => item.toPhone === user.phone && !item.readAt)
+    .length;
+}
+
+// A badge-only APNs payload updates the app-icon number without displaying a
+// banner.  It keeps the system badge in step with messages that were marked
+// read from another device or inside the app.
+async function syncCommunityUnreadBadge(db, user) {
+  if (!apnsConfigured() || !user) return;
+  const devices = normalizedPushDevices(user.pushDevices);
+  if (!devices.length) return;
+  const badge = Math.min(99, Math.max(0, communityUnreadMessageCount(db, user)));
+  const payload = { aps: { badge } };
+  const results = await Promise.all(devices.map(item => sendApnsNotification(item.token, payload)));
+  results.forEach((result, index) => {
+    if (result.invalid) removeInvalidPushDevice(user.phone, devices[index].token);
+    else if (!result.ok && !result.skipped) console.warn("APNs badge sync failed:", result.reason || result.status || "unknown");
+  });
+}
+
 async function notifyCommunityMessage(db, message, sender, recipient) {
   if (!apnsConfigured() || !recipient) return;
   const devices = normalizedPushDevices(recipient.pushDevices);
   if (!devices.length) return;
-  const unreadCount = (Array.isArray(db.messages) ? db.messages : [])
-    .filter(item => item.toPhone === recipient.phone && !item.readAt)
-    .length;
+  const unreadCount = communityUnreadMessageCount(db, recipient);
   const preview = communityMessagePreview(message) || "发来一条新消息";
   const payload = {
     aps: {
@@ -1275,6 +1296,9 @@ async function handlePushDeviceRegister(req, res) {
   ].filter((item, index, list) => list.findIndex(other => other.token === item.token) === index).slice(-8);
   user.updatedAt = now;
   writeDatabase(db);
+  // Correct an icon badge left by a previous session as soon as this iPhone
+  // registers again, even before the user opens a conversation.
+  void syncCommunityUnreadBadge(db, user);
   return sendJson(res, 200, { ok: true, registered: true });
 }
 
@@ -2425,7 +2449,12 @@ async function handleCommunityChatList(req, res) {
       readStateChanged = true;
     }
   });
-  if (readStateChanged) writeDatabase(db);
+  if (readStateChanged) {
+    writeDatabase(db);
+    // Reading a conversation may bring the total down to zero. Update every
+    // registered device without showing another user-facing notification.
+    void syncCommunityUnreadBadge(db, user);
+  }
   const messages = communityConversationMessages(db, user.phone, target.phone);
   return sendJson(res, 200, {
     ok: true,
@@ -2527,9 +2556,7 @@ async function handleCommunityUnread(req, res) {
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
-  const unreadCount = (Array.isArray(db.messages) ? db.messages : [])
-    .filter(item => item.toPhone === user.phone && !item.readAt)
-    .length;
+  const unreadCount = communityUnreadMessageCount(db, user);
   return sendJson(res, 200, { ok: true, unreadCount, friends: communityFriends(db, user) });
 }
 
