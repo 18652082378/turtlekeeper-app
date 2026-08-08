@@ -3085,7 +3085,7 @@ function pageMarketDetail() {
     ${topbar("商品详情", true, detailMoreAction)}
     <main class="content page-fresh market-detail-page">
       <section class="market-detail-gallery-wrap">
-      <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster, sold, index === 0) : `<div class="market-detail-photo"><img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`}</section>
+      <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery><div class="market-detail-gallery-track" data-market-detail-gallery-track>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster, sold, index === 0) : `<div class="market-detail-photo"><img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`}</div></section>
         <span class="market-detail-gallery-count" data-market-gallery-count aria-live="polite">1/${Math.max(1, primaryMediaItems.length)}</span>
         ${hasPrimaryGalleryControls ? `<button class="market-detail-gallery-arrow prev" type="button" data-market-gallery-prev aria-label="查看上一张图片" aria-controls="marketDetailGallery">‹</button><button class="market-detail-gallery-arrow next" type="button" data-market-gallery-next aria-label="查看下一张图片" aria-controls="marketDetailGallery">›</button>` : ""}
       </section>
@@ -5308,49 +5308,51 @@ function bindEvents() {
   document.querySelectorAll("[data-view-market-seller]").forEach(btn => btn.addEventListener("click", () => openMarketSeller(btn.dataset.viewMarketSeller)));
   const marketDetailGallery = document.querySelector("[data-market-detail-gallery]");
   if (marketDetailGallery) {
-    const slides = Array.from(marketDetailGallery.querySelectorAll(".market-detail-photo"));
+    const track = marketDetailGallery.querySelector("[data-market-detail-gallery-track]");
+    const slides = Array.from(track?.querySelectorAll(".market-detail-photo") || []);
     const previous = document.querySelector("[data-market-gallery-prev]");
     const next = document.querySelector("[data-market-gallery-next]");
     const count = document.querySelector("[data-market-gallery-count]");
-    let controlsFrame = 0;
-    let pendingScrollLeft = null;
-    let galleryScrollFrame = 0;
-    let lastGalleryIndex = -1;
+    let galleryIndex = 0;
+    let galleryPaintFrame = 0;
+    let pendingGalleryTransform = null;
     const galleryWidth = () => Math.max(1, marketDetailGallery.clientWidth);
     const updateGalleryControls = () => {
-      controlsFrame = 0;
-      const index = Math.max(0, Math.min(slides.length - 1, Math.round(marketDetailGallery.scrollLeft / galleryWidth())));
-      if (index === lastGalleryIndex) return;
-      lastGalleryIndex = index;
-      if (previous) previous.disabled = index === 0;
-      if (next) next.disabled = index >= slides.length - 1;
-      if (count) count.textContent = `${index + 1}/${slides.length}`;
+      if (previous) previous.disabled = galleryIndex === 0;
+      if (next) next.disabled = galleryIndex >= slides.length - 1;
+      if (count) count.textContent = `${galleryIndex + 1}/${Math.max(1, slides.length)}`;
     };
-    const requestGalleryControls = () => {
-      if (controlsFrame) return;
-      controlsFrame = requestAnimationFrame(updateGalleryControls);
+    const paintGalleryTransform = (value, immediate = false) => {
+      if (!track) return;
+      pendingGalleryTransform = value;
+      const paint = () => {
+        galleryPaintFrame = 0;
+        if (pendingGalleryTransform === null) return;
+        track.style.transform = `translate3d(${Math.round(pendingGalleryTransform)}px, 0, 0)`;
+        pendingGalleryTransform = null;
+      };
+      if (immediate) {
+        if (galleryPaintFrame) cancelAnimationFrame(galleryPaintFrame);
+        paint();
+      } else if (!galleryPaintFrame) {
+        galleryPaintFrame = requestAnimationFrame(paint);
+      }
     };
-    const paintGalleryScroll = () => {
-      galleryScrollFrame = 0;
-      if (pendingScrollLeft === null) return;
-      marketDetailGallery.scrollLeft = pendingScrollLeft;
-      pendingScrollLeft = null;
+    const setGalleryIndex = (nextIndex, animate = true) => {
+      if (!track || !slides.length) return;
+      galleryIndex = Math.max(0, Math.min(slides.length - 1, nextIndex));
+      track.style.transition = animate ? "transform .24s cubic-bezier(.22,.82,.28,1)" : "none";
+      paintGalleryTransform(-galleryIndex * galleryWidth(), true);
+      updateGalleryControls();
+      if (!animate) requestAnimationFrame(() => {
+        if (!marketDetailGallery.classList.contains("is-dragging")) track.style.removeProperty("transition");
+      });
     };
-    const queueGalleryScroll = value => {
-      pendingScrollLeft = value;
-      if (!galleryScrollFrame) galleryScrollFrame = requestAnimationFrame(paintGalleryScroll);
-    };
-    const moveGallery = offset => {
-      const width = galleryWidth();
-      const current = Math.round(marketDetailGallery.scrollLeft / width);
-      const target = Math.max(0, Math.min(slides.length - 1, current + offset));
-      marketDetailGallery.scrollTo({ left: target * width, behavior: "smooth" });
-    };
+    const moveGallery = offset => setGalleryIndex(galleryIndex + offset, true);
     previous?.addEventListener("click", () => moveGallery(-1));
     next?.addEventListener("click", () => moveGallery(1));
-    marketDetailGallery.addEventListener("scroll", requestGalleryControls, { passive: true });
-    window.addEventListener("resize", requestGalleryControls, { once: true });
-    requestAnimationFrame(updateGalleryControls);
+    window.addEventListener("resize", () => setGalleryIndex(galleryIndex, false), { once: true });
+    setGalleryIndex(0, false);
 
     // Keep a drag constrained to its immediate neighbour.  A long or fast
     // swipe must never skip across several listing photos in one movement.
@@ -5361,31 +5363,23 @@ function bindEvents() {
     };
     const settleGallery = (active, cancelled = false) => {
       if (!active?.dragging) return;
-      if (galleryScrollFrame) {
-        cancelAnimationFrame(galleryScrollFrame);
-        galleryScrollFrame = 0;
+      if (galleryPaintFrame) {
+        cancelAnimationFrame(galleryPaintFrame);
+        galleryPaintFrame = 0;
       }
-      if (pendingScrollLeft !== null) {
-        marketDetailGallery.scrollLeft = pendingScrollLeft;
-        pendingScrollLeft = null;
+      if (pendingGalleryTransform !== null) {
+        track.style.transform = `translate3d(${Math.round(pendingGalleryTransform)}px, 0, 0)`;
+        pendingGalleryTransform = null;
       }
       const width = active.width;
-      const startIndex = Math.round(active.startScroll / width);
       const distance = active.lastX - active.startX;
       const projectedDistance = cancelled ? distance : distance + (active.velocityX * 140);
       const threshold = Math.max(36, width * .12);
-      let target = startIndex;
-      if (cancelled) {
-        // A cancelled gesture simply settles to the closest of the current
-        // photo and its two direct neighbours.
-        target = Math.round(marketDetailGallery.scrollLeft / width);
-        target = Math.max(startIndex - 1, Math.min(startIndex + 1, target));
-      } else if (Math.abs(projectedDistance) >= threshold) {
-        target = startIndex + (projectedDistance < 0 ? 1 : -1);
-      }
+      let target = active.startIndex;
+      if (!cancelled && Math.abs(projectedDistance) >= threshold) target += projectedDistance < 0 ? 1 : -1;
       target = Math.max(0, Math.min(slides.length - 1, target));
       marketDetailGallery.classList.remove("is-dragging");
-      marketDetailGallery.scrollTo({ left: target * width, behavior: "smooth" });
+      setGalleryIndex(target, true);
       marketGalleryPreviewSuppressUntil = Date.now() + 320;
     };
     marketDetailGallery.addEventListener("pointerdown", event => {
@@ -5400,8 +5394,8 @@ function bindEvents() {
         lastAt: now,
         velocityX: 0,
         width: galleryWidth(),
-        maxScroll: Math.max(0, marketDetailGallery.scrollWidth - marketDetailGallery.clientWidth),
-        startScroll: marketDetailGallery.scrollLeft,
+        startIndex: galleryIndex,
+        startTransform: -galleryIndex * galleryWidth(),
         dragging: false
       };
     }, { passive: true });
@@ -5419,6 +5413,7 @@ function bindEvents() {
         }
         active.dragging = true;
         marketDetailGallery.classList.add("is-dragging");
+        track.style.transition = "none";
         marketDetailGallery.setPointerCapture?.(active.pointerId);
       }
       const now = performance.now();
@@ -5428,9 +5423,13 @@ function bindEvents() {
       active.lastAt = now;
       // Do not expose more than one neighbouring photo during an individual
       // drag either, even if the finger travels a large distance.
-      const minDragScroll = Math.max(0, active.startScroll - active.width);
-      const maxDragScroll = Math.min(active.maxScroll, active.startScroll + active.width);
-      queueGalleryScroll(Math.max(minDragScroll, Math.min(maxDragScroll, active.startScroll - dx)));
+      const minIndex = Math.min(slides.length - 1, active.startIndex + 1);
+      const maxIndex = Math.max(0, active.startIndex - 1);
+      const minTransform = -minIndex * active.width;
+      const maxTransform = -maxIndex * active.width;
+      // The track is a compositor layer: it follows the finger continuously
+      // without changing scrollLeft or forcing layout on every move.
+      paintGalleryTransform(Math.max(minTransform, Math.min(maxTransform, active.startTransform + dx)));
       if (event.cancelable) event.preventDefault();
     }, { passive: false });
     marketDetailGallery.addEventListener("pointerup", event => {
@@ -7146,8 +7145,12 @@ async function shareMarketListing(listingId) {
   const listing = (state.marketListings || []).find(item => item.id === String(listingId || ""));
   if (!listing) return toast("商品信息不存在");
   const url = marketShareUrl(listing);
-  const title = listing.title || `${listing.speciesName || "乌龟"}在售`;
-  const text = `${title} · ${money(listing.price)}`;
+  const productTitle = listing.title || `${listing.speciesName || "乌龟"}在售`;
+  // The server uses this same market link to render Open Graph metadata with
+  // the listing title and its first photo, so WeChat shows a real product card
+  // instead of a generic app-link placeholder.
+  const title = `壳友手账｜${productTitle}`;
+  const text = `${productTitle} · ${money(listing.price)}`;
   try {
     const nativeShare = window.Capacitor?.Plugins?.Share;
     if (nativeShare?.share) {
@@ -10374,7 +10377,7 @@ function toast(text) {
   setTimeout(() => el.remove(), 2200);
 }
 
-function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
+function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwipeSettle } = {}) {
   const pointers = new Map();
   const maxScale = 4;
   let scale = 1;
@@ -10571,11 +10574,17 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
       event.preventDefault();
       return;
     }
-    if (typeof onSwipe !== "function") return;
+    const supportsSwipe = typeof onSwipe === "function" || typeof onSwipeMove === "function" || typeof onSwipeSettle === "function";
+    if (!supportsSwipe) return;
     const atLeadingEdge = typeof canSwipe === "function" && !canSwipe(-1);
     const atTrailingEdge = typeof canSwipe === "function" && !canSwipe(1);
-    const resistance = (atLeadingEdge && deltaX > 0) || (atTrailingEdge && deltaX < 0) ? 0.28 : 0.72;
-    paintSwipe(deltaX * resistance);
+    // Between valid neighbours the preview must be 1:1 with the finger so
+    // the next picture is revealed by exactly the amount the user drags.
+    // Keep resistance only when there is no picture beyond the current edge.
+    const resistance = (atLeadingEdge && deltaX > 0) || (atTrailingEdge && deltaX < 0) ? 0.28 : 1;
+    const swipeTranslateX = deltaX * resistance;
+    if (typeof onSwipeMove === "function") onSwipeMove({ translateX: swipeTranslateX, rawDeltaX: deltaX, width: stageWidth });
+    else paintSwipe(swipeTranslateX);
     event.preventDefault();
   };
   const finishPointer = event => {
@@ -10617,15 +10626,21 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
       paint(true);
       return;
     }
-    clearSwipePaint();
-    if (gesture && moved && typeof onSwipe === "function") {
+    const supportsSwipe = typeof onSwipe === "function" || typeof onSwipeMove === "function" || typeof onSwipeSettle === "function";
+    if (gesture && moved && supportsSwipe) {
       const distance = (current?.x ?? gesture.lastX) - gesture.startX;
       const projected = distance + (gesture.velocityX * 160);
       const threshold = Math.max(44, stageWidth * 0.14);
       const travel = Math.abs(projected) >= threshold ? projected : distance;
-      if (Math.abs(travel) >= threshold) onSwipe(travel < 0 ? 1 : -1);
+      const offset = Math.abs(travel) >= threshold ? (travel < 0 ? 1 : -1) : 0;
+      const handled = typeof onSwipeSettle === "function"
+        ? onSwipeSettle({ offset, distance, width: stageWidth }) === true
+        : false;
+      if (!handled) clearSwipePaint();
+      if (offset && !handled && typeof onSwipe === "function") onSwipe(offset);
       return;
     }
+    clearSwipePaint();
     if (!moved && event.pointerType !== "mouse") {
       const now = Date.now();
       if (now - lastTapAt < 280) {
@@ -10700,8 +10715,17 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
 
   const stage = document.createElement("div");
   stage.className = "image-preview-stage";
+  const currentSlide = document.createElement("div");
+  currentSlide.className = "image-preview-slide image-preview-current-slide";
   const image = document.createElement("img");
-  stage.appendChild(image);
+  currentSlide.appendChild(image);
+  const neighbourSlide = document.createElement("div");
+  neighbourSlide.className = "image-preview-slide image-preview-neighbour-slide";
+  neighbourSlide.hidden = true;
+  const neighbourImage = document.createElement("img");
+  neighbourImage.alt = "";
+  neighbourSlide.appendChild(neighbourImage);
+  stage.append(currentSlide, neighbourSlide);
 
   const caption = document.createElement("span");
   caption.className = "image-preview-caption";
@@ -10723,6 +10747,8 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
 
   let switchTimer = 0;
   let switchSequence = 0;
+  let previewDrag = null;
+  let previewDragTimer = 0;
   let previewZoom = null;
   const update = (direction = 0, animate = false) => {
     previewZoom?.reset(false);
@@ -10775,7 +10801,68 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
       if (gallery[index]?.src) void preloadPreviewImage(gallery[index].src);
     });
   };
+  const clearPreviewDrag = () => {
+    window.clearTimeout(previewDragTimer);
+    previewDragTimer = 0;
+    previewDrag = null;
+    currentSlide.style.removeProperty("transition");
+    currentSlide.style.removeProperty("transform");
+    neighbourSlide.style.removeProperty("transition");
+    neighbourSlide.style.removeProperty("transform");
+    neighbourSlide.hidden = true;
+  };
+  const preparePreviewDrag = (direction, width) => {
+    const target = activeIndex + direction;
+    if (!isGallery || !gallery[target]) return null;
+    if (previewDrag?.direction === direction && previewDrag.target === target) return previewDrag;
+    previewDrag = { direction, target, width: Math.max(1, width) };
+    neighbourImage.src = gallery[target].src;
+    neighbourImage.alt = gallery[target].alt;
+    neighbourSlide.hidden = false;
+    return previewDrag;
+  };
+  const movePreviewDrag = ({ translateX, rawDeltaX, width }) => {
+    if (!isGallery) return;
+    const direction = rawDeltaX < 0 ? 1 : -1;
+    const drag = preparePreviewDrag(direction, width);
+    const offset = Math.max(-width, Math.min(width, translateX));
+    currentSlide.style.transition = "none";
+    currentSlide.style.transform = `translate3d(${Math.round(offset)}px, 0, 0)`;
+    if (!drag) return;
+    neighbourSlide.style.transition = "none";
+    neighbourSlide.style.transform = `translate3d(${Math.round(offset + (drag.direction * drag.width))}px, 0, 0)`;
+  };
+  const settlePreviewDrag = ({ offset }) => {
+    if (!previewDrag) {
+      currentSlide.style.transition = "transform 180ms cubic-bezier(.22,.82,.28,1)";
+      currentSlide.style.transform = "translate3d(0, 0, 0)";
+      window.setTimeout(() => {
+        currentSlide.style.removeProperty("transition");
+        currentSlide.style.removeProperty("transform");
+      }, 200);
+      return true;
+    }
+    const drag = previewDrag;
+    const shouldSwitch = offset === drag.direction && activeIndex + offset === drag.target;
+    const duration = 190;
+    currentSlide.style.transition = `transform ${duration}ms cubic-bezier(.22,.82,.28,1)`;
+    neighbourSlide.style.transition = `transform ${duration}ms cubic-bezier(.22,.82,.28,1)`;
+    currentSlide.style.transform = `translate3d(${shouldSwitch ? -drag.direction * drag.width : 0}px, 0, 0)`;
+    neighbourSlide.style.transform = `translate3d(${shouldSwitch ? 0 : drag.direction * drag.width}px, 0, 0)`;
+    previewDragTimer = window.setTimeout(() => {
+      if (!overlay.isConnected) return;
+      if (shouldSwitch) {
+        activeIndex = drag.target;
+        image.src = gallery[activeIndex].src;
+        image.alt = gallery[activeIndex].alt;
+        update(0, false);
+      }
+      clearPreviewDrag();
+    }, duration + 20);
+    return true;
+  };
   const switchImage = offset => {
+    clearPreviewDrag();
     const target = Math.max(0, Math.min(gallery.length - 1, activeIndex + offset));
     if (target === activeIndex) {
       stage.classList.remove("is-bouncing");
@@ -10801,13 +10888,16 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
   update();
   previewZoom = attachPreviewZoom(stage, image, {
     onSwipe: offset => switchImage(offset),
-    canSwipe: offset => activeIndex + offset >= 0 && activeIndex + offset < gallery.length
+    canSwipe: offset => activeIndex + offset >= 0 && activeIndex + offset < gallery.length,
+    onSwipeMove: movePreviewDrag,
+    onSwipeSettle: settlePreviewDrag
   });
 
   const close = () => {
     if (!overlay.isConnected) return;
     switchSequence += 1;
     window.clearTimeout(switchTimer);
+    clearPreviewDrag();
     previewZoom?.destroy();
     document.removeEventListener("keydown", handleKeydown);
     document.body.classList.remove("image-preview-open");
@@ -10824,9 +10914,22 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     next.addEventListener("click", () => switchImage(1));
   }
 
+  const suppressCloseClickThrough = () => {
+    const swallowFollowUpClick = event => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      document.removeEventListener("click", swallowFollowUpClick, true);
+    };
+    document.addEventListener("click", swallowFollowUpClick, true);
+    window.setTimeout(() => document.removeEventListener("click", swallowFollowUpClick, true), 360);
+  };
   const closeFromButton = event => {
     event.preventDefault();
-    event.stopPropagation();
+    event.stopImmediatePropagation();
+    // On iOS the synthetic click follows pointerup after the overlay has been
+    // removed. Consume that one click so it cannot trigger the product's
+    // share button underneath the close control.
+    if (event.type === "pointerup") suppressCloseClickThrough();
     close();
   };
   // Use pointerup as well as click so the close control responds reliably on

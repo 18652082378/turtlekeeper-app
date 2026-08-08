@@ -3102,6 +3102,72 @@ async function handleMarketDelete(req, res) {
   return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user) });
 }
 
+function escapeShareMeta(value) {
+  return String(value || "").replace(/[&<>'"]/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "'": "&#39;",
+    '"': "&quot;"
+  })[char]);
+}
+
+function requestPublicOrigin(req) {
+  const forwardedProtocol = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const protocol = forwardedProtocol || "https";
+  const host = String(req.headers.host || "api.turtleworld.cn").trim();
+  return `${protocol}://${host}`;
+}
+
+function absoluteShareMediaUrl(source, origin) {
+  const value = String(source || "").trim();
+  if (!value || value.startsWith("data:")) return "";
+  try {
+    return new URL(value, origin).toString();
+  } catch {
+    return "";
+  }
+}
+
+function marketSharePageHtml(req, url, content) {
+  const listingId = trimPublicText(url.searchParams.get("market"), 100);
+  if (!listingId) return content;
+  const db = readDatabase();
+  const listing = (Array.isArray(db.marketListings) ? db.marketListings : [])
+    .find(item => item.id === listingId && (item.status || "active") === "active");
+  if (!listing) return content;
+  const publicListing = marketListingView(db, listing, null);
+  const origin = requestPublicOrigin(req);
+  const firstImage = publicListing.mediaItems.find(item => item.type !== "video" && item.url)?.url
+    || publicListing.photoUrl
+    || publicListing.mediaItems[0]?.posterUrl
+    || publicListing.mediaItems[0]?.url
+    || "";
+  const imageUrl = absoluteShareMediaUrl(firstImage, origin);
+  const productTitle = String(publicListing.title || `${publicListing.speciesName || "乌龟"}诚意出售`).trim();
+  const title = `壳友手账｜${productTitle}`;
+  const description = `${publicListing.speciesName || "龟集市商品"}${publicListing.price ? ` · ¥${Number(publicListing.price).toFixed(2)}` : ""}${publicListing.city ? ` · ${publicListing.city}` : ""}`;
+  const canonicalUrl = new URL(url.pathname || "/", origin);
+  canonicalUrl.searchParams.set("market", listingId);
+  const metadata = [
+    `<meta name="description" content="${escapeShareMeta(description)}">`,
+    `<meta property="og:type" content="website">`,
+    `<meta property="og:site_name" content="壳友手账">`,
+    `<meta property="og:title" content="${escapeShareMeta(title)}">`,
+    `<meta property="og:description" content="${escapeShareMeta(description)}">`,
+    `<meta property="og:url" content="${escapeShareMeta(canonicalUrl.toString())}">`,
+    imageUrl ? `<meta property="og:image" content="${escapeShareMeta(imageUrl)}">` : "",
+    imageUrl ? `<meta property="og:image:secure_url" content="${escapeShareMeta(imageUrl)}">` : "",
+    `<meta name="twitter:card" content="summary_large_image">`,
+    `<meta name="twitter:title" content="${escapeShareMeta(title)}">`,
+    `<meta name="twitter:description" content="${escapeShareMeta(description)}">`,
+    imageUrl ? `<meta name="twitter:image" content="${escapeShareMeta(imageUrl)}">` : ""
+  ].filter(Boolean).join("\n    ");
+  return Buffer.from(String(content)
+    .replace(/<title>[\s\S]*?<\/title>/i, `<title>${escapeShareMeta(title)}</title>`)
+    .replace(/<\/head>/i, `    ${metadata}\n  </head>`), "utf8");
+}
+
 function serveStatic(req, res, url) {
   const pathname = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
   const target = path.resolve(STATIC_ROOT, `.${pathname}`);
@@ -3122,11 +3188,12 @@ function serveStatic(req, res, url) {
     const contentType = isAppleAppSiteAssociation
       ? "application/json"
       : (mimeTypes[ext] || "application/octet-stream");
+    const pageContent = pathname === "/index.html" ? marketSharePageHtml(req, url, content) : content;
     res.writeHead(200, {
       "Content-Type": contentType,
       ...(isAppleAppSiteAssociation ? { "Cache-Control": "no-store" } : {})
     });
-    res.end(content);
+    res.end(pageContent);
   });
 }
 
