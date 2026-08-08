@@ -5328,7 +5328,7 @@ function bindEvents() {
       const paint = () => {
         galleryPaintFrame = 0;
         if (pendingGalleryTransform === null) return;
-        track.style.transform = `translate3d(${Math.round(pendingGalleryTransform)}px, 0, 0)`;
+        track.style.transform = `translate3d(${pendingGalleryTransform}px, 0, 0)`;
         pendingGalleryTransform = null;
       };
       if (immediate) {
@@ -5368,7 +5368,7 @@ function bindEvents() {
         galleryPaintFrame = 0;
       }
       if (pendingGalleryTransform !== null) {
-        track.style.transform = `translate3d(${Math.round(pendingGalleryTransform)}px, 0, 0)`;
+        track.style.transform = `translate3d(${pendingGalleryTransform}px, 0, 0)`;
         pendingGalleryTransform = null;
       }
       const width = active.width;
@@ -10430,7 +10430,7 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwi
     limitTranslation();
     stage.classList.add("is-zoomed", "is-zooming");
     media.style.transition = animate ? "transform .18s ease" : "none";
-    media.style.transform = `translate3d(${Math.round(translateX)}px, ${Math.round(translateY)}px, 0) scale(${scale})`;
+    media.style.transform = `translate3d(${translateX}px, ${translateY}px, 0) scale(${scale})`;
   };
   // Pointer events can arrive far faster than the screen can draw.  Coalesce
   // all move updates into one compositor transform per frame instead of
@@ -10634,7 +10634,7 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwi
       const travel = Math.abs(projected) >= threshold ? projected : distance;
       const offset = Math.abs(travel) >= threshold ? (travel < 0 ? 1 : -1) : 0;
       const handled = typeof onSwipeSettle === "function"
-        ? onSwipeSettle({ offset, distance, width: stageWidth }) === true
+        ? onSwipeSettle({ offset, distance, width: stageWidth, velocityX: gesture.velocityX }) === true
         : false;
       if (!handled) clearSwipePaint();
       if (offset && !handled && typeof onSwipe === "function") onSwipe(offset);
@@ -10834,10 +10834,10 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     const drag = preparePreviewDrag(direction, width);
     const offset = Math.max(-width, Math.min(width, translateX));
     currentSlide.style.transition = "none";
-    currentSlide.style.transform = `translate3d(${Math.round(offset)}px, 0, 0)`;
+    currentSlide.style.transform = `translate3d(${offset}px, 0, 0)`;
     if (!drag) return;
     neighbourSlide.style.transition = "none";
-    neighbourSlide.style.transform = `translate3d(${Math.round(offset + (drag.direction * drag.width))}px, 0, 0)`;
+    neighbourSlide.style.transform = `translate3d(${offset + (drag.direction * drag.width)}px, 0, 0)`;
   };
   // Touch hardware can send many more samples than the display can render.
   // Keep only the latest sample and move both slide layers once per frame.
@@ -10858,22 +10858,27 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     pendingPreviewDrag = null;
     if (next) paintPreviewDrag(next);
   };
-  const settlePreviewDrag = ({ offset }) => {
+  const settlePreviewDrag = ({ offset, velocityX = 0 }) => {
     flushPreviewDrag();
     if (!previewDrag) {
-      currentSlide.style.transition = "transform 180ms cubic-bezier(.22,.82,.28,1)";
+      currentSlide.style.transition = "transform 230ms cubic-bezier(.18,.82,.28,1)";
       currentSlide.style.transform = "translate3d(0, 0, 0)";
       window.setTimeout(() => {
         currentSlide.style.removeProperty("transition");
         currentSlide.style.removeProperty("transform");
-      }, 200);
+      }, 250);
       return true;
     }
     const drag = previewDrag;
     const shouldSwitch = offset === drag.direction && activeIndex + offset === drag.target;
-    const duration = 190;
-    currentSlide.style.transition = `transform ${duration}ms cubic-bezier(.22,.82,.28,1)`;
-    neighbourSlide.style.transition = `transform ${duration}ms cubic-bezier(.22,.82,.28,1)`;
+    // Keep the physical drag 1:1, then let the final few pixels settle with
+    // a velocity-aware curve. This removes the stiff, mechanical snap while
+    // preserving the one-neighbour-at-a-time rule.
+    const speed = Math.min(2.4, Math.abs(Number(velocityX) || 0));
+    const duration = Math.round(Math.max(165, 270 - speed * 46));
+    const easing = "cubic-bezier(.18,.82,.28,1)";
+    currentSlide.style.transition = `transform ${duration}ms ${easing}`;
+    neighbourSlide.style.transition = `transform ${duration}ms ${easing}`;
     currentSlide.style.transform = `translate3d(${shouldSwitch ? -drag.direction * drag.width : 0}px, 0, 0)`;
     neighbourSlide.style.transform = `translate3d(${shouldSwitch ? 0 : drag.direction * drag.width}px, 0, 0)`;
     previewDragTimer = window.setTimeout(() => {

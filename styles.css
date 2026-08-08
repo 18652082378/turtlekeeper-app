@@ -12819,6 +12819,9 @@ body.image-preview-open {
   place-items: center;
   pointer-events: none;
   will-change: transform;
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
   contain: paint;
 }
 

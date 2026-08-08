@@ -3189,9 +3189,21 @@ function serveStatic(req, res, url) {
       ? "application/json"
       : (mimeTypes[ext] || "application/octet-stream");
     const pageContent = pathname === "/index.html" ? marketSharePageHtml(req, url, content) : content;
+    // Shared product links are usually opened in the WeChat in-app browser.
+    // It can retain app.js/styles.css for a long time, even after a listing
+    // link points at a freshly deployed server.  The page shell and its
+    // executable assets must therefore revalidate on every visit; otherwise
+    // users keep an older gallery implementation and later listing photos
+    // appear blank until they open a preview.
+    const shouldRevalidate = pathname === "/index.html"
+      || /\.(?:js|css)$/i.test(pathname);
     res.writeHead(200, {
       "Content-Type": contentType,
-      ...(isAppleAppSiteAssociation ? { "Cache-Control": "no-store" } : {})
+      ...((isAppleAppSiteAssociation || shouldRevalidate) ? {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0"
+      } : {})
     });
     res.end(pageContent);
   });
