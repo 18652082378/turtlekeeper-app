@@ -338,6 +338,11 @@ let communityLoading = false;
 let communityLastLoadedAt = 0;
 let communityChatLoading = false;
 let communityChatLoadedKey = "";
+// A notification can arrive while an existing chat request is still in
+// flight. Remember it so the just-finished (possibly older) response can
+// never be the last refresh the open conversation receives.
+let communityChatRefreshPending = false;
+let communityVideoLoadObserver = null;
 let followingLoading = false;
 let followingLastLoadedAt = 0;
 let communityUserProfileLoading = false;
@@ -385,6 +390,11 @@ let messageListRefreshFlushTimer = 0;
 let nativePushListenersAttached = false;
 let nativePushSetupInFlight = false;
 let nativePushDeviceToken = "";
+// iOS can deliver an interaction with a notification before the saved cloud
+// session has finished hydrating. Keep that route until it can really open
+// the conversation instead of silently leaving the user on the messages tab.
+let pendingNativePushAction = null;
+let messageUnreadRenderRequested = false;
 let nativeMediaPickerOpening = false;
 // Do not open a preview from the synthetic click at the end of a carousel drag.
 let marketGalleryPreviewSuppressUntil = 0;
@@ -1835,9 +1845,23 @@ function communityMedia(item, compact = false) {
   const mediaItems = communityPostMediaItems(item);
   if (!mediaItems.length) return `<div class="community-media-placeholder"><span>壳友动态</span></div>`;
   const first = mediaItems[0];
-  if (first.type === "video") return `<video class="community-media" src="${first.url}" ${compact ? "muted playsinline preload=\"metadata\"" : "controls playsinline preload=\"metadata\""}></video>`;
+  if (first.type === "video") return `<video class="community-media" src="${first.url}" ${compact ? "muted playsinline" : "controls playsinline"} preload="auto" crossorigin="anonymous" data-community-video-autoload data-video-first-frame></video>`;
   if (mediaItems.length === 1) return `<img class="community-media" src="${first.url}" alt="动态图片" loading="lazy">`;
   return `<div class="community-media-gallery community-media-gallery-${mediaItems.length}">${mediaItems.map((media, index) => `<img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy">`).join("")}</div>`;
+}
+
+function communityFeedMedia(item) {
+  const mediaItems = communityPostMediaItems(item);
+  const mediaButton = (media, index) => {
+    const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
+    const body = media.type === "video"
+      ? `<video class="community-media" src="${media.url}" muted playsinline autoplay loop preload="auto" crossorigin="anonymous" data-community-video-autoload data-community-video-autoplay="true" data-video-first-frame></video><i class="community-detail-play-mark">▶</i>`
+      : `<img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i>`;
+    return `<button class="community-feed-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}">${body}</button>`;
+  };
+  if (!mediaItems.length) return "";
+  if (mediaItems.length === 1) return mediaButton(mediaItems[0], 0);
+  return `<div class="community-media-gallery community-media-gallery-${mediaItems.length}">${mediaItems.map(mediaButton).join("")}</div>`;
 }
 
 function communityCompactCard(item) {
@@ -1863,9 +1887,9 @@ function communityFeedCard(item) {
       <div class="community-moment-main">
         <div class="community-moment-author"><button class="community-profile-name-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}">${escapeHtml(item.authorName || "壳友")}</button>${!isOwn ? `<span class="community-author-actions"><button class="community-follow-button ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></span>` : ""}</div>
         ${item.content ? `<p class="community-post-copy">${escapeHtml(item.content)}</p>` : ""}
-        ${primaryMedia ? `<div class="community-post-media">${communityMedia(item, true)}${primaryMedia.type === "video" ? `<i class="community-detail-play-mark">▶</i>` : ""}</div>` : ""}
+        ${primaryMedia ? `<div class="community-post-media">${communityFeedMedia(item)}</div>` : ""}
         ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
-        <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? `<div class="community-moment-popover"><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "取消" : "赞"}</button><button type="button" data-show-community-comment="${item.id}">评论</button>${!isOwn ? `<button type="button" data-open-content-report data-report-type="community" data-report-id="${item.id}">举报</button><button class="danger-link" type="button" data-block-content-user data-block-type="community" data-block-id="${item.id}" data-block-name="${escapeHtml(item.authorName || "该用户")}">屏蔽</button>` : ""}</div>` : ""}</div></div>
+        <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? communityMomentActionMenu(item, isOwn) : ""}</div></div>
         ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</div>` : ""}
         ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="评论" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
       </div>
@@ -1873,10 +1897,72 @@ function communityFeedCard(item) {
   `;
 }
 
+function communityMomentActionMenu(item, isOwn = Boolean(item?.isOwn || item?.pendingLocal)) {
+  if (!item?.id) return "";
+  return `<div class="community-moment-popover" data-community-moment-popover><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "取消" : "赞"}</button><button type="button" data-show-community-comment="${item.id}">评论</button></div>`;
+}
+
 function findCommunityPost(postId) {
   const id = String(postId || "");
   return [...(state.communityPosts || []), ...(state.communityFollowingPosts || [])]
     .find(item => String(item.id) === id) || null;
+}
+
+function closeCommunityMomentPopovers(exceptWrap = null) {
+  document.querySelectorAll(".community-moment-action-wrap .community-moment-popover").forEach(popover => {
+    if (!exceptWrap || popover.parentElement !== exceptWrap) popover.remove();
+  });
+  if (!exceptWrap) state.openCommunityActionId = "";
+}
+
+function bindCommunityMomentPopover(popover) {
+  if (!popover || popover.dataset.bound === "true") return;
+  popover.dataset.bound = "true";
+  popover.querySelector("[data-like-community-post]")?.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    state.openCommunityActionId = "";
+    toggleCommunityLike(event.currentTarget.dataset.likeCommunityPost);
+  });
+  popover.querySelector("[data-show-community-comment]")?.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    setState({ communityCommentPostId: event.currentTarget.dataset.showCommunityComment, openCommunityActionId: "" }, { skipCloud: true });
+  });
+  popover.querySelector("[data-open-content-report]")?.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    state.openCommunityActionId = "";
+    openContentReportDialog(event.currentTarget.dataset.reportType, event.currentTarget.dataset.reportId);
+  });
+  popover.querySelector("[data-block-content-user]")?.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    state.openCommunityActionId = "";
+    confirmBlockUser({ targetType: event.currentTarget.dataset.blockType, targetId: event.currentTarget.dataset.blockId, name: event.currentTarget.dataset.blockName });
+  });
+}
+
+function toggleCommunityMomentPopover(button) {
+  const postId = String(button?.dataset.communityMore || "");
+  const wrap = button?.closest(".community-moment-action-wrap");
+  if (!postId || !wrap) return;
+  const current = wrap.querySelector(".community-moment-popover");
+  if (current) {
+    current.remove();
+    state.openCommunityActionId = "";
+    return;
+  }
+  const post = findCommunityPost(postId);
+  if (!post) return;
+  closeCommunityMomentPopovers();
+  const template = document.createElement("template");
+  template.innerHTML = communityMomentActionMenu(post);
+  const popover = template.content.firstElementChild;
+  if (!popover) return;
+  wrap.appendChild(popover);
+  state.openCommunityActionId = postId;
+  bindCommunityMomentPopover(popover);
 }
 
 function communityDetailMedia(item) {
@@ -1887,7 +1973,7 @@ function communityDetailMedia(item) {
     <div class="community-detail-media-gallery ${isGallery ? "is-gallery" : ""}">
       ${mediaItems.map((media, index) => {
         const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
-        return `<button class="community-detail-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}">${media.type === "video" ? `<video class="community-media" src="${media.url}" muted playsinline preload="metadata"></video><i class="community-detail-play-mark">▶</i>` : `<img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i>`}</button>`;
+        return `<button class="community-detail-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}">${media.type === "video" ? `<video class="community-media" src="${media.url}" muted playsinline autoplay loop preload="auto" crossorigin="anonymous" data-community-video-autoload data-community-video-autoplay="true" data-video-first-frame></video><i class="community-detail-play-mark">▶</i>` : `<img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i>`}</button>`;
       }).join("")}
     </div>
   `;
@@ -1932,7 +2018,10 @@ function pageMessages() {
     if (state.selectedCommunityFriendId && chatPreview?.lastMessage) {
       const index = rows.findIndex(item => item.id === state.selectedCommunityFriendId);
       const previewPatch = { lastMessage: chatPreview.lastMessage, lastMessageAt: chatPreview.lastMessageAt };
-      if (index >= 0 && !rows[index].lastMessage) rows[index] = { ...rows[index], ...previewPatch };
+      // The conversation request contains the complete timeline and is often
+      // newer than a list request that started a moment earlier. Never keep a
+      // visible old preview merely because that row already has some text.
+      if (index >= 0 && isCommunityPreviewAtLeastAsNew(previewPatch, rows[index])) rows[index] = { ...rows[index], ...previewPatch };
       if (index < 0 && state.selectedCommunityFriend) rows.unshift({ ...state.selectedCommunityFriend, ...previewPatch });
     }
     return rows;
@@ -2295,6 +2384,7 @@ function navigateBack(options = {}) {
       // preview on the following frame so there is no visible hand-off jump.
       $app.style.transform = "";
       hydrateVideoFirstFrames();
+      hydrateCommunityPostVideos();
       hydrateMarketDetailVideos();
       window.requestAnimationFrame(clearEdgeBackPreview);
     });
@@ -3358,7 +3448,7 @@ function pageTurtleDetail() {
 function turtleReadOnlyDetail(t, species, photo) {
   return `
     <section class="turtle-detail-hero fresh-card detail-photo-card">
-      <img src="${photo}" alt="${species.name || t.speciesName}">
+      <img class="growth-preview-photo" src="${photo}" alt="${species.name || t.speciesName}" data-growth-photo-preview role="button" tabindex="0" title="点击放大">
       <div>
         <h2>${t.code || "未命名档案"}</h2>
         <p>${species.name || t.speciesName || "-"}</p>
@@ -4652,6 +4742,7 @@ function render() {
   setupMarketInfiniteScroll();
   requestAnimationFrame(() => {
     hydrateVideoFirstFrames();
+    hydrateCommunityPostVideos();
     hydrateMarketDetailVideos();
   });
   if (state.page === "communityChat") scrollCommunityChatToLatest();
@@ -5094,17 +5185,23 @@ function bindEvents() {
       openDetail(event);
     });
   });
-  document.querySelectorAll("[data-preview-community-media]").forEach(button => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-preview-community-media]").forEach(button => button.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
     const post = findCommunityPost(button.dataset.previewCommunityMedia);
     const mediaItems = communityPostMediaItems(post);
     const index = Math.max(0, Number(button.dataset.previewCommunityMediaIndex || 0));
     const media = mediaItems[index];
     if (!media) return;
-    if (media.type === "video") openVideoPreview(media.url, "动态视频");
+    if (media.type === "video") openVideoPreview(media.url, "动态视频", media.posterUrl || "");
     else openImagePreview(media.url, "动态图片");
   }));
   document.querySelectorAll("[data-like-community-post]").forEach(btn => btn.addEventListener("click", () => toggleCommunityLike(btn.dataset.likeCommunityPost)));
-  document.querySelectorAll("[data-community-more]").forEach(btn => btn.addEventListener("click", () => setState({ openCommunityActionId: state.openCommunityActionId === btn.dataset.communityMore ? "" : btn.dataset.communityMore }, { skipCloud: true })));
+  document.querySelectorAll("[data-community-more]").forEach(btn => btn.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleCommunityMomentPopover(event.currentTarget);
+  }));
   document.querySelectorAll("[data-open-content-report]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
     openContentReportDialog(btn.dataset.reportType, btn.dataset.reportId);
@@ -7616,6 +7713,71 @@ function hydrateVideoFirstFrames() {
   });
 }
 
+function hydrateCommunityPostVideos() {
+  communityVideoLoadObserver?.disconnect();
+  communityVideoLoadObserver = null;
+  const videos = [...document.querySelectorAll("video[data-community-video-autoload]")];
+  if (!videos.length) return;
+
+  const loadVideo = video => {
+    if (!video || video.dataset.communityVideoLoaded === "true") return;
+    video.dataset.communityVideoLoaded = "true";
+    video.muted = true;
+    video.defaultMuted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) video.load();
+  };
+
+  const shouldAutoplay = video => video.dataset.communityVideoAutoplay === "true";
+  const startVideo = video => {
+    if (!shouldAutoplay(video)) return;
+    loadVideo(video);
+    video.muted = true;
+    video.defaultMuted = true;
+    video.playsInline = true;
+    video.autoplay = true;
+    const playback = video.play();
+    if (playback?.then) {
+      playback.then(() => video.closest("button")?.classList.add("is-playing"))
+        .catch(() => video.closest("button")?.classList.remove("is-playing"));
+    }
+  };
+
+  const stopVideo = video => {
+    if (!shouldAutoplay(video)) return;
+    video.pause();
+    video.closest("button")?.classList.remove("is-playing");
+  };
+
+  videos.forEach(video => {
+    if (video.dataset.communityVideoPlaybackBound === "true") return;
+    video.dataset.communityVideoPlaybackBound = "true";
+    video.addEventListener("playing", () => video.closest("button")?.classList.add("is-playing"), { once: true });
+    video.addEventListener("pause", () => video.closest("button")?.classList.remove("is-playing"));
+  });
+
+  if (!("IntersectionObserver" in window)) {
+    videos.forEach(video => {
+      loadVideo(video);
+      startVideo(video);
+    });
+    return;
+  }
+
+  communityVideoLoadObserver = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        loadVideo(entry.target);
+        startVideo(entry.target);
+      } else {
+        stopVideo(entry.target);
+      }
+    });
+  }, { rootMargin: "160px 0px", threshold: 0.15 });
+  videos.forEach(video => communityVideoLoadObserver.observe(video));
+}
+
 function hydrateMarketDetailVideos() {
   document.querySelectorAll("video[data-market-detail-video]").forEach(video => {
     const shell = video.closest(".market-detail-video-shell");
@@ -7861,21 +8023,78 @@ function latestCommunityMessagePreview(messages = []) {
   };
 }
 
+function communityChatMessageKey(message) {
+  if (!message || typeof message !== "object") return "";
+  // Server-side messages always have an id. The fallback keeps older local
+  // data comparable too, without treating an identical poll response as new.
+  return String(message.id || [
+    message.createdAt || "",
+    message.senderId || message.fromPhone || "",
+    message.content || "",
+    message.mediaUrl || "",
+    message.mediaType || ""
+  ].join("\u0001"));
+}
+
+function communityChatMessageSignature(messages = []) {
+  return (Array.isArray(messages) ? messages : [])
+    .map(communityChatMessageKey)
+    .join("\u0002");
+}
+
+function mergeCommunityChatMessages(existingMessages = [], incomingMessages = []) {
+  const existing = Array.isArray(existingMessages) ? existingMessages : [];
+  const incoming = Array.isArray(incomingMessages) ? incomingMessages : [];
+  const incomingKeys = new Set(incoming.map(communityChatMessageKey));
+  const newestIncomingAt = incoming.reduce((latest, item) => {
+    const value = new Date(item?.createdAt || 0).getTime();
+    return Number.isFinite(value) ? Math.max(latest, value) : latest;
+  }, 0);
+  // Requests are allowed to overlap the moment a push arrives. Retain only
+  // messages newer than a delayed response, so a stale response cannot make
+  // a just-received bubble disappear from the currently open chat.
+  const missingNewerLocalMessages = existing.filter(item => {
+    const key = communityChatMessageKey(item);
+    if (!key || incomingKeys.has(key)) return false;
+    const createdAt = new Date(item?.createdAt || 0).getTime();
+    return Number.isFinite(createdAt) && createdAt > newestIncomingAt;
+  });
+  return incoming.concat(missingNewerLocalMessages).sort((left, right) => {
+    const timeDiff = new Date(left?.createdAt || 0) - new Date(right?.createdAt || 0);
+    return timeDiff || communityChatMessageKey(left).localeCompare(communityChatMessageKey(right));
+  });
+}
+
+function communityPreviewTimestamp(item) {
+  const timestamp = new Date(item?.lastMessageAt || item?.createdAt || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function isCommunityPreviewAtLeastAsNew(candidate, current) {
+  if (!candidate?.lastMessage) return false;
+  const candidateAt = communityPreviewTimestamp(candidate);
+  const currentAt = communityPreviewTimestamp(current);
+  // If legacy data has no timestamp, a non-empty fresh preview is still more
+  // useful than retaining the stale placeholder from the old list.
+  return Boolean(candidateAt && (!currentAt || candidateAt >= currentAt)) || !current?.lastMessage;
+}
+
 function communityFriendsWithPreview(userId, friend, messages = [], options = {}) {
   const preview = latestCommunityMessagePreview(messages);
   const current = (state.communityFriends || []).find(item => item.id === userId);
+  const useChatPreview = isCommunityPreviewAtLeastAsNew(preview, current);
   const mergedFriend = {
     ...(current || {}),
     ...(friend || {}),
     id: userId,
     unreadCount: Number(options.unreadCount ?? current?.unreadCount ?? friend?.unreadCount ?? 0),
-    lastMessage: preview?.lastMessage || current?.lastMessage || friend?.lastMessage || "",
-    lastMessageAt: preview?.lastMessageAt || current?.lastMessageAt || friend?.lastMessageAt || ""
+    lastMessage: useChatPreview ? preview.lastMessage : (current?.lastMessage || friend?.lastMessage || ""),
+    lastMessageAt: useChatPreview ? preview.lastMessageAt : (current?.lastMessageAt || friend?.lastMessageAt || "")
   };
   const nextFriends = (state.communityFriends || [])
     .filter(item => item.id !== userId)
     .concat(mergedFriend)
-    .sort((left, right) => new Date(right.lastMessageAt || right.createdAt || 0) - new Date(left.lastMessageAt || left.createdAt || 0));
+    .sort((left, right) => Number(right.pinned) - Number(left.pinned) || new Date(right.lastMessageAt || right.createdAt || 0) - new Date(left.lastMessageAt || left.createdAt || 0));
   return nextFriends;
 }
 
@@ -7886,11 +8105,15 @@ function mergeCommunityFriends(incomingFriends = []) {
   const merged = (Array.isArray(incomingFriends) ? incomingFriends : []).map(friend => {
     incomingIds.add(friend.id);
     const old = previousMap.get(friend.id) || {};
+    // A slower response from /community/list or /community/unread must never
+    // overwrite the last message just obtained from /community/chat/list.
+    const keepLocalPreview = isCommunityPreviewAtLeastAsNew(old, friend)
+      && communityPreviewTimestamp(old) > communityPreviewTimestamp(friend);
     return {
       ...old,
       ...friend,
-      lastMessage: friend.lastMessage || old.lastMessage || "",
-      lastMessageAt: friend.lastMessageAt || old.lastMessageAt || ""
+      lastMessage: keepLocalPreview ? old.lastMessage : (friend.lastMessage || old.lastMessage || ""),
+      lastMessageAt: keepLocalPreview ? old.lastMessageAt : (friend.lastMessageAt || old.lastMessageAt || "")
     };
   });
   previous.forEach(friend => {
@@ -7904,10 +8127,16 @@ async function openCommunityChat(userId) {
   marketChatDraft = "";
   communityChatLoadedKey = "";
   const previousFriend = (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId);
+  // Do not leave a red unread badge visible while the network request is in
+  // flight. The server remains the source of truth and will restore it on a
+  // later refresh if the request cannot be completed.
+  const locallyReadFriends = markCommunityConversationReadLocally(userId);
+  const locallyReadUnreadCount = locallyReadFriends.reduce((total, friend) => total + Math.max(0, Number(friend.unreadCount || 0)), 0);
   if (!CONFIGURED_SMS_BACKEND) {
     communityChatOpening = false;
     pendingCommunityChatLatestScroll = true;
-    setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: previousFriend, communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false }, { skipCloud: true, pageMotion: "chat" });
+    setState({ page: "communityChat", selectedCommunityFriendId: userId, selectedCommunityFriend: previousFriend, communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false, communityFriends: locallyReadFriends, messageUnreadCount: locallyReadUnreadCount }, { skipCloud: true, pageMotion: "chat" });
+    patchStoredMessageLists(locallyReadFriends);
     return;
   }
   const openingSameConversation = state.selectedCommunityFriendId === userId;
@@ -7924,8 +8153,11 @@ async function openCommunityChat(userId) {
     selectedCommunityFriend: previousFriend,
     communityChatMessages: cachedMessages,
     communityChatListing: cachedListing,
-    communityChatToolsOpen: false
+    communityChatToolsOpen: false,
+    communityFriends: locallyReadFriends,
+    messageUnreadCount: locallyReadUnreadCount
   }, { skipCloud: true, pageMotion: "chat" });
+  patchStoredMessageLists(locallyReadFriends);
   try {
     const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
     communityChatLoadedKey = `${userId}:${Math.floor(Date.now() / 10000)}`;
@@ -7938,13 +8170,15 @@ async function openCommunityChat(userId) {
     communityChatOpening = false;
     if (chatStillVisible) $app.classList.remove("community-chat-enter-motion");
     pendingCommunityChatLatestScroll = chatStillVisible;
+    const chatFriends = communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 });
+    patchStoredMessageLists(chatFriends);
     const chatData = {
       selectedCommunityFriendId: userId,
       selectedCommunityFriend: friend,
       communityChatMessages: messages,
       communityChatListing: normalizeCommunityChatListing(result.marketListing),
       communityChatToolsOpen: false,
-      communityFriends: communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 })
+      communityFriends: chatFriends
     };
     if (chatStillVisible) {
       setState({ page: "communityChat", ...chatData }, { skipCloud: true, pageMotion: "chat" });
@@ -7966,6 +8200,10 @@ async function openCommunityChat(userId) {
     toast(error.message || "聊天记录读取失败");
   } finally {
     communityChatLoading = false;
+    if (communityChatRefreshPending && state.page === "communityChat" && state.selectedCommunityFriendId === userId) {
+      communityChatRefreshPending = false;
+      void refreshCommunityChat(true, { scrollLatest: true, silent: true });
+    }
   }
 }
 
@@ -7991,8 +8229,10 @@ async function deleteCommunityConversation(userId) {
   }
 }
 
-async function refreshMessageUnread(force = false) {
-  if (!CONFIGURED_SMS_BACKEND || messageUnreadLoading) return;
+async function refreshMessageUnread(force = false, options = {}) {
+  if (options.renderMessages) messageUnreadRenderRequested = true;
+  if (!CONFIGURED_SMS_BACKEND) return;
+  if (messageUnreadLoading) return;
   if (!state.loggedInPhone || !currentCloudToken()) {
     if (state.messageUnreadCount) setState({ messageUnreadCount: 0 }, { skipCloud: true });
     return;
@@ -8005,6 +8245,11 @@ async function refreshMessageUnread(force = false) {
     messageUnreadLastLoadedAt = Date.now();
     const friends = Array.isArray(result.friends) ? mergeCommunityFriends(result.friends) : state.communityFriends;
     const friendSignature = items => JSON.stringify((items || []).map(item => [item.id, item.name, item.avatar, item.lastMessage, item.lastMessageAt, Number(item.unreadCount || 0)]));
+    // Consume the current render request before comparing data. If a new push
+    // lands during this request it will set the flag again and the finally
+    // block will run one follow-up request instead of creating a refresh loop.
+    const shouldRenderMessages = Boolean(messageUnreadRenderRequested);
+    messageUnreadRenderRequested = false;
     if (unreadCount !== Number(state.messageUnreadCount || 0) || friendSignature(friends) !== friendSignature(state.communityFriends)) {
       if (deferMessageListRefreshWhileDragging()) return;
       if (state.page === "communityChat") {
@@ -8012,24 +8257,102 @@ async function refreshMessageUnread(force = false) {
         // without replacing the chat DOM while the user is reading it.
         state = { ...state, messageUnreadCount: unreadCount, communityFriends: friends };
         saveState({ skipCloud: true });
+        patchStoredMessageLists(friends);
+      } else if (state.page === "messages" && patchVisibleMessageList(friends)) {
+        // A chat can return to an exact preserved messages DOM. Patch its
+        // changed rows in place so a push never looks like the whole page was
+        // refreshed just to update one preview or unread badge.
+        state = { ...state, messageUnreadCount: unreadCount, communityFriends: friends };
+        saveState({ skipCloud: true });
+        syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
       } else {
-        setState({ messageUnreadCount: unreadCount, communityFriends: friends }, { skipCloud: true });
+        setState({ messageUnreadCount: unreadCount, communityFriends: friends }, { skipCloud: true, forceRender: shouldRenderMessages || state.page === "messages" });
       }
     }
   } catch (error) {
     if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "未读消息读取失败");
   } finally {
     messageUnreadLoading = false;
+    if (messageUnreadRenderRequested) {
+      const renderMessages = messageUnreadRenderRequested;
+      messageUnreadRenderRequested = false;
+      void refreshMessageUnread(true, { renderMessages });
+    }
   }
+}
+
+function markCommunityConversationReadLocally(userId) {
+  const id = String(userId || "");
+  if (!id) return state.communityFriends || [];
+  return (state.communityFriends || []).map(friend => String(friend.id || "") === id
+    ? { ...friend, unreadCount: 0 }
+    : friend);
+}
+
+function patchVisibleMessageList(friends) {
+  if (state.page !== "messages" || messageListSwipeIsActive()) return false;
+  return patchMessageListInRoot($app, friends);
+}
+
+function patchStoredMessageLists(friends) {
+  edgeBackSnapshots
+    .filter(snapshot => snapshot?.page === "messages")
+    .forEach(snapshot => {
+      if (snapshot.liveDom?.hasChildNodes?.()) patchMessageListInRoot(snapshot.liveDom, friends);
+      if (!snapshot.html) return;
+      const template = document.createElement("template");
+      template.innerHTML = snapshot.html;
+      if (!patchMessageListInRoot(template.content, friends)) return;
+      snapshot.html = template.innerHTML;
+      snapshot.previewHtml = buildEdgeBackPreviewHtml(snapshot.html);
+    });
+}
+
+function patchMessageListInRoot(root, friends) {
+  const list = root?.querySelector?.(".message-friend-list");
+  if (!list) return false;
+  const rows = [...list.querySelectorAll(":scope > .message-friend-swipe")];
+  const rowIds = rows.map(row => String(row.dataset.conversationId || ""));
+  const friendIds = (friends || []).map(friend => String(friend.id || ""));
+  if (rowIds.length !== friendIds.length || rowIds.some((id, index) => id !== friendIds[index])) return false;
+  rows.forEach((row, index) => {
+    const friend = friends[index] || {};
+    const copy = row.querySelector(".message-friend-copy");
+    const title = copy?.querySelector("strong");
+    const preview = copy?.querySelector("span");
+    if (title) title.textContent = friend.name || "壳友";
+    if (preview) preview.textContent = friend.lastMessage || "暂无消息";
+    const avatarWrap = row.querySelector(".message-friend-avatar-wrap");
+    let badge = avatarWrap?.querySelector(":scope > i");
+    const unread = Math.max(0, Number(friend.unreadCount || 0));
+    if (unread && avatarWrap && !badge) {
+      badge = document.createElement("i");
+      avatarWrap.appendChild(badge);
+    }
+    if (badge) {
+      if (unread) badge.textContent = unread > 99 ? "99+" : String(unread);
+      else badge.remove();
+    }
+    const time = row.querySelector(".message-friend-time");
+    if (time && friend.lastMessageAt) {
+      time.dateTime = friend.lastMessageAt;
+      time.textContent = formatMessagePreviewTime(friend.lastMessageAt);
+    }
+  });
+  return true;
 }
 
 function startMessageUnreadPolling() {
   if (messageUnreadTimer) return;
   messageUnreadTimer = setInterval(() => {
-    if (!document.hidden) refreshMessageUnread(true);
+    if (document.hidden) return;
+    refreshMessageUnread(true);
+    if (state.page === "communityChat") void refreshCommunityChat(true, { scrollLatest: true, silent: true });
   }, 5000);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) refreshMessageUnread(true);
+    if (document.hidden) return;
+    refreshMessageUnread(true);
+    if (state.page === "communityChat") void refreshCommunityChat(true, { scrollLatest: true, silent: true });
   });
 }
 
@@ -8054,7 +8377,7 @@ function flushDeferredMessageListRefresh() {
   messageListRefreshDeferred = false;
   if (state.page !== "messages") return;
   void refreshCommunity(true);
-  void refreshMessageUnread(true);
+  void refreshMessageUnread(true, { renderMessages: true });
 }
 
 function scheduleDeferredMessageListRefresh() {
@@ -8065,9 +8388,13 @@ function scheduleDeferredMessageListRefresh() {
   }, 0);
 }
 
-async function refreshCommunityChat(force = false) {
+async function refreshCommunityChat(force = false, options = {}) {
   const userId = state.selectedCommunityFriendId;
-  if (!userId || !CONFIGURED_SMS_BACKEND || communityChatLoading) return;
+  if (!userId || !CONFIGURED_SMS_BACKEND) return;
+  if (communityChatLoading) {
+    if (force) communityChatRefreshPending = true;
+    return;
+  }
   const key = `${userId}:${Math.floor(Date.now() / 10000)}`;
   if (!force && communityChatLoadedKey === key) return;
   communityChatLoading = true;
@@ -8075,19 +8402,44 @@ async function refreshCommunityChat(force = false) {
     const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
     communityChatLoadedKey = key;
     const friend = result.friend || state.selectedCommunityFriend;
-    const messages = result.messages || [];
-    setState({
-      selectedCommunityFriend: friend,
-      communityChatMessages: messages,
-      communityChatListing: normalizeCommunityChatListing(result.marketListing),
-      communityFriends: communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 })
-    }, { skipCloud: true });
+    const messages = mergeCommunityChatMessages(state.selectedCommunityFriendId === userId ? state.communityChatMessages : [], result.messages || []);
+    const chatFriends = communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 });
+    patchStoredMessageLists(chatFriends);
+    const chatStillVisible = state.page === "communityChat" && state.selectedCommunityFriendId === userId;
+    const messagesChanged = communityChatMessageSignature(messages) !== communityChatMessageSignature(state.communityChatMessages || []);
+    if (chatStillVisible && messagesChanged && options.scrollLatest) pendingCommunityChatLatestScroll = true;
+    if (chatStillVisible && messagesChanged) {
+      setState({
+        selectedCommunityFriend: friend,
+        communityChatMessages: messages,
+        communityChatListing: normalizeCommunityChatListing(result.marketListing),
+        communityFriends: chatFriends
+      }, { skipCloud: true });
+    } else if (chatStillVisible) {
+      // Keep the open conversation DOM intact when polling found no new
+      // message. This removes the periodic flash users were seeing.
+      state = {
+        ...state,
+        selectedCommunityFriend: friend,
+        communityChatListing: normalizeCommunityChatListing(result.marketListing),
+        communityFriends: chatFriends
+      };
+      saveState({ skipCloud: true });
+    } else {
+      // A late reply for an old conversation may update the list preview, but
+      // must never overwrite whichever conversation the user opened next.
+      state = { ...state, communityFriends: chatFriends };
+      saveState({ skipCloud: true });
+    }
     refreshMessageUnread(true);
-    refreshCommunity(true);
   } catch (error) {
-    toast(error.message || "聊天记录读取失败");
+    if (!options.silent) toast(error.message || "聊天记录读取失败");
   } finally {
     communityChatLoading = false;
+    if (communityChatRefreshPending && state.page === "communityChat" && state.selectedCommunityFriendId === userId) {
+      communityChatRefreshPending = false;
+      void refreshCommunityChat(true, { scrollLatest: true, silent: true });
+    }
   }
 }
 
@@ -8110,12 +8462,14 @@ function applyCommunityChatSendResult(result, options = {}) {
   pendingCommunityChatLatestScroll = true;
   const friend = result.friend || state.selectedCommunityFriend;
   const messages = result.messages || [];
+  const chatFriends = communityFriendsWithPreview(state.selectedCommunityFriendId, friend, messages, { unreadCount: 0 });
+  patchStoredMessageLists(chatFriends);
   setState({
     selectedCommunityFriend: friend,
     communityChatMessages: messages,
     communityChatListing: normalizeCommunityChatListing(result.marketListing) || state.communityChatListing,
     communityChatToolsOpen: Boolean(options.keepToolsOpen),
-    communityFriends: communityFriendsWithPreview(state.selectedCommunityFriendId, friend, messages, { unreadCount: 0 })
+    communityFriends: chatFriends
   }, { skipCloud: true });
   refreshMessageUnread(true);
 }
@@ -8724,16 +9078,21 @@ function bindNativePushListeners(push) {
     push.addListener("registrationError", event => {
       console.warn(event?.error || "消息通知注册失败");
     });
-    push.addListener("pushNotificationReceived", () => {
+    push.addListener("pushNotificationReceived", event => {
       // The native banner/sound is presented by the iOS PushNotifications setting.
-      refreshMessageUnread(true);
+      // Refresh both state and the visible row. A preserved messages DOM is
+      // patched in place by refreshMessageUnread, so this has no page-flash.
+      refreshMessageUnread(true, { renderMessages: true });
+      // Capacitor passes the notification directly for foreground delivery,
+      // while an action callback wraps it in `notification`.
+      const data = nativePushData(event?.notification || event);
+      const senderId = String(data.senderId || data.senderID || data.sender_id || "").trim();
+      if (senderId && state.page === "communityChat" && senderId === String(state.selectedCommunityFriendId || "")) {
+        void refreshCommunityChat(true, { scrollLatest: true, silent: true });
+      }
     });
     push.addListener("pushNotificationActionPerformed", event => {
-      const senderId = String(event?.notification?.data?.senderId || "");
-      const route = String(event?.notification?.data?.route || "");
-      if (route === "memos") setState({ page: "memos" }, { skipCloud: true });
-      else if (senderId && state.loggedInPhone && currentCloudToken()) openCommunityChat(senderId);
-      else setState({ page: "messages" }, { skipCloud: true });
+      queueNativePushAction(event?.notification);
     });
   } catch (error) {
     nativePushListenersAttached = false;
@@ -8756,7 +9115,45 @@ async function setupNativePushNotifications() {
     console.warn(error.message || "消息通知权限初始化失败");
   } finally {
     nativePushSetupInFlight = false;
+    consumePendingNativePushAction();
   }
+}
+
+function nativePushData(notification) {
+  const raw = notification?.data;
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw); } catch (_) { return {}; }
+  }
+  return typeof raw === "object" ? raw : {};
+}
+
+function queueNativePushAction(notification) {
+  const data = nativePushData(notification);
+  const senderId = String(data.senderId || data.senderID || data.sender_id || "").trim();
+  const route = String(data.route || "").trim();
+  pendingNativePushAction = { senderId, route, receivedAt: Date.now() };
+  consumePendingNativePushAction();
+}
+
+function consumePendingNativePushAction() {
+  const action = pendingNativePushAction;
+  if (!action) return;
+  if (action.route === "memos") {
+    pendingNativePushAction = null;
+    setState({ page: "memos" }, { skipCloud: true });
+    return;
+  }
+  if (!action.senderId || !state.loggedInPhone || !currentCloudToken()) {
+    // Keep the action for a short cold-start window. Showing Messages is a
+    // safe fallback, but it must not discard the target conversation.
+    if (Date.now() - Number(action.receivedAt || 0) > 30000) pendingNativePushAction = null;
+    setState({ page: "messages" }, { skipCloud: true });
+    void refreshMessageUnread(true, { renderMessages: true });
+    return;
+  }
+  pendingNativePushAction = null;
+  void openCommunityChat(action.senderId);
 }
 
 async function unregisterNativePushNotifications(phone, token) {
@@ -9057,6 +9454,8 @@ async function startCloudSessionHydration() {
     await migrateEmbeddedImagesToCloud({ silent: true });
   } catch (error) {
     console.warn(error.message || "云端数据初始化失败");
+  } finally {
+    consumePendingNativePushAction();
   }
 }
 
@@ -9849,6 +10248,247 @@ function toast(text) {
   setTimeout(() => el.remove(), 2200);
 }
 
+function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
+  const pointers = new Map();
+  const maxScale = 4;
+  let scale = 1;
+  let translateX = 0;
+  let translateY = 0;
+  let primaryGesture = null;
+  let pinchGesture = null;
+  let moved = false;
+  let suppressBlankClickUntil = 0;
+  let lastTapAt = 0;
+
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+  const pointDistance = (first, second) => Math.hypot(first.x - second.x, first.y - second.y);
+  const pointMidpoint = (first, second) => ({ x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 });
+  const limitTranslation = () => {
+    const maxX = Math.max(0, (stage.clientWidth * (scale - 1)) / 2);
+    const maxY = Math.max(0, (stage.clientHeight * (scale - 1)) / 2);
+    translateX = clamp(translateX, -maxX, maxX);
+    translateY = clamp(translateY, -maxY, maxY);
+  };
+  const paint = (animate = false) => {
+    if (scale <= 1.005) {
+      scale = 1;
+      translateX = 0;
+      translateY = 0;
+      stage.classList.remove("is-zoomed", "is-zooming");
+      media.style.removeProperty("transform");
+      media.style.removeProperty("transition");
+      return;
+    }
+    limitTranslation();
+    stage.classList.add("is-zoomed", "is-zooming");
+    media.style.transition = animate ? "transform .18s ease" : "none";
+    media.style.transform = `translate3d(${Math.round(translateX)}px, ${Math.round(translateY)}px, 0) scale(${scale})`;
+  };
+  const reset = (animate = true) => {
+    if (scale <= 1.005) {
+      paint(false);
+      return;
+    }
+    scale = 1;
+    translateX = 0;
+    translateY = 0;
+    if (!animate) {
+      paint(false);
+      return;
+    }
+    stage.classList.remove("is-zoomed", "is-zooming");
+    media.style.transition = "transform .18s ease";
+    media.style.transform = "translate3d(0, 0, 0) scale(1)";
+    window.setTimeout(() => {
+      if (!stage.isConnected || scale > 1.005) return;
+      media.style.removeProperty("transform");
+      media.style.removeProperty("transition");
+    }, 190);
+  };
+  const beginPinch = () => {
+    const [first, second] = [...pointers.values()];
+    if (!first || !second) return;
+    const midpoint = pointMidpoint(first, second);
+    pinchGesture = {
+      distance: Math.max(1, pointDistance(first, second)),
+      midpoint,
+      scale,
+      translateX,
+      translateY
+    };
+    primaryGesture = null;
+    moved = true;
+    stage.classList.add("is-dragging");
+  };
+  const setPointer = event => pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  const pointerDown = event => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    setPointer(event);
+    try { stage.setPointerCapture(event.pointerId); } catch {}
+    if (pointers.size >= 2) {
+      beginPinch();
+      event.preventDefault();
+      return;
+    }
+    primaryGesture = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      lastAt: performance.now(),
+      velocityX: 0
+    };
+    moved = false;
+  };
+  const pointerMove = event => {
+    if (!pointers.has(event.pointerId)) return;
+    setPointer(event);
+    if (pointers.size >= 2) {
+      if (!pinchGesture) beginPinch();
+      const [first, second] = [...pointers.values()];
+      const midpoint = pointMidpoint(first, second);
+      const ratio = pointDistance(first, second) / Math.max(1, pinchGesture.distance);
+      const nextScale = clamp(pinchGesture.scale * ratio, 1, maxScale);
+      const stageBounds = stage.getBoundingClientRect();
+      const centerX = stageBounds.left + stageBounds.width / 2;
+      const centerY = stageBounds.top + stageBounds.height / 2;
+      const scaleRatio = nextScale / Math.max(1, pinchGesture.scale);
+      scale = nextScale;
+      translateX = pinchGesture.translateX + (pinchGesture.midpoint.x - centerX) * (1 - scaleRatio) + (midpoint.x - pinchGesture.midpoint.x);
+      translateY = pinchGesture.translateY + (pinchGesture.midpoint.y - centerY) * (1 - scaleRatio) + (midpoint.y - pinchGesture.midpoint.y);
+      paint(false);
+      event.preventDefault();
+      return;
+    }
+    if (!primaryGesture || event.pointerId !== primaryGesture.pointerId) return;
+    const deltaX = event.clientX - primaryGesture.startX;
+    const deltaY = event.clientY - primaryGesture.startY;
+    const now = performance.now();
+    const elapsed = Math.max(1, now - primaryGesture.lastAt);
+    primaryGesture.velocityX = (event.clientX - primaryGesture.lastX) / elapsed;
+    primaryGesture.lastX = event.clientX;
+    primaryGesture.lastY = event.clientY;
+    primaryGesture.lastAt = now;
+    if (Math.hypot(deltaX, deltaY) > 4) moved = true;
+    if (!moved) return;
+    stage.classList.add("is-dragging");
+    if (scale > 1.005) {
+      if (primaryGesture.panStartX === undefined) {
+        primaryGesture.panStartX = primaryGesture.startX;
+        primaryGesture.panStartY = primaryGesture.startY;
+        primaryGesture.panBaseX = translateX;
+        primaryGesture.panBaseY = translateY;
+      }
+      translateX = primaryGesture.panBaseX + (event.clientX - primaryGesture.panStartX);
+      translateY = primaryGesture.panBaseY + (event.clientY - primaryGesture.panStartY);
+      paint(false);
+      event.preventDefault();
+      return;
+    }
+    if (typeof onSwipe !== "function") return;
+    const atLeadingEdge = typeof canSwipe === "function" && !canSwipe(-1);
+    const atTrailingEdge = typeof canSwipe === "function" && !canSwipe(1);
+    const resistance = (atLeadingEdge && deltaX > 0) || (atTrailingEdge && deltaX < 0) ? 0.28 : 0.72;
+    media.style.transition = "none";
+    media.style.transform = `translate3d(${Math.round(deltaX * resistance)}px, 0, 0)`;
+    event.preventDefault();
+  };
+  const finishPointer = event => {
+    if (!pointers.has(event.pointerId)) return;
+    const current = pointers.get(event.pointerId);
+    const wasPrimary = primaryGesture?.pointerId === event.pointerId;
+    try { stage.releasePointerCapture(event.pointerId); } catch {}
+    pointers.delete(event.pointerId);
+    if (pointers.size >= 2) {
+      beginPinch();
+      return;
+    }
+    if (pointers.size === 1 && pinchGesture) {
+      const [remainingId, remaining] = pointers.entries().next().value;
+      primaryGesture = {
+        pointerId: remainingId,
+        startX: remaining.x,
+        startY: remaining.y,
+        lastX: remaining.x,
+        lastY: remaining.y,
+        lastAt: performance.now(),
+        velocityX: 0,
+        panStartX: remaining.x,
+        panStartY: remaining.y,
+        panBaseX: translateX,
+        panBaseY: translateY
+      };
+      pinchGesture = null;
+      return;
+    }
+    if (pointers.size) return;
+    stage.classList.remove("is-dragging");
+    const gesture = wasPrimary ? primaryGesture : null;
+    primaryGesture = null;
+    pinchGesture = null;
+    if (moved) suppressBlankClickUntil = Date.now() + 300;
+    if (scale > 1.005) {
+      limitTranslation();
+      paint(true);
+      return;
+    }
+    media.style.removeProperty("transform");
+    media.style.removeProperty("transition");
+    if (gesture && moved && typeof onSwipe === "function") {
+      const distance = (current?.x ?? gesture.lastX) - gesture.startX;
+      const projected = distance + (gesture.velocityX * 160);
+      const threshold = Math.max(44, stage.clientWidth * 0.14);
+      const travel = Math.abs(projected) >= threshold ? projected : distance;
+      if (Math.abs(travel) >= threshold) onSwipe(travel < 0 ? 1 : -1);
+      return;
+    }
+    if (!moved && event.pointerType !== "mouse") {
+      const now = Date.now();
+      if (now - lastTapAt < 280) {
+        const bounds = stage.getBoundingClientRect();
+        scale = 2.35;
+        translateX = (bounds.left + bounds.width / 2 - (current?.x ?? bounds.left + bounds.width / 2)) * .4;
+        translateY = (bounds.top + bounds.height / 2 - (current?.y ?? bounds.top + bounds.height / 2)) * .4;
+        paint(true);
+        suppressBlankClickUntil = now + 320;
+        lastTapAt = 0;
+      } else {
+        lastTapAt = now;
+      }
+    }
+  };
+  const doubleClick = event => {
+    event.preventDefault();
+    if (scale > 1.005) reset(true);
+    else {
+      scale = 2.35;
+      const bounds = stage.getBoundingClientRect();
+      translateX = (bounds.left + bounds.width / 2 - event.clientX) * .4;
+      translateY = (bounds.top + bounds.height / 2 - event.clientY) * .4;
+      paint(true);
+    }
+    suppressBlankClickUntil = Date.now() + 320;
+  };
+  stage.addEventListener("pointerdown", pointerDown, { passive: false });
+  stage.addEventListener("pointermove", pointerMove, { passive: false });
+  stage.addEventListener("pointerup", finishPointer);
+  stage.addEventListener("pointercancel", finishPointer);
+  stage.addEventListener("dblclick", doubleClick);
+  return {
+    reset,
+    isZoomed: () => scale > 1.005,
+    shouldIgnoreBlankClick: () => Date.now() < suppressBlankClickUntil,
+    destroy: () => {
+      stage.removeEventListener("pointerdown", pointerDown);
+      stage.removeEventListener("pointermove", pointerMove);
+      stage.removeEventListener("pointerup", finishPointer);
+      stage.removeEventListener("pointercancel", finishPointer);
+      stage.removeEventListener("dblclick", doubleClick);
+    }
+  };
+}
+
 function openImagePreview(src, alt = "图片预览", options = {}) {
   const existing = document.querySelector(".image-preview-overlay");
   if (typeof existing?.__closePreview === "function") existing.__closePreview();
@@ -9898,15 +10538,9 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
 
   let switchTimer = 0;
   let switchSequence = 0;
-  let pointerId = null;
-  let startX = 0;
-  let deltaX = 0;
-  let lastX = 0;
-  let lastAt = 0;
-  let velocityX = 0;
-  let dragging = false;
-  let ignoreStageBlankClick = false;
+  let previewZoom = null;
   const update = (direction = 0, animate = false) => {
+    previewZoom?.reset(false);
     const item = gallery[activeIndex];
     image.src = item.src;
     image.alt = item.alt;
@@ -9971,11 +10605,16 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
   if (isGallery) gallery.forEach(item => {
     if (item.src !== gallery[activeIndex].src) void preloadPreviewImage(item.src);
   });
+  previewZoom = attachPreviewZoom(stage, image, {
+    onSwipe: offset => switchImage(offset),
+    canSwipe: offset => activeIndex + offset >= 0 && activeIndex + offset < gallery.length
+  });
 
   const close = () => {
     if (!overlay.isConnected) return;
     switchSequence += 1;
     window.clearTimeout(switchTimer);
+    previewZoom?.destroy();
     document.removeEventListener("keydown", handleKeydown);
     document.body.classList.remove("image-preview-open");
     overlay.remove();
@@ -9986,60 +10625,9 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     if (event.key === "ArrowRight") switchImage(1);
   };
 
-  const restorePosition = () => {
-    stage.classList.remove("is-dragging");
-    image.style.removeProperty("transform");
-  };
-  const finishPointer = event => {
-    if (pointerId === null || (event?.pointerId !== undefined && event.pointerId !== pointerId)) return;
-    const distance = Number.isFinite(event?.clientX) ? event.clientX - startX : deltaX;
-    // A quick flick has a small measured distance. Project its velocity only
-    // to determine its direction; one gesture always means one photo.
-    const projectedDistance = distance + (velocityX * 160);
-    try { stage.releasePointerCapture(pointerId); } catch {}
-    const wasDragging = dragging;
-    pointerId = null;
-    deltaX = 0;
-    restorePosition();
-    ignoreStageBlankClick = wasDragging;
-    if (!wasDragging) return;
-    const threshold = Math.max(44, stage.clientWidth * 0.14);
-    const travel = Math.abs(projectedDistance) >= threshold ? projectedDistance : distance;
-    if (Math.abs(travel) < threshold) return;
-    switchImage(travel < 0 ? 1 : -1);
-  };
-
   if (isGallery) {
     previous.addEventListener("click", () => switchImage(-1));
     next.addEventListener("click", () => switchImage(1));
-    stage.addEventListener("pointerdown", event => {
-      if (event.pointerType === "mouse" && event.button !== 0) return;
-      pointerId = event.pointerId;
-      startX = event.clientX;
-      lastX = startX;
-      lastAt = performance.now();
-      velocityX = 0;
-      deltaX = 0;
-      dragging = false;
-      ignoreStageBlankClick = false;
-      stage.classList.add("is-dragging");
-      stage.setPointerCapture?.(pointerId);
-    });
-    stage.addEventListener("pointermove", event => {
-      if (pointerId === null || event.pointerId !== pointerId) return;
-      deltaX = event.clientX - startX;
-      const now = performance.now();
-      const elapsed = Math.max(1, now - lastAt);
-      velocityX = (event.clientX - lastX) / elapsed;
-      lastX = event.clientX;
-      lastAt = now;
-      if (Math.abs(deltaX) > 4) dragging = true;
-      const resistance = (activeIndex === 0 && deltaX > 0) || (activeIndex === gallery.length - 1 && deltaX < 0) ? 0.28 : 0.72;
-      image.style.transform = `translate3d(${Math.round(deltaX * resistance)}px, 0, 0)`;
-      if (dragging) event.preventDefault();
-    }, { passive: false });
-    stage.addEventListener("pointerup", finishPointer);
-    stage.addEventListener("pointercancel", finishPointer);
   }
 
   const closeFromButton = event => {
@@ -10052,8 +10640,7 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
   closeButton.addEventListener("pointerup", closeFromButton);
   closeButton.addEventListener("click", closeFromButton);
   overlay.addEventListener("click", event => {
-    if (event.target === stage && ignoreStageBlankClick) {
-      ignoreStageBlankClick = false;
+    if (event.target === stage && (previewZoom?.shouldIgnoreBlankClick() || previewZoom?.isZoomed())) {
       return;
     }
     // The stage deliberately fills the empty area around a contained image.
@@ -10091,16 +10678,22 @@ function openVideoPreview(src, alt = "视频预览", poster = "") {
   video.crossOrigin = "anonymous";
   if (poster) video.poster = poster;
 
+  const stage = document.createElement("div");
+  stage.className = "image-preview-stage video-preview-stage";
+  stage.appendChild(video);
+
   const caption = document.createElement("span");
   caption.className = "image-preview-caption";
   caption.textContent = alt;
 
-  overlay.append(closeButton, video, caption);
+  overlay.append(closeButton, stage, caption);
   document.body.appendChild(overlay);
   document.body.classList.add("image-preview-open");
+  const previewZoom = attachPreviewZoom(stage, video);
   video.play().catch(() => {});
 
   const close = () => {
+    previewZoom.destroy();
     document.removeEventListener("keydown", handleKeydown);
     video.pause();
     video.removeAttribute("src");
@@ -10112,13 +10705,46 @@ function openVideoPreview(src, alt = "视频预览", poster = "") {
     if (event.key === "Escape") close();
   };
 
-  closeButton.addEventListener("click", close);
+  const closeFromButton = event => {
+    event.preventDefault();
+    event.stopPropagation();
+    close();
+  };
+  closeButton.addEventListener("pointerup", closeFromButton);
+  closeButton.addEventListener("click", closeFromButton);
   overlay.addEventListener("click", event => {
-    if (event.target === overlay) close();
+    if (event.target === stage && (previewZoom.isZoomed() || previewZoom.shouldIgnoreBlankClick())) return;
+    if (event.target === overlay || event.target === stage) close();
   });
   overlay.__closePreview = close;
   document.addEventListener("keydown", handleKeydown);
   closeButton.focus();
+}
+
+let universalMediaPreviewBound = false;
+function setupUniversalMediaPreview() {
+  if (universalMediaPreviewBound) return;
+  universalMediaPreviewBound = true;
+  document.addEventListener("click", event => {
+    const origin = event.target instanceof Element ? event.target : null;
+    const media = origin?.closest("img, video");
+    if (!(media instanceof HTMLImageElement || media instanceof HTMLVideoElement)) return;
+    if (!$app.contains(media) || media.closest(".image-preview-overlay")) return;
+    // Controls with their own preview/navigation action keep their dedicated
+    // handler.  The capture listener is only a safe fallback for content
+    // media that otherwise has no click behaviour.
+    if (media.closest("button, a, label, input, textarea, select, [contenteditable='true'], [data-preview-community-media], [data-preview-chat-media], [data-preview-market-image], [data-growth-photo-preview], .photo-uploader, .media-picker, .default-avatar-option, .avatar-picker")) return;
+    if (media.classList.contains("species-thumbnail") || media.classList.contains("turtle-icon") || media.classList.contains("app-icon")) return;
+    const source = media instanceof HTMLVideoElement ? (media.currentSrc || media.src) : (media.currentSrc || media.src);
+    if (!source || source.startsWith("data:image/svg+xml")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (media instanceof HTMLVideoElement) {
+      openVideoPreview(source, media.getAttribute("aria-label") || media.title || "视频预览", media.poster || "");
+    } else {
+      openImagePreview(source, media.alt || media.getAttribute("aria-label") || media.title || "图片预览");
+    }
+  }, true);
 }
 
 function syncMobileKeyboardUI() {
@@ -10624,6 +11250,7 @@ setupMobileKeyboardGuard();
 setupPullToRefresh();
 setupEdgeBackAndConversationSwipe();
 setupNativeMediaPicker();
+setupUniversalMediaPreview();
 setupBottomNavForegroundRecovery();
 render();
 checkRequiredAppUpdate();
