@@ -12781,7 +12781,10 @@ body.image-preview-open {
   justify-content: center;
   gap: 14px;
   background: rgba(0, 0, 0, .9);
-  backdrop-filter: blur(8px);
+  /* A backdrop blur requires the browser to re-composite the full screen
+     during every image drag. The opaque preview layer is both cleaner and
+     substantially smoother on iPhone. */
+  isolation: isolate;
 }
 
 .image-preview-stage {
@@ -14798,7 +14801,10 @@ html[data-theme-color="dark"] .profile-content-tabs button.active {
   width: 100%;
   transform: translate3d(0, 0, 0);
   will-change: transform;
-  contain: paint;
+  /* Do not use paint containment here: the track itself is one viewport
+     wide, while all subsequent slides live outside that layout box until the
+     transform brings them in. The outer gallery owns the only clipping. */
+  contain: layout style;
 }
 
 .market-detail-gallery.is-dragging {

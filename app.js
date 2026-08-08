@@ -10718,11 +10718,13 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
   const currentSlide = document.createElement("div");
   currentSlide.className = "image-preview-slide image-preview-current-slide";
   const image = document.createElement("img");
+  image.decoding = "async";
   currentSlide.appendChild(image);
   const neighbourSlide = document.createElement("div");
   neighbourSlide.className = "image-preview-slide image-preview-neighbour-slide";
   neighbourSlide.hidden = true;
   const neighbourImage = document.createElement("img");
+  neighbourImage.decoding = "async";
   neighbourImage.alt = "";
   neighbourSlide.appendChild(neighbourImage);
   stage.append(currentSlide, neighbourSlide);
@@ -10749,6 +10751,8 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
   let switchSequence = 0;
   let previewDrag = null;
   let previewDragTimer = 0;
+  let previewDragFrame = 0;
+  let pendingPreviewDrag = null;
   let previewZoom = null;
   const update = (direction = 0, animate = false) => {
     previewZoom?.reset(false);
@@ -10804,6 +10808,9 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
   const clearPreviewDrag = () => {
     window.clearTimeout(previewDragTimer);
     previewDragTimer = 0;
+    if (previewDragFrame) cancelAnimationFrame(previewDragFrame);
+    previewDragFrame = 0;
+    pendingPreviewDrag = null;
     previewDrag = null;
     currentSlide.style.removeProperty("transition");
     currentSlide.style.removeProperty("transform");
@@ -10821,7 +10828,7 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     neighbourSlide.hidden = false;
     return previewDrag;
   };
-  const movePreviewDrag = ({ translateX, rawDeltaX, width }) => {
+  const paintPreviewDrag = ({ translateX, rawDeltaX, width }) => {
     if (!isGallery) return;
     const direction = rawDeltaX < 0 ? 1 : -1;
     const drag = preparePreviewDrag(direction, width);
@@ -10832,7 +10839,27 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     neighbourSlide.style.transition = "none";
     neighbourSlide.style.transform = `translate3d(${Math.round(offset + (drag.direction * drag.width))}px, 0, 0)`;
   };
+  // Touch hardware can send many more samples than the display can render.
+  // Keep only the latest sample and move both slide layers once per frame.
+  const movePreviewDrag = payload => {
+    pendingPreviewDrag = payload;
+    if (previewDragFrame) return;
+    previewDragFrame = requestAnimationFrame(() => {
+      previewDragFrame = 0;
+      const next = pendingPreviewDrag;
+      pendingPreviewDrag = null;
+      if (next) paintPreviewDrag(next);
+    });
+  };
+  const flushPreviewDrag = () => {
+    if (previewDragFrame) cancelAnimationFrame(previewDragFrame);
+    previewDragFrame = 0;
+    const next = pendingPreviewDrag;
+    pendingPreviewDrag = null;
+    if (next) paintPreviewDrag(next);
+  };
   const settlePreviewDrag = ({ offset }) => {
+    flushPreviewDrag();
     if (!previewDrag) {
       currentSlide.style.transition = "transform 180ms cubic-bezier(.22,.82,.28,1)";
       currentSlide.style.transform = "translate3d(0, 0, 0)";
