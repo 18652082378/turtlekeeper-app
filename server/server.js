@@ -2714,6 +2714,21 @@ async function handleMarketList(req, res) {
   });
 }
 
+async function handleMarketPublicDetail(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const viewer = optionalReviewUser(db, body);
+  const listingId = trimPublicText(body.listingId, 100);
+  const listing = (Array.isArray(db.marketListings) ? db.marketListings : [])
+    .find(item => item.id === listingId && (item.status || "active") === "active");
+  if (!listing) return sendJson(res, 404, { ok: false, message: "商品已下架或不存在" });
+  const seller = db.users?.[listing.sellerPhoneRaw] || null;
+  if (viewer && seller && usersBlockEachOther(viewer, seller)) {
+    return sendJson(res, 403, { ok: false, message: "该商品当前不可查看" });
+  }
+  return sendJson(res, 200, { ok: true, listing: marketListingView(db, listing, viewer) });
+}
+
 async function handleMarketCreate(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
@@ -3102,10 +3117,15 @@ function serveStatic(req, res, url) {
       return;
     }
     const ext = path.extname(target).toLowerCase();
-    const contentType = pathname === "/.well-known/apple-app-site-association"
+    const isAppleAppSiteAssociation = pathname === "/apple-app-site-association"
+      || pathname === "/.well-known/apple-app-site-association";
+    const contentType = isAppleAppSiteAssociation
       ? "application/json"
       : (mimeTypes[ext] || "application/octet-stream");
-    res.writeHead(200, { "Content-Type": contentType });
+    res.writeHead(200, {
+      "Content-Type": contentType,
+      ...(isAppleAppSiteAssociation ? { "Cache-Control": "no-store" } : {})
+    });
     res.end(content);
   });
 }
@@ -3226,6 +3246,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/chat/pin") return await handleCommunityConversationPin(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/delete") return await handleCommunityConversationDelete(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/list") return await handleMarketList(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/detail") return await handleMarketPublicDetail(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/view") return await handleMarketView(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/want") return await handleMarketWant(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/create") return await handleMarketCreate(req, res);

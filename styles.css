@@ -14764,10 +14764,13 @@ html[data-theme-color="dark"] .profile-content-tabs button.active {
   display: flex;
   overflow-x: auto;
   scroll-snap-type: x mandatory;
+  scroll-snap-stop: always;
   touch-action: pan-y;
   overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
   background: #0f1110;
+  contain: paint;
 }
 
 .market-detail-gallery.is-dragging {
@@ -14848,6 +14851,8 @@ html[data-theme-color="dark"] .profile-content-tabs button.active {
 .market-detail-gallery .market-detail-photo {
   flex: 0 0 100%;
   scroll-snap-align: start;
+  scroll-snap-stop: always;
+  contain: paint;
 }
 
 .market-feed-status {

@@ -13,6 +13,7 @@
     "cap:open:ios": "npm run build && npx cap open ios"
   },
   "dependencies": {
+    "@capacitor/app": "^8.1.1",
     "@capacitor/core": "8.4.0",
     "@capacitor/geolocation": "^8.2.0",
     "@capacitor/ios": "8.4.0",

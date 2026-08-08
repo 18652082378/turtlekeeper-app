@@ -398,6 +398,13 @@ let messageUnreadRenderRequested = false;
 let nativeMediaPickerOpening = false;
 // Do not open a preview from the synthetic click at the end of a carousel drag.
 let marketGalleryPreviewSuppressUntil = 0;
+// A market URL can arrive from a browser query string, or from iOS through
+// Capacitor's App plugin after an Associated Domains (Universal Link) launch.
+// Keep the requested id separately so the detail page can show a stable
+// loading state until the public market list finishes its first request.
+let incomingMarketShareListingId = "";
+let incomingMarketShareLoading = false;
+let nativeMarketShareLinksBound = false;
 
 if (CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE) {
   state = { ...state, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" };
@@ -3059,7 +3066,11 @@ function pageMarketAdd() {
 
 function pageMarketDetail() {
   const item = (state.marketListings || []).find(listing => listing.id === state.selectedMarketListingId);
-  if (!item) return `${topbar("商品详情", true)}<main class="content page-fresh market-detail-page"><div class="empty"><strong>商品已下架</strong></div></main>`;
+  if (!item) {
+    const openingSharedListing = incomingMarketShareLoading
+      && incomingMarketShareListingId === String(state.selectedMarketListingId || "");
+    return `${topbar("商品详情", true)}<main class="content page-fresh market-detail-page"><div class="empty"><strong>${openingSharedListing ? "正在打开商品…" : "商品已下架"}</strong>${openingSharedListing ? "<br>正在读取商品信息" : ""}</div></main>`;
+  }
   const isOwn = Boolean(item.isOwn || item.pendingLocal);
   const sold = item.status === "sold";
   const mediaItems = marketListingMediaItems(item);
@@ -5301,34 +5312,64 @@ function bindEvents() {
     const previous = document.querySelector("[data-market-gallery-prev]");
     const next = document.querySelector("[data-market-gallery-next]");
     const count = document.querySelector("[data-market-gallery-count]");
+    let controlsFrame = 0;
+    let pendingScrollLeft = null;
+    let galleryScrollFrame = 0;
+    let lastGalleryIndex = -1;
+    const galleryWidth = () => Math.max(1, marketDetailGallery.clientWidth);
     const updateGalleryControls = () => {
-      const index = Math.max(0, Math.min(slides.length - 1, Math.round(marketDetailGallery.scrollLeft / Math.max(1, marketDetailGallery.clientWidth))));
+      controlsFrame = 0;
+      const index = Math.max(0, Math.min(slides.length - 1, Math.round(marketDetailGallery.scrollLeft / galleryWidth())));
+      if (index === lastGalleryIndex) return;
+      lastGalleryIndex = index;
       if (previous) previous.disabled = index === 0;
       if (next) next.disabled = index >= slides.length - 1;
       if (count) count.textContent = `${index + 1}/${slides.length}`;
     };
+    const requestGalleryControls = () => {
+      if (controlsFrame) return;
+      controlsFrame = requestAnimationFrame(updateGalleryControls);
+    };
+    const paintGalleryScroll = () => {
+      galleryScrollFrame = 0;
+      if (pendingScrollLeft === null) return;
+      marketDetailGallery.scrollLeft = pendingScrollLeft;
+      pendingScrollLeft = null;
+    };
+    const queueGalleryScroll = value => {
+      pendingScrollLeft = value;
+      if (!galleryScrollFrame) galleryScrollFrame = requestAnimationFrame(paintGalleryScroll);
+    };
     const moveGallery = offset => {
-      const current = Math.round(marketDetailGallery.scrollLeft / Math.max(1, marketDetailGallery.clientWidth));
+      const width = galleryWidth();
+      const current = Math.round(marketDetailGallery.scrollLeft / width);
       const target = Math.max(0, Math.min(slides.length - 1, current + offset));
-      marketDetailGallery.scrollTo({ left: target * marketDetailGallery.clientWidth, behavior: "smooth" });
+      marketDetailGallery.scrollTo({ left: target * width, behavior: "smooth" });
     };
     previous?.addEventListener("click", () => moveGallery(-1));
     next?.addEventListener("click", () => moveGallery(1));
-    marketDetailGallery.addEventListener("scroll", updateGalleryControls, { passive: true });
-    window.addEventListener("resize", updateGalleryControls, { once: true });
+    marketDetailGallery.addEventListener("scroll", requestGalleryControls, { passive: true });
+    window.addEventListener("resize", requestGalleryControls, { once: true });
     requestAnimationFrame(updateGalleryControls);
 
     // Keep a drag constrained to its immediate neighbour.  A long or fast
     // swipe must never skip across several listing photos in one movement.
     let galleryPointer = null;
-    const slideWidth = () => Math.max(1, marketDetailGallery.clientWidth);
     const releaseGalleryPointer = active => {
       if (active?.pointerId === undefined) return;
       try { marketDetailGallery.releasePointerCapture(active.pointerId); } catch {}
     };
     const settleGallery = (active, cancelled = false) => {
       if (!active?.dragging) return;
-      const width = slideWidth();
+      if (galleryScrollFrame) {
+        cancelAnimationFrame(galleryScrollFrame);
+        galleryScrollFrame = 0;
+      }
+      if (pendingScrollLeft !== null) {
+        marketDetailGallery.scrollLeft = pendingScrollLeft;
+        pendingScrollLeft = null;
+      }
+      const width = active.width;
       const startIndex = Math.round(active.startScroll / width);
       const distance = active.lastX - active.startX;
       const projectedDistance = cancelled ? distance : distance + (active.velocityX * 140);
@@ -5358,6 +5399,8 @@ function bindEvents() {
         lastX: event.clientX,
         lastAt: now,
         velocityX: 0,
+        width: galleryWidth(),
+        maxScroll: Math.max(0, marketDetailGallery.scrollWidth - marketDetailGallery.clientWidth),
         startScroll: marketDetailGallery.scrollLeft,
         dragging: false
       };
@@ -5383,13 +5426,11 @@ function bindEvents() {
       active.velocityX = (event.clientX - active.lastX) / elapsed;
       active.lastX = event.clientX;
       active.lastAt = now;
-      const maxScroll = Math.max(0, marketDetailGallery.scrollWidth - marketDetailGallery.clientWidth);
-      const width = slideWidth();
       // Do not expose more than one neighbouring photo during an individual
       // drag either, even if the finger travels a large distance.
-      const minDragScroll = Math.max(0, active.startScroll - width);
-      const maxDragScroll = Math.min(maxScroll, active.startScroll + width);
-      marketDetailGallery.scrollLeft = Math.max(minDragScroll, Math.min(maxDragScroll, active.startScroll - dx));
+      const minDragScroll = Math.max(0, active.startScroll - active.width);
+      const maxDragScroll = Math.min(active.maxScroll, active.startScroll + active.width);
+      queueGalleryScroll(Math.max(minDragScroll, Math.min(maxDragScroll, active.startScroll - dx)));
       if (event.cancelable) event.preventDefault();
     }, { passive: false });
     marketDetailGallery.addEventListener("pointerup", event => {
@@ -5698,6 +5739,20 @@ async function refreshMarket(force = false) {
   if (!force && Date.now() - marketLastLoadedAt < 10000) return;
   marketLoading = true;
   try {
+    const sharedListingId = incomingMarketShareLoading
+      && incomingMarketShareListingId === String(state.selectedMarketListingId || "")
+      ? incomingMarketShareListingId
+      : "";
+    if (sharedListingId) {
+      const result = await apiPost("/api/market/detail", marketAuthPayload({ listingId: sharedListingId }));
+      const sharedListing = normalizeMarketListings([result.listing])[0];
+      if (!sharedListing) throw new Error("商品已下架或不存在");
+      const retainedListings = (state.marketListings || []).filter(item => item.id !== sharedListing.id);
+      marketLastLoadedAt = Date.now();
+      incomingMarketShareLoading = false;
+      setState({ marketListings: [sharedListing, ...retainedListings] }, { skipCloud: true });
+      return;
+    }
     const result = await apiPost("/api/market/list", marketAuthPayload(isMarketFeed ? {
       offset: 0,
       limit: 8,
@@ -5714,6 +5769,9 @@ async function refreshMarket(force = false) {
     [...pending, ...retainedReference, ...remoteListings, ...savedListings].forEach(item => mergedListings.set(item.id, item));
     const accountPatch = result.accountData ? normalizeAccountData(result.accountData) : {};
     marketLastLoadedAt = Date.now();
+    if (incomingMarketShareListingId && incomingMarketShareListingId === String(state.selectedMarketListingId || "")) {
+      incomingMarketShareLoading = false;
+    }
     setState({
       ...accountPatch,
       marketListings: [...mergedListings.values()],
@@ -5726,6 +5784,10 @@ async function refreshMarket(force = false) {
       } : {})
     }, { skipCloud: true });
   } catch (error) {
+    if (incomingMarketShareListingId && incomingMarketShareListingId === String(state.selectedMarketListingId || "")) {
+      incomingMarketShareLoading = false;
+      if (state.page === "marketDetail") render();
+    }
     if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "龟集市读取失败");
   } finally {
     marketLoading = false;
@@ -7011,9 +7073,73 @@ async function openPlatformWeChat() {
   }, 900);
 }
 
+function sharedMarketListingIdFromUrl(rawUrl) {
+  const value = String(rawUrl || "").trim();
+  if (!value) return "";
+  try {
+    const parsed = new URL(value, window.location.href);
+    const queryId = String(parsed.searchParams.get("market") || "").trim();
+    const pathMatch = parsed.pathname.match(/^\/market\/([^/?#]+)/i);
+    const listingId = queryId || (pathMatch ? decodeURIComponent(pathMatch[1]) : "");
+    return listingId && listingId.length <= 120 ? listingId : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function openSharedMarketListing(rawUrl, options = {}) {
+  const listingId = sharedMarketListingIdFromUrl(rawUrl);
+  if (!listingId) return false;
+  incomingMarketShareListingId = listingId;
+  incomingMarketShareLoading = true;
+  // A Universal Link must not be held back by the normal ten-second market
+  // cache window: the requested listing might not be in the previous list.
+  marketLastLoadedAt = 0;
+  const marketHistoryIds = [listingId, ...(state.marketHistoryIds || []).filter(item => item !== listingId)].slice(0, 100);
+  if (options.initial) {
+    state = { ...state, page: "marketDetail", selectedMarketListingId: listingId, marketHistoryIds };
+    return true;
+  }
+  if (state.page === "marketDetail" && String(state.selectedMarketListingId || "") === listingId) return true;
+  setState({ page: "marketDetail", selectedMarketListingId: listingId, marketHistoryIds }, { pageMotion: "enter" });
+  recordMarketView(listingId);
+  return true;
+}
+
+function nativeAppLinkPlugin() {
+  const capacitor = window.Capacitor;
+  if (!capacitor || typeof capacitor.isNativePlatform !== "function" || !capacitor.isNativePlatform()) return null;
+  const plugin = capacitor.Plugins?.App || capacitor.registerPlugin?.("App");
+  return plugin && typeof plugin.addListener === "function" ? plugin : null;
+}
+
+function setupMarketShareDeepLinks() {
+  if (nativeMarketShareLinksBound) return;
+  nativeMarketShareLinksBound = true;
+  const nativeApp = nativeAppLinkPlugin();
+  if (nativeApp) {
+    try {
+      const listener = nativeApp.addListener("appUrlOpen", event => {
+        openSharedMarketListing(event?.url);
+      });
+      listener?.catch?.(error => console.warn("商品链接监听失败", error));
+      nativeApp.getLaunchUrl?.()
+        .then(result => {
+          if (result?.url) openSharedMarketListing(result.url);
+        })
+        .catch(error => console.warn("商品启动链接读取失败", error));
+    } catch (error) {
+      console.warn("商品链接初始化失败", error);
+    }
+  }
+  window.addEventListener("popstate", () => openSharedMarketListing(window.location.href));
+}
+
 function marketShareUrl(listing) {
-  const base = String(window.TURTLE_PUBLIC_APP_URL || "https://api.turtleworld.cn/").replace(/\/?$/, "/");
-  return `${base}?market=${encodeURIComponent(String(listing?.id || ""))}`;
+  const base = String(window.TURTLE_PUBLIC_APP_URL || "https://api.turtleworld.cn/").trim() || "https://api.turtleworld.cn/";
+  const url = new URL(base, window.location.href);
+  url.searchParams.set("market", String(listing?.id || ""));
+  return url.toString();
 }
 
 async function shareMarketListing(listingId) {
@@ -10259,17 +10385,36 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
   let moved = false;
   let suppressBlankClickUntil = 0;
   let lastTapAt = 0;
+  let paintFrame = 0;
+  let swipePaintFrame = 0;
+  let pendingSwipeX = 0;
+  let stageWidth = Math.max(1, stage.clientWidth || 1);
+  let stageHeight = Math.max(1, stage.clientHeight || 1);
+  let stageCenterX = 0;
+  let stageCenterY = 0;
 
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
   const pointDistance = (first, second) => Math.hypot(first.x - second.x, first.y - second.y);
   const pointMidpoint = (first, second) => ({ x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 });
+  const refreshStageMetrics = () => {
+    stageWidth = Math.max(1, stage.clientWidth || 1);
+    stageHeight = Math.max(1, stage.clientHeight || 1);
+    const bounds = stage.getBoundingClientRect();
+    stageCenterX = bounds.left + bounds.width / 2;
+    stageCenterY = bounds.top + bounds.height / 2;
+  };
+  refreshStageMetrics();
+  const stageResizeObserver = typeof ResizeObserver === "function"
+    ? new ResizeObserver(refreshStageMetrics)
+    : null;
+  stageResizeObserver?.observe(stage);
   const limitTranslation = () => {
-    const maxX = Math.max(0, (stage.clientWidth * (scale - 1)) / 2);
-    const maxY = Math.max(0, (stage.clientHeight * (scale - 1)) / 2);
+    const maxX = Math.max(0, (stageWidth * (scale - 1)) / 2);
+    const maxY = Math.max(0, (stageHeight * (scale - 1)) / 2);
     translateX = clamp(translateX, -maxX, maxX);
     translateY = clamp(translateY, -maxY, maxY);
   };
-  const paint = (animate = false) => {
+  const paintNow = (animate = false) => {
     if (scale <= 1.005) {
       scale = 1;
       translateX = 0;
@@ -10284,16 +10429,55 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
     media.style.transition = animate ? "transform .18s ease" : "none";
     media.style.transform = `translate3d(${Math.round(translateX)}px, ${Math.round(translateY)}px, 0) scale(${scale})`;
   };
+  // Pointer events can arrive far faster than the screen can draw.  Coalesce
+  // all move updates into one compositor transform per frame instead of
+  // forcing a layout/style update for every touch sample.
+  const paint = (animate = false, immediate = false) => {
+    if (paintFrame && (animate || immediate || scale <= 1.005)) {
+      cancelAnimationFrame(paintFrame);
+      paintFrame = 0;
+    }
+    if (animate || immediate || scale <= 1.005) {
+      paintNow(animate);
+      return;
+    }
+    if (paintFrame) return;
+    paintFrame = requestAnimationFrame(() => {
+      paintFrame = 0;
+      paintNow(false);
+    });
+  };
+  const paintSwipe = (translateX, immediate = false) => {
+    pendingSwipeX = translateX;
+    const paintNow = () => {
+      swipePaintFrame = 0;
+      media.style.transition = "none";
+      media.style.transform = `translate3d(${Math.round(pendingSwipeX)}px, 0, 0)`;
+    };
+    if (immediate) {
+      if (swipePaintFrame) cancelAnimationFrame(swipePaintFrame);
+      paintNow();
+      return;
+    }
+    if (!swipePaintFrame) swipePaintFrame = requestAnimationFrame(paintNow);
+  };
+  const clearSwipePaint = () => {
+    if (swipePaintFrame) cancelAnimationFrame(swipePaintFrame);
+    swipePaintFrame = 0;
+    pendingSwipeX = 0;
+    media.style.removeProperty("transform");
+    media.style.removeProperty("transition");
+  };
   const reset = (animate = true) => {
     if (scale <= 1.005) {
-      paint(false);
+      paint(false, true);
       return;
     }
     scale = 1;
     translateX = 0;
     translateY = 0;
     if (!animate) {
-      paint(false);
+      paint(false, true);
       return;
     }
     stage.classList.remove("is-zoomed", "is-zooming");
@@ -10309,12 +10493,15 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
     const [first, second] = [...pointers.values()];
     if (!first || !second) return;
     const midpoint = pointMidpoint(first, second);
+    refreshStageMetrics();
     pinchGesture = {
       distance: Math.max(1, pointDistance(first, second)),
       midpoint,
       scale,
       translateX,
-      translateY
+      translateY,
+      centerX: stageCenterX,
+      centerY: stageCenterY
     };
     primaryGesture = null;
     moved = true;
@@ -10323,6 +10510,7 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
   const setPointer = event => pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   const pointerDown = event => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    refreshStageMetrics();
     setPointer(event);
     try { stage.setPointerCapture(event.pointerId); } catch {}
     if (pointers.size >= 2) {
@@ -10350,13 +10538,10 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
       const midpoint = pointMidpoint(first, second);
       const ratio = pointDistance(first, second) / Math.max(1, pinchGesture.distance);
       const nextScale = clamp(pinchGesture.scale * ratio, 1, maxScale);
-      const stageBounds = stage.getBoundingClientRect();
-      const centerX = stageBounds.left + stageBounds.width / 2;
-      const centerY = stageBounds.top + stageBounds.height / 2;
       const scaleRatio = nextScale / Math.max(1, pinchGesture.scale);
       scale = nextScale;
-      translateX = pinchGesture.translateX + (pinchGesture.midpoint.x - centerX) * (1 - scaleRatio) + (midpoint.x - pinchGesture.midpoint.x);
-      translateY = pinchGesture.translateY + (pinchGesture.midpoint.y - centerY) * (1 - scaleRatio) + (midpoint.y - pinchGesture.midpoint.y);
+      translateX = pinchGesture.translateX + (pinchGesture.midpoint.x - pinchGesture.centerX) * (1 - scaleRatio) + (midpoint.x - pinchGesture.midpoint.x);
+      translateY = pinchGesture.translateY + (pinchGesture.midpoint.y - pinchGesture.centerY) * (1 - scaleRatio) + (midpoint.y - pinchGesture.midpoint.y);
       paint(false);
       event.preventDefault();
       return;
@@ -10390,8 +10575,7 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
     const atLeadingEdge = typeof canSwipe === "function" && !canSwipe(-1);
     const atTrailingEdge = typeof canSwipe === "function" && !canSwipe(1);
     const resistance = (atLeadingEdge && deltaX > 0) || (atTrailingEdge && deltaX < 0) ? 0.28 : 0.72;
-    media.style.transition = "none";
-    media.style.transform = `translate3d(${Math.round(deltaX * resistance)}px, 0, 0)`;
+    paintSwipe(deltaX * resistance);
     event.preventDefault();
   };
   const finishPointer = event => {
@@ -10433,12 +10617,11 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
       paint(true);
       return;
     }
-    media.style.removeProperty("transform");
-    media.style.removeProperty("transition");
+    clearSwipePaint();
     if (gesture && moved && typeof onSwipe === "function") {
       const distance = (current?.x ?? gesture.lastX) - gesture.startX;
       const projected = distance + (gesture.velocityX * 160);
-      const threshold = Math.max(44, stage.clientWidth * 0.14);
+      const threshold = Math.max(44, stageWidth * 0.14);
       const travel = Math.abs(projected) >= threshold ? projected : distance;
       if (Math.abs(travel) >= threshold) onSwipe(travel < 0 ? 1 : -1);
       return;
@@ -10446,10 +10629,9 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
     if (!moved && event.pointerType !== "mouse") {
       const now = Date.now();
       if (now - lastTapAt < 280) {
-        const bounds = stage.getBoundingClientRect();
         scale = 2.35;
-        translateX = (bounds.left + bounds.width / 2 - (current?.x ?? bounds.left + bounds.width / 2)) * .4;
-        translateY = (bounds.top + bounds.height / 2 - (current?.y ?? bounds.top + bounds.height / 2)) * .4;
+        translateX = (stageCenterX - (current?.x ?? stageCenterX)) * .4;
+        translateY = (stageCenterY - (current?.y ?? stageCenterY)) * .4;
         paint(true);
         suppressBlankClickUntil = now + 320;
         lastTapAt = 0;
@@ -10463,9 +10645,9 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
     if (scale > 1.005) reset(true);
     else {
       scale = 2.35;
-      const bounds = stage.getBoundingClientRect();
-      translateX = (bounds.left + bounds.width / 2 - event.clientX) * .4;
-      translateY = (bounds.top + bounds.height / 2 - event.clientY) * .4;
+      refreshStageMetrics();
+      translateX = (stageCenterX - event.clientX) * .4;
+      translateY = (stageCenterY - event.clientY) * .4;
       paint(true);
     }
     suppressBlankClickUntil = Date.now() + 320;
@@ -10480,6 +10662,9 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe } = {}) {
     isZoomed: () => scale > 1.005,
     shouldIgnoreBlankClick: () => Date.now() < suppressBlankClickUntil,
     destroy: () => {
+      if (paintFrame) cancelAnimationFrame(paintFrame);
+      if (swipePaintFrame) cancelAnimationFrame(swipePaintFrame);
+      stageResizeObserver?.disconnect();
       stage.removeEventListener("pointerdown", pointerDown);
       stage.removeEventListener("pointermove", pointerMove);
       stage.removeEventListener("pointerup", finishPointer);
@@ -10547,12 +10732,17 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     caption.textContent = isGallery ? `${item.alt}  ${activeIndex + 1}/${gallery.length}` : item.alt;
     previous.disabled = activeIndex === 0;
     next.disabled = activeIndex === gallery.length - 1;
+    if (isGallery) warmAdjacentPreviewImages();
     if (!animate) return;
     image.classList.remove("is-entering-from-left", "is-entering-from-right");
     image.classList.add(direction > 0 ? "is-entering-from-right" : "is-entering-from-left");
     requestAnimationFrame(() => image.classList.remove("is-entering-from-left", "is-entering-from-right"));
   };
-  const preloadPreviewImage = source => new Promise(resolve => {
+  const previewPreloads = new Map();
+  const preloadPreviewImage = source => {
+    const existing = previewPreloads.get(source);
+    if (existing) return existing;
+    const pending = new Promise(resolve => {
     const cachedImage = new Image();
     let settled = false;
     const finish = () => {
@@ -10576,7 +10766,15 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
         finish();
       }
     }
-  });
+    });
+    previewPreloads.set(source, pending);
+    return pending;
+  };
+  const warmAdjacentPreviewImages = () => {
+    [activeIndex - 1, activeIndex + 1].forEach(index => {
+      if (gallery[index]?.src) void preloadPreviewImage(gallery[index].src);
+    });
+  };
   const switchImage = offset => {
     const target = Math.max(0, Math.min(gallery.length - 1, activeIndex + offset));
     if (target === activeIndex) {
@@ -10601,10 +10799,6 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     });
   };
   update();
-  // Warm the browser cache for adjacent images as soon as the preview opens.
-  if (isGallery) gallery.forEach(item => {
-    if (item.src !== gallery[activeIndex].src) void preloadPreviewImage(item.src);
-  });
   previewZoom = attachPreviewZoom(stage, image, {
     onSwipe: offset => switchImage(offset),
     canSwipe: offset => activeIndex + offset >= 0 && activeIndex + offset < gallery.length
@@ -11246,12 +11440,16 @@ function setupEdgeBackAndConversationSwipe() {
 }
 
 restorePendingCloudData();
+// Browser share links already contain their target in location. Route before
+// the first render so a shared product never flashes the dashboard first.
+openSharedMarketListing(window.location.href, { initial: true });
 setupMobileKeyboardGuard();
 setupPullToRefresh();
 setupEdgeBackAndConversationSwipe();
 setupNativeMediaPicker();
 setupUniversalMediaPreview();
 setupBottomNavForegroundRecovery();
+setupMarketShareDeepLinks();
 render();
 checkRequiredAppUpdate();
 startMarketNetworkMonitoring();
