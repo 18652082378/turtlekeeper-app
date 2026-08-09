@@ -2083,9 +2083,44 @@ function communityFeedSignature(posts = []) {
   ]));
 }
 
+function communityPostRenderSignature(post = {}) {
+  // Keep this signature scoped to one card.  It lets a refresh replace only
+  // the card whose visible data actually changed, instead of discarding every
+  // image/video element in the feed after the page has opened.
+  return JSON.stringify([
+    post.id,
+    post.authorId,
+    post.authorName,
+    post.authorAvatar,
+    post.content,
+    post.createdAt,
+    post.location,
+    Boolean(post.isOwn),
+    Boolean(post.pendingLocal),
+    Boolean(post.followed),
+    Boolean(post.liked),
+    Number(post.likeCount || 0),
+    (post.mediaItems || []).map(media => [media.url, media.posterUrl, media.type]),
+    (post.comments || []).map(comment => [comment.id, comment.authorName, comment.authorAvatar, comment.content])
+  ]);
+}
+
+function communityPostMediaSignature(post = {}) {
+  return JSON.stringify((post.mediaItems || []).map(media => [media.url, media.posterUrl, media.type]));
+}
+
+function createCommunityFeedCard(item) {
+  const template = document.createElement("template");
+  template.innerHTML = communityFeedCard(item).trim();
+  return template.content.firstElementChild;
+}
+
 function bindPatchedCommunityFeed(feed) {
   if (!feed) return;
-  feed.querySelectorAll("[data-view-community-post]").forEach(card => {
+  const cards = feed.matches?.("[data-view-community-post]")
+    ? [feed]
+    : [...feed.querySelectorAll("[data-view-community-post]")];
+  cards.forEach(card => {
     const openDetail = event => {
       if (event.target.closest("button, input, textarea, select, form")) return;
       setState({ page: "communityPostDetail", selectedCommunityPostId: card.dataset.viewCommunityPost, openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
@@ -2131,18 +2166,63 @@ function bindPatchedCommunityFeed(feed) {
   }));
 }
 
-function patchVisibleCommunityFeed(posts) {
+function patchVisibleCommunityFeed(posts, previousPosts = []) {
   if (state.page !== "community") return false;
   const feed = $app.querySelector(".community-feed");
   if (!feed) return false;
-  // Keep the route shell, top bar and persistent bottom nav mounted. Only the
-  // list's children change, so the response cannot look like a second page load.
-  feed.innerHTML = communityFeedMarkup(posts);
-  bindPatchedCommunityFeed(feed);
-  requestAnimationFrame(() => {
-    hydrateVideoFirstFrames();
-    hydrateCommunityPostVideos();
+  const previousById = new Map((previousPosts || []).map(post => [String(post.id), post]));
+  const existingCards = [...feed.querySelectorAll(":scope > .community-moment")];
+  const existingById = new Map(existingCards.map(card => [String(card.dataset.viewCommunityPost || ""), card]));
+
+  if (!posts.length) {
+    if (!existingCards.length && feed.querySelector(".empty")) return true;
+    feed.innerHTML = communityFeedMarkup([]);
+    return true;
+  }
+
+  const cards = [];
+  const changedCards = [];
+  posts.forEach(post => {
+    const id = String(post.id || "");
+    const existing = existingById.get(id);
+    const previous = previousById.get(id);
+    const canKeepExistingCard = Boolean(existing && previous
+      && communityPostRenderSignature(post) === communityPostRenderSignature(previous));
+    const card = canKeepExistingCard ? existing : createCommunityFeedCard(post);
+    // A comment/like change must update its card, but it must not restart an
+    // unchanged inline video or make an already-decoded image flash. Move the
+    // mounted media container to the replacement card when its media is the
+    // same, then update the surrounding text/actions normally.
+    if (!canKeepExistingCard && existing && previous
+      && communityPostMediaSignature(post) === communityPostMediaSignature(previous)) {
+      const existingMedia = existing.querySelector(".community-post-media");
+      const nextMedia = card.querySelector(".community-post-media");
+      if (existingMedia && nextMedia) nextMedia.replaceWith(existingMedia);
+    }
+    if (!canKeepExistingCard) changedCards.push(card);
+    cards.push(card);
   });
+
+  // Reorder by moving existing nodes in place.  Unchanged media elements stay
+  // mounted, retain their decoded frame/playback state and do not flash again.
+  let cursor = feed.firstElementChild;
+  cards.forEach(card => {
+    if (card !== cursor) feed.insertBefore(card, cursor);
+    cursor = card.nextElementSibling;
+  });
+  while (cursor) {
+    const next = cursor.nextElementSibling;
+    cursor.remove();
+    cursor = next;
+  }
+
+  changedCards.forEach(card => bindPatchedCommunityFeed(card));
+  if (changedCards.length) {
+    requestAnimationFrame(() => {
+      hydrateVideoFirstFrames();
+      hydrateCommunityPostVideos();
+    });
+  }
   return true;
 }
 
@@ -7788,13 +7868,14 @@ async function refreshCommunity(force = false) {
       messageUnreadCount
     };
     if (state.page === "community") {
-      const feedChanged = communityFeedSignature(communityPosts) !== communityFeedSignature(state.communityPosts || []);
+      const previousPosts = state.communityPosts || [];
+      const feedChanged = communityFeedSignature(communityPosts) !== communityFeedSignature(previousPosts);
       // A community refresh arrives after the route has already opened. Keep
       // that page mounted and update only its feed; setState would reconstruct
       // the entire page and produced the visible render/flicker the user saw.
       state = { ...state, ...nextCommunityState };
       saveState({ skipCloud: true });
-      if (feedChanged) patchVisibleCommunityFeed(communityPosts);
+      if (feedChanged) patchVisibleCommunityFeed(communityPosts, previousPosts);
       syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
     } else {
       setState(nextCommunityState, { skipCloud: true });
@@ -11389,6 +11470,7 @@ function openVideoPreview(src, alt = "视频预览", poster = "") {
   video.play().catch(() => {});
 
   const close = () => {
+    if (!overlay.isConnected) return;
     previewZoom.destroy();
     document.removeEventListener("keydown", handleKeydown);
     video.pause();
@@ -11401,9 +11483,22 @@ function openVideoPreview(src, alt = "视频预览", poster = "") {
     if (event.key === "Escape") close();
   };
 
+  const suppressCloseClickThrough = () => {
+    const swallowFollowUpClick = event => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      document.removeEventListener("click", swallowFollowUpClick, true);
+    };
+    document.addEventListener("click", swallowFollowUpClick, true);
+    window.setTimeout(() => document.removeEventListener("click", swallowFollowUpClick, true), 360);
+  };
   const closeFromButton = event => {
     event.preventDefault();
-    event.stopPropagation();
+    event.stopImmediatePropagation();
+    // iOS can dispatch a synthetic click after pointerup.  The preview is
+    // already gone by then, so consume that click before it reaches the
+    // community camera/publish control underneath this close button.
+    if (event.type === "pointerup") suppressCloseClickThrough();
     close();
   };
   closeButton.addEventListener("pointerup", closeFromButton);
