@@ -2514,7 +2514,10 @@ function marketDraftMediaMarkup() {
   return `${mediaItems.map((item, index) => `
     <div class="market-media-item" draggable="true" data-market-media-index="${index}">
       ${item.type === "video" ? `<video src="${item.dataUrl || item.url}"${videoPosterAttribute(item)} muted playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video><i>▶</i>` : `<img src="${item.dataUrl || item.url}" alt="实拍图 ${index + 1}">`}
-      <span class="market-media-drag-handle" title="长按拖动调整顺序" aria-hidden="true">⠿</span>
+      <div class="market-media-order-controls" aria-label="调整媒体顺序">
+        <button type="button" data-move-market-media="${index}" data-market-media-direction="-1" aria-label="向前移动第 ${index + 1} 个媒体"${index === 0 ? " disabled" : ""}>‹</button>
+        <button type="button" data-move-market-media="${index}" data-market-media-direction="1" aria-label="向后移动第 ${index + 1} 个媒体"${index === mediaItems.length - 1 ? " disabled" : ""}>›</button>
+      </div>
       <button type="button" data-remove-market-media="${index}" aria-label="删除第 ${index + 1} 个媒体">×</button>
     </div>
   `).join("")}${mediaItems.length < 9 ? `<button class="market-media-add" type="button" data-market-media-button><b>＋</b><small>图片/视频</small></button>` : ""}`;
@@ -3087,6 +3090,7 @@ function pageMarketDetail() {
     <main class="content page-fresh market-detail-page">
       <section class="market-detail-gallery-wrap">
       <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery><div class="market-detail-gallery-track" data-market-detail-gallery-track>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster, sold, index === 0) : `<div class="market-detail-photo"><img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button" draggable="false" decoding="async" fetchpriority="${index < 2 ? "high" : "auto"}">${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button" draggable="false" decoding="async">${sold ? `<span>已售出</span>` : ""}</div>`}</div></section>
+        <span class="market-detail-edge-back-zone" aria-hidden="true"></span>
         <span class="market-detail-gallery-count" data-market-gallery-count aria-live="polite">1/${Math.max(1, primaryMediaItems.length)}</span>
         ${hasPrimaryGalleryControls ? `<button class="market-detail-gallery-arrow prev" type="button" data-market-gallery-prev aria-label="查看上一张图片" aria-controls="marketDetailGallery">‹</button><button class="market-detail-gallery-arrow next" type="button" data-market-gallery-next aria-label="查看下一张图片" aria-controls="marketDetailGallery">›</button>` : ""}
       </section>
@@ -5518,8 +5522,8 @@ function bindEvents() {
   // On current iOS WebViews the browser's native scroll compositor follows
   // the finger much more closely than a JavaScript translateX loop can. Keep
   // the transform implementation above only for older WebViews, and use
-  // native scroll-snap everywhere else. The settle guard deliberately limits
-  // one gesture to the immediate neighbour, regardless of flick velocity.
+  // native scroll-snap everywhere else. No pointer handler is installed
+  // here: iOS owns direct tracking, deceleration, reversal and settlement.
   if (marketDetailGallery && useNativeDetailGallery) {
     const track = marketDetailGallery.querySelector("[data-market-detail-gallery-track]");
     const slides = Array.from(track?.querySelectorAll(".market-detail-photo") || []);
@@ -5529,7 +5533,6 @@ function bindEvents() {
     if (track && slides.length) {
       const total = slides.length;
       let galleryIndex = 0;
-      let activeGesture = null;
       let settleTimer = 0;
       let resizeFrame = 0;
       const galleryWidth = () => Math.max(1, marketDetailGallery.clientWidth);
@@ -5554,20 +5557,10 @@ function bindEvents() {
       };
       const finishNativeSettle = () => {
         settleTimer = 0;
-        const settledIndex = readIndex();
-        const startedAt = activeGesture?.startIndex;
-        const lower = Math.max(0, Number(startedAt || 0) - 1);
-        const upper = Math.min(total - 1, Number(startedAt || 0) + 1);
-        const limitedIndex = startedAt === undefined
-          ? settledIndex
-          : Math.max(lower, Math.min(upper, settledIndex));
-        if (limitedIndex !== settledIndex) {
-          applyIndex(limitedIndex, { smooth: true });
-          settleTimer = window.setTimeout(finishNativeSettle, 300);
-          return;
-        }
-        galleryIndex = settledIndex;
-        activeGesture = null;
+        // Do not correct a user's finger position in JavaScript. WebKit owns
+        // this scroll view from touch-down through deceleration and its own
+        // mandatory snap, which preserves the native reversal behaviour.
+        galleryIndex = readIndex();
         updateGalleryControls();
         marketDetailGallery.classList.remove("is-native-scrolling");
         marketGalleryPreviewSuppressUntil = Date.now() + 220;
@@ -5582,7 +5575,6 @@ function bindEvents() {
       const moveGallery = offset => {
         const target = clampIndex(galleryIndex + offset);
         if (target === galleryIndex) return;
-        activeGesture = null;
         marketDetailGallery.classList.add("is-native-scrolling");
         applyIndex(target, { smooth: true });
         scheduleNativeSettle();
@@ -5592,38 +5584,6 @@ function bindEvents() {
       marketDetailGallery.classList.add("uses-native-gallery");
       previous?.addEventListener("click", () => moveGallery(-1));
       next?.addEventListener("click", () => moveGallery(1));
-      marketDetailGallery.addEventListener("pointerdown", event => {
-        if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
-        if (event.target.closest("button, video")) return;
-        activeGesture = {
-          pointerId: event.pointerId,
-          startX: event.clientX,
-          startY: event.clientY,
-          startIndex: readIndex(),
-          horizontal: false
-        };
-        galleryIndex = activeGesture.startIndex;
-        updateGalleryControls();
-      }, { passive: true });
-      marketDetailGallery.addEventListener("pointermove", event => {
-        const gesture = activeGesture;
-        if (!gesture || event.pointerId !== gesture.pointerId) return;
-        const dx = event.clientX - gesture.startX;
-        const dy = event.clientY - gesture.startY;
-        if (!gesture.horizontal && Math.max(Math.abs(dx), Math.abs(dy)) > 6 && Math.abs(dx) > Math.abs(dy)) {
-          gesture.horizontal = true;
-          marketDetailGallery.classList.add("is-native-scrolling");
-          marketGalleryPreviewSuppressUntil = Date.now() + 700;
-        }
-      }, { passive: true });
-      const endNativeGesture = event => {
-        const gesture = activeGesture;
-        if (!gesture || event.pointerId !== gesture.pointerId) return;
-        if (gesture.horizontal) marketGalleryPreviewSuppressUntil = Date.now() + 460;
-        scheduleNativeSettle();
-      };
-      marketDetailGallery.addEventListener("pointerup", endNativeGesture, { passive: true });
-      marketDetailGallery.addEventListener("pointercancel", endNativeGesture, { passive: true });
       marketDetailGallery.addEventListener("scroll", () => {
         const nextIndex = readIndex();
         if (nextIndex !== galleryIndex) {
@@ -5631,6 +5591,7 @@ function bindEvents() {
           updateGalleryControls();
         }
         marketDetailGallery.classList.add("is-native-scrolling");
+        marketGalleryPreviewSuppressUntil = Date.now() + 340;
         scheduleNativeSettle();
       }, { passive: true });
       if ("onscrollend" in marketDetailGallery) {
@@ -6280,16 +6241,20 @@ function bindMarketMediaDraftEvents() {
       renderMarketMediaDraft();
     };
   });
+  document.querySelectorAll("[data-move-market-media]").forEach(button => {
+    button.onclick = () => {
+      const from = Number(button.dataset.moveMarketMedia);
+      const direction = Number(button.dataset.marketMediaDirection);
+      moveMarketDraftMedia(from, from + direction);
+    };
+  });
 
   const mediaItems = Array.from(document.querySelectorAll("[data-market-media-index]"));
   let desktopDragIndex = null;
   const clearDragState = () => mediaItems.forEach(item => item.classList.remove("is-dragging", "is-drag-over"));
-  const itemAtPoint = (x, y) => document.elementFromPoint(x, y)?.closest("[data-market-media-index]");
 
   mediaItems.forEach(item => {
     const index = Number(item.dataset.marketMediaIndex);
-    const handle = item.querySelector(".market-media-drag-handle");
-
     item.addEventListener("dragstart", event => {
       desktopDragIndex = index;
       item.classList.add("is-dragging");
@@ -6314,52 +6279,6 @@ function bindMarketMediaDraftEvents() {
       clearDragState();
     });
 
-    if (!handle) return;
-    let pressTimer = null;
-    let pointerId = null;
-    let active = false;
-    let destinationIndex = index;
-
-    const clearTouchDrag = () => {
-      if (pressTimer) window.clearTimeout(pressTimer);
-      pressTimer = null;
-      pointerId = null;
-      active = false;
-      clearDragState();
-    };
-
-    handle.addEventListener("pointerdown", event => {
-      if (!event.isPrimary || event.pointerType === "mouse") return;
-      event.preventDefault();
-      pointerId = event.pointerId;
-      // Capture before the long-press delay. Otherwise lifting the finger just
-      // outside the small handle can lose pointerup and leave a stale drag.
-      handle.setPointerCapture?.(pointerId);
-      destinationIndex = index;
-      pressTimer = window.setTimeout(() => {
-        active = true;
-        item.classList.add("is-dragging");
-        navigator.vibrate?.(12);
-      }, 180);
-    });
-    handle.addEventListener("pointermove", event => {
-      if (event.pointerId !== pointerId || !active) return;
-      event.preventDefault();
-      const target = itemAtPoint(event.clientX, event.clientY);
-      const targetIndex = Number(target?.dataset.marketMediaIndex);
-      if (!Number.isInteger(targetIndex)) return;
-      destinationIndex = targetIndex;
-      mediaItems.forEach(entry => entry.classList.toggle("is-drag-over", entry === target && entry !== item));
-    });
-    handle.addEventListener("pointerup", event => {
-      if (event.pointerId !== pointerId) return;
-      const shouldMove = active && destinationIndex !== index;
-      const targetIndex = destinationIndex;
-      clearTouchDrag();
-      if (shouldMove) moveMarketDraftMedia(index, targetIndex);
-    });
-    handle.addEventListener("pointercancel", clearTouchDrag);
-    handle.addEventListener("lostpointercapture", clearTouchDrag);
   });
 }
 
@@ -8698,34 +8617,27 @@ function setupNativeMessageRowSwipes(root = document) {
     if (row.dataset.nativeSwipeBound === "true") return;
     row.dataset.nativeSwipeBound = "true";
     let settleTimer = 0;
-    const settle = () => {
+    const finishNativeScroll = () => {
       settleTimer = 0;
       row.classList.remove("is-native-scrolling");
-      const actionWidth = Math.max(0, row.scrollWidth - row.clientWidth);
-      if (!actionWidth) return;
-      const target = row.scrollLeft >= actionWidth * .5 ? actionWidth : 0;
-      if (Math.abs(row.scrollLeft - target) > 1) row.scrollTo({ left: target, behavior: "smooth" });
-      if (!target) scheduleDeferredMessageListRefresh();
+      // Do not decide or animate the release point in JavaScript. The row is
+      // a native WebKit snap scroller, so its own momentum handles opening,
+      // closing and reversing the action rail without fighting the finger.
+      if (row.scrollLeft <= 1) scheduleDeferredMessageListRefresh();
     };
     row.addEventListener("scroll", () => {
       row.classList.add("is-native-scrolling");
       if (settleTimer) window.clearTimeout(settleTimer);
-      // Let the system horizontal scroller finish its own deceleration first.
-      // A short timer here used to pull the card back while a finger was still
-      // gliding, which was perceived as a stutter.
-      settleTimer = window.setTimeout(settle, 200);
+      // `scrollend` is used where available; this is only the compatibility
+      // fallback and never writes scrollLeft or starts another animation.
+      settleTimer = window.setTimeout(finishNativeScroll, 220);
     }, { passive: true });
     if ("onscrollend" in row) {
       row.addEventListener("scrollend", () => {
         if (settleTimer) window.clearTimeout(settleTimer);
-        settle();
+        finishNativeScroll();
       }, { passive: true });
     }
-    row.addEventListener("pointerdown", () => {
-      document.querySelectorAll(".message-friend-swipe").forEach(other => {
-        if (other !== row && other.scrollLeft > 1) other.scrollTo({ left: 0, behavior: "smooth" });
-      });
-    }, { passive: true });
   });
 }
 
@@ -10617,8 +10529,12 @@ function toast(text) {
   setTimeout(() => el.remove(), 2200);
 }
 
-function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwipeSettle } = {}) {
+function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwipeSettle, nativePager = false } = {}) {
   const pointers = new Map();
+  // A gallery preview uses the WebKit scroll view for paging.  `media` is a
+  // resolver in that case because the visible slide changes while the stage
+  // itself remains mounted.  Pinch/pan always applies only to that slide.
+  const resolveMedia = () => typeof media === "function" ? media() : media;
   const maxScale = 4;
   let scale = 1;
   let translateX = 0;
@@ -10658,19 +10574,21 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwi
     translateY = clamp(translateY, -maxY, maxY);
   };
   const paintNow = (animate = false) => {
+    const targetMedia = resolveMedia();
+    if (!targetMedia) return;
     if (scale <= 1.005) {
       scale = 1;
       translateX = 0;
       translateY = 0;
       stage.classList.remove("is-zoomed", "is-zooming");
-      media.style.removeProperty("transform");
-      media.style.removeProperty("transition");
+      targetMedia.style.removeProperty("transform");
+      targetMedia.style.removeProperty("transition");
       return;
     }
     limitTranslation();
     stage.classList.add("is-zoomed", "is-zooming");
-    media.style.transition = animate ? "transform .18s ease" : "none";
-    media.style.transform = `translate3d(${translateX}px, ${translateY}px, 0) scale(${scale})`;
+    targetMedia.style.transition = animate ? "transform .18s ease" : "none";
+    targetMedia.style.transform = `translate3d(${translateX}px, ${translateY}px, 0) scale(${scale})`;
   };
   // Pointer events can arrive far faster than the screen can draw.  Coalesce
   // all move updates into one compositor transform per frame instead of
@@ -10691,11 +10609,13 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwi
     });
   };
   const paintSwipe = (translateX, immediate = false) => {
+    const targetMedia = resolveMedia();
+    if (!targetMedia) return;
     pendingSwipeX = translateX;
     const paintNow = () => {
       swipePaintFrame = 0;
-      media.style.transition = "none";
-      media.style.transform = `translate3d(${Math.round(pendingSwipeX)}px, 0, 0)`;
+      targetMedia.style.transition = "none";
+      targetMedia.style.transform = `translate3d(${Math.round(pendingSwipeX)}px, 0, 0)`;
     };
     if (immediate) {
       if (swipePaintFrame) cancelAnimationFrame(swipePaintFrame);
@@ -10705,11 +10625,12 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwi
     if (!swipePaintFrame) swipePaintFrame = requestAnimationFrame(paintNow);
   };
   const clearSwipePaint = () => {
+    const targetMedia = resolveMedia();
     if (swipePaintFrame) cancelAnimationFrame(swipePaintFrame);
     swipePaintFrame = 0;
     pendingSwipeX = 0;
-    media.style.removeProperty("transform");
-    media.style.removeProperty("transition");
+    targetMedia?.style.removeProperty("transform");
+    targetMedia?.style.removeProperty("transition");
   };
   const reset = (animate = true) => {
     if (scale <= 1.005) {
@@ -10724,12 +10645,15 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwi
       return;
     }
     stage.classList.remove("is-zoomed", "is-zooming");
-    media.style.transition = "transform .18s ease";
-    media.style.transform = "translate3d(0, 0, 0) scale(1)";
+    const targetMedia = resolveMedia();
+    if (!targetMedia) return;
+    targetMedia.style.transition = "transform .18s ease";
+    targetMedia.style.transform = "translate3d(0, 0, 0) scale(1)";
     window.setTimeout(() => {
       if (!stage.isConnected || scale > 1.005) return;
-      media.style.removeProperty("transform");
-      media.style.removeProperty("transition");
+      const currentMedia = resolveMedia();
+      currentMedia?.style.removeProperty("transform");
+      currentMedia?.style.removeProperty("transition");
     }, 190);
   };
   const beginPinch = () => {
@@ -10755,7 +10679,11 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwi
     if (event.pointerType === "mouse" && event.button !== 0) return;
     refreshStageMetrics();
     setPointer(event);
-    try { stage.setPointerCapture(event.pointerId); } catch {}
+    // Pointer capture would steal the native iOS pager from the first finger.
+    // Take ownership only once a pinch is in progress.
+    if (!nativePager || pointers.size >= 2) {
+      try { stage.setPointerCapture(event.pointerId); } catch {}
+    }
     if (pointers.size >= 2) {
       beginPinch();
       event.preventDefault();
@@ -10800,6 +10728,9 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwi
     primaryGesture.lastAt = now;
     if (Math.hypot(deltaX, deltaY) > 4) moved = true;
     if (!moved) return;
+    // At normal scale, paging is owned by the WebKit UIScrollView.  Do not
+    // transform or cancel its touch stream from JavaScript.
+    if (nativePager && scale <= 1.005) return;
     stage.classList.add("is-dragging");
     if (scale > 1.005) {
       if (primaryGesture.panStartX === undefined) {
@@ -10864,6 +10795,10 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwi
     if (scale > 1.005) {
       limitTranslation();
       paint(true);
+      return;
+    }
+    if (nativePager && moved) {
+      clearSwipePaint();
       return;
     }
     const supportsSwipe = typeof onSwipe === "function" || typeof onSwipeMove === "function" || typeof onSwipeSettle === "function";
@@ -10955,19 +10890,48 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
 
   const stage = document.createElement("div");
   stage.className = "image-preview-stage";
-  const currentSlide = document.createElement("div");
-  currentSlide.className = "image-preview-slide image-preview-current-slide";
-  const image = document.createElement("img");
-  image.decoding = "async";
-  currentSlide.appendChild(image);
-  const neighbourSlide = document.createElement("div");
-  neighbourSlide.className = "image-preview-slide image-preview-neighbour-slide";
-  neighbourSlide.hidden = true;
-  const neighbourImage = document.createElement("img");
-  neighbourImage.decoding = "async";
-  neighbourImage.alt = "";
-  neighbourSlide.appendChild(neighbourImage);
-  stage.append(currentSlide, neighbourSlide);
+  let image;
+  let currentSlide;
+  let neighbourSlide;
+  let neighbourImage;
+  let nativePreviewImages = [];
+  if (isGallery) {
+    // Safari's own paging scroll view is the only layer that moves images at
+    // normal scale. It is intentionally separate from the pinch layer below.
+    stage.classList.add("uses-native-preview-gallery");
+    const nativeTrack = document.createElement("div");
+    nativeTrack.className = "image-preview-native-track";
+    nativeTrack.style.setProperty("--image-preview-slide-count", String(gallery.length));
+    nativePreviewImages = gallery.map((item, index) => {
+      const slide = document.createElement("div");
+      slide.className = "image-preview-native-slide";
+      const previewImage = document.createElement("img");
+      previewImage.src = item.src;
+      previewImage.alt = item.alt;
+      previewImage.decoding = "async";
+      previewImage.draggable = false;
+      previewImage.fetchPriority = index < 2 ? "high" : "auto";
+      slide.appendChild(previewImage);
+      nativeTrack.appendChild(slide);
+      return previewImage;
+    });
+    stage.appendChild(nativeTrack);
+    image = nativePreviewImages[activeIndex];
+  } else {
+    currentSlide = document.createElement("div");
+    currentSlide.className = "image-preview-slide image-preview-current-slide";
+    image = document.createElement("img");
+    image.decoding = "async";
+    currentSlide.appendChild(image);
+    neighbourSlide = document.createElement("div");
+    neighbourSlide.className = "image-preview-slide image-preview-neighbour-slide";
+    neighbourSlide.hidden = true;
+    neighbourImage = document.createElement("img");
+    neighbourImage.decoding = "async";
+    neighbourImage.alt = "";
+    neighbourSlide.appendChild(neighbourImage);
+    stage.append(currentSlide, neighbourSlide);
+  }
 
   const caption = document.createElement("span");
   caption.className = "image-preview-caption";
@@ -10997,6 +10961,14 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
   const update = (direction = 0, animate = false) => {
     previewZoom?.reset(false);
     const item = gallery[activeIndex];
+    if (isGallery) {
+      image = nativePreviewImages[activeIndex] || nativePreviewImages[0];
+      caption.textContent = `${item.alt}  ${activeIndex + 1}/${gallery.length}`;
+      previous.disabled = activeIndex === 0;
+      next.disabled = activeIndex === gallery.length - 1;
+      warmAdjacentPreviewImages();
+      return;
+    }
     image.src = item.src;
     image.alt = item.alt;
     caption.textContent = isGallery ? `${item.alt}  ${activeIndex + 1}/${gallery.length}` : item.alt;
@@ -11052,6 +11024,7 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     previewDragFrame = 0;
     pendingPreviewDrag = null;
     previewDrag = null;
+    if (!currentSlide || !neighbourSlide) return;
     currentSlide.style.removeProperty("transition");
     currentSlide.style.removeProperty("transform");
     neighbourSlide.style.removeProperty("transition");
@@ -11134,6 +11107,12 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     return true;
   };
   const switchImage = offset => {
+    if (isGallery) {
+      const target = Math.max(0, Math.min(gallery.length - 1, activeIndex + offset));
+      if (target === activeIndex) return;
+      stage.scrollTo({ left: target * Math.max(1, stage.clientWidth), behavior: "smooth" });
+      return;
+    }
     clearPreviewDrag();
     const target = Math.max(0, Math.min(gallery.length - 1, activeIndex + offset));
     if (target === activeIndex) {
@@ -11157,18 +11136,56 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
       }, 110);
     });
   };
+  let nativeScrollFrame = 0;
+  let nativeScrollTimer = 0;
+  const syncNativePreviewIndex = () => {
+    nativeScrollFrame = 0;
+    if (!isGallery || previewZoom?.isZoomed()) return;
+    const width = Math.max(1, stage.clientWidth);
+    const nextIndex = Math.max(0, Math.min(gallery.length - 1, Math.round(stage.scrollLeft / width)));
+    if (nextIndex === activeIndex) return;
+    activeIndex = nextIndex;
+    update();
+  };
+  const scheduleNativePreviewIndex = () => {
+    if (!isGallery || nativeScrollFrame) return;
+    nativeScrollFrame = requestAnimationFrame(syncNativePreviewIndex);
+  };
+  if (isGallery) {
+    stage.addEventListener("scroll", scheduleNativePreviewIndex, { passive: true });
+    if ("onscrollend" in stage) stage.addEventListener("scrollend", syncNativePreviewIndex, { passive: true });
+    else {
+      stage.addEventListener("scroll", () => {
+        window.clearTimeout(nativeScrollTimer);
+        nativeScrollTimer = window.setTimeout(syncNativePreviewIndex, 180);
+      }, { passive: true });
+    }
+  }
   update();
-  previewZoom = attachPreviewZoom(stage, image, {
-    onSwipe: offset => switchImage(offset),
-    canSwipe: offset => activeIndex + offset >= 0 && activeIndex + offset < gallery.length,
-    onSwipeMove: movePreviewDrag,
-    onSwipeSettle: settlePreviewDrag
-  });
+  previewZoom = attachPreviewZoom(stage, isGallery ? () => nativePreviewImages[activeIndex] : image, isGallery
+    ? { nativePager: true }
+    : {
+        onSwipe: offset => switchImage(offset),
+        canSwipe: offset => activeIndex + offset >= 0 && activeIndex + offset < gallery.length,
+        onSwipeMove: movePreviewDrag,
+        onSwipeSettle: settlePreviewDrag
+      });
+  if (isGallery) {
+    requestAnimationFrame(() => {
+      const left = activeIndex * Math.max(1, stage.clientWidth);
+      stage.style.scrollBehavior = "auto";
+      stage.scrollLeft = left;
+      stage.style.removeProperty("scroll-behavior");
+      syncNativePreviewIndex();
+    });
+  }
 
   const close = () => {
     if (!overlay.isConnected) return;
     switchSequence += 1;
     window.clearTimeout(switchTimer);
+    window.clearTimeout(nativeScrollTimer);
+    if (nativeScrollFrame) cancelAnimationFrame(nativeScrollFrame);
     clearPreviewDrag();
     previewZoom?.destroy();
     document.removeEventListener("keydown", handleKeydown);
@@ -11649,7 +11666,11 @@ function setupEdgeBackAndConversationSwipe() {
     if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
     // A new touch must never inherit a previous drag or its delayed rebound.
     if (gesture || edgeSettleTimer) cancelActiveGesture();
-    if (event.target.closest("input, textarea, select, [contenteditable='true'], .modal-overlay")) return;
+    if (event.target.closest("input, textarea, select, [contenteditable='true'], .modal-overlay, .image-preview-overlay")) return;
+    // A native product gallery owns every horizontal gesture except the thin
+    // left-edge shield rendered above it. This prevents the page-back path
+    // from competing with an image page while the finger is already on it.
+    if (event.target.closest(".market-detail-gallery") && event.clientX > 24) return;
     // Conversation rows are native horizontal scrollers.  Do not let the
     // document-level edge/drag handler claim their pointer: that would turn a
     // UIKit-style inertial swipe back into a JavaScript drag.

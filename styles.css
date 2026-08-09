@@ -12796,8 +12796,55 @@ body.image-preview-open {
   touch-action: none;
 }
 
+/* Image galleries use the iOS WebKit scroll view instead of a JavaScript
+   translate loop. This preserves direct finger tracking, deceleration and
+   native one-page scroll snap. */
+.image-preview-stage.uses-native-preview-gallery {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  touch-action: pan-x pan-y;
+  scroll-snap-type: x mandatory;
+  scroll-snap-stop: always;
+  /* Native user paging must not inherit a CSS animation. Programmatic page
+     buttons pass their own smooth behaviour when needed. */
+  scroll-behavior: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.image-preview-stage.uses-native-preview-gallery::-webkit-scrollbar {
+  display: none;
+}
+
+.image-preview-stage.uses-native-preview-gallery.is-zoomed {
+  overflow: hidden;
+  touch-action: none;
+  scroll-snap-type: none;
+}
+
+.image-preview-native-track {
+  display: flex;
+  width: calc(var(--image-preview-slide-count, 1) * 100%);
+  min-width: 100%;
+  height: 100%;
+}
+
+.image-preview-native-slide {
+  flex: 0 0 calc(100% / var(--image-preview-slide-count, 1));
+  min-width: 0;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  contain: paint;
+}
+
 .image-preview-stage > img,
 .image-preview-stage > .image-preview-slide > img,
+.image-preview-stage > .image-preview-native-track > .image-preview-native-slide > img,
 .image-preview-stage > video {
   max-width: 100%;
   max-height: 100%;
@@ -14797,6 +14844,35 @@ html[data-theme-color="dark"] .profile-content-tabs button.active {
   contain: paint;
 }
 
+/* Mobile ordering uses normal tap controls instead of a JavaScript
+   long-press drag that competes with the system's scrolling gesture. */
+.market-media-order-controls {
+  position: absolute;
+  z-index: 3;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  gap: 3px;
+}
+
+.market-media-order-controls button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, .62);
+  font-size: 19px;
+  line-height: 1;
+}
+
+.market-media-order-controls button:disabled {
+  opacity: .38;
+}
+
 .market-detail-gallery-track {
   display: flex;
   width: 100%;
@@ -14829,6 +14905,17 @@ html[data-theme-color="dark"] .profile-content-tabs button.active {
 .market-detail-gallery-wrap {
   position: relative;
   background: #0f1110;
+}
+
+/* The outermost strip belongs solely to the interactive back gesture. A
+   gallery page cannot receive that same horizontal pan, so returning and
+   changing a picture never compete for one finger movement. */
+.market-detail-edge-back-zone {
+  position: absolute;
+  z-index: 5;
+  inset: 0 auto 0 0;
+  width: max(22px, env(safe-area-inset-left));
+  touch-action: pan-y;
 }
 
 .market-detail-gallery-count {
@@ -14901,7 +14988,9 @@ html[data-theme-color="dark"] .profile-content-tabs button.active {
   overflow-y: hidden;
   touch-action: pan-x pan-y;
   scroll-snap-type: x mandatory;
-  scroll-behavior: smooth;
+  /* User drags stay entirely in WebKit's native scroll pipeline. Buttons
+     still request smooth scrolling explicitly from JavaScript. */
+  scroll-behavior: auto;
   overscroll-behavior-x: contain;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
