@@ -761,7 +761,8 @@ function setState(patch, options = {}) {
 
 function cleanNavigationSnapshotDom(root) {
   root?.querySelectorAll?.(".message-friend-swipe").forEach(row => {
-    row.classList.remove("is-open", "is-dragging");
+    row.classList.remove("is-open", "is-dragging", "is-native-scrolling");
+    row.scrollLeft = 0;
     const foreground = row.querySelector(".message-friend-row");
     foreground?.style.removeProperty("transform");
     foreground?.style.removeProperty("will-change");
@@ -2039,7 +2040,7 @@ function pageMessages() {
       <section class="message-discover-list">
         <button class="message-discover-row" type="button" data-page="community"><span class="message-community-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2.8c2.5 0 3.9 3 2.2 4.8M21.2 12c0 2.5-3 3.9-4.8 2.2M12 21.2c-2.5 0-3.9-3-2.2-4.8M2.8 12c0-2.5 3-3.9 4.8-2.2"></path></svg></span><strong>壳友圈</strong><span class="message-discover-preview">${latestPost?.mediaUrl ? (latestPost.mediaType === "video" ? `<span class="message-video-thumb">▶</span>` : `<img src="${latestPost.mediaUrl}" alt="最新动态">`) : ""}</span><b>›</b></button>
       </section>
-      <section class="message-friend-list">${friends.map(friend => `<article class="message-friend-swipe" data-conversation-id="${escapeHtml(friend.id)}"><div class="message-friend-actions"><button type="button" data-toggle-conversation-pin="${escapeHtml(friend.id)}">${friend.pinned ? "取消置顶" : "置顶"}</button><button class="delete" type="button" data-delete-conversation="${escapeHtml(friend.id)}">删除</button></div><button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div class="message-friend-copy"><strong>${escapeHtml(friend.name || "壳友")}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><span class="message-friend-meta">${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></span></button></article>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`}</section>
+      <section class="message-friend-list">${friends.map(friend => `<article class="message-friend-swipe" data-conversation-id="${escapeHtml(friend.id)}"><button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div class="message-friend-copy"><strong>${escapeHtml(friend.name || "壳友")}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><span class="message-friend-meta">${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></span></button><div class="message-friend-actions"><button type="button" data-toggle-conversation-pin="${escapeHtml(friend.id)}">${friend.pinned ? "取消置顶" : "置顶"}</button><button class="delete" type="button" data-delete-conversation="${escapeHtml(friend.id)}">删除</button></div></article>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`}</section>
     </main>
     ${bottomNav()}
   `;
@@ -3085,7 +3086,7 @@ function pageMarketDetail() {
     ${topbar("商品详情", true, detailMoreAction)}
     <main class="content page-fresh market-detail-page">
       <section class="market-detail-gallery-wrap">
-      <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery><div class="market-detail-gallery-track" data-market-detail-gallery-track>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster, sold, index === 0) : `<div class="market-detail-photo"><img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button">${sold ? `<span>已售出</span>` : ""}</div>`}</div></section>
+      <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery><div class="market-detail-gallery-track" data-market-detail-gallery-track>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster, sold, index === 0) : `<div class="market-detail-photo"><img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button" draggable="false" decoding="async" fetchpriority="${index < 2 ? "high" : "auto"}">${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button" draggable="false" decoding="async">${sold ? `<span>已售出</span>` : ""}</div>`}</div></section>
         <span class="market-detail-gallery-count" data-market-gallery-count aria-live="polite">1/${Math.max(1, primaryMediaItems.length)}</span>
         ${hasPrimaryGalleryControls ? `<button class="market-detail-gallery-arrow prev" type="button" data-market-gallery-prev aria-label="查看上一张图片" aria-controls="marketDetailGallery">‹</button><button class="market-detail-gallery-arrow next" type="button" data-market-gallery-next aria-label="查看下一张图片" aria-controls="marketDetailGallery">›</button>` : ""}
       </section>
@@ -4828,6 +4829,7 @@ function startAccountCodeCooldownTimer() {
 }
 
 function bindEvents() {
+  setupNativeMessageRowSwipes($app);
   if (state.openTurtleMenuId) {
     $app.addEventListener("click", event => {
       if (event.target.closest("[data-toggle-turtle-menu], .turtle-menu")) return;
@@ -5307,7 +5309,11 @@ function bindEvents() {
   document.querySelectorAll("[data-view-market]").forEach(btn => btn.addEventListener("click", () => openMarketDetail(btn.dataset.viewMarket)));
   document.querySelectorAll("[data-view-market-seller]").forEach(btn => btn.addEventListener("click", () => openMarketSeller(btn.dataset.viewMarketSeller)));
   const marketDetailGallery = document.querySelector("[data-market-detail-gallery]");
-  if (marketDetailGallery) {
+  const useNativeDetailGallery = Boolean(marketDetailGallery && window.CSS?.supports?.("scroll-snap-type", "x mandatory"));
+  // Older WebViews keep the previous compositor-transform implementation as
+  // a fallback. Current iOS uses the native scroller bound below, which is
+  // what gives the gallery its direct, system-level feel.
+  if (marketDetailGallery && !useNativeDetailGallery) {
     const track = marketDetailGallery.querySelector("[data-market-detail-gallery-track]");
     const slides = Array.from(track?.querySelectorAll(".market-detail-photo") || []);
     const previous = document.querySelector("[data-market-gallery-prev]");
@@ -5316,6 +5322,7 @@ function bindEvents() {
     let galleryIndex = 0;
     let galleryPaintFrame = 0;
     let pendingGalleryTransform = null;
+    let galleryMotionTimer = 0;
     const galleryWidth = () => Math.max(1, marketDetailGallery.clientWidth);
     const updateGalleryControls = () => {
       if (previous) previous.disabled = galleryIndex === 0;
@@ -5338,17 +5345,35 @@ function bindEvents() {
         galleryPaintFrame = requestAnimationFrame(paint);
       }
     };
-    const setGalleryIndex = (nextIndex, animate = true) => {
+    const setGalleryIndex = (nextIndex, motion = true) => {
       if (!track || !slides.length) return;
+      const options = typeof motion === "boolean" ? { animate: motion } : (motion || {});
+      const animate = options.animate !== false;
+      const duration = Math.round(Math.max(140, Math.min(360, Number(options.duration) || 270)));
+      const easing = options.easing || "cubic-bezier(.16,.9,.24,1)";
       galleryIndex = Math.max(0, Math.min(slides.length - 1, nextIndex));
-      track.style.transition = animate ? "transform .24s cubic-bezier(.22,.82,.28,1)" : "none";
+      track.style.transition = animate ? `transform ${duration}ms ${easing}` : "none";
+      if (animate) {
+        marketDetailGallery.classList.add("is-settling");
+        if (galleryMotionTimer) clearTimeout(galleryMotionTimer);
+        galleryMotionTimer = window.setTimeout(() => {
+          galleryMotionTimer = 0;
+          marketDetailGallery.classList.remove("is-settling");
+        }, duration + 48);
+      }
       paintGalleryTransform(-galleryIndex * galleryWidth(), true);
       updateGalleryControls();
       if (!animate) requestAnimationFrame(() => {
-        if (!marketDetailGallery.classList.contains("is-dragging")) track.style.removeProperty("transition");
+        if (!marketDetailGallery.classList.contains("is-dragging")) {
+          marketDetailGallery.classList.remove("is-settling");
+          track.style.removeProperty("transition");
+        }
       });
     };
-    const moveGallery = offset => setGalleryIndex(galleryIndex + offset, true);
+    const moveGallery = offset => setGalleryIndex(galleryIndex + offset, {
+      animate: true,
+      duration: 270
+    });
     previous?.addEventListener("click", () => moveGallery(-1));
     next?.addEventListener("click", () => moveGallery(1));
     window.addEventListener("resize", () => setGalleryIndex(galleryIndex, false), { once: true });
@@ -5373,18 +5398,41 @@ function bindEvents() {
       }
       const width = active.width;
       const distance = active.lastX - active.startX;
-      const projectedDistance = cancelled ? distance : distance + (active.velocityX * 140);
-      const threshold = Math.max(36, width * .12);
+      // Retain the last meaningful pointer velocity. Pointer-up events often
+      // arrive with the same x coordinate as the final move, which used to
+      // erase the user's momentum and made every release feel like a rigid
+      // fixed-time snap.
+      const projectedDistance = cancelled ? distance : distance + (active.velocityX * 165);
+      const threshold = Math.max(42, width * .16);
       let target = active.startIndex;
       if (!cancelled && Math.abs(projectedDistance) >= threshold) target += projectedDistance < 0 ? 1 : -1;
       target = Math.max(0, Math.min(slides.length - 1, target));
+      const targetTransform = -target * width;
+      const currentTransform = Number.isFinite(active.currentTransform)
+        ? active.currentTransform
+        : active.startTransform;
+      const travelled = Math.min(1, Math.abs(distance) / width);
+      const speed = Math.min(1.45, Math.abs(active.velocityX));
+      // The remaining motion is shorter for a quick flick and longer for a
+      // slow, deliberate pull.  This keeps the visual movement connected to
+      // the finger instead of always snapping in the same .24 seconds.
+      const remaining = Math.min(1, Math.abs(targetTransform - currentTransform) / width);
+      const duration = Math.round(Math.max(150, Math.min(330,
+        292 - (speed * 74) - (travelled * 44) + (remaining * 22)
+      )));
       marketDetailGallery.classList.remove("is-dragging");
-      setGalleryIndex(target, true);
-      marketGalleryPreviewSuppressUntil = Date.now() + 320;
+      setGalleryIndex(target, { animate: true, duration });
+      marketGalleryPreviewSuppressUntil = Date.now() + duration + 80;
     };
     marketDetailGallery.addEventListener("pointerdown", event => {
       if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
       if (event.target.closest("button, video")) return;
+      if (galleryMotionTimer) {
+        clearTimeout(galleryMotionTimer);
+        galleryMotionTimer = 0;
+      }
+      marketDetailGallery.classList.remove("is-settling");
+      track.style.transition = "none";
       const now = performance.now();
       galleryPointer = {
         pointerId: event.pointerId,
@@ -5396,6 +5444,7 @@ function bindEvents() {
         width: galleryWidth(),
         startIndex: galleryIndex,
         startTransform: -galleryIndex * galleryWidth(),
+        currentTransform: -galleryIndex * galleryWidth(),
         dragging: false
       };
     }, { passive: true });
@@ -5418,7 +5467,13 @@ function bindEvents() {
       }
       const now = performance.now();
       const elapsed = Math.max(1, now - active.lastAt);
-      active.velocityX = (event.clientX - active.lastX) / elapsed;
+      const movedX = event.clientX - active.lastX;
+      const instantaneousVelocity = movedX / elapsed;
+      if (Math.abs(movedX) > .15) {
+        active.velocityX = !active.velocityX || Math.sign(active.velocityX) !== Math.sign(instantaneousVelocity)
+          ? instantaneousVelocity
+          : ((active.velocityX * .62) + (instantaneousVelocity * .38));
+      }
       active.lastX = event.clientX;
       active.lastAt = now;
       // Do not expose more than one neighbouring photo during an individual
@@ -5427,9 +5482,12 @@ function bindEvents() {
       const maxIndex = Math.max(0, active.startIndex - 1);
       const minTransform = -minIndex * active.width;
       const maxTransform = -maxIndex * active.width;
-      // The track is a compositor layer: it follows the finger continuously
-      // without changing scrollLeft or forcing layout on every move.
-      paintGalleryTransform(Math.max(minTransform, Math.min(maxTransform, active.startTransform + dx)));
+      // The track is a compositor layer: write the exact finger position
+      // immediately.  Batching this through another animation frame adds a
+      // visible one-frame delay on iOS and is the reason the carousel felt
+      // stiff even when it was not technically dropping frames.
+      active.currentTransform = Math.max(minTransform, Math.min(maxTransform, active.startTransform + dx));
+      paintGalleryTransform(active.currentTransform, true);
       if (event.cancelable) event.preventDefault();
     }, { passive: false });
     marketDetailGallery.addEventListener("pointerup", event => {
@@ -5437,7 +5495,13 @@ function bindEvents() {
       if (!active || event.pointerId !== active.pointerId) return;
       const now = performance.now();
       const elapsed = Math.max(1, now - active.lastAt);
-      active.velocityX = (event.clientX - active.lastX) / elapsed;
+      const movedX = event.clientX - active.lastX;
+      if (Math.abs(movedX) > .15) {
+        const instantaneousVelocity = movedX / elapsed;
+        active.velocityX = !active.velocityX || Math.sign(active.velocityX) !== Math.sign(instantaneousVelocity)
+          ? instantaneousVelocity
+          : ((active.velocityX * .62) + (instantaneousVelocity * .38));
+      }
       active.lastX = event.clientX;
       releaseGalleryPointer(active);
       settleGallery(active);
@@ -5450,6 +5514,140 @@ function bindEvents() {
       settleGallery(active, true);
       galleryPointer = null;
     }, { passive: true });
+  }
+  // On current iOS WebViews the browser's native scroll compositor follows
+  // the finger much more closely than a JavaScript translateX loop can. Keep
+  // the transform implementation above only for older WebViews, and use
+  // native scroll-snap everywhere else. The settle guard deliberately limits
+  // one gesture to the immediate neighbour, regardless of flick velocity.
+  if (marketDetailGallery && useNativeDetailGallery) {
+    const track = marketDetailGallery.querySelector("[data-market-detail-gallery-track]");
+    const slides = Array.from(track?.querySelectorAll(".market-detail-photo") || []);
+    const previous = document.querySelector("[data-market-gallery-prev]");
+    const next = document.querySelector("[data-market-gallery-next]");
+    const count = document.querySelector("[data-market-gallery-count]");
+    if (track && slides.length) {
+      const total = slides.length;
+      let galleryIndex = 0;
+      let activeGesture = null;
+      let settleTimer = 0;
+      let resizeFrame = 0;
+      const galleryWidth = () => Math.max(1, marketDetailGallery.clientWidth);
+      const clampIndex = value => Math.max(0, Math.min(total - 1, Math.round(value)));
+      const readIndex = () => clampIndex(marketDetailGallery.scrollLeft / galleryWidth());
+      const updateGalleryControls = () => {
+        if (previous) previous.disabled = galleryIndex === 0;
+        if (next) next.disabled = galleryIndex >= total - 1;
+        if (count) count.textContent = `${galleryIndex + 1}/${total}`;
+      };
+      const applyIndex = (nextIndex, options = {}) => {
+        const { smooth = false, source = "program" } = options;
+        galleryIndex = clampIndex(nextIndex);
+        updateGalleryControls();
+        if (source === "scroll") return;
+        const left = galleryIndex * galleryWidth();
+        if (smooth && typeof marketDetailGallery.scrollTo === "function") {
+          marketDetailGallery.scrollTo({ left, behavior: "smooth" });
+        } else {
+          marketDetailGallery.scrollLeft = left;
+        }
+      };
+      const finishNativeSettle = () => {
+        settleTimer = 0;
+        const settledIndex = readIndex();
+        const startedAt = activeGesture?.startIndex;
+        const lower = Math.max(0, Number(startedAt || 0) - 1);
+        const upper = Math.min(total - 1, Number(startedAt || 0) + 1);
+        const limitedIndex = startedAt === undefined
+          ? settledIndex
+          : Math.max(lower, Math.min(upper, settledIndex));
+        if (limitedIndex !== settledIndex) {
+          applyIndex(limitedIndex, { smooth: true });
+          settleTimer = window.setTimeout(finishNativeSettle, 300);
+          return;
+        }
+        galleryIndex = settledIndex;
+        activeGesture = null;
+        updateGalleryControls();
+        marketDetailGallery.classList.remove("is-native-scrolling");
+        marketGalleryPreviewSuppressUntil = Date.now() + 220;
+      };
+      const scheduleNativeSettle = () => {
+        if (settleTimer) clearTimeout(settleTimer);
+        // Never correct while iOS is still carrying the scroll with momentum.
+        // `scrollend` (when present) handles the exact finish; this longer
+        // debounce is only the compatibility fallback for older WebViews.
+        settleTimer = window.setTimeout(finishNativeSettle, 220);
+      };
+      const moveGallery = offset => {
+        const target = clampIndex(galleryIndex + offset);
+        if (target === galleryIndex) return;
+        activeGesture = null;
+        marketDetailGallery.classList.add("is-native-scrolling");
+        applyIndex(target, { smooth: true });
+        scheduleNativeSettle();
+      };
+
+      track.style.setProperty("--market-gallery-slide-count", String(total));
+      marketDetailGallery.classList.add("uses-native-gallery");
+      previous?.addEventListener("click", () => moveGallery(-1));
+      next?.addEventListener("click", () => moveGallery(1));
+      marketDetailGallery.addEventListener("pointerdown", event => {
+        if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+        if (event.target.closest("button, video")) return;
+        activeGesture = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          startIndex: readIndex(),
+          horizontal: false
+        };
+        galleryIndex = activeGesture.startIndex;
+        updateGalleryControls();
+      }, { passive: true });
+      marketDetailGallery.addEventListener("pointermove", event => {
+        const gesture = activeGesture;
+        if (!gesture || event.pointerId !== gesture.pointerId) return;
+        const dx = event.clientX - gesture.startX;
+        const dy = event.clientY - gesture.startY;
+        if (!gesture.horizontal && Math.max(Math.abs(dx), Math.abs(dy)) > 6 && Math.abs(dx) > Math.abs(dy)) {
+          gesture.horizontal = true;
+          marketDetailGallery.classList.add("is-native-scrolling");
+          marketGalleryPreviewSuppressUntil = Date.now() + 700;
+        }
+      }, { passive: true });
+      const endNativeGesture = event => {
+        const gesture = activeGesture;
+        if (!gesture || event.pointerId !== gesture.pointerId) return;
+        if (gesture.horizontal) marketGalleryPreviewSuppressUntil = Date.now() + 460;
+        scheduleNativeSettle();
+      };
+      marketDetailGallery.addEventListener("pointerup", endNativeGesture, { passive: true });
+      marketDetailGallery.addEventListener("pointercancel", endNativeGesture, { passive: true });
+      marketDetailGallery.addEventListener("scroll", () => {
+        const nextIndex = readIndex();
+        if (nextIndex !== galleryIndex) {
+          galleryIndex = nextIndex;
+          updateGalleryControls();
+        }
+        marketDetailGallery.classList.add("is-native-scrolling");
+        scheduleNativeSettle();
+      }, { passive: true });
+      if ("onscrollend" in marketDetailGallery) {
+        marketDetailGallery.addEventListener("scrollend", () => {
+          if (settleTimer) clearTimeout(settleTimer);
+          finishNativeSettle();
+        }, { passive: true });
+      }
+      window.addEventListener("resize", () => {
+        if (resizeFrame) cancelAnimationFrame(resizeFrame);
+        resizeFrame = requestAnimationFrame(() => {
+          resizeFrame = 0;
+          applyIndex(galleryIndex, { smooth: false });
+        });
+      }, { passive: true });
+      requestAnimationFrame(() => applyIndex(0, { smooth: false }));
+    }
   }
   document.querySelectorAll("[data-market-favorite]").forEach(btn => btn.addEventListener("click", event => {
     event.preventDefault();
@@ -8486,7 +8684,49 @@ function startMessageUnreadPolling() {
 }
 
 function messageListSwipeIsActive() {
-  return state.page === "messages" && Boolean(document.querySelector(".message-friend-swipe.is-dragging"));
+  return state.page === "messages" && Boolean(document.querySelector(".message-friend-swipe.is-native-scrolling"));
+}
+
+function messageListHasOpenNativeRow(root = document) {
+  return Boolean([...root.querySelectorAll?.(".message-friend-swipe") || []]
+    .some(row => row.scrollLeft > Math.max(4, (row.scrollWidth - row.clientWidth) * 0.25)));
+}
+
+function setupNativeMessageRowSwipes(root = document) {
+  const rows = root?.querySelectorAll?.(".message-friend-swipe") || [];
+  rows.forEach(row => {
+    if (row.dataset.nativeSwipeBound === "true") return;
+    row.dataset.nativeSwipeBound = "true";
+    let settleTimer = 0;
+    const settle = () => {
+      settleTimer = 0;
+      row.classList.remove("is-native-scrolling");
+      const actionWidth = Math.max(0, row.scrollWidth - row.clientWidth);
+      if (!actionWidth) return;
+      const target = row.scrollLeft >= actionWidth * .5 ? actionWidth : 0;
+      if (Math.abs(row.scrollLeft - target) > 1) row.scrollTo({ left: target, behavior: "smooth" });
+      if (!target) scheduleDeferredMessageListRefresh();
+    };
+    row.addEventListener("scroll", () => {
+      row.classList.add("is-native-scrolling");
+      if (settleTimer) window.clearTimeout(settleTimer);
+      // Let the system horizontal scroller finish its own deceleration first.
+      // A short timer here used to pull the card back while a finger was still
+      // gliding, which was perceived as a stutter.
+      settleTimer = window.setTimeout(settle, 200);
+    }, { passive: true });
+    if ("onscrollend" in row) {
+      row.addEventListener("scrollend", () => {
+        if (settleTimer) window.clearTimeout(settleTimer);
+        settle();
+      }, { passive: true });
+    }
+    row.addEventListener("pointerdown", () => {
+      document.querySelectorAll(".message-friend-swipe").forEach(other => {
+        if (other !== row && other.scrollLeft > 1) other.scrollTo({ left: 0, behavior: "smooth" });
+      });
+    }, { passive: true });
+  });
 }
 
 function deferMessageListRefreshWhileDragging() {
@@ -8502,7 +8742,7 @@ function flushDeferredMessageListRefresh() {
   if (!messageListRefreshDeferred || messageListSwipeIsActive()) return;
   // Keep an opened action rail stable for the follow-up tap. The newest data
   // will be fetched once the user closes it or performs the action.
-  if (document.querySelector(".message-friend-swipe.is-open")) return;
+  if (messageListHasOpenNativeRow()) return;
   messageListRefreshDeferred = false;
   if (state.page !== "messages") return;
   void refreshCommunity(true);
@@ -11117,27 +11357,28 @@ function pullRefreshIndicator() {
 
 function setPullRefreshIndicator({ distance = 0, ready = false, refreshing = false } = {}) {
   const indicator = pullRefreshIndicator();
-  // Native-style resistance: the page never hits a hard cap while the finger
-  // is still moving, which removes the sticky / stuttering feeling at the end
-  // of a long pull.
-  const pageOffset = refreshing
+  // Do not translate the page while a pull is in progress.  WKWebView keeps
+  // ownership of vertical scrolling, inertia and the iOS rubber-band; this
+  // overlay only reports the refresh state in the exposed area.
+  const pageOffset = 0;
+  const indicatorOffset = refreshing
     ? 58
     : Math.min(PULL_REFRESH_MAX_OFFSET, Math.round(104 * (1 - Math.exp(-Math.max(0, distance) / 80))));
   const indicatorHeight = 36;
   // The indicator is vertically centred in the newly exposed blank area.
-  const indicatorDistance = (pageOffset + indicatorHeight) / 2;
+  const indicatorDistance = indicatorOffset > 0 ? (indicatorOffset + indicatorHeight) / 2 : 0;
   const label = refreshing ? "正在刷新中···" : ready ? "松开即可刷新" : "下拉刷新";
   indicator.style.setProperty("--pull-refresh-distance", `${indicatorDistance}px`);
   document.body.style.setProperty("--pull-refresh-page-offset", `${pageOffset}px`);
-  const visualState = `${refreshing ? "refreshing" : ready ? "ready" : pageOffset > 0 ? "dragging" : "idle"}:${label}`;
+  const visualState = `${refreshing ? "refreshing" : ready ? "ready" : indicatorOffset > 0 ? "dragging" : "idle"}:${label}`;
   if (visualState === pullRefreshVisualState) return;
   pullRefreshVisualState = visualState;
-  indicator.classList.toggle("is-visible", refreshing || pageOffset > 0);
+  indicator.classList.toggle("is-visible", refreshing || indicatorOffset > 0);
   indicator.classList.toggle("is-ready", Boolean(ready) && !refreshing);
   indicator.classList.toggle("is-refreshing", Boolean(refreshing));
   (pullRefreshIndicatorLabel || indicator.querySelector("span")).textContent = label;
-  document.body.classList.toggle("pull-refresh-active", pageOffset > 0);
-  document.body.classList.toggle("pull-refresh-dragging", pageOffset > 0 && !refreshing);
+  document.body.classList.toggle("pull-refresh-active", indicatorOffset > 0);
+  document.body.classList.toggle("pull-refresh-dragging", indicatorOffset > 0 && !refreshing);
 }
 
 function schedulePullRefreshIndicator(nextState) {
@@ -11232,10 +11473,9 @@ function setupPullToRefresh() {
       schedulePullRefreshIndicator();
       return;
     }
-    if (event.cancelable) event.preventDefault();
     pullRefreshState = { ...pullRefreshState, distance, ready: distance >= PULL_REFRESH_THRESHOLD };
     schedulePullRefreshIndicator();
-  }, { passive: false });
+  }, { passive: true });
 
   const finish = () => {
     if (!pullRefreshState.tracking || pullRefreshState.refreshing) return;
@@ -11326,7 +11566,6 @@ function setupEdgeBackAndConversationSwipe() {
   let gestureAnimationFrame = 0;
   let edgeSettleTimer = 0;
   let edgeSettleCleanup = null;
-  let suppressRowClickUntil = 0;
   const rootPages = new Set(["home", "ledger", "market", "messages", "mine"]);
   const edgePinnedProperties = ["position", "top", "left", "right", "bottom", "width", "transform"];
   const pinEdgeFixedLayers = active => {
@@ -11382,13 +11621,6 @@ function setupEdgeBackAndConversationSwipe() {
     if (target?.hasPointerCapture?.(active.pointerId)) target.releasePointerCapture(active.pointerId);
   };
   const cancelActiveGesture = () => {
-    if (gesture?.row && gesture.rowDragging && gesture.row.isConnected) {
-      gesture.row.classList.remove("is-dragging");
-      gesture.row.classList.toggle("is-open", Boolean(gesture.rowStartedOpen));
-      gesture.rowContent?.style.removeProperty("transform");
-      gesture.rowActions?.style.removeProperty("transform");
-      if (!gesture.rowStartedOpen) scheduleDeferredMessageListRefresh();
-    }
     releasePointer(gesture);
     clearPendingEdgeBack();
     gesture = null;
@@ -11396,16 +11628,7 @@ function setupEdgeBackAndConversationSwipe() {
   const paintGesture = active => {
     gestureAnimationFrame = 0;
     if (!active) return;
-    if (active.mode === "row" && active.rowContent) {
-      if (active.lastPaintedReveal !== active.reveal) {
-        active.lastPaintedReveal = active.reveal;
-        active.rowContent.style.transform = `translate3d(${-active.reveal}px, 0, 0)`;
-        // The action rail enters from the right by exactly the same amount as
-        // the foreground card moves left.  Keeping both layers on the
-        // compositor makes the buttons visibly follow a reversing finger too.
-        active.rowActions?.style.setProperty("transform", `translate3d(${144 - active.reveal}px, 0, 0)`);
-      }
-    } else if (active.mode === "edge") {
+    if (active.mode === "edge") {
       $app.style.transform = `translate3d(${active.edgeOffset}px, 0, 0)`;
       active.preview?.style.setProperty("transform", `translate3d(${-22 + (active.edgeProgress * 22)}%, 0, 0)`);
     }
@@ -11427,14 +11650,17 @@ function setupEdgeBackAndConversationSwipe() {
     // A new touch must never inherit a previous drag or its delayed rebound.
     if (gesture || edgeSettleTimer) cancelActiveGesture();
     if (event.target.closest("input, textarea, select, [contenteditable='true'], .modal-overlay")) return;
-    const row = event.target.closest(".message-friend-swipe");
+    // Conversation rows are native horizontal scrollers.  Do not let the
+    // document-level edge/drag handler claim their pointer: that would turn a
+    // UIKit-style inertial swipe back into a JavaScript drag.
+    if (event.target.closest(".message-friend-swipe")) return;
     gesture = {
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
-      row,
-      rowContent: row?.querySelector(".message-friend-row") || null,
-      rowActions: row?.querySelector(".message-friend-actions") || null,
+      lastX: event.clientX,
+      lastAt: performance.now(),
+      velocityX: 0,
       mode: "pending"
     };
   }, { passive: true });
@@ -11443,28 +11669,23 @@ function setupEdgeBackAndConversationSwipe() {
     if (!active || event.pointerId !== active.pointerId || !event.isPrimary) return;
     const dx = event.clientX - active.x;
     const dy = event.clientY - active.y;
+    const now = performance.now();
+    const elapsed = Math.max(1, now - active.lastAt);
+    const sampleVelocity = (event.clientX - active.lastX) / elapsed;
+    if (Number.isFinite(sampleVelocity) && Math.abs(event.clientX - active.lastX) > .1) {
+      active.velocityX = active.velocityX && Math.sign(active.velocityX) === Math.sign(sampleVelocity)
+        ? (active.velocityX * .62) + (sampleVelocity * .38)
+        : sampleVelocity;
+    }
+    active.lastX = event.clientX;
+    active.lastAt = now;
     if (active.mode === "pending") {
       if (Math.max(Math.abs(dx), Math.abs(dy)) < 8) return;
       if (Math.abs(dx) <= Math.abs(dy)) {
         active.mode = "vertical";
         return;
       }
-      if (active.row) {
-        active.mode = "row";
-        active.rowStartedOpen = active.row.classList.contains("is-open");
-        // Keep the reveal position as an incremental value instead of deriving
-        // it from the original touch point.  If an already-open row is pushed
-        // further left, that extra motion is clamped at the rail width.  With
-        // an origin-based formula the user then has to undo that invisible
-        // excess before the card can travel right again.  Updating from the
-        // previous pointer position makes a reversal respond immediately.
-        active.reveal = active.rowStartedOpen ? 144 : 0;
-        active.lastRowX = active.x;
-        claimPointer(active, active.row);
-        document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => {
-          if (row !== active.row) row.classList.remove("is-open");
-        });
-      } else if (active.x <= 24 && dx > 0 && !rootPages.has(state.page) && edgeBackSnapshots.length) {
+      if (active.x <= 24 && dx > 0 && !rootPages.has(state.page) && edgeBackSnapshots.length) {
         active.mode = "edge";
         active.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
         claimPointer(active, $app);
@@ -11474,20 +11695,6 @@ function setupEdgeBackAndConversationSwipe() {
         active.mode = "horizontal";
         return;
       }
-    }
-    if (active.mode === "row") {
-      const actionWidth = 144;
-      const previousX = Number.isFinite(active.lastRowX) ? active.lastRowX : active.x;
-      const deltaX = event.clientX - previousX;
-      active.lastRowX = event.clientX;
-      active.reveal = Math.min(actionWidth, Math.max(0, Number(active.reveal || 0) - deltaX));
-      if (!active.rowDragging) {
-        active.row.classList.add("is-dragging");
-        active.rowDragging = true;
-      }
-      scheduleGesturePaint();
-      if (event.cancelable) event.preventDefault();
-      return;
     }
     if (active.mode === "edge") {
       active.edgeOffset = Math.max(0, dx);
@@ -11503,21 +11710,22 @@ function setupEdgeBackAndConversationSwipe() {
     const dy = event.clientY - active.y;
     flushGesturePaint(active);
     releasePointer(active);
-    if (active.mode === "row" && active.rowDragging) {
-      const shouldOpen = Number(active.reveal || 0) >= 72;
-      active.row.classList.remove("is-dragging");
-      active.row.classList.toggle("is-open", shouldOpen);
-      active.rowContent?.style.removeProperty("transform");
-      active.rowActions?.style.removeProperty("transform");
-      if (!shouldOpen) scheduleDeferredMessageListRefresh();
-      suppressRowClickUntil = Date.now() + 350;
-    } else if (active.mode === "edge") {
-      const shouldComplete = dx > Math.max(78, window.innerWidth * .18) && Math.abs(dx) > Math.abs(dy);
+    if (active.mode === "edge") {
+      const width = Math.max(1, window.innerWidth);
+      const edgeOffset = Math.max(0, Math.min(width, active.edgeOffset ?? dx));
+      const hasForwardFling = active.velocityX > .48 && dx > 26;
+      const shouldComplete = (dx > Math.max(78, width * .18) || hasForwardFling) && Math.abs(dx) > Math.abs(dy);
+      // A UIKit interactive-pop transition continues with the release
+      // velocity. Keep the same principle here: the final leg is calculated
+      // from distance and finger speed instead of one fixed, mechanical time.
+      const remaining = shouldComplete ? width - edgeOffset : edgeOffset;
+      const releaseSpeed = Math.max(.42, Math.min(2.35, Math.abs(active.velocityX || 0)));
+      const settleDuration = Math.round(Math.max(145, Math.min(310, remaining / releaseSpeed)));
       $app.classList.remove("edge-back-dragging");
-      $app.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
+      $app.style.transition = `transform ${settleDuration}ms cubic-bezier(.18,.78,.2,1)`;
       $app.style.transform = shouldComplete ? "translate3d(100vw, 0, 0)" : "translate3d(0, 0, 0)";
       if (active.preview) {
-        active.preview.style.transition = "transform .2s cubic-bezier(.2,.72,.25,1)";
+        active.preview.style.transition = `transform ${settleDuration}ms cubic-bezier(.18,.78,.2,1)`;
         active.preview.style.transform = shouldComplete ? "translate3d(0, 0, 0)" : "translate3d(-22%, 0, 0)";
       }
       // Do not guess when the transition has finished.  The old 190 ms timer
@@ -11551,10 +11759,7 @@ function setupEdgeBackAndConversationSwipe() {
       };
       edgeSettleCleanup = () => $app.removeEventListener("transitionend", handleEdgeTransitionEnd);
       $app.addEventListener("transitionend", handleEdgeTransitionEnd);
-      edgeSettleTimer = window.setTimeout(finishEdgeSettle, 280);
-    } else if (!active.row && document.querySelector(".message-friend-swipe.is-open") && Math.abs(dx) > Math.abs(dy)) {
-      document.querySelectorAll(".message-friend-swipe.is-open").forEach(row => row.classList.remove("is-open"));
-      scheduleDeferredMessageListRefresh();
+      edgeSettleTimer = window.setTimeout(finishEdgeSettle, settleDuration + 90);
     }
     gesture = null;
   }, { passive: true });
@@ -11562,11 +11767,6 @@ function setupEdgeBackAndConversationSwipe() {
     if (!gesture || event.pointerId !== gesture.pointerId) return;
     cancelActiveGesture();
   }, { passive: true });
-  document.addEventListener("click", event => {
-    if (Date.now() >= suppressRowClickUntil || !event.target.closest(".message-friend-swipe")) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  }, true);
   window.addEventListener("pagehide", cancelActiveGesture);
   window.addEventListener("blur", cancelActiveGesture);
   document.addEventListener("visibilitychange", () => {

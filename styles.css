@@ -213,14 +213,12 @@ button { border: 0; cursor: pointer; }
   animation: pull-refresh-spin .75s linear infinite;
 }
 
-/* 龟集市、消息与壳友圈下拉刷新：内容随手势轻微下移，松手后回弹。 */
+/* 龟集市、消息与壳友圈下拉刷新：垂直滚动仍完全交给 WKWebView 的
+   原生惯性与回弹；提示层只显示状态，绝不再用 JS 移动整页内容。 */
 body.pull-refresh-active .content {
-  transform: translate3d(0, var(--pull-refresh-page-offset, 0px), 0);
-  transition: transform .22s cubic-bezier(.2, .75, .25, 1);
-  will-change: transform;
-  contain: paint;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
+  transform: none;
+  transition: none;
+  will-change: auto;
 }
 
 body.pull-refresh-dragging .content {
@@ -233,9 +231,9 @@ body.pull-refresh-dragging .pull-refresh-indicator {
 
 html,
 body {
-  /* Keep the browser's elastic overscroll from competing with our own pull
-     gesture, which otherwise produces a double-bounce on iOS. */
-  overscroll-behavior-y: contain;
+  /* Vertical scrolling and the elastic top-edge bounce belong to WKWebView.
+     The refresh UI observes that motion but never replaces it. */
+  overscroll-behavior-y: auto;
 }
 
 .market-detail-video-shell {
@@ -14803,7 +14801,8 @@ html[data-theme-color="dark"] .profile-content-tabs button.active {
   display: flex;
   width: 100%;
   transform: translate3d(0, 0, 0);
-  will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
   /* Do not use paint containment here: the track itself is one viewport
      wide, while all subsequent slides live outside that layout box until the
      transform brings them in. The outer gallery owns the only clipping. */
@@ -14812,6 +14811,15 @@ html[data-theme-color="dark"] .profile-content-tabs button.active {
 
 .market-detail-gallery.is-dragging {
   cursor: grabbing;
+}
+
+/* Keep the expensive compositor layer only while the user is moving the
+   gallery or its final momentum is playing.  Keeping a full-width layer for
+   every high-resolution listing image while the page sits idle can make the
+   next gesture begin with a visible hitch on iOS. */
+.market-detail-gallery.is-dragging .market-detail-gallery-track,
+.market-detail-gallery.is-settling .market-detail-gallery-track {
+  will-change: transform;
 }
 
 .market-detail-gallery.is-dragging .market-detail-photo img {
@@ -14883,6 +14891,36 @@ html[data-theme-color="dark"] .profile-content-tabs button.active {
   flex: 0 0 100%;
   min-width: 0;
   contain: paint;
+}
+
+/* Current iOS uses the native scrolling compositor for the product gallery.
+   It is the only path that can remain attached to the finger during a fast
+   drag while preserving inertial release. */
+.market-detail-gallery.uses-native-gallery {
+  overflow-x: auto;
+  overflow-y: hidden;
+  touch-action: pan-x pan-y;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.market-detail-gallery.uses-native-gallery::-webkit-scrollbar {
+  display: none;
+}
+
+.market-detail-gallery.uses-native-gallery .market-detail-gallery-track {
+  width: calc(var(--market-gallery-slide-count, 1) * 100%);
+  min-width: 100%;
+  transform: none;
+}
+
+.market-detail-gallery.uses-native-gallery .market-detail-photo {
+  flex: 0 0 calc(100% / var(--market-gallery-slide-count, 1));
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
 }
 
 .market-feed-status {
