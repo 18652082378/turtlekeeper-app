@@ -2052,10 +2052,98 @@ function pageCommunity() {
     ${topbar("壳友圈", true, `<button class="community-camera-button" type="button" data-community-camera-button aria-label="拍摄或从相册选择"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"></path><circle cx="12" cy="13.5" r="3.5"></circle></svg></button>`)}
     <main class="content page-fresh community-page community-moments-page">
       <input class="hidden-file" type="file" accept="image/*,video/*" multiple data-community-quick-media>
-      <section class="community-feed">${posts.map(communityFeedCard).join("") || `<div class="empty small-empty"><div><strong>暂时还没有动态</strong><br>点击右上角相机发布第一条内容</div></div>`}</section>
+      <section class="community-feed">${communityFeedMarkup(posts)}</section>
     </main>
     ${bottomNav()}
   `;
+}
+
+function communityFeedMarkup(posts = state.communityPosts || []) {
+  return posts.map(communityFeedCard).join("") || `<div class="empty small-empty"><div><strong>暂时还没有动态</strong><br>点击右上角相机发布第一条内容</div></div>`;
+}
+
+function communityFeedSignature(posts = []) {
+  // API polling creates a new array every time. Compare only the fields that
+  // affect the feed so an unchanged response never repaints the current page.
+  return JSON.stringify((posts || []).map(post => [
+    post.id,
+    post.authorId,
+    post.authorName,
+    post.authorAvatar,
+    post.content,
+    post.createdAt,
+    post.location,
+    Boolean(post.isOwn),
+    Boolean(post.pendingLocal),
+    Boolean(post.followed),
+    Boolean(post.liked),
+    Number(post.likeCount || 0),
+    (post.mediaItems || []).map(media => [media.url, media.posterUrl, media.type]),
+    (post.comments || []).map(comment => [comment.id, comment.authorName, comment.authorAvatar, comment.content])
+  ]));
+}
+
+function bindPatchedCommunityFeed(feed) {
+  if (!feed) return;
+  feed.querySelectorAll("[data-view-community-post]").forEach(card => {
+    const openDetail = event => {
+      if (event.target.closest("button, input, textarea, select, form")) return;
+      setState({ page: "communityPostDetail", selectedCommunityPostId: card.dataset.viewCommunityPost, openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
+    };
+    card.addEventListener("click", openDetail);
+    card.addEventListener("keydown", event => {
+      if (event.target !== card || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      openDetail(event);
+    });
+  });
+  feed.querySelectorAll("[data-preview-community-media]").forEach(button => button.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const post = findCommunityPost(button.dataset.previewCommunityMedia);
+    const mediaItems = communityPostMediaItems(post);
+    const index = Math.max(0, Number(button.dataset.previewCommunityMediaIndex || 0));
+    const media = mediaItems[index];
+    if (!media) return;
+    if (media.type === "video") openVideoPreview(media.url, "动态视频", media.posterUrl || "");
+    else openImagePreview(media.url, "动态图片");
+  }));
+  feed.querySelectorAll("[data-like-community-post]").forEach(btn => btn.addEventListener("click", () => toggleCommunityLike(btn.dataset.likeCommunityPost)));
+  feed.querySelectorAll("[data-community-more]").forEach(btn => btn.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleCommunityMomentPopover(event.currentTarget);
+  }));
+  feed.querySelectorAll("[data-show-community-comment]").forEach(btn => btn.addEventListener("click", () => setState({ communityCommentPostId: btn.dataset.showCommunityComment, openCommunityActionId: "" }, { skipCloud: true })));
+  feed.querySelectorAll("[data-community-comment-form]").forEach(form => form.addEventListener("submit", submitCommunityComment));
+  feed.querySelectorAll("[data-toggle-community-follow]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    toggleCommunityFollow(btn.dataset.toggleCommunityFollow);
+  }));
+  feed.querySelectorAll("[data-view-community-user]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    openCommunityUserProfile(btn.dataset.viewCommunityUser);
+  }));
+  feed.querySelectorAll("[data-open-community-chat]").forEach(btn => btn.addEventListener("click", () => openCommunityChat(btn.dataset.openCommunityChat)));
+  feed.querySelectorAll("[data-delete-community-post]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    deleteCommunityPost(btn.dataset.deleteCommunityPost);
+  }));
+}
+
+function patchVisibleCommunityFeed(posts) {
+  if (state.page !== "community") return false;
+  const feed = $app.querySelector(".community-feed");
+  if (!feed) return false;
+  // Keep the route shell, top bar and persistent bottom nav mounted. Only the
+  // list's children change, so the response cannot look like a second page load.
+  feed.innerHTML = communityFeedMarkup(posts);
+  bindPatchedCommunityFeed(feed);
+  requestAnimationFrame(() => {
+    hydrateVideoFirstFrames();
+    hydrateCommunityPostVideos();
+  });
+  return true;
 }
 
 function pageCommunityAdd() {
@@ -4905,7 +4993,9 @@ function bindEvents() {
       navigationState.speciesPickerForAdd = state.page === "add";
       if (state.page === "add") navigationState.formDraft = captureTurtleFormDraft();
     }
-      setState(navigationState);
+      // 壳友圈的内容随后会由接口在原列表中补齐。不要先播放淡入缩放
+      // 再补数据，否则在 iPhone 上会像页面重新渲染了一次。
+      setState(navigationState, targetPage === "community" ? { pageMotion: "none" } : {});
     });
   });
   document.querySelectorAll("[data-open-platform-wechat]").forEach(button => button.addEventListener("click", openPlatformWeChat));
@@ -7689,13 +7779,26 @@ async function refreshCommunity(force = false) {
       }
       : state.communityProfileStats;
     if (deferMessageListRefreshWhileDragging()) return;
-    setState({
-      communityPosts: normalizeCommunityPosts(result.posts || []),
+    const communityPosts = normalizeCommunityPosts(result.posts || []);
+    const nextCommunityState = {
+      communityPosts,
       communityProfileStats: profileStats,
       isCommunityAdmin: Boolean(result.isAdmin),
       communityFriends: friends,
       messageUnreadCount
-    }, { skipCloud: true });
+    };
+    if (state.page === "community") {
+      const feedChanged = communityFeedSignature(communityPosts) !== communityFeedSignature(state.communityPosts || []);
+      // A community refresh arrives after the route has already opened. Keep
+      // that page mounted and update only its feed; setState would reconstruct
+      // the entire page and produced the visible render/flicker the user saw.
+      state = { ...state, ...nextCommunityState };
+      saveState({ skipCloud: true });
+      if (feedChanged) patchVisibleCommunityFeed(communityPosts);
+      syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
+    } else {
+      setState(nextCommunityState, { skipCloud: true });
+    }
   } catch (error) {
     console.warn(error.message || "壳友圈读取失败");
   } finally {
@@ -8508,6 +8611,13 @@ async function refreshMessageUnread(force = false, options = {}) {
         // A chat can return to an exact preserved messages DOM. Patch its
         // changed rows in place so a push never looks like the whole page was
         // refreshed just to update one preview or unread badge.
+        state = { ...state, messageUnreadCount: unreadCount, communityFriends: friends };
+        saveState({ skipCloud: true });
+        syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
+      } else if (state.page === "community") {
+        // 壳友圈 does not render the unread number. Updating it must not tear
+        // down the newly opened feed just because the unread request resolved
+        // after the community request.
         state = { ...state, messageUnreadCount: unreadCount, communityFriends: friends };
         saveState({ skipCloud: true });
         syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
