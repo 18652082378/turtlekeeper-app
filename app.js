@@ -449,6 +449,26 @@ function forgetCloudToken(phone) {
   }
 }
 
+// A server-side 401 means the saved credential can no longer be used.  Clear
+// every local copy in one place so background polling stops immediately.  The
+// account's current data deliberately stays in `state`: saveState() writes it
+// as an offline recovery copy until the person signs in again, rather than
+// discarding edits merely because a token expired.
+function clearExpiredCloudSession() {
+  const phone = state.loggedInPhone;
+  if (!phone) return;
+  forgetCloudToken(phone);
+  cloudHydrationComplete = false;
+  state = {
+    ...state,
+    cloudToken: "",
+    registeredUsers: (state.registeredUsers || []).map(user => (
+      user.phone === phone ? { ...user, cloudToken: "" } : user
+    ))
+  };
+  saveState({ skipCloud: true });
+}
+
 function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE));
@@ -508,6 +528,14 @@ function restorePendingCloudData() {
   return true;
 }
 
+function pendingCloudDataIsNewerThan(serverUpdatedAt, pending = readPendingCloudData()) {
+  if (!pending || pending.phone !== state.loggedInPhone) return false;
+  const pendingTime = Date.parse(pending.updatedAt || "");
+  const serverTime = Date.parse(serverUpdatedAt || "");
+  if (!Number.isFinite(pendingTime)) return false;
+  return !Number.isFinite(serverTime) || pendingTime > serverTime;
+}
+
 function cleanText(value) {
   const map = {
     "鏈煡": "未知",
@@ -534,7 +562,19 @@ function normalizeState(next) {
     ? next.loggedInPhone
     : "";
   const activeUser = registeredUsers.find(user => user.phone === loggedInPhone);
-  const accountData = loggedInPhone ? normalizeAccountData(activeUser?.data || {}) : emptyAccountData();
+  const serverAccountData = normalizeAccountData(activeUser?.data || {});
+  // When a cloud token is missing or has expired, saveState stores the active
+  // account data at the root as a local recovery copy.  Do not throw that copy
+  // away on the next launch just because the lightweight account record has no
+  // embedded data.  Cloud-backed sessions still prefer the authoritative user
+  // record, while an offline recovery copy is used only when it actually has
+  // account content that the lightweight record does not.
+  const recoveryAccountData = normalizeAccountData(next || {});
+  const accountData = loggedInPhone
+    ? (accountHasContent(serverAccountData) || !accountHasContent(recoveryAccountData)
+      ? serverAccountData
+      : recoveryAccountData)
+    : emptyAccountData();
   const base = {
     ...next,
     ...accountData,
@@ -659,7 +699,11 @@ function accountHasEmbeddedImages(source = state) {
 function saveState(options = {}) {
   const registeredUsers = syncRegisteredUsers(state);
   const cloudSession = hasCloudSession();
-  const accountData = state.loggedInPhone && !cloudSession ? accountDataSnapshot(state) : emptyAccountData();
+  // The device copy is a recovery mirror, not merely an offline fallback.
+  // Keeping it for every signed-in account means a temporary network loss,
+  // expired token, or interrupted background sync can never erase a user's
+  // turtles, ledger records, photos, or reminders before the next launch.
+  const accountData = state.loggedInPhone ? accountDataSnapshot(state) : emptyAccountData();
   const storageUsers = cloudSession || CONFIGURED_SMS_BACKEND
     ? registeredUsers.map(lightAccountUser)
     : registeredUsers;
@@ -690,6 +734,9 @@ function saveState(options = {}) {
     console.warn("保存本地数据失败", error);
     toast("本地登录状态保存失败，请清理浏览器缓存后重试");
   }
+  // Write-ahead journal: the cloud sync may be delayed or interrupted after
+  // this local save. It is cleared only after /api/account/save succeeds.
+  if (cloudSession && !options.skipCloud) persistPendingCloudData();
   if (!options.skipCloud) queueCloudSave();
 }
 
@@ -1849,6 +1896,12 @@ function communityPostMediaItems(item) {
     .slice(0, 9);
 }
 
+function inlineVideoExpandButton(media, label = "视频") {
+  const source = String(media?.url || "");
+  if (!source) return "";
+  return `<button class="inline-video-expand" type="button" data-open-video-preview="${escapeHtml(source)}" data-video-preview-title="${escapeHtml(label)}" data-video-preview-poster="${escapeHtml(String(media?.posterUrl || media?.poster || ""))}" aria-label="放大${escapeHtml(label)}">放大</button>`;
+}
+
 function communityMedia(item, compact = false) {
   const mediaItems = communityPostMediaItems(item);
   if (!mediaItems.length) return `<div class="community-media-placeholder"><span>壳友动态</span></div>`;
@@ -1862,10 +1915,10 @@ function communityFeedMedia(item) {
   const mediaItems = communityPostMediaItems(item);
   const mediaButton = (media, index) => {
     const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
-    const body = media.type === "video"
-      ? `<video class="community-media" src="${media.url}" muted playsinline autoplay loop preload="auto" crossorigin="anonymous" data-community-video-autoload data-community-video-autoplay="true" data-video-first-frame></video><i class="community-detail-play-mark">▶</i>`
-      : `<img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i>`;
-    return `<button class="community-feed-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}">${body}</button>`;
+    if (media.type === "video") {
+      return `<div class="community-feed-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}" muted playsinline autoplay loop controls preload="auto" crossorigin="anonymous" data-inline-video data-community-video-autoload data-community-video-autoplay="true" data-video-first-frame></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
+    }
+    return `<button class="community-feed-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
   };
   if (!mediaItems.length) return "";
   if (mediaItems.length === 1) return mediaButton(mediaItems[0], 0);
@@ -1981,7 +2034,10 @@ function communityDetailMedia(item) {
     <div class="community-detail-media-gallery ${isGallery ? "is-gallery" : ""}">
       ${mediaItems.map((media, index) => {
         const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
-        return `<button class="community-detail-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}">${media.type === "video" ? `<video class="community-media" src="${media.url}" muted playsinline autoplay loop preload="auto" crossorigin="anonymous" data-community-video-autoload data-community-video-autoplay="true" data-video-first-frame></video><i class="community-detail-play-mark">▶</i>` : `<img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i>`}</button>`;
+        if (media.type === "video") {
+          return `<div class="community-detail-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}" muted playsinline autoplay loop controls preload="auto" crossorigin="anonymous" data-inline-video data-community-video-autoload data-community-video-autoplay="true" data-video-first-frame></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
+        }
+        return `<button class="community-detail-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
       }).join("")}
     </div>
   `;
@@ -2122,7 +2178,7 @@ function bindPatchedCommunityFeed(feed) {
     : [...feed.querySelectorAll("[data-view-community-post]")];
   cards.forEach(card => {
     const openDetail = event => {
-      if (event.target.closest("button, input, textarea, select, form")) return;
+      if (event.target.closest("button, input, textarea, select, form, .inline-video-shell")) return;
       setState({ page: "communityPostDetail", selectedCommunityPostId: card.dataset.viewCommunityPost, openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
     };
     card.addEventListener("click", openDetail);
@@ -2300,7 +2356,7 @@ function marketVideoPosterUrl(media, fallbackUrl = defaultPhoto) {
 function marketDetailVideoMarkup(media, fallbackPosterUrl, sold = false, autoPlay = false) {
   // Detail videos deliberately have no poster/cover. The viewer sees the
   // native loading state and then the actual first playable frame directly.
-  return `<div class="market-detail-photo market-detail-video-shell is-loading"><video src="${escapeHtml(media.url)}" controls playsinline preload="auto"${autoPlay ? " autoplay muted" : ""} crossorigin="anonymous" data-market-detail-video${autoPlay ? " data-market-detail-autoplay" : ""}></video><div class="market-detail-video-loading" aria-live="polite">视频加载中</div>${sold ? `<span>已售出</span>` : ""}</div>`;
+  return `<div class="market-detail-photo market-detail-video-shell is-loading"><video src="${escapeHtml(media.url)}" controls playsinline preload="auto"${autoPlay ? " autoplay muted" : ""} crossorigin="anonymous" data-inline-video data-market-detail-video${autoPlay ? " data-market-detail-autoplay" : ""}></video>${inlineVideoExpandButton(media, "商品视频")}<div class="market-detail-video-loading" aria-live="polite">视频加载中</div>${sold ? `<span>已售出</span>` : ""}</div>`;
 }
 
 function communityMessageAspectRatio(message, mediaType) {
@@ -2396,7 +2452,9 @@ function pageCommunityChat() {
     const text = mediaUrl && ["[图片]", "[视频]"].includes(rawContent) ? "" : rawContent;
     const mediaPosterUrl = message.posterUrl ? apiAssetUrl(message.posterUrl) : "";
     const media = mediaUrl
-      ? `<button class="community-message-media ${mediaType === "video" ? "is-video" : ""}" style="--community-media-ratio:${communityMessageAspectRatio(message, mediaType)}" type="button" data-preview-chat-media="${escapeHtml(mediaUrl)}" data-chat-media-poster="${escapeHtml(mediaPosterUrl)}" data-chat-media-type="${mediaType}" aria-label="查看聊天${mediaType === "video" ? "视频" : "图片"}">${mediaType === "video" ? `<video src="${escapeHtml(mediaUrl)}"${videoPosterAttribute({ posterUrl: mediaPosterUrl })} muted playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video><i aria-hidden="true">▶</i>` : `<img src="${escapeHtml(mediaUrl)}" alt="聊天图片">`}</button>`
+      ? (mediaType === "video"
+        ? `<div class="community-message-media is-video" style="--community-media-ratio:${communityMessageAspectRatio(message, mediaType)}" aria-label="查看聊天视频"><div class="inline-video-shell"><video src="${escapeHtml(mediaUrl)}"${videoPosterAttribute({ posterUrl: mediaPosterUrl })} muted playsinline controls preload="auto" crossorigin="anonymous" data-inline-video data-video-first-frame></video>${inlineVideoExpandButton({ url: mediaUrl, posterUrl: mediaPosterUrl }, "聊天视频")}</div></div>`
+        : `<button class="community-message-media" style="--community-media-ratio:${communityMessageAspectRatio(message, mediaType)}" type="button" data-preview-chat-media="${escapeHtml(mediaUrl)}" data-chat-media-poster="${escapeHtml(mediaPosterUrl)}" data-chat-media-type="${mediaType}" aria-label="查看聊天图片"><img src="${escapeHtml(mediaUrl)}" alt="聊天图片"></button>`)
       : "";
     const showTime = shouldShowCommunityMessageTime(visibleMessages, index);
     const sender = { id: message.senderId || friend?.id || state.selectedCommunityFriendId, avatar: message.senderAvatar || friend?.avatar || "", name: friend?.name || "壳友" };
@@ -5362,7 +5420,7 @@ function bindEvents() {
   document.querySelector("#communityPostForm")?.addEventListener("submit", submitCommunityPost);
   document.querySelectorAll("[data-view-community-post]").forEach(card => {
     const openDetail = event => {
-      if (event.target.closest("button, input, textarea, select, form")) return;
+      if (event.target.closest("button, input, textarea, select, form, .inline-video-shell")) return;
       setState({ page: "communityPostDetail", selectedCommunityPostId: card.dataset.viewCommunityPost, openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
     };
     card.addEventListener("click", openDetail);
@@ -6062,7 +6120,11 @@ function localMarketListing(payload) {
 async function refreshMarket(force = false) {
   const isMarketFeed = state.page === "market";
   const savedListingIds = savedMarketListingIds();
-  if (!CONFIGURED_SMS_BACKEND || marketLoading) return;
+  // A stale saved login used to make every visible market render ask the
+  // server again.  Once apiPost detects 401 it clears that login; this guard
+  // prevents a repeated background request/error loop from making the page
+  // feel like it is continually refreshing.
+  if (!hasCloudSession() || marketLoading) return;
   if (isMarketFeed && state.marketFeedInitialized && !force) return;
   if (!force && Date.now() - marketLastLoadedAt < 10000) return;
   marketLoading = true;
@@ -6135,7 +6197,7 @@ function resetMarketFeed(patch = {}) {
 }
 
 async function loadMoreMarketListings() {
-  if (!CONFIGURED_SMS_BACKEND || state.page !== "market" || marketLoading || state.marketFeedLoadingMore || !state.marketFeedHasMore) return;
+  if (!hasCloudSession() || state.page !== "market" || marketLoading || state.marketFeedLoadingMore || !state.marketFeedHasMore) return;
   marketLoading = true;
   setState({ marketFeedLoadingMore: true }, { skipCloud: true });
   try {
@@ -7844,7 +7906,7 @@ function normalizeCommunityPosts(posts = []) {
 }
 
 async function refreshCommunity(force = false) {
-  if (!CONFIGURED_SMS_BACKEND || communityLoading) return;
+  if (!hasCloudSession() || communityLoading) return;
   if (!force && Date.now() - communityLastLoadedAt < 10000) return;
   communityLoading = true;
   try {
@@ -7979,7 +8041,7 @@ function openCommunityUserProfile(userId) {
 
 async function refreshCommunityUserProfile(force = false) {
   const userId = String(state.selectedCommunityUserId || "");
-  if (!userId || !CONFIGURED_SMS_BACKEND || communityUserProfileLoading) return;
+  if (!userId || !hasCloudSession() || communityUserProfileLoading) return;
   const loadedKey = `${userId}:${Math.floor(Date.now() / 10000)}`;
   if (!force && communityUserProfileLoadedKey === loadedKey) return;
   communityUserProfileLoading = true;
@@ -8707,7 +8769,10 @@ async function refreshMessageUnread(force = false, options = {}) {
       }
     }
   } catch (error) {
-    if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "未读消息读取失败");
+    // A 401 has already cleared the stale local credential in apiPost().  It
+    // is not a transient unread-message error and must not keep filling the
+    // console every polling interval.
+    if (error.status !== 401 && error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "未读消息读取失败");
   } finally {
     messageUnreadLoading = false;
     if (messageUnreadRenderRequested) {
@@ -8862,7 +8927,7 @@ function scheduleDeferredMessageListRefresh() {
 
 async function refreshCommunityChat(force = false, options = {}) {
   const userId = state.selectedCommunityFriendId;
-  if (!userId || !CONFIGURED_SMS_BACKEND) return;
+  if (!userId || !hasCloudSession()) return;
   if (communityChatLoading) {
     if (force) communityChatRefreshPending = true;
     return;
@@ -9678,9 +9743,10 @@ async function apiPost(path, payload) {
     body: JSON.stringify(payload)
   });
   const data = await response.json().catch(() => ({}));
+  if (response.status === 401) {
+    clearExpiredCloudSession();
+  }
   if (path === "/api/upload/image" && response.status === 401) {
-    forgetCloudToken(state.loggedInPhone);
-    state.cloudToken = "";
     throw new Error("登录状态已过期，请重新登录后再上传图片");
   }
   if (path === "/api/upload/image" && response.status === 405) {
@@ -9733,10 +9799,7 @@ async function apiUploadMediaFile(file, duration = 0, options = {}) {
         body: file
       });
       const data = await response.json().catch(() => ({}));
-      if (response.status === 401) {
-        forgetCloudToken(state.loggedInPhone);
-        state.cloudToken = "";
-      }
+      if (response.status === 401) clearExpiredCloudSession();
       if (!response.ok || data.ok === false) {
         const error = new Error(data.message || "视频上传失败");
         error.status = response.status;
@@ -9897,6 +9960,7 @@ async function pushCloudDataNow(throwOnError = false) {
 
 async function refreshCloudAccountFromServer() {
   if (!CONFIGURED_SMS_BACKEND || !state.loggedInPhone || !currentCloudToken()) return;
+  const pendingBeforeLoad = readPendingCloudData();
   try {
     const result = await apiPost("/api/account/load", {
       phone: state.loggedInPhone,
@@ -9906,6 +9970,16 @@ async function refreshCloudAccountFromServer() {
     // during a normal refresh it is the page the person is currently using.
     if (result.user) {
       applyCloudUser(result.user, "", { skipCloud: true, page: state.page });
+      // A journal newer than the server is an interrupted local save. Restore
+      // it after the authoritative account shell is applied, then retry the
+      // normal save pipeline. A stale journal is discarded so an older device
+      // never overwrites a newer cloud edit.
+      if (pendingCloudDataIsNewerThan(result.user.updatedAt, pendingBeforeLoad) && restorePendingCloudData()) {
+        setState({}, { skipCloud: true });
+        queueCloudSave();
+      } else if (pendingBeforeLoad?.phone === result.user.phone) {
+        clearPendingCloudData(result.user.phone);
+      }
       return true;
     }
     return false;
@@ -11512,6 +11586,21 @@ function openVideoPreview(src, alt = "视频预览", poster = "") {
   closeButton.focus();
 }
 
+let inlineVideoPreviewBound = false;
+function setupInlineVideoPreviewControls() {
+  if (inlineVideoPreviewBound) return;
+  inlineVideoPreviewBound = true;
+  document.addEventListener("click", event => {
+    const trigger = event.target instanceof Element ? event.target.closest("[data-open-video-preview]") : null;
+    if (!trigger || !$app.contains(trigger)) return;
+    const source = String(trigger.dataset.openVideoPreview || "");
+    if (!source) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openVideoPreview(source, trigger.dataset.videoPreviewTitle || "视频预览", trigger.dataset.videoPreviewPoster || "");
+  }, true);
+}
+
 let universalMediaPreviewBound = false;
 function setupUniversalMediaPreview() {
   if (universalMediaPreviewBound) return;
@@ -11519,22 +11608,20 @@ function setupUniversalMediaPreview() {
   document.addEventListener("click", event => {
     const origin = event.target instanceof Element ? event.target : null;
     const media = origin?.closest("img, video");
-    if (!(media instanceof HTMLImageElement || media instanceof HTMLVideoElement)) return;
+    // Video playback remains inline. It enters the larger viewer only through
+    // the visible “放大” button supplied above the player.
+    if (!(media instanceof HTMLImageElement)) return;
     if (!$app.contains(media) || media.closest(".image-preview-overlay")) return;
     // Controls with their own preview/navigation action keep their dedicated
     // handler.  The capture listener is only a safe fallback for content
     // media that otherwise has no click behaviour.
     if (media.closest("button, a, label, input, textarea, select, [contenteditable='true'], [data-preview-community-media], [data-preview-chat-media], [data-preview-market-image], [data-growth-photo-preview], .photo-uploader, .media-picker, .default-avatar-option, .avatar-picker")) return;
     if (media.classList.contains("species-thumbnail") || media.classList.contains("turtle-icon") || media.classList.contains("app-icon")) return;
-    const source = media instanceof HTMLVideoElement ? (media.currentSrc || media.src) : (media.currentSrc || media.src);
+    const source = media.currentSrc || media.src;
     if (!source || source.startsWith("data:image/svg+xml")) return;
     event.preventDefault();
     event.stopPropagation();
-    if (media instanceof HTMLVideoElement) {
-      openVideoPreview(source, media.getAttribute("aria-label") || media.title || "视频预览", media.poster || "");
-    } else {
-      openImagePreview(source, media.alt || media.getAttribute("aria-label") || media.title || "图片预览");
-    }
+    openImagePreview(source, media.alt || media.getAttribute("aria-label") || media.title || "图片预览");
   }, true);
 }
 
@@ -12008,6 +12095,7 @@ setupMobileKeyboardGuard();
 setupPullToRefresh();
 setupEdgeBackAndConversationSwipe();
 setupNativeMediaPicker();
+setupInlineVideoPreviewControls();
 setupUniversalMediaPreview();
 setupBottomNavForegroundRecovery();
 setupMarketShareDeepLinks();

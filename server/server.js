@@ -32,11 +32,15 @@ const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
 const STATIC_ROOT = path.resolve(__dirname, "..");
 const SPECIES_CATALOG_FILE = path.resolve(STATIC_ROOT, "species-data.js");
-const DATA_DIR = path.resolve(__dirname, "data");
+// Production keeps runtime files beside the server.  Tests can opt into an
+// isolated runtime root so regression checks never read or write real users'
+// accounts, uploads, or backups.
+const RUNTIME_ROOT = path.resolve(process.env.TURTLE_RUNTIME_DIR || __dirname);
+const DATA_DIR = path.resolve(RUNTIME_ROOT, "data");
 const DATA_FILE = path.resolve(DATA_DIR, "app-data.json");
 const SMS_STATE_FILE = path.resolve(DATA_DIR, "sms-state.json");
-const UPLOAD_DIR = path.resolve(__dirname, "uploads");
-const BACKUP_DIR = path.resolve(__dirname, "backups");
+const UPLOAD_DIR = path.resolve(RUNTIME_ROOT, "uploads");
+const BACKUP_DIR = path.resolve(RUNTIME_ROOT, "backups");
 const BACKUP_RETENTION_DAYS = Math.max(7, Math.floor(Number(process.env.BACKUP_RETENTION_DAYS || 30)));
 // Small, per-account recovery snapshots are separate from the daily full
 // backup. They are written only before a record-count reduction, so an

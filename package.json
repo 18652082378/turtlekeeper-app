@@ -7,6 +7,7 @@
     "start": "node server/server.js",
     "build": "node scripts/build-web.js",
     "test:backup-restore": "node scripts/test-backup-restore.js",
+    "test:api-workflows": "node scripts/test-api-workflows.js",
     "verify:backup": "node scripts/restore-server-backup.js",
     "cap:add:ios": "npm run build && npx cap add ios",
     "cap:sync:ios": "npm run build && npx cap sync ios && node scripts/configure-ios-local-plugins.js",
