@@ -1896,10 +1896,10 @@ function communityPostMediaItems(item) {
     .slice(0, 9);
 }
 
-function inlineVideoExpandButton(media, label = "视频") {
-  const source = String(media?.url || "");
-  if (!source) return "";
-  return `<button class="inline-video-expand" type="button" data-open-video-preview="${escapeHtml(source)}" data-video-preview-title="${escapeHtml(label)}" data-video-preview-poster="${escapeHtml(String(media?.posterUrl || media?.poster || ""))}" aria-label="放大${escapeHtml(label)}">放大</button>`;
+// Videos keep the system's native full-screen control in their player controls.
+// Do not add a separate text badge over video content.
+function inlineVideoExpandButton() {
+  return "";
 }
 
 function communityMedia(item, compact = false) {
