@@ -244,12 +244,18 @@ async function main() {
       shellLength: "6",
       price: 100,
       city: "南京市",
+      locationSource: "device",
+      latitude: 32.0603,
+      longitude: 118.7969,
       delivery: "可快递",
       description: "Regression listing",
       mediaItems: [{ url: uploadedImage.json.url, type: "image" }]
     });
     const listingId = market.json.myListings[0]?.id;
     assert.ok(listingId, "market listing should be returned after publishing");
+    await request("/api/market/create", {
+      ...auth(seller), submissionId: "regression-no-location", title: "缺少定位的商品", speciesCode: "GHG", price: 100
+    }, { status: 400 });
     await request("/api/market/create", {
       ...auth(seller),
       submissionId: "regression-blocked-listing",

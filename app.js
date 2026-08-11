@@ -166,6 +166,8 @@ const initialState = {
   marketDraftMedia: [],
   marketDraftTurtleId: "",
   marketDraftCity: "",
+  marketDraftLatitude: "",
+  marketDraftLongitude: "",
   marketDraftDescription: "",
   marketDraftDescriptionTemplate: "",
   marketLocationStatus: "idle",
@@ -3280,8 +3282,8 @@ function pageMarketAdd() {
           <div class="market-form-two market-city-delivery-row">
             <div class="market-city-field">
               <div class="market-city-label"><span>所在城市<i class="required-mark" aria-hidden="true">*</i></span><button type="button" data-market-city-locate>⌖ 定位</button></div>
-              <input class="field" name="city" maxlength="24" value="${escapeHtml(state.marketDraftCity || editingListing?.city || "")}" placeholder="正在获取所在城市" data-market-city required>
-              <small data-market-city-hint>将自动填写您所在的城市</small>
+              <input class="field" name="city" maxlength="24" value="${escapeHtml(state.marketDraftCity || "")}" placeholder="请先允许定位" data-market-city readonly required aria-describedby="marketCityHint">
+              <small id="marketCityHint" data-market-city-hint>城市仅能由当前位置自动获取，不能手动填写</small>
             </div>
             <label class="market-delivery-field"><span>交付方式<i class="required-mark" aria-hidden="true">*</i></span><select class="select" name="delivery" required><option value="" ${!formValue("delivery") ? "selected" : ""} disabled>请选择方式</option><option value="可快递" ${formValue("delivery") === "可快递" ? "selected" : ""}>可快递</option><option value="仅自提" ${formValue("delivery") === "仅自提" ? "selected" : ""}>仅自提</option><option value="可面交" ${formValue("delivery") === "可面交" ? "selected" : ""}>可面交</option></select><small aria-hidden="true">&nbsp;</small></label>
           </div>
@@ -5114,6 +5116,8 @@ function bindEvents() {
       navigationState.marketDraftTurtleId = "";
       navigationState.marketDraftMedia = [];
       navigationState.marketDraftCity = "";
+      navigationState.marketDraftLatitude = "";
+      navigationState.marketDraftLongitude = "";
       navigationState.marketDraftDescription = "";
       navigationState.marketDraftDescriptionTemplate = "";
       navigationState.marketLocationStatus = "idle";
@@ -5864,10 +5868,6 @@ function bindEvents() {
       state.marketDraftDescriptionTemplate = "";
     }
   });
-  document.querySelector("[data-market-city]")?.addEventListener("input", event => {
-    state.marketDraftCity = event.target.value;
-    state.marketLocationStatus = "manual";
-  });
   document.querySelector("[data-market-city-locate]")?.addEventListener("click", () => requestMarketCityAutofill({ force: true }));
   bindMarketSpeciesPicker();
   bindMarketMediaDraftEvents();
@@ -6587,10 +6587,10 @@ function updateMarketCityLocationUi(status = state.marketLocationStatus) {
   if (!button || !hint) return;
   const labels = {
     loading: ["定位中…", "正在读取设备位置"],
-    success: ["重新定位", "已按当前位置自动填写，可手动修改"],
-    error: ["重新定位", "定位失败，请手动填写或重新定位"],
-    manual: ["重新定位", "已手动填写；可重新定位覆盖"],
-    idle: ["定位", "将自动填写您所在的城市"]
+    success: ["重新定位", "已按当前位置自动填写，城市不可手动修改"],
+    error: ["重新定位", "无法获取城市。请开启位置权限后重新定位"],
+    manual: ["重新定位", "请重新定位以确认所在城市"],
+    idle: ["定位", "城市仅能通过当前位置自动获取"]
   };
   const [buttonText, hintText] = labels[status] || labels.idle;
   button.textContent = buttonText;
@@ -6788,7 +6788,7 @@ async function requestLocationPermissionOnLogin() {
 
 async function requestMarketCityAutofill({ force = false } = {}) {
   if (state.marketLocationStatus === "loading") return;
-  if (!force && String(state.marketDraftCity || "").trim()) {
+  if (!force && state.marketLocationStatus === "success" && String(state.marketDraftCity || "").trim() && Number.isFinite(Number(state.marketDraftLatitude)) && Number.isFinite(Number(state.marketDraftLongitude))) {
     updateMarketCityLocationUi(state.marketLocationStatus === "idle" ? "success" : state.marketLocationStatus);
     return;
   }
@@ -6799,15 +6799,16 @@ async function requestMarketCityAutofill({ force = false } = {}) {
     const city = await reverseGeocodeMarketCity(position.coords.latitude, position.coords.longitude);
     if (!city) throw new Error("未能识别所在城市");
     const input = document.querySelector("[data-market-city]");
-    if (force || !String(state.marketDraftCity || "").trim()) {
-      state.marketDraftCity = city;
-      if (input) input.value = city;
-    }
+    state.marketDraftCity = city;
+    state.marketDraftLatitude = String(position.coords.latitude);
+    state.marketDraftLongitude = String(position.coords.longitude);
+    if (input) input.value = city;
     state.marketLocationStatus = "success";
     updateMarketCityLocationUi();
-  } catch {
+  } catch (error) {
     state.marketLocationStatus = "error";
     updateMarketCityLocationUi();
+    if (isLocationPermissionDenied(error)) toast(locationSettingsHint());
   }
 }
 
@@ -6862,6 +6863,9 @@ async function submitMarketListing(event) {
     price: Number(form.get("price") || 0),
     negotiable: form.get("negotiable") === "on",
     city: String(form.get("city") || "").trim(),
+    locationSource: "device",
+    latitude: Number(state.marketDraftLatitude),
+    longitude: Number(state.marketDraftLongitude),
     delivery: String(form.get("delivery") || ""),
     description: String(form.get("description") || "").trim()
   };
@@ -6871,7 +6875,7 @@ async function submitMarketListing(event) {
     !payload.stage && "阶段",
     !payload.shellLength && "背甲长度",
     payload.shellLength && (!Number.isFinite(Number(payload.shellLength)) || Number(payload.shellLength) <= 0) && "背甲长度",
-    !payload.city && "所在城市",
+    (!payload.city || state.marketLocationStatus !== "success" || !Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) && "所在城市（请先允许位置访问并完成定位）",
     !payload.delivery && "交付方式",
     !payload.description && "详细说明"
   ].filter(Boolean);
@@ -6972,6 +6976,8 @@ async function submitMarketListing(event) {
     state.marketDraftMedia = [];
     state.marketDraftTurtleId = "";
     state.marketDraftCity = "";
+    state.marketDraftLatitude = "";
+    state.marketDraftLongitude = "";
     state.marketDraftDescription = "";
     state.marketDraftDescriptionTemplate = "";
     state.marketLocationStatus = "idle";
@@ -7245,10 +7251,12 @@ function beginMarketListingEdit(listingId) {
     marketDraftTurtleId: listing.turtleId || "",
     marketDraftPhoto: "",
     marketDraftMedia: mediaItems,
-    marketDraftCity: listing.city || "",
+    marketDraftCity: "",
+    marketDraftLatitude: "",
+    marketDraftLongitude: "",
     marketDraftDescription: listing.description || "",
     marketDraftDescriptionTemplate: "",
-    marketLocationStatus: "manual"
+    marketLocationStatus: "idle"
   }, { skipCloud: true });
 }
 

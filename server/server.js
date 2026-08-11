@@ -1261,6 +1261,14 @@ function rejectObjectionableContent(res, ...values) {
   return true;
 }
 
+function verifiedMarketLocation(body) {
+  const city = trimPublicText(body.city, 24);
+  const latitude = Number(body.latitude);
+  const longitude = Number(body.longitude);
+  if (body.locationSource !== "device" || !city || !Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
+  return { city, latitude, longitude };
+}
+
 function publicReviewAuthor(user) {
   return {
     name: user.accountName || maskPhone(user.phone),
@@ -2807,6 +2815,8 @@ async function handleMarketCreate(req, res) {
     .filter(media => media.url);
   const price = Number(body.price || 0);
   if (!title || !speciesName || !Number.isFinite(price) || price < 0) return sendJson(res, 400, { ok: false, message: "请填写正确的标题、品种和价格" });
+  const location = verifiedMarketLocation(body);
+  if (!location) return sendJson(res, 400, { ok: false, message: "龟集市必须获取当前位置城市。请在系统设置中允许位置访问后重新定位。" });
   if (rejectObjectionableContent(res, title, body.description, body.city, body.delivery)) return;
   const listing = {
     id: crypto.randomUUID(),
@@ -2821,7 +2831,7 @@ async function handleMarketCreate(req, res) {
     shellLength: trimPublicText(body.shellLength, 20),
     price,
     negotiable: Boolean(body.negotiable),
-    city: trimPublicText(body.city, 24),
+    city: location.city,
     delivery: ["可快递", "仅自提", "可面交"].includes(body.delivery) ? body.delivery : "双方协商",
     description: trimPublicText(body.description, 600),
     photoUrl: mediaItems[0]?.url || trimPublicText(body.photoUrl, 800),
@@ -3019,6 +3029,9 @@ async function handleMarketUpdate(req, res) {
   if (!title || !speciesName || !Number.isFinite(price) || price < 0 || !mediaItems.length) {
     return sendJson(res, 400, { ok: false, message: "请填写正确的商品信息并保留至少一项实拍媒体" });
   }
+  const location = verifiedMarketLocation(body);
+  if (!location) return sendJson(res, 400, { ok: false, message: "龟集市必须获取当前位置城市。请在系统设置中允许位置访问后重新定位。" });
+  if (rejectObjectionableContent(res, title, body.description, body.city, body.delivery)) return;
   Object.assign(listing, {
     turtleId: trimPublicText(body.turtleId, 100),
     title,
@@ -3030,7 +3043,7 @@ async function handleMarketUpdate(req, res) {
     shellLength: trimPublicText(body.shellLength, 20),
     price,
     negotiable: Boolean(body.negotiable),
-    city: trimPublicText(body.city, 24),
+    city: location.city,
     delivery: ["可快递", "仅自提", "可面交"].includes(body.delivery) ? body.delivery : "双方协商",
     description: trimPublicText(body.description, 600),
     photoUrl: mediaItems[0].url,
