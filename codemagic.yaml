@@ -61,9 +61,6 @@ workflows:
     publishing:
       app_store_connect:
         auth: integration
-        # Internal TestFlight does not require Beta App Review. Keeping this
-        # false limits the workflow to the signed IPA upload and avoids an
-        # unnecessary App Store Connect post-processing request after upload.
-        # Add an internal tester group in App Store Connect once build 42 is
-        # processed; submit externally from App Store Connect only when needed.
-        submit_to_testflight: false
+        # Upload the signed build to TestFlight. App Store review is still
+        # submitted manually in App Store Connect after processing completes.
+        submit_to_testflight: true

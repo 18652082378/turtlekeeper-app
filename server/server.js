@@ -50,7 +50,7 @@ const ACCOUNT_SNAPSHOT_DIR = path.resolve(BACKUP_DIR, "account-snapshots");
 const ACCOUNT_SNAPSHOT_LIMIT = Math.min(200, Math.max(20, Math.floor(Number(process.env.ACCOUNT_SNAPSHOT_LIMIT || 100))));
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
 const REVIEW_ADMIN_PHONE = process.env.ADMIN_PHONE || "18652082378";
-const POLICY_VERSION = "2026-07-17";
+const POLICY_VERSION = "2026-08-12";
 // 每次 App Store 新版已发布后，将 MIN_SUPPORTED_APP_BUILD 调整为新的 Xcode 构建号即可强制更新。
 const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 12)));
 const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || MIN_SUPPORTED_APP_BUILD)));
@@ -1226,6 +1226,41 @@ function trimPublicText(value, maxLength = 500) {
   return String(value || "").trim().slice(0, maxLength);
 }
 
+// User-generated text is checked on the server, rather than trusting only a
+// client-side prompt.  Keep the list deliberately narrow: it blocks clearly
+// objectionable, illegal, or unsafe material without preventing normal turtle
+// care discussions.  Separators are removed before matching to catch simple
+// attempts to evade the filter (for example, "色-情" or "诈 骗").
+const UGC_BLOCKED_PATTERNS = [
+  { pattern: /(?:色情|黄色网站|黄色直播|裸聊|约炮|招嫖|卖淫)/u, label: "色情或招嫖" },
+  { pattern: /(?:网赌|赌博平台|博彩平台|代赌|私彩)/u, label: "赌博" },
+  { pattern: /(?:刷单返利|杀猪盘|电信诈骗|贷款诈骗|冒充客服|虚假投资)/u, label: "诈骗" },
+  { pattern: /(?:爆炸物|自制炸弹|制作炸弹|恐怖袭击|极端组织)/u, label: "暴力或危险活动" },
+  { pattern: /(?:人肉搜索|开盒|出售身份证|买卖身份证|银行卡四件套)/u, label: "个人信息或违法交易" },
+  { pattern: /(?:象牙|犀牛角|穿山甲|虎骨|熊胆)/u, label: "非法野生动物交易" }
+];
+
+function normalizeModerationText(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\s\-_.·•,，。!！?？:：;；/\\|]/g, "");
+}
+
+function objectionableContentReason(...values) {
+  const text = normalizeModerationText(values.filter(Boolean).join("\n"));
+  if (!text) return "";
+  const hit = UGC_BLOCKED_PATTERNS.find(item => item.pattern.test(text));
+  return hit ? hit.label : "";
+}
+
+function rejectObjectionableContent(res, ...values) {
+  const reason = objectionableContentReason(...values);
+  if (!reason) return false;
+  sendJson(res, 400, { ok: false, message: `内容包含可能违规的${reason}信息，无法发布。请修改后重试；如有疑问可在“意见反馈”联系平台。` });
+  return true;
+}
+
 function publicReviewAuthor(user) {
   return {
     name: user.accountName || maskPhone(user.phone),
@@ -2079,6 +2114,7 @@ async function handleCommunityCreate(req, res) {
   const mentions = trimPublicText(body.mentions, 200);
   const visibility = "public";
   if (!content && !primaryMedia) return sendJson(res, 400, { ok: false, message: "请填写内容或选择图片、视频" });
+  if (rejectObjectionableContent(res, content, location, mentions)) return;
   const post = {
     id: crypto.randomUUID(),
     content,
@@ -2123,6 +2159,7 @@ async function handleCommunityComment(req, res) {
   const content = trimPublicText(body.content, 500);
   if (!post) return sendJson(res, 404, { ok: false, message: "动态不存在" });
   if (!content) return sendJson(res, 400, { ok: false, message: "请输入评论" });
+  if (rejectObjectionableContent(res, content)) return;
   post.comments = [...(Array.isArray(post.comments) ? post.comments : []), {
     id: crypto.randomUUID(),
     content,
@@ -2484,6 +2521,7 @@ async function handleCommunityChatSend(req, res) {
   const marketListing = marketListingId ? marketChatListingSnapshot(db, marketListingId, target.phone) : null;
   if (marketListingId && !marketListing) return sendJson(res, 400, { ok: false, message: "商品信息无效" });
   if (!content && !mediaUrl && !marketListing) return sendJson(res, 400, { ok: false, message: "请输入消息" });
+  if (rejectObjectionableContent(res, content)) return;
   const message = {
     id: crypto.randomUUID(),
     fromPhone: user.phone,
@@ -2769,6 +2807,7 @@ async function handleMarketCreate(req, res) {
     .filter(media => media.url);
   const price = Number(body.price || 0);
   if (!title || !speciesName || !Number.isFinite(price) || price < 0) return sendJson(res, 400, { ok: false, message: "请填写正确的标题、品种和价格" });
+  if (rejectObjectionableContent(res, title, body.description, body.city, body.delivery)) return;
   const listing = {
     id: crypto.randomUUID(),
     submissionId,

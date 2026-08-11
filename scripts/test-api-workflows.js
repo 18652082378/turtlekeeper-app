@@ -199,8 +199,14 @@ async function main() {
     });
     const postId = post.json.posts[0]?.id;
     assert.ok(postId, "community post should be returned after creation");
+    await request("/api/community/create", {
+      ...auth(seller), content: "提供 色-情 裸聊服务"
+    }, { status: 400 });
     await request("/api/community/like", { ...auth(buyer), postId });
     await request("/api/community/comment", { ...auth(buyer), postId, content: "Regression comment" });
+    await request("/api/community/comment", {
+      ...auth(buyer), postId, content: "这是一个网赌 平台"
+    }, { status: 400 });
     const community = await request("/api/community/list", auth(seller));
     assert.equal(community.json.posts[0].likeCount, 1);
     assert.equal(community.json.posts[0].comments[0].content, "Regression comment");
@@ -212,6 +218,9 @@ async function main() {
       userId: sellerId,
       content: "价格 100 元"
     });
+    await request("/api/community/chat/send", {
+      ...auth(buyer), userId: sellerId, content: "刷单返利，联系我"
+    }, { status: 400 });
     assert.ok(sent.json.messages.length >= 2, "price discussion should include the official safety notice");
     const unread = await request("/api/community/unread", auth(seller));
     assert.ok(unread.json.unreadCount >= 1);
@@ -241,6 +250,13 @@ async function main() {
     });
     const listingId = market.json.myListings[0]?.id;
     assert.ok(listingId, "market listing should be returned after publishing");
+    await request("/api/market/create", {
+      ...auth(seller),
+      submissionId: "regression-blocked-listing",
+      title: "黄色网站推广",
+      speciesCode: "GHG",
+      price: 100
+    }, { status: 400 });
     const duplicate = await request("/api/market/create", {
       ...auth(seller),
       submissionId: "regression-submission-1",
