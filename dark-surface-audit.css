@@ -197,7 +197,7 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
 .message-friend-swipe { --message-swipe-actions-width: 144px; position: relative; isolation: isolate; display: flex; overflow-x: auto; overflow-y: hidden; background: var(--section-bg); touch-action: pan-x pan-y; scroll-snap-type: x mandatory; scroll-behavior: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none; contain: layout paint; }
 .message-friend-swipe::-webkit-scrollbar { display: none; }
 .message-friend-actions { position: relative; inset: auto; z-index: 0; flex: 0 0 var(--message-swipe-actions-width); width: var(--message-swipe-actions-width); display: flex; visibility: visible; opacity: 1; pointer-events: auto; transform: none; scroll-snap-align: end; scroll-snap-stop: always; }
-.message-friend-actions button { flex: 0 0 72px; width: 72px; border-radius: 0; color: #fff; background: #4b9f7d; font-size: 13px; font-weight: 700; }
+.message-friend-actions button { flex: 0 0 72px; width: 72px; border-radius: 0; color: #fff; background: #4b9f7d; font-size: 13px; font-weight: 700; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .message-friend-actions .delete { background: #e45762; }
 .message-friend-row { position: relative; z-index: 1; display: flex; box-sizing: border-box; flex: 0 0 100%; min-width: 100%; max-width: 100%; transform: none; scroll-snap-align: start; scroll-snap-stop: always; contain: paint; }
 

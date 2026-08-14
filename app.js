@@ -394,6 +394,10 @@ let pendingPageScrollReset = false;
 let edgeBackSnapshots = [];
 let messageListRefreshDeferred = false;
 let messageListRefreshFlushTimer = 0;
+// Keep a conversation action isolated from the list's background refreshes.
+// A refresh arriving while the action rail is open used to replace the row
+// before the tap reached its button, making pin/delete appear unresponsive.
+const communityConversationActionPending = new Set();
 let nativePushListenersAttached = false;
 let nativePushSetupInFlight = false;
 let nativePushDeviceToken = "";
@@ -5519,12 +5523,14 @@ function bindEvents() {
   }));
   document.querySelectorAll("[data-open-community-chat]").forEach(btn => btn.addEventListener("click", () => openCommunityChat(btn.dataset.openCommunityChat)));
   document.querySelectorAll("[data-toggle-conversation-pin]").forEach(btn => btn.addEventListener("click", event => {
+    event.preventDefault();
     event.stopPropagation();
-    toggleCommunityConversationPin(btn.dataset.toggleConversationPin);
+    void toggleCommunityConversationPin(btn.dataset.toggleConversationPin);
   }));
   document.querySelectorAll("[data-delete-conversation]").forEach(btn => btn.addEventListener("click", event => {
+    event.preventDefault();
     event.stopPropagation();
-    deleteCommunityConversation(btn.dataset.deleteConversation);
+    void deleteCommunityConversation(btn.dataset.deleteConversation);
   }));
   document.querySelectorAll("[data-delete-community-post]").forEach(btn => btn.addEventListener("click", () => deleteCommunityPost(btn.dataset.deleteCommunityPost)));
   document.querySelector("#communityChatForm")?.addEventListener("submit", sendCommunityMessage);
@@ -8750,24 +8756,53 @@ async function openCommunityChat(userId) {
 }
 
 async function toggleCommunityConversationPin(userId) {
-  if (!canUseCommunity()) return;
+  if (!canUseCommunity() || communityConversationActionPending.has(userId)) return;
+  const previousFriends = state.communityFriends || [];
+  const target = previousFriends.find(item => item.id === userId);
+  if (!target) return;
+  communityConversationActionPending.add(userId);
+  // Reflect the action immediately. This also keeps the row stable while its
+  // native horizontal scroll is settling after the user taps the action.
+  const nextFriends = previousFriends
+    .map(item => item.id === userId ? { ...item, pinned: !item.pinned } : item)
+    .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) ||
+      new Date(right.lastMessageAt || right.createdAt || 0) - new Date(left.lastMessageAt || left.createdAt || 0));
+  setState({ communityFriends: nextFriends }, { skipCloud: true });
   try {
     const result = await apiPost("/api/community/chat/pin", communityAuthPayload({ userId }));
-    setState({ communityFriends: Array.isArray(result.friends) ? result.friends : [] }, { skipCloud: true });
+    if (!result?.ok || !Array.isArray(result.friends)) throw new Error(result?.message || "置顶失败，请重试");
+    setState({ communityFriends: result.friends }, { skipCloud: true });
+    toast(target.pinned ? "已取消置顶" : "已置顶");
   } catch (error) {
+    setState({ communityFriends: previousFriends }, { skipCloud: true });
+    console.error("切换会话置顶失败", error);
     toast(error.message || "操作失败，请重试");
+  } finally {
+    communityConversationActionPending.delete(userId);
   }
 }
 
 async function deleteCommunityConversation(userId) {
   const friend = (state.communityFriends || []).find(item => item.id === userId);
   const name = String(friend?.name || "该用户").trim();
-  if (!canUseCommunity() || !confirm(`确认删除与“${name}”的聊天记录吗？\n\n删除后将不再显示此会话；收到对方新消息时会再次出现。`)) return;
+  if (!canUseCommunity() || communityConversationActionPending.has(userId)) return;
+  if (!window.confirm(`确认删除与“${name}”的聊天记录吗？\n\n删除后将不再显示此会话；收到对方新消息时会再次出现。`)) return;
+  const previousFriends = state.communityFriends || [];
+  communityConversationActionPending.add(userId);
+  // Remove it optimistically so pressing “OK” always gives immediate, visible
+  // feedback instead of waiting for a network round trip.
+  setState({ communityFriends: previousFriends.filter(item => item.id !== userId) }, { skipCloud: true });
   try {
     const result = await apiPost("/api/community/chat/delete", communityAuthPayload({ userId }));
-    setState({ communityFriends: Array.isArray(result.friends) ? result.friends : [] }, { skipCloud: true });
+    if (!result?.ok || !Array.isArray(result.friends)) throw new Error(result?.message || "删除失败，请重试");
+    setState({ communityFriends: result.friends }, { skipCloud: true });
+    toast("聊天记录已删除");
   } catch (error) {
+    setState({ communityFriends: previousFriends }, { skipCloud: true });
+    console.error("删除会话失败", error);
     toast(error.message || "删除失败，请重试");
+  } finally {
+    communityConversationActionPending.delete(userId);
   }
 }
 
