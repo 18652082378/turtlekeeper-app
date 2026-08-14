@@ -63,6 +63,8 @@ let pullRefreshPendingState = null;
 let pullRefreshIndicatorElement = null;
 let pullRefreshIndicatorLabel = null;
 let pullRefreshVisualState = "";
+let communityChatMessageMenuElement = null;
+let communityChatMessageMenuDismiss = null;
 
 const initialState = {
   page: "home",
@@ -382,6 +384,7 @@ let marketPublishSubmissionId = "";
 // Publishing continues after leaving the form, so progress must not depend on
 // the page DOM that is about to be replaced.
 let marketPublishProgress = { active: false, current: 0, total: 0, stage: "" };
+let communityChatMediaUploadProgress = { active: false, current: 0, total: 0, percent: 0, stage: "" };
 let pendingCommunityChatLatestScroll = false;
 let communityChatOpening = false;
 let pendingPageEnterMotion = false;
@@ -2484,7 +2487,14 @@ function pageCommunityChat() {
         ? `<button class="community-chat-message-avatar" type="button" data-view-community-user="${escapeHtml(sender.id)}" aria-label="查看${escapeHtml(sender.name)}的主页">${communityAvatar(sender, "community-chat-avatar")}</button>`
         : `<span class="community-chat-avatar-spacer" aria-hidden="true"></span>`)
       : "";
-    return `<div class="community-message ${message.mine ? "mine" : "theirs"}">${showTime ? `<small>${formatTime(message.createdAt)}</small>` : ""}<div class="community-message-body">${senderMark}<div class="community-message-content">${text ? `<p>${escapeHtml(text)}</p>` : ""}${media}</div></div></div>`;
+    const recalled = Boolean(message.recalled);
+    const textMessage = text && !mediaUrl && !recalled
+      ? `<p class="community-chat-text-message" data-community-chat-text-message="${escapeHtml(message.id || "")}" tabindex="0">${escapeHtml(text)}</p>`
+      : "";
+    const recalledMessage = recalled
+      ? `<p class="community-chat-recalled-message">${message.mine ? "你撤回了一条消息" : "对方撤回了一条消息"}</p>`
+      : "";
+    return `<div class="community-message ${message.mine ? "mine" : "theirs"} ${recalled ? "is-recalled" : ""}">${showTime ? `<small>${formatTime(message.createdAt)}</small>` : ""}<div class="community-message-body">${senderMark}<div class="community-message-content">${recalledMessage || textMessage}${media}</div></div></div>`;
   };
   const chatMessageList = visibleMessages.map(messageMarkup).join("") || (marketListing
     ? ""
@@ -2503,7 +2513,7 @@ function pageCommunityChat() {
       <form class="community-chat-form" id="communityChatForm">
         <input name="content" maxlength="1000" value="${escapeHtml(marketChatDraft)}" placeholder="输入消息…" autocomplete="off" enterkeyhint="send">
         <button class="community-chat-plus-btn ${toolsOpen ? "is-open" : ""}" type="button" data-toggle-community-chat-tools aria-label="${toolsOpen ? "收起更多功能" : "更多功能"}" aria-expanded="${toolsOpen ? "true" : "false"}">${toolsOpen ? "×" : "+"}</button>
-        <input class="community-chat-media-input" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime,video/x-m4v" data-community-chat-media-input hidden>
+        <input class="community-chat-media-input" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime,video/x-m4v" multiple data-community-chat-media-input hidden>
         <input class="community-chat-media-input" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" data-community-chat-camera-photo-input hidden>
         <input class="community-chat-media-input" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-m4v" capture="environment" data-community-chat-camera-video-input hidden>
       </form>
@@ -5526,6 +5536,7 @@ function bindEvents() {
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
   });
+  bindCommunityChatTextMessageMenus();
   document.querySelector("[data-toggle-community-chat-tools]")?.addEventListener("click", () => {
     document.querySelector("#communityChatForm input[name='content']")?.blur();
     setState({ communityChatToolsOpen: !state.communityChatToolsOpen }, { skipCloud: true });
@@ -5534,7 +5545,7 @@ function bindEvents() {
     document.querySelector("[data-community-chat-media-input]")?.click();
   });
   bindCommunityChatCameraButton();
-  document.querySelector("[data-community-chat-media-input]")?.addEventListener("change", sendCommunityChatMedia);
+  document.querySelector("[data-community-chat-media-input]")?.addEventListener("change", sendCommunityChatMediaBatch);
   document.querySelector("[data-community-chat-camera-photo-input]")?.addEventListener("change", sendCommunityChatMedia);
   document.querySelector("[data-community-chat-camera-video-input]")?.addEventListener("change", sendCommunityChatMedia);
   document.querySelectorAll("[data-preview-chat-media]").forEach(button => button.addEventListener("click", () => {
@@ -9032,6 +9043,139 @@ async function sendCommunityMessage(event) {
   }
 }
 
+function closeCommunityChatMessageMenu() {
+  communityChatMessageMenuDismiss?.();
+}
+
+async function copyCommunityChatText(text) {
+  const value = String(text || "");
+  if (!value) return;
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
+    else {
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.style.cssText = "position:fixed;opacity:0;pointer-events:none;";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    toast("已复制");
+  } catch {
+    toast("复制失败，请重试");
+  }
+}
+
+function quoteCommunityChatMessage(message) {
+  const source = String(message?.rawContent || message?.content || "").trim();
+  if (!source) return;
+  const input = document.querySelector("#communityChatForm input[name='content']");
+  if (!input) return;
+  const quote = `「引用：${source.slice(0, 160)}」\n`;
+  input.value = quote;
+  marketChatDraft = quote;
+  input.focus();
+  input.setSelectionRange(quote.length, quote.length);
+}
+
+async function recallCommunityChatMessage(message) {
+  if (!message?.id || !canUseCommunity()) return;
+  try {
+    const result = await apiPost("/api/community/chat/recall", communityAuthPayload({
+      userId: state.selectedCommunityFriendId,
+      messageId: message.id
+    }));
+    applyCommunityChatSendResult(result);
+    toast("已撤回消息");
+  } catch (error) {
+    toast(error.message || "撤回失败，请重试");
+  }
+}
+
+function openCommunityChatMessageMenu(messageId, anchor) {
+  const message = (state.communityChatMessages || []).find(item => item.id === messageId);
+  if (!message || message.recalled || message.mediaUrl) return;
+  closeCommunityChatMessageMenu();
+  const menu = document.createElement("div");
+  menu.className = "community-chat-message-menu";
+  menu.setAttribute("role", "menu");
+  menu.innerHTML = message.mine
+    ? `<button type="button" data-chat-message-recall>撤回</button>`
+    : `<button type="button" data-chat-message-copy>复制</button><button type="button" data-chat-message-quote>引用</button>`;
+  document.body.appendChild(menu);
+  const close = () => {
+    document.removeEventListener("pointerdown", onOutsidePointer, true);
+    document.removeEventListener("keydown", onKeyDown, true);
+    menu.remove();
+    if (communityChatMessageMenuElement === menu) {
+      communityChatMessageMenuElement = null;
+      communityChatMessageMenuDismiss = null;
+    }
+  };
+  const onOutsidePointer = event => {
+    if (!menu.contains(event.target) && event.target !== anchor) close();
+  };
+  const onKeyDown = event => { if (event.key === "Escape") close(); };
+  communityChatMessageMenuElement = menu;
+  communityChatMessageMenuDismiss = close;
+  menu.querySelector("[data-chat-message-copy]")?.addEventListener("click", async () => {
+    close();
+    await copyCommunityChatText(message.rawContent || message.content);
+  });
+  menu.querySelector("[data-chat-message-quote]")?.addEventListener("click", () => {
+    close();
+    quoteCommunityChatMessage(message);
+  });
+  menu.querySelector("[data-chat-message-recall]")?.addEventListener("click", async () => {
+    close();
+    await recallCommunityChatMessage(message);
+  });
+  const rect = anchor.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const left = Math.max(10, Math.min(window.innerWidth - menuRect.width - 10, rect.left + (rect.width - menuRect.width) / 2));
+  const above = rect.top - menuRect.height - 10;
+  menu.style.left = `${left}px`;
+  menu.style.top = `${Math.max(10, above >= 10 ? above : rect.bottom + 10)}px`;
+  requestAnimationFrame(() => {
+    document.addEventListener("pointerdown", onOutsidePointer, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    menu.classList.add("is-visible");
+  });
+}
+
+function bindCommunityChatTextMessageMenus() {
+  document.querySelectorAll("[data-community-chat-text-message]").forEach(element => {
+    let timer = null;
+    let startX = 0;
+    let startY = 0;
+    const clear = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+    element.addEventListener("pointerdown", event => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      startX = event.clientX;
+      startY = event.clientY;
+      clear();
+      timer = setTimeout(() => {
+        timer = null;
+        event.preventDefault();
+        openCommunityChatMessageMenu(element.dataset.communityChatTextMessage, element);
+      }, 480);
+    });
+    element.addEventListener("pointermove", event => {
+      if (Math.abs(event.clientX - startX) > 10 || Math.abs(event.clientY - startY) > 10) clear();
+    });
+    element.addEventListener("pointerup", clear);
+    element.addEventListener("pointercancel", clear);
+    element.addEventListener("contextmenu", event => {
+      event.preventDefault();
+      openCommunityChatMessageMenu(element.dataset.communityChatTextMessage, element);
+    });
+  });
+}
+
 function applyCommunityChatSendResult(result, options = {}) {
   marketChatDraft = "";
   communityChatLoadedKey = `${state.selectedCommunityFriendId}:${Math.floor(Date.now() / 10000)}`;
@@ -9110,6 +9254,80 @@ function bindCommunityChatCameraButton() {
 function collapseCommunityChatTools() {
   if (!state.communityChatToolsOpen) return;
   setState({ communityChatToolsOpen: false }, { skipCloud: true });
+}
+
+function updateCommunityChatMediaUploadProgress(patch = {}) {
+  communityChatMediaUploadProgress = { ...communityChatMediaUploadProgress, ...patch, active: true };
+  let panel = document.querySelector("[data-community-chat-upload-progress]");
+  if (!panel) {
+    panel = document.createElement("aside");
+    panel.className = "community-chat-upload-progress";
+    panel.dataset.communityChatUploadProgress = "";
+    panel.setAttribute("role", "status");
+    panel.setAttribute("aria-live", "polite");
+    document.body.append(panel);
+  }
+  const total = Math.max(1, Number(communityChatMediaUploadProgress.total || 1));
+  const current = Math.min(total, Math.max(1, Number(communityChatMediaUploadProgress.current || 1)));
+  panel.innerHTML = `<i aria-hidden="true"></i><span><strong>正在发送${total > 1 ? `（${current}/${total}）` : ""}</strong><small>${escapeHtml(communityChatMediaUploadProgress.stage || "正在准备媒体…")}</small></span><b>${Math.max(0, Math.min(100, Number(communityChatMediaUploadProgress.percent || 0)))}%</b>`;
+}
+
+function clearCommunityChatMediaUploadProgress() {
+  communityChatMediaUploadProgress = { active: false, current: 0, total: 0, percent: 0, stage: "" };
+  document.querySelector("[data-community-chat-upload-progress]")?.remove();
+}
+
+async function sendCommunityChatMediaBatch(event) {
+  const input = event.currentTarget;
+  const files = Array.from(input.files || []);
+  input.value = "";
+  if (!files.length || !canUseCommunity()) return;
+  const kinds = files.map(localMediaFileKind);
+  if (kinds.some(kind => !kind)) return toast("请选择图片或不超过 30 秒的视频");
+  if (kinds.includes("video") && files.length !== 1) return toast("视频一次只能发送 1 个，图片最多可选择 9 张");
+  if (kinds.some(kind => kind === "image") && files.length > 9) return toast("图片一次最多可选择 9 张");
+  for (const file of files) {
+    if (localMediaFileKind(file) === "image" && file.size > 10 * 1024 * 1024) return toast("图片不能超过 10MB");
+  }
+  const total = files.length;
+  try {
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const mediaKind = kinds[index];
+      const duration = mediaKind === "video" ? await readVideoDuration(file) : 0;
+      if (duration > 30) throw new Error("视频时长不能超过 30 秒");
+      updateCommunityChatMediaUploadProgress({ current: index + 1, total, percent: 0, stage: mediaKind === "video" ? "正在上传高清原视频…" : "正在上传图片…" });
+      const uploaded = await apiUploadMediaFile(file, duration, {
+        onProgress: ({ percent }) => updateCommunityChatMediaUploadProgress({ current: index + 1, total, percent, stage: mediaKind === "video" ? "正在上传高清原视频…" : "正在上传图片…" })
+      });
+      let posterUrl = "";
+      const poster = mediaKind === "video" ? await createVideoPoster(file) : null;
+      try {
+        if (poster?.file) {
+          updateCommunityChatMediaUploadProgress({ current: index + 1, total, percent: 100, stage: "正在生成视频封面…" });
+          const uploadedPoster = await apiUploadMediaFile(poster.file);
+          posterUrl = uploadedPoster.url || "";
+        }
+      } finally {
+        if (String(poster?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(poster.previewUrl);
+      }
+      updateCommunityChatMediaUploadProgress({ current: index + 1, total, percent: 100, stage: "正在发送消息…" });
+      const result = await apiPost("/api/community/chat/send", communityAuthPayload({
+        userId: state.selectedCommunityFriendId,
+        content: "",
+        mediaUrl: uploaded.url || "",
+        mediaType: uploaded.mediaType || mediaKind,
+        posterUrl
+      }));
+      applyCommunityChatSendResult(result);
+    }
+    collapseCommunityChatTools();
+    toast(total > 1 ? `已发送 ${total} 张图片` : (kinds[0] === "video" ? "视频已发送" : "图片已发送"));
+  } catch (error) {
+    toast(error?.message || "媒体发送失败");
+  } finally {
+    clearCommunityChatMediaUploadProgress();
+  }
 }
 
 async function sendCommunityChatMedia(event) {
@@ -9835,6 +10053,9 @@ async function apiUploadMediaFile(file, duration = 0, options = {}) {
   let lastError;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
+      if (typeof options.onProgress === "function") {
+        return await uploadMediaFileRequest(`${base}/api/upload/media`, file, { contentType, duration, onProgress: options.onProgress });
+      }
       const response = await fetch(`${base}/api/upload/media`, {
         method: "POST",
         headers: {
@@ -9861,6 +10082,40 @@ async function apiUploadMediaFile(file, duration = 0, options = {}) {
     }
   }
   throw lastError || new Error("视频上传失败");
+}
+
+function uploadMediaFileRequest(url, file, { contentType, duration = 0, onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", url, true);
+    request.responseType = "text";
+    request.setRequestHeader("Content-Type", contentType || "application/octet-stream");
+    request.setRequestHeader("X-Auth-Phone", state.loggedInPhone || "");
+    request.setRequestHeader("X-Auth-Token", currentCloudToken() || "");
+    request.setRequestHeader("X-Media-Duration", String(Math.max(0, Number(duration || 0))));
+    request.upload.onprogress = event => {
+      if (!event.lengthComputable) return;
+      const total = Math.max(1, Number(event.total || file?.size || 1));
+      const loaded = Math.min(total, Math.max(0, Number(event.loaded || 0)));
+      onProgress?.({ loaded, total, percent: Math.min(100, Math.round((loaded / total) * 100)) });
+    };
+    request.onerror = () => reject(new TypeError("网络连接中断"));
+    request.onabort = () => reject(new Error("上传已取消"));
+    request.onload = () => {
+      let data = {};
+      try { data = JSON.parse(request.responseText || "{}"); } catch {}
+      if (request.status === 401) clearExpiredCloudSession();
+      if (request.status < 200 || request.status >= 300 || data.ok === false) {
+        const error = new Error(data.message || "媒体上传失败");
+        error.status = request.status;
+        reject(error);
+        return;
+      }
+      onProgress?.({ loaded: Number(file?.size || 1), total: Number(file?.size || 1), percent: 100 });
+      resolve(data);
+    };
+    request.send(file);
+  });
 }
 
 function localMediaFileKind(file) {

@@ -1823,6 +1823,7 @@ function friendshipKey(phoneA, phoneB) {
 
 function communityMessagePreview(message) {
   if (!message) return "";
+  if (message.recalledAt) return "已撤回一条消息";
   if (message.systemType === "platform_transaction_warning") return "平台官方提醒";
   const content = String(message.content || message.text || message.message || "").trim();
   if (content) return content;
@@ -1917,16 +1918,18 @@ function communityConversationMessages(db, phoneA, phoneB) {
     .filter(item => [item.fromPhone, item.toPhone].includes(phoneA) && [item.fromPhone, item.toPhone].includes(phoneB))
     .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
     .map(item => {
-      const rawContent = String(item.content || item.text || item.message || "").trim();
+      const recalled = Boolean(item.recalledAt);
+      const rawContent = recalled ? "" : String(item.content || item.text || item.message || "").trim();
       const marketListing = resolveCommunityChatListing(db, item.marketListing);
       return {
         id: item.id,
         content: communityMessagePreview(item),
         rawContent,
-        mediaUrl: item.mediaUrl || "",
-        posterUrl: item.posterUrl || "",
+      mediaUrl: item.mediaUrl || "",
+      posterUrl: item.posterUrl || "",
       mediaType: item.mediaType === "video" ? "video" : "image",
-        official: item.systemType === "platform_transaction_warning",
+      recalled,
+      official: item.systemType === "platform_transaction_warning",
         mine: item.fromPhone === phoneA,
         senderId: communityUserId(item.fromPhone),
         senderAvatar: db.users?.[item.fromPhone]?.accountAvatar || "",
@@ -2567,6 +2570,30 @@ async function handleCommunityChatSend(req, res) {
   writeDatabase(db);
   // Send asynchronously so a temporary APNs issue never delays the chat itself.
   void notifyCommunityMessage(db, message, user, target);
+  const messages = communityConversationMessages(db, user.phone, target.phone);
+  return sendJson(res, 200, {
+    ok: true,
+    friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "" },
+    messages,
+    marketListing: latestConversationMarketListing(messages)
+  });
+}
+
+async function handleCommunityChatRecall(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const target = communityUserById(db, body.userId);
+  const messageId = trimPublicText(body.messageId, 100);
+  if (!target || target.phone === user.phone || !messageId) return sendJson(res, 400, { ok: false, message: "消息不存在" });
+  db.messages = Array.isArray(db.messages) ? db.messages : [];
+  const message = db.messages.find(item => item.id === messageId && item.fromPhone === user.phone && item.toPhone === target.phone);
+  if (!message) return sendJson(res, 404, { ok: false, message: "只能撤回自己发送的文字消息" });
+  if (message.recalledAt) return sendJson(res, 400, { ok: false, message: "这条消息已撤回" });
+  if (message.mediaUrl || message.marketListing || message.systemType) return sendJson(res, 400, { ok: false, message: "仅支持撤回文字消息" });
+  message.recalledAt = new Date().toISOString();
+  writeDatabase(db);
   const messages = communityConversationMessages(db, user.phone, target.phone);
   return sendJson(res, 200, {
     ok: true,
@@ -3382,6 +3409,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/unread") return await handleCommunityUnread(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/list") return await handleCommunityChatList(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/send") return await handleCommunityChatSend(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/chat/recall") return await handleCommunityChatRecall(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/pin") return await handleCommunityConversationPin(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/delete") return await handleCommunityConversationDelete(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/list") return await handleMarketList(req, res);

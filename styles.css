@@ -6174,6 +6174,76 @@ html[data-theme-color="dark"] .ledger-row .ledger-turtle-meta span {
   object-fit: cover;
 }
 
+/* Long-press actions for text messages: keep the menu out of the layout so
+   opening it never shifts or re-renders the chat list. */
+.community-chat-text-message {
+  -webkit-user-select: text;
+  user-select: text;
+  touch-action: pan-y;
+}
+
+.community-message.is-recalled .community-message-content {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 4px 0 !important;
+}
+
+.community-chat-recalled-message {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.community-chat-message-menu {
+  position: fixed;
+  z-index: 500;
+  display: flex;
+  min-height: 48px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgba(28, 29, 31, .96);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, .28);
+  opacity: 0;
+  transform: translateY(4px) scale(.98);
+  transition: opacity .14s ease, transform .14s ease;
+}
+
+.community-chat-message-menu.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.community-chat-message-menu::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.community-chat-message-menu button {
+  position: relative;
+  z-index: 1;
+  min-width: 78px;
+  min-height: 48px;
+  padding: 0 18px;
+  border: 0;
+  border-right: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 0;
+  color: #fff;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.community-chat-message-menu button:last-child { border-right: 0; }
+.community-chat-message-menu button:active { background: rgba(255, 255, 255, .14); }
+
 .keyboard-open .community-chat-tools {
   display: none !important;
 }
@@ -7218,6 +7288,62 @@ html[data-theme-color="dark"] .ledger-row .ledger-inline-type.loss {
 @keyframes market-publish-progress-spin {
   to { transform: rotate(360deg); }
 }
+
+/* Chat uploads stay visible while the original high-quality video is sent. */
+.community-chat-upload-progress {
+  position: fixed;
+  top: calc(var(--fixed-topbar-height, 78px) + 10px);
+  left: 50%;
+  z-index: 9000;
+  width: min(286px, calc(100vw - 32px));
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  color: #243c33;
+  background: rgba(255, 255, 255, .98);
+  border: 1px solid rgba(47, 167, 127, .28);
+  border-radius: 14px;
+  box-shadow: 0 10px 28px rgba(22, 52, 41, .2);
+  pointer-events: none;
+  transform: translateX(-50%) translateZ(0);
+}
+
+.community-chat-upload-progress > i {
+  width: 19px;
+  height: 19px;
+  flex: 0 0 19px;
+  border: 2px solid rgba(47, 167, 127, .22);
+  border-top-color: #2fa77f;
+  border-radius: 50%;
+  animation: market-publish-progress-spin .78s linear infinite;
+}
+
+.community-chat-upload-progress > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.community-chat-upload-progress strong,
+.community-chat-upload-progress small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.community-chat-upload-progress strong { font-size: 13px; line-height: 1.2; }
+.community-chat-upload-progress small { color: #6f7c76; font-size: 11px; line-height: 1.25; }
+.community-chat-upload-progress > b { margin-left: auto; color: #247d5f; font-size: 13px; font-variant-numeric: tabular-nums; }
+
+body.dark .community-chat-upload-progress {
+  color: #eaf5ef;
+  background: rgba(28, 34, 31, .98);
+  border-color: rgba(74, 201, 150, .34);
+}
+
+body.dark .community-chat-upload-progress small { color: #adbbb4; }
 
 .market-search-wrap {
   height: 44px;
