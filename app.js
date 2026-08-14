@@ -8,7 +8,9 @@ const CLOUD_SYNC_DEBOUNCE_MS = 900;
 const CHINA_TIME_ZONE = "Asia/Shanghai";
 const REVIEW_ADMIN_PHONE = "18652082378";
 const DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);
-const POLICY_VERSION = "2026-07-17";
+// Keep this in sync with the server so accepted users are never trapped
+// behind a stale consent overlay.
+const POLICY_VERSION = "2026-08-12";
 const APP_BUILD = Math.max(0, Number.parseInt(String(window.TURTLE_APP_BUILD || "0"), 10) || 0);
 const APP_STORE_URL = String(window.TURTLE_APP_STORE_URL || "https://apps.apple.com/app/id6783481335");
 let forceUpdateState = { required: false, checking: false, minimumBuild: 0, latestBuild: 0, message: "", appStoreUrl: "" };
@@ -1791,6 +1793,22 @@ function bottomNavActivePage(page = state.page) {
   return "mine";
 }
 
+// Keep the guest view recognisable: visitors can see the normal page layout,
+// while the unused area directly above the tab bar clearly explains how to
+// unlock the page.  This is intentionally not a full-page replacement.
+function guestLoginSlot() {
+  if (state.loggedInPhone) return "";
+  return `
+    <section class="guest-login-slot" aria-label="登录提示">
+      <div>
+        <strong>请先登录账号</strong>
+        <span>登录后即可使用全部功能</span>
+        <button type="button" data-page="account">去登录</button>
+      </div>
+    </section>
+  `;
+}
+
 function syncPersistentBottomNav(nav) {
   if (!nav) return;
   const activePage = bottomNavActivePage();
@@ -2100,6 +2118,7 @@ function pageMessages() {
       </section>
       <section class="message-friend-list">${friends.map(friend => `<article class="message-friend-swipe" data-conversation-id="${escapeHtml(friend.id)}"><button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div class="message-friend-copy"><strong>${escapeHtml(friend.name || "壳友")}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><span class="message-friend-meta">${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></span></button><div class="message-friend-actions"><button type="button" data-toggle-conversation-pin="${escapeHtml(friend.id)}">${friend.pinned ? "取消置顶" : "置顶"}</button><button class="delete" type="button" data-delete-conversation="${escapeHtml(friend.id)}">删除</button></div></article>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`}</section>
     </main>
+    ${guestLoginSlot()}
     ${bottomNav()}
   `;
 }
@@ -3137,7 +3156,11 @@ function pageMarket() {
   const listings = marketSearchResultListings();
   const regions = [...new Set((state.marketListings || []).map(item => String(item.city || "").trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
   const showAssistSearch = Boolean(keyword || state.marketPriceOrder || state.marketFreshOnly || state.marketRegion || state.marketDelivery);
-  const marketInitialLoading = Boolean(CONFIGURED_SMS_BACKEND && !state.marketFeedInitialized && !listings.length);
+  const marketRequiresLogin = !state.loggedInPhone;
+  const marketInitialLoading = Boolean(!marketRequiresLogin && CONFIGURED_SMS_BACKEND && !state.marketFeedInitialized && !listings.length);
+  const marketEmptyMarkup = marketRequiresLogin
+    ? ""
+    : `<div class="market-empty"><span>龟</span><strong>${keyword || stage !== "all" ? "没有找到合适的商品" : "龟集市还没有商品"}</strong><p>从自己的乌龟档案一键发布，尺寸和状态会自动带入。</p><button type="button" data-page="marketAdd">发布第一只</button></div>`;
   return `
     ${marketPublishProgressMarkup()}
     ${topbar("龟集市", false, `<button class="market-top-add" type="button" data-page="marketAdd" aria-label="发布出售">＋</button>`, `<button class="market-top-service" type="button" data-market-top-service aria-label="联系平台客服"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.2v-1.1a7.5 7.5 0 0 1 15 0v1.1"></path><path d="M4.5 12.6H3.8a1.8 1.8 0 0 0-1.8 1.8v2.1a1.8 1.8 0 0 0 1.8 1.8h1.7v-5.7ZM19.5 12.6h.7a1.8 1.8 0 0 1 1.8 1.8v2.1a1.8 1.8 0 0 1-1.8 1.8h-1.7v-5.7ZM19.5 18.1c0 1.3-1.2 2.4-2.7 2.4h-1.5"></path><path d="M13.2 20.5h2.4"></path></svg></button>`)}
@@ -3160,10 +3183,11 @@ function pageMarket() {
       </section>
       <section class="market-grid ${marketInitialLoading ? "is-initial-loading" : ""}">
         ${marketInitialLoading ? `<div class="market-feed-initial-loading" role="status" aria-live="polite"><i aria-hidden="true"></i><span>正在加载商品…</span></div>` : ""}
-        ${listings.map(marketListingCard).join("") || `<div class="market-empty"><span>龟</span><strong>${keyword || stage !== "all" ? "没有找到合适的商品" : "龟集市还没有商品"}</strong><p>从自己的乌龟档案一键发布，尺寸和状态会自动带入。</p><button type="button" data-page="marketAdd">发布第一只</button></div>`}
+        ${listings.map(marketListingCard).join("") || marketEmptyMarkup}
       </section>
       ${listings.length ? `<div class="market-feed-status" data-market-load-sentinel>${state.marketFeedLoadingMore ? "正在加载更多商品…" : state.marketFeedHasMore ? "继续上滑，加载更多" : "已经到底了"}</div>` : ""}
     </main>
+    ${guestLoginSlot()}
     <button class="market-floating-add" type="button" data-page="marketAdd"><span>＋</span>发布出售</button>
     ${bottomNav()}
   `;
@@ -3407,6 +3431,7 @@ function pageHome() {
       </section>
       ${archiveDashboardSection()}
     </main>
+    ${guestLoginSlot()}
     ${bottomNav()}
   `;
 }
@@ -3950,7 +3975,7 @@ function pageLedger() {
   const dateText = dateRange.label;
   return `
     ${topbar("经营账本")}
-    <main class="content page-fresh">
+    <main class="content page-fresh ${state.loggedInPhone ? "" : "guest-ledger-content"}">
       <section class="page-intro ledger-intro"><div><p class="eyebrow dark">经营</p><h2>${records.length} 条资金明细</h2><p>${dateText}，收购、售出、损耗都可以留图、留尺寸。</p></div></section>
       <section class="ledger-profit-card ${profit < 0 ? "negative" : "positive"}">
         <div><span>${profitLabel}</span><strong><i>${profitPrefix}</i><em>${money(Math.abs(profit))}</em></strong><small>售出收入 − 收购投入 − 损耗金额</small></div>
@@ -3986,6 +4011,7 @@ function pageLedger() {
       </section>
       ${records.map(ledgerRow).join("") || `<div class="empty"><div><strong>还没有账本记录</strong></div></div>`}
     </main>
+    ${guestLoginSlot()}
     ${bottomNav()}
   `;
 }
@@ -4665,7 +4691,7 @@ function pageAccount() {
             ${!CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE ? `<p class="muted auth-code-hint">原型验证码：${state.pendingAuthCode}</p>` : ""}
           ` : ""}
           <button class="primary" type="submit">${state.accountMode === "register" ? "注册并登录" : "登录"}</button>
-          ${state.accountMode === "login" ? `<p class="auth-login-agreement">登录即代表你已阅读并同意<button type="button" data-page="rules">《服务与社区规则》</button>及<button type="button" data-page="privacy">《隐私政策》</button></p>` : ""}
+          ${state.accountMode === "login" ? `<label class="auth-agreement"><input type="checkbox" name="termsAccepted" required><span>我已阅读并同意<button type="button" data-page="rules">《服务与社区规则》</button>及<button type="button" data-page="privacy">《隐私政策》</button></span></label>` : ""}
         </form>
       `}
       <section class="fresh-card settings-card">
@@ -5009,7 +5035,7 @@ function policyConsentGate() {
   if (!state.policyConsentRequired || !state.loggedInPhone) return "";
   return `
     <div class="policy-consent-overlay" role="dialog" aria-modal="true" aria-labelledby="policyConsentTitle">
-      <section class="policy-consent-dialog">
+      <form class="policy-consent-dialog" data-policy-consent-form>
         <p class="policy-consent-kicker">服务协议更新</p>
         <h1 id="policyConsentTitle">请阅读并同意服务协议</h1>
         <p>为继续使用壳友手账，请阅读最新版《服务与社区规则》和《隐私政策》。本次更新生效日期为 2026 年 7 月 17 日。</p>
@@ -5019,9 +5045,9 @@ function policyConsentGate() {
         </div>
         <label class="policy-consent-check"><input type="checkbox" data-policy-consent-check><span>我已阅读并同意上述协议</span></label>
         <p class="policy-consent-error" data-policy-consent-error hidden aria-live="polite"></p>
-        <button class="primary policy-consent-submit" type="button" data-policy-consent-submit disabled>同意并继续使用</button>
+        <button class="primary policy-consent-submit" type="submit" data-policy-consent-submit disabled>同意并继续使用</button>
         <button class="policy-consent-logout" type="button" data-policy-consent-logout>暂不同意，退出账号</button>
-      </section>
+      </form>
     </div>
   `;
 }
@@ -5939,12 +5965,19 @@ function bindEvents() {
   document.querySelector("[data-open-account-delete]")?.addEventListener("click", openAccountDeleteDialog);
   document.querySelector("[data-refresh-blocked-users]")?.addEventListener("click", () => refreshBlockedUsers(true));
   document.querySelectorAll("[data-unblock-user]").forEach(button => button.addEventListener("click", () => unblockUser(button.dataset.unblockUser)));
+  const policyConsentForm = document.querySelector("[data-policy-consent-form]");
   const policyConsentCheck = document.querySelector("[data-policy-consent-check]");
   const policyConsentSubmit = document.querySelector("[data-policy-consent-submit]");
-  policyConsentCheck?.addEventListener("change", () => {
+  const syncPolicyConsentSubmit = () => {
     if (policyConsentSubmit) policyConsentSubmit.disabled = !policyConsentCheck.checked;
+  };
+  policyConsentCheck?.addEventListener("change", syncPolicyConsentSubmit);
+  policyConsentCheck?.addEventListener("input", syncPolicyConsentSubmit);
+  policyConsentForm?.addEventListener("submit", event => {
+    event.preventDefault();
+    if (!policyConsentCheck?.checked) return;
+    void acceptLatestPolicies();
   });
-  policyConsentSubmit?.addEventListener("click", acceptLatestPolicies);
   document.querySelector("[data-policy-consent-logout]")?.addEventListener("click", logoutAccount);
   document.querySelector("[data-test-push-notification]")?.addEventListener("click", testNativePushNotification);
   document.querySelectorAll("[data-export-data]").forEach(btn => btn.addEventListener("click", () => exportAccountData(btn.dataset.exportData)));
@@ -9309,11 +9342,12 @@ async function submitAccountInner(event) {
   const confirmPassword = String(form.get("confirmPassword") || "");
   if (!/^1[3-9]\d{9}$/.test(phone)) return toast("请输入正确的 11 位手机号");
   if (password.length < 6) return toast("密码至少需要 6 位");
+  if (!form.get("termsAccepted")) return toast("请先阅读并同意服务规则和隐私政策");
 
   if (mode === "login") {
     if (CONFIGURED_SMS_BACKEND) {
       try {
-        const result = await apiPost("/api/account/login", { phone, password });
+        const result = await apiPost("/api/account/login", { phone, password, termsAccepted: true, termsVersion: POLICY_VERSION });
         if (!result.user) throw new Error("登录失败，请稍后重试");
         applyCloudUser(result.user, `手机号登录：${maskPhone(phone)}`, { skipCloud: true, skipMigration: true });
         void requestLocationPermissionOnLogin();
@@ -9326,6 +9360,10 @@ async function submitAccountInner(event) {
     }
     const user = (state.registeredUsers || []).find(item => item.phone === phone && item.password === password);
     if (!user) return toast("手机号或密码不正确");
+    const acceptedAt = new Date().toISOString();
+    const registeredUsers = (state.registeredUsers || []).map(item => item.phone === phone
+      ? { ...item, termsAcceptedAt: acceptedAt, termsVersion: POLICY_VERSION }
+      : item);
     const accountData = normalizeAccountData(user.data || {});
     setState({
       ...accountData,
@@ -9335,7 +9373,8 @@ async function submitAccountInner(event) {
       accountDraftPhone: "",
       accountDraftPassword: "",
       accountDraftConfirmPassword: "",
-      policyConsentRequired: user.termsVersion !== POLICY_VERSION,
+      registeredUsers,
+      policyConsentRequired: false,
       page: "mine",
       activityLogs: [makeActivity(`手机号登录：${maskPhone(phone)}`, "空间"), ...(accountData.activityLogs || [])]
     });
@@ -9347,7 +9386,6 @@ async function submitAccountInner(event) {
   const code = String(form.get("code") || "").trim();
   if (!confirmPassword) return toast("请先填写核对密码");
   if (password !== confirmPassword) return toast("密码不一致");
-  if (!form.get("termsAccepted")) return toast("请先阅读并同意服务规则和隐私政策");
   if (!CONFIGURED_SMS_BACKEND && (state.registeredUsers || []).some(item => item.phone === phone)) return toast("手机号已注册，请直接登录");
   if (state.pendingAuthPhone !== phone || !Number(state.authCodeExpiresAt || 0)) return toast("请先获取验证码");
   if (Date.now() > Number(state.authCodeExpiresAt || 0)) return toast("验证码已过期，请重新获取");
@@ -9510,6 +9548,8 @@ function submitProfile(event) {
 
 async function acceptLatestPolicies() {
   if (!state.loggedInPhone) return;
+  const check = document.querySelector("[data-policy-consent-check]");
+  if (!check?.checked) return;
   const submit = document.querySelector("[data-policy-consent-submit]");
   if (submit) {
     submit.disabled = true;
@@ -9523,6 +9563,7 @@ async function acceptLatestPolicies() {
       }));
       if (!result.user) throw new Error("协议确认失败，请稍后重试");
       applyCloudUser(result.user, "已同意最新版服务协议和隐私政策", { skipCloud: true, skipMigration: true });
+      setState({ policyConsentRequired: false }, { skipCloud: true });
     } else {
       const acceptedAt = new Date().toISOString();
       const registeredUsers = (state.registeredUsers || []).map(user => user.phone === state.loggedInPhone

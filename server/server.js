@@ -1100,6 +1100,7 @@ async function handleLogin(req, res) {
   const phone = String(body.phone || "").trim();
   const password = String(body.password || "");
   if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
+  if (body.termsAccepted !== true) return sendJson(res, 400, { ok: false, message: "请先阅读并同意服务规则和隐私政策" });
   const db = readDatabase();
   const user = db.users[phone];
   if (!user || !verifyPassword(password, user)) {
@@ -1108,6 +1109,9 @@ async function handleLogin(req, res) {
   const token = makeAuthToken();
   const now = new Date().toISOString();
   user.tokens = [...(Array.isArray(user.tokens) ? user.tokens : []), { hash: hashValue(token), createdAt: now }].slice(-5);
+  // Keep a server-side audit trail for the agreement accepted at login.
+  user.termsAcceptedAt = now;
+  user.termsVersion = POLICY_VERSION;
   user.updatedAt = now;
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });

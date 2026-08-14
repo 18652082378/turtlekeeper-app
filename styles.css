@@ -5745,6 +5745,58 @@ html[data-theme-color="dark"] .ledger-row .ledger-turtle-meta span {
   background: #202020 !important;
 }
 
+/* Guest tabs retain their normal page chrome.  The login prompt only occupies
+   the otherwise unused area immediately above the persistent tab bar. */
+.guest-login-slot {
+  position: fixed;
+  left: 50%;
+  bottom: var(--fixed-tabbar-height);
+  transform: translateX(-50%);
+  width: min(430px, 100vw);
+  height: clamp(180px, 26vh, 300px);
+  padding: 20px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  background: var(--page-bg);
+  z-index: 20;
+}
+
+.guest-login-slot > div {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.guest-login-slot strong {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.guest-login-slot span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.guest-login-slot button {
+  min-height: 38px;
+  margin-top: 4px;
+  padding: 0 20px;
+  border-radius: 20px;
+  color: #fff;
+  background: var(--accent);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* On the guest ledger the empty-record board ends above the fixed login area,
+   so the two surfaces never overlap or form a notched background. */
+.guest-ledger-content > .empty {
+  min-height: 180px;
+  padding-block: 42px;
+}
+
 /* Community post media: one short video or up to nine still images. */
 .community-draft-media-grid {
   display: grid;
