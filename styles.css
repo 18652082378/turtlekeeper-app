@@ -5753,6 +5753,7 @@ html[data-theme-color="dark"] .ledger-row .ledger-turtle-meta span {
   bottom: var(--fixed-tabbar-height);
   transform: translateX(-50%);
   width: min(430px, 100vw);
+  box-sizing: border-box;
   height: clamp(180px, 26vh, 300px);
   padding: 20px;
   display: grid;
@@ -5760,6 +5761,7 @@ html[data-theme-color="dark"] .ledger-row .ledger-turtle-meta span {
   text-align: center;
   background: var(--page-bg);
   z-index: 20;
+  overflow: hidden;
 }
 
 .guest-login-slot > div {

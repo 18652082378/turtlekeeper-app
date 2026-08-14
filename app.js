@@ -3431,7 +3431,6 @@ function pageHome() {
       </section>
       ${archiveDashboardSection()}
     </main>
-    ${guestLoginSlot()}
     ${bottomNav()}
   `;
 }
@@ -4011,7 +4010,6 @@ function pageLedger() {
       </section>
       ${records.map(ledgerRow).join("") || `<div class="empty"><div><strong>还没有账本记录</strong></div></div>`}
     </main>
-    ${guestLoginSlot()}
     ${bottomNav()}
   `;
 }
