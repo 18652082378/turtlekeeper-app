@@ -9096,6 +9096,11 @@ async function recallCommunityChatMessage(message) {
 function openCommunityChatMessageMenu(messageId, anchor) {
   const message = (state.communityChatMessages || []).find(item => item.id === messageId);
   if (!message || message.recalled || message.mediaUrl) return;
+  const sentAt = new Date(message.createdAt || 0).getTime();
+  if (message.mine && (!Number.isFinite(sentAt) || Date.now() - sentAt > 2 * 60 * 1000)) {
+    toast("消息发送超过 2 分钟，无法撤回");
+    return;
+  }
   closeCommunityChatMessageMenu();
   const menu = document.createElement("div");
   menu.className = "community-chat-message-menu";

@@ -156,49 +156,32 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func exportVideoAsset(_ asset: AVAsset, duration: TimeInterval, completion: @escaping (Result<[String: Any], Error>) -> Void) {
-        // Do not create the old medium-quality rendition here.  It was useful
-        // for small uploads, but made a video visibly blurry when played full
-        // screen. Prefer a byte-for-byte stream copy whenever Photos exposes a
-        // compatible container; only re-encode as a high-quality fallback.
-        let compatiblePresets = AVAssetExportSession.exportPresets(compatibleWith: asset)
-        let preset = compatiblePresets.contains(AVAssetExportPresetPassthrough)
-            ? AVAssetExportPresetPassthrough
-            : AVAssetExportPresetHighestQuality
-        guard let session = AVAssetExportSession(asset: asset, presetName: preset) else {
+        // Keep the highest available quality.  The previous medium-quality
+        // preset made full-screen chat videos visibly blurry.  We deliberately
+        // keep the known-compatible MP4 export path here: its API shape works
+        // across all iOS/Xcode versions supported by this project.
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
             completion(.failure(TurtleMediaPickerError.unavailableMedia))
             return
         }
-        let outputType: AVFileType
-        if session.supportedFileTypes.contains(.mp4) {
-            outputType = .mp4
-        } else if session.supportedFileTypes.contains(.mov) {
-            outputType = .mov
-        } else if let first = session.supportedFileTypes.first {
-            outputType = first
-        } else {
-            completion(.failure(TurtleMediaPickerError.unavailableMedia))
-            return
-        }
-        let extensionName = outputType == .mov ? "mov" : "mp4"
-        let outputURL = self.temporaryURL(extensionName: extensionName)
+        let outputURL = self.temporaryURL(extensionName: "mp4")
         session.outputURL = outputURL
-        session.outputFileType = outputType
+        session.outputFileType = .mp4
         session.shouldOptimizeForNetworkUse = true
         session.exportAsynchronously {
             if session.status == .completed {
-                completion(.success(self.videoResult(url: outputURL, duration: duration, outputType: outputType)))
+                completion(.success(self.videoResult(url: outputURL, duration: duration)))
             } else {
                 completion(.failure(session.error ?? TurtleMediaPickerError.unavailableMedia))
             }
         }
     }
 
-    private func videoResult(url: URL, duration: TimeInterval, outputType: AVFileType) -> [String: Any] {
-        let isMov = outputType == .mov
+    private func videoResult(url: URL, duration: TimeInterval) -> [String: Any] {
         [
             "path": url.absoluteString,
-            "name": "video-\(UUID().uuidString).\(isMov ? "mov" : "mp4")",
-            "mimeType": isMov ? "video/quicktime" : "video/mp4",
+            "name": "video-\(UUID().uuidString).mp4",
+            "mimeType": "video/mp4",
             "mediaType": "video",
             "duration": duration
         ]

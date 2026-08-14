@@ -2592,6 +2592,10 @@ async function handleCommunityChatRecall(req, res) {
   if (!message) return sendJson(res, 404, { ok: false, message: "只能撤回自己发送的文字消息" });
   if (message.recalledAt) return sendJson(res, 400, { ok: false, message: "这条消息已撤回" });
   if (message.mediaUrl || message.marketListing || message.systemType) return sendJson(res, 400, { ok: false, message: "仅支持撤回文字消息" });
+  const sentAt = new Date(message.createdAt || 0).getTime();
+  if (!Number.isFinite(sentAt) || Date.now() - sentAt > 2 * 60 * 1000) {
+    return sendJson(res, 400, { ok: false, message: "消息发送超过 2 分钟，无法撤回" });
+  }
   message.recalledAt = new Date().toISOString();
   writeDatabase(db);
   const messages = communityConversationMessages(db, user.phone, target.phone);
