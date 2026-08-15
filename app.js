@@ -6724,13 +6724,22 @@ async function nativePickedFiles(items = []) {
     const path = String(item?.path || "");
     if (!path) continue;
     const source = typeof capacitor?.convertFileSrc === "function" ? capacitor.convertFileSrc(path) : path;
-    const response = await fetch(source);
-    const blob = await response.blob();
+    let response;
+    let blob;
+    // A freshly exported camera/photo file can reach WKWebView a fraction of
+    // a second before Capacitor's local-file handler can serve its contents.
+    // Retry that transient empty response so the first user action succeeds.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      response = await fetch(`${source}${source.includes("?") ? "&" : "?"}read=${Date.now()}-${attempt}`, { cache: "no-store" });
+      blob = await response.blob();
+      if ((response.ok || response.status === 0) && blob.size) break;
+      if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 120 * (attempt + 1)));
+    }
     // Capacitor's iOS local-file handler returns URLResponse for media files,
     // which has no HTTP status even when the file body is valid.  Trust a
     // non-empty body in that case instead of rejecting every selected photo
     // or video as a failed network response.
-    if ((!response.ok && response.status !== 0) || !blob.size) throw new Error("读取已选媒体失败");
+    if ((!response.ok && response.status !== 0) || !blob?.size) throw new Error("读取已选媒体失败，请重试");
     const mimeType = String(item?.mimeType || blob.type || (item?.mediaType === "video" ? "video/mp4" : "image/jpeg"));
     const extension = mimeType.startsWith("video/") ? "mp4" : "jpg";
     const name = String(item?.name || `${item?.mediaType === "video" ? "video" : "photo"}-${Date.now()}-${index + 1}.${extension}`);

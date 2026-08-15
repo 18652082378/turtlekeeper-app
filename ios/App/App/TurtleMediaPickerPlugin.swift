@@ -5,12 +5,14 @@ import UIKit
 import UniformTypeIdentifiers
 
 @objc(TurtleMediaPickerPlugin)
-public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin {
+public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
     public let identifier = "TurtleMediaPickerPlugin"
     public let jsName = "TurtleMediaPicker"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "pick", returnType: CAPPluginReturnPromise)
     ]
+
+    private var cameraCall: CAPPluginCall?
 
     @objc func pick(_ call: CAPPluginCall) {
         let allowImages = call.getBool("allowImages", true)
@@ -23,6 +25,38 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let host = self.bridge?.viewController else {
+                call.reject("媒体选择器暂时不可用")
+                return
+            }
+            let sheet = UIAlertController(title: "上传照片", message: nil, preferredStyle: .actionSheet)
+            if allowImages && UIImagePickerController.isSourceTypeAvailable(.camera) {
+                sheet.addAction(UIAlertAction(title: "拍照", style: .default) { [weak self] _ in
+                    self?.openCamera(call: call)
+                })
+            }
+            sheet.addAction(UIAlertAction(title: allowVideos ? "从相册选择图片或视频" : "从相册选择", style: .default) { [weak self] _ in
+                self?.openPhotoLibrary(
+                    call: call,
+                    allowImages: allowImages,
+                    allowVideos: allowVideos,
+                    selectionLimit: selectionLimit,
+                    maximumVideoDuration: maximumVideoDuration
+                )
+            })
+            sheet.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in
+                call.resolve(["files": []])
+            })
+            if let popover = sheet.popoverPresentationController {
+                popover.sourceView = host.view
+                popover.sourceRect = CGRect(x: host.view.bounds.midX, y: host.view.bounds.maxY - 1, width: 1, height: 1)
+            }
+            host.present(sheet, animated: true)
+        }
+    }
+
+    private func openPhotoLibrary(call: CAPPluginCall, allowImages: Bool, allowVideos: Bool, selectionLimit: Int, maximumVideoDuration: Double) {
         requestPhotoAuthorization { [weak self] granted in
             guard let self else { return }
             guard granted else {
@@ -40,14 +74,68 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin {
                     selectionLimit: selectionLimit,
                     maximumVideoDuration: maximumVideoDuration
                 )
-                picker.onCancel = {
-                    call.resolve(["files": []])
-                }
-                picker.onFinish = { [weak self] assets in
-                    self?.export(assets: assets, call: call)
-                }
+                picker.onCancel = { call.resolve(["files": []]) }
+                picker.onFinish = { [weak self] assets in self?.export(assets: assets, call: call) }
                 host.present(picker, animated: true)
             }
+        }
+    }
+
+    private func openCamera(call: CAPPluginCall) {
+        let presentCamera = { [weak self] in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                guard let host = self.bridge?.viewController else {
+                    call.reject("相机暂时不可用")
+                    return
+                }
+                self.cameraCall = call
+                let camera = UIImagePickerController()
+                camera.sourceType = .camera
+                camera.mediaTypes = [UTType.image.identifier]
+                camera.cameraCaptureMode = .photo
+                camera.delegate = self
+                camera.modalPresentationStyle = .fullScreen
+                host.present(camera, animated: true)
+            }
+        }
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            presentCamera()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                granted ? presentCamera() : call.reject("需要允许使用相机，才能拍摄照片")
+            }
+        default:
+            call.reject("需要允许使用相机，才能拍摄照片")
+        }
+    }
+
+    public func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+        let call = cameraCall
+        cameraCall = nil
+        picker.dismiss(animated: true) { call?.resolve(["files": []]) }
+    }
+
+    public func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+        let call = cameraCall
+        cameraCall = nil
+        guard let image = info[.originalImage] as? UIImage, let data = image.jpegData(compressionQuality: 0.92) else {
+            picker.dismiss(animated: true) { call?.reject("拍摄的照片读取失败，请重试") }
+            return
+        }
+        let fileURL = temporaryURL(extensionName: "jpg")
+        do {
+            try data.write(to: fileURL, options: .atomic)
+            let result: [String: Any] = [
+                "path": fileURL.absoluteString,
+                "name": "camera-\(UUID().uuidString).jpg",
+                "mimeType": "image/jpeg",
+                "mediaType": "image"
+            ]
+            picker.dismiss(animated: true) { call?.resolve(["files": [result]]) }
+        } catch {
+            picker.dismiss(animated: true) { call?.reject("保存拍摄照片失败：\(error.localizedDescription)") }
         }
     }
 
