@@ -1,6 +1,6 @@
 {
   "name": "turtlekeeper-ios-app",
-  "version": "1.0.1",
+  "version": "1.0.0",
   "private": true,
   "description": "ShellNote iOS cloud build package",
   "scripts": {
