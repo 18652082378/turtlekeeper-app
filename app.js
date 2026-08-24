@@ -1933,7 +1933,7 @@ function communityMedia(item, compact = false) {
   const mediaItems = communityPostMediaItems(item);
   if (!mediaItems.length) return `<div class="community-media-placeholder"><span>壳友动态</span></div>`;
   const first = mediaItems[0];
-  if (first.type === "video") return `<video class="community-media" src="${first.url}" ${compact ? "muted playsinline" : "controls playsinline"} preload="auto" crossorigin="anonymous" data-community-video-autoload data-video-first-frame></video>`;
+  if (first.type === "video") return `<video class="community-media" src="${first.url}"${videoPosterAttribute(first)} ${compact ? "muted playsinline" : "controls playsinline"} preload="metadata" crossorigin="anonymous" data-community-video-autoload></video>`;
   if (mediaItems.length === 1) return `<img class="community-media" src="${first.url}" alt="动态图片" loading="lazy">`;
   return `<div class="community-media-gallery community-media-gallery-${mediaItems.length}">${mediaItems.map((media, index) => `<img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy">`).join("")}</div>`;
 }
@@ -1943,7 +1943,7 @@ function communityFeedMedia(item) {
   const mediaButton = (media, index) => {
     const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
     if (media.type === "video") {
-      return `<div class="community-feed-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}" muted playsinline autoplay loop controls preload="auto" crossorigin="anonymous" data-inline-video data-community-video-autoload data-community-video-autoplay="true" data-video-first-frame></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
+      return `<div class="community-feed-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}"${videoPosterAttribute(media)} muted playsinline autoplay loop controls preload="metadata" crossorigin="anonymous" data-inline-video data-community-video-autoload data-community-video-autoplay="true"></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
     }
     return `<button class="community-feed-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
   };
@@ -2062,7 +2062,7 @@ function communityDetailMedia(item) {
       ${mediaItems.map((media, index) => {
         const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
         if (media.type === "video") {
-          return `<div class="community-detail-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}" muted playsinline autoplay loop controls preload="auto" crossorigin="anonymous" data-inline-video data-community-video-autoload data-community-video-autoplay="true" data-video-first-frame></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
+          return `<div class="community-detail-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}"${videoPosterAttribute(media)} muted playsinline autoplay loop controls preload="metadata" crossorigin="anonymous" data-inline-video data-community-video-autoload data-community-video-autoplay="true"></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
         }
         return `<button class="community-detail-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
       }).join("")}
@@ -2382,9 +2382,9 @@ function marketVideoPosterUrl(media, fallbackUrl = defaultPhoto) {
 }
 
 function marketDetailVideoMarkup(media, fallbackPosterUrl, sold = false, autoPlay = false) {
-  // Detail videos deliberately have no poster/cover. The viewer sees the
-  // native loading state and then the actual first playable frame directly.
-  return `<div class="market-detail-photo market-detail-video-shell is-loading"><video src="${escapeHtml(media.url)}" controls playsinline preload="auto"${autoPlay ? " autoplay muted" : ""} crossorigin="anonymous" data-inline-video data-market-detail-video${autoPlay ? " data-market-detail-autoplay" : ""}></video>${inlineVideoExpandButton(media, "商品视频")}<div class="market-detail-video-loading" aria-live="polite">视频加载中</div>${sold ? `<span>已售出</span>` : ""}</div>`;
+  // Use the video's own generated first-frame poster when available.  It
+  // makes the detail page immediate without substituting an unrelated image.
+  return `<div class="market-detail-photo market-detail-video-shell is-loading"><video src="${escapeHtml(media.url)}"${videoPosterAttribute(media)} controls playsinline preload="metadata"${autoPlay ? " autoplay muted" : ""} crossorigin="anonymous" data-inline-video data-market-detail-video${autoPlay ? " data-market-detail-autoplay" : ""}></video>${inlineVideoExpandButton(media, "商品视频")}<div class="market-detail-video-loading" aria-live="polite">视频加载中</div>${sold ? `<span>已售出</span>` : ""}</div>`;
 }
 
 function communityMessageAspectRatio(message, mediaType) {
@@ -8282,8 +8282,10 @@ function hydrateCommunityPostVideos() {
     video.muted = true;
     video.defaultMuted = true;
     video.playsInline = true;
-    video.preload = "auto";
-    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) video.load();
+    // Keep off-screen videos at metadata only. The poster is already visible,
+    // so downloading full media for every feed card wastes the limited uplink.
+    video.preload = "metadata";
+    if (video.readyState < HTMLMediaElement.HAVE_METADATA) video.load();
   };
 
   const shouldAutoplay = video => video.dataset.communityVideoAutoplay === "true";
@@ -8331,7 +8333,7 @@ function hydrateCommunityPostVideos() {
         stopVideo(entry.target);
       }
     });
-  }, { rootMargin: "160px 0px", threshold: 0.15 });
+  }, { rootMargin: "320px 0px", threshold: 0.15 });
   videos.forEach(video => communityVideoLoadObserver.observe(video));
 }
 
@@ -8357,10 +8359,12 @@ function hydrateMarketDetailVideos() {
     video.addEventListener("loadeddata", ready, { once: true });
     video.addEventListener("canplay", ready, { once: true });
     video.addEventListener("error", failed, { once: true });
-    // Explicitly start the request on every network type. We do not autoplay
-    // detail videos, but Wi-Fi must never be required for their first frame.
-    video.preload = "auto";
-    video.load();
+    // Keep secondary videos lightweight until the user plays them. Only the
+    // first visible detail video may preload enough data to autoplay.
+    const shouldAutoplay = video.hasAttribute("data-market-detail-autoplay");
+    video.preload = shouldAutoplay ? "auto" : "metadata";
+    const requiredState = shouldAutoplay ? HTMLMediaElement.HAVE_CURRENT_DATA : HTMLMediaElement.HAVE_METADATA;
+    if (video.readyState < requiredState) video.load();
     if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) ready();
   });
 }
@@ -8464,9 +8468,21 @@ async function submitCommunityPost(event) {
       const media = draftMedia[index];
       const uploaded = await apiUploadMediaFile(media.file, media.duration || 0);
       if (!uploaded?.url) throw new Error("媒体上传失败，请稍后重试");
+      let posterUrl = String(uploaded.posterUrl || "");
+      if (media.type === "video" && !posterUrl) {
+        const poster = await createVideoPoster(media.file);
+        try {
+          if (poster?.file) {
+            const uploadedPoster = await apiUploadMediaFile(poster.file);
+            posterUrl = String(uploadedPoster?.url || "");
+          }
+        } finally {
+          if (String(poster?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(poster.previewUrl);
+        }
+      }
       mediaItems.push({
         url: uploaded.url,
-        posterUrl: uploaded.posterUrl || "",
+        posterUrl,
         type: uploaded.mediaType === "video" ? "video" : media.type
       });
     }
