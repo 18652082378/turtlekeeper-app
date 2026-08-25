@@ -8,6 +8,8 @@
     "build": "node scripts/build-web.js",
     "test:backup-restore": "node scripts/test-backup-restore.js",
     "test:api-workflows": "node scripts/test-api-workflows.js",
+    "migrate:mysql": "node scripts/migrate-json-to-mysql.js",
+    "backup:mysql-cutover": "node scripts/backup-before-mysql-cutover.js",
     "verify:backup": "node scripts/restore-server-backup.js",
     "cap:add:ios": "npm run build && npx cap add ios",
     "cap:sync:ios": "npm run build && npx cap sync ios && node scripts/configure-ios-local-plugins.js",
@@ -19,7 +21,8 @@
     "@capacitor/geolocation": "^8.2.0",
     "@capacitor/ios": "8.4.0",
     "@capacitor/network": "^8.0.1",
-    "@capacitor/push-notifications": "^8.0.1"
+    "@capacitor/push-notifications": "^8.0.1",
+    "mysql2": "^3.14.3"
   },
   "devDependencies": {
     "@capacitor/cli": "8.4.0"

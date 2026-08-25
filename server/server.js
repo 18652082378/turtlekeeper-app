@@ -38,6 +38,9 @@ const SPECIES_CATALOG_FILE = path.resolve(STATIC_ROOT, "species-data.js");
 const RUNTIME_ROOT = path.resolve(process.env.TURTLE_RUNTIME_DIR || __dirname);
 const DATA_DIR = path.resolve(RUNTIME_ROOT, "data");
 const DATA_FILE = path.resolve(DATA_DIR, "app-data.json");
+const MYSQL_URL = String(process.env.MYSQL_URL || "").trim();
+const MYSQL_HOST = String(process.env.MYSQL_HOST || "").trim();
+const MYSQL_ENABLED = Boolean(MYSQL_URL || MYSQL_HOST);
 const SMS_STATE_FILE = path.resolve(DATA_DIR, "sms-state.json");
 const UPLOAD_DIR = path.resolve(RUNTIME_ROOT, "uploads");
 const BACKUP_DIR = path.resolve(RUNTIME_ROOT, "backups");
@@ -315,23 +318,50 @@ class DatabaseIntegrityError extends Error {
   }
 }
 
+let mysqlPool = null;
+let mysqlDatabase = null;
+let mysqlWriteQueue = Promise.resolve();
+
+function normalizeDatabase(data = {}) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("数据库根节点无效");
+  return {
+    users: data.users || {}, reviews: Array.isArray(data.reviews) ? data.reviews : [], feedbacks: Array.isArray(data.feedbacks) ? data.feedbacks : [],
+    communityPosts: Array.isArray(data.communityPosts) ? data.communityPosts : [], marketListings: Array.isArray(data.marketListings) ? data.marketListings : [],
+    friendships: Array.isArray(data.friendships) ? data.friendships : [], messages: Array.isArray(data.messages) ? data.messages : [],
+    follows: Array.isArray(data.follows) ? data.follows : [], reports: Array.isArray(data.reports) ? data.reports : [],
+    careReminderDeliveries: data.careReminderDeliveries && typeof data.careReminderDeliveries === "object" ? data.careReminderDeliveries : {}
+  };
+}
+
+async function initializeMysqlDatabase() {
+  if (!MYSQL_ENABLED) return;
+  let mysql;
+  try { mysql = require("mysql2/promise"); } catch { throw new Error("已设置 MySQL 配置，但未安装 mysql2；请先执行 npm install"); }
+  mysqlPool = mysql.createPool(MYSQL_URL || {
+    host: MYSQL_HOST,
+    port: Number(process.env.MYSQL_PORT || 3306),
+    user: String(process.env.MYSQL_USER || "").trim(),
+    password: String(process.env.MYSQL_PASSWORD || ""),
+    database: String(process.env.MYSQL_DATABASE || "turtlekeeper").trim(),
+    charset: "utf8mb4",
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+  });
+  await mysqlPool.query("CREATE TABLE IF NOT EXISTS turtlekeeper_app_state (id TINYINT UNSIGNED NOT NULL PRIMARY KEY, payload JSON NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  const [rows] = await mysqlPool.query("SELECT payload FROM turtlekeeper_app_state WHERE id = 1");
+  mysqlDatabase = rows.length ? normalizeDatabase(typeof rows[0].payload === "string" ? JSON.parse(rows[0].payload) : rows[0].payload) : emptyDatabase();
+  console.log(`数据库模式：MySQL（${rows.length ? "已加载迁移数据" : "空数据库"}）`);
+}
+
 function readDatabase() {
+  if (MYSQL_ENABLED) {
+    if (!mysqlDatabase) throw new DatabaseIntegrityError(new Error("MySQL 尚未完成初始化"));
+    return mysqlDatabase;
+  }
   if (!fs.existsSync(DATA_FILE)) return emptyDatabase();
   try {
-    const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-    if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("数据库根节点无效");
-    return {
-      users: data.users || {},
-      reviews: Array.isArray(data.reviews) ? data.reviews : [],
-      feedbacks: Array.isArray(data.feedbacks) ? data.feedbacks : [],
-      communityPosts: Array.isArray(data.communityPosts) ? data.communityPosts : [],
-      marketListings: Array.isArray(data.marketListings) ? data.marketListings : [],
-      friendships: Array.isArray(data.friendships) ? data.friendships : [],
-      messages: Array.isArray(data.messages) ? data.messages : [],
-      follows: Array.isArray(data.follows) ? data.follows : [],
-      reports: Array.isArray(data.reports) ? data.reports : [],
-      careReminderDeliveries: data.careReminderDeliveries && typeof data.careReminderDeliveries === "object" ? data.careReminderDeliveries : {}
-    };
+    return normalizeDatabase(JSON.parse(fs.readFileSync(DATA_FILE, "utf8")));
   } catch (error) {
     console.error("数据库读取保护已触发：", error.message);
     throw new DatabaseIntegrityError(error);
@@ -339,6 +369,16 @@ function readDatabase() {
 }
 
 function writeDatabase(db) {
+  if (MYSQL_ENABLED) {
+    if (!mysqlPool || !mysqlDatabase) throw new DatabaseIntegrityError(new Error("MySQL 尚未完成初始化"));
+    mysqlDatabase = normalizeDatabase(db);
+    const payload = JSON.stringify(mysqlDatabase);
+    mysqlWriteQueue = mysqlWriteQueue.catch(error => console.error("上一笔 MySQL 写入失败：", error.message)).then(() => mysqlPool.execute(
+      "INSERT INTO turtlekeeper_app_state (id, payload) VALUES (1, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload)", [payload]
+    ));
+    mysqlWriteQueue.catch(error => console.error("MySQL 写入失败；请立即检查 RDS：", error.message));
+    return mysqlWriteQueue;
+  }
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const tempFile = `${DATA_FILE}.${process.pid}.tmp`;
   // Write and flush the new file before its atomic rename. If storage reports
@@ -456,12 +496,13 @@ function backupFileManifest(root, directory = root) {
 }
 
 function createServerBackup(reason = "scheduled") {
-  if (!fs.existsSync(DATA_FILE)) return "";
+  if (!MYSQL_ENABLED && !fs.existsSync(DATA_FILE)) return "";
   const now = new Date();
   const safeReason = String(reason || "scheduled").replace(/[^a-z0-9_-]/gi, "").slice(0, 24) || "scheduled";
   const targetDir = path.resolve(BACKUP_DIR, `${backupTimeKey(now)}-${safeReason}`);
   fs.mkdirSync(targetDir, { recursive: true });
-  fs.copyFileSync(DATA_FILE, path.resolve(targetDir, "app-data.json"));
+  if (MYSQL_ENABLED) fs.writeFileSync(path.resolve(targetDir, "app-data.json"), JSON.stringify(readDatabase(), null, 2), "utf8");
+  else fs.copyFileSync(DATA_FILE, path.resolve(targetDir, "app-data.json"));
   if (fs.existsSync(UPLOAD_DIR)) copyBackupDirectory(UPLOAD_DIR, path.resolve(targetDir, "uploads"));
   fs.writeFileSync(path.resolve(targetDir, "manifest.json"), JSON.stringify({
     createdAt: now.toISOString(),
@@ -3444,14 +3485,6 @@ setInterval(() => {
 // Remote care reminders are checked twice a minute, allowing a short recovery
 // window if the timer runs close to the minute boundary.
 setInterval(() => { void dispatchDueCareReminders(); }, 30 * 1000).unref();
-void dispatchDueCareReminders();
-
-try {
-  if (!hasBackupForDate()) createServerBackup("startup");
-  lastServerBackupDate = backupDateKey();
-} catch (error) {
-  console.error("启动备份失败：", error.message);
-}
 setInterval(runScheduledBackup, 60 * 60 * 1000).unref();
 
 // Videos are streamed directly from iOS. Keep the origin request alive long
@@ -3460,12 +3493,24 @@ server.requestTimeout = 15 * 60 * 1000;
 server.headersTimeout = 75 * 1000;
 server.keepAliveTimeout = 70 * 1000;
 
-server.listen(PORT, HOST, () => {
-  console.log(`龟管家服务已启动：http://${HOST}:${PORT}`);
-  const mode = process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured()
-    ? "阿里云号码认证"
-    : aliyunConfigured()
-      ? "阿里云短信服务"
-      : "本地模拟";
-  console.log(`短信模式：${mode}`);
+void initializeMysqlDatabase().then(() => {
+  void dispatchDueCareReminders();
+  try {
+    if (!hasBackupForDate()) createServerBackup("startup");
+    lastServerBackupDate = backupDateKey();
+  } catch (error) {
+    console.error("启动备份失败：", error.message);
+  }
+  server.listen(PORT, HOST, () => {
+    console.log(`龟管家服务已启动：http://${HOST}:${PORT}`);
+    const mode = process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured()
+      ? "阿里云号码认证"
+      : aliyunConfigured()
+        ? "阿里云短信服务"
+        : "本地模拟";
+    console.log(`短信模式：${mode}`);
+  });
+}).catch(error => {
+  console.error("服务启动失败：", error.message);
+  process.exitCode = 1;
 });
