@@ -160,7 +160,14 @@ function ossPublicUrl(objectKey) {
 async function copyUploadToOss(localPath, objectKey, mime) {
   const client = getOssClient();
   if (!client) return null;
-  await client.put(objectKey, localPath, { headers: { "Content-Type": mime || "application/octet-stream" } });
+  await client.put(objectKey, localPath, {
+    headers: {
+      "Content-Type": mime || "application/octet-stream",
+      // iOS WebView refuses to render OSS objects declared as attachments.
+      "Content-Disposition": "inline",
+      "Cache-Control": "public, max-age=31536000, immutable"
+    }
+  });
   return ossPublicUrl(objectKey);
 }
 

@@ -47,7 +47,13 @@ async function putWithRetry(client, objectKey, file) {
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      return await client.put(objectKey, file, { headers: { "Content-Type": mimeFor(file) } });
+      return await client.put(objectKey, file, {
+        headers: {
+          "Content-Type": mimeFor(file),
+          "Content-Disposition": "inline",
+          "Cache-Control": "public, max-age=31536000, immutable"
+        }
+      });
     } catch (error) {
       lastError = error;
       if (attempt < 3) {
