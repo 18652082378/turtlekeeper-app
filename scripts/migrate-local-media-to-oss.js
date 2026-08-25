@@ -1,7 +1,9 @@
 /*
  * Copies every existing local upload to Alibaba Cloud OSS, then (only when
  * --apply is supplied and every copy succeeded) changes media URLs in the
- * single MySQL JSON payload. It never deletes or overwrites local uploads.
+ * single MySQL JSON payload. It never deletes local uploads. A completed
+ * pre-copy can be followed by `--apply --skip-upload` during a short
+ * maintenance window, so users do not wait for the full media transfer.
  */
 const fs = require("fs");
 const path = require("path");
@@ -60,16 +62,21 @@ async function main() {
   const publicBase = String(process.env.OSS_PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
   const mysqlHost = String(process.env.MYSQL_HOST || "").trim();
   if (![region, bucket, accessKeyId, accessKeySecret, publicBase, mysqlHost].every(Boolean)) throw new Error("请先在 server/.env 填写 OSS_* 和 MYSQL_HOST 配置。");
+  const skipUpload = process.argv.includes("--skip-upload");
   const files = walk(uploadRoot);
-  if (!files.length) throw new Error("没有找到 server/uploads 中的文件；已停止，未修改 RDS。");
+  if (!skipUpload && !files.length) throw new Error("没有找到 server/uploads 中的文件；已停止，未修改 RDS。");
   const OSS = require("ali-oss");
   const client = new OSS({ region, bucket, accessKeyId, accessKeySecret, authorizationV4: true });
-  console.log(`准备上传 ${files.length} 个文件到 OSS（本地文件不会删除）。`);
-  for (let index = 0; index < files.length; index += 1) {
-    const file = files[index];
-    const key = path.relative(uploadRoot, file).split(path.sep).join("/");
-    await client.put(`uploads/${key}`, file, { headers: { "Content-Type": mimeFor(file) } });
-    console.log(`[${index + 1}/${files.length}] uploads/${key}`);
+  if (!skipUpload) {
+    console.log(`准备上传 ${files.length} 个文件到 OSS（本地文件不会删除）。`);
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const key = path.relative(uploadRoot, file).split(path.sep).join("/");
+      await client.put(`uploads/${key}`, file, { headers: { "Content-Type": mimeFor(file) } });
+      console.log(`[${index + 1}/${files.length}] uploads/${key}`);
+    }
+  } else {
+    console.log("已跳过 OSS 重传；将只更新 RDS 中已验证的媒体链接。");
   }
   if (!process.argv.includes("--apply")) {
     console.log("OSS 上传已完成；这是演练模式，RDS 链接尚未修改。确认后请重新执行同一命令并追加 --apply。");
