@@ -52,6 +52,9 @@ const BACKUP_RETENTION_DAYS = Math.max(7, Math.floor(Number(process.env.BACKUP_R
 const ACCOUNT_SNAPSHOT_DIR = path.resolve(BACKUP_DIR, "account-snapshots");
 const ACCOUNT_SNAPSHOT_LIMIT = Math.min(200, Math.max(20, Math.floor(Number(process.env.ACCOUNT_SNAPSHOT_LIMIT || 100))));
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
+// Bump this value after a media-delivery fix to make iOS WebViews retry an
+// image that they cached as a failed request during a temporary outage.
+const MEDIA_CACHE_VERSION = String(process.env.MEDIA_CACHE_VERSION || "20260825.1").trim();
 const REVIEW_ADMIN_PHONE = process.env.ADMIN_PHONE || "18652082378";
 const POLICY_VERSION = "2026-08-12";
 // 每次 App Store 新版已发布后，将 MIN_SUPPORTED_APP_BUILD 调整为新的 Xcode 构建号即可强制更新。
@@ -166,6 +169,28 @@ const mimeTypes = {
   ".mov": "video/quicktime"
 };
 
+function cacheBustedMediaUrl(value) {
+  const url = String(value || "");
+  if (!MEDIA_CACHE_VERSION || !/(?:^|https?:\/\/[^/]+)\/uploads\//i.test(url)) return value;
+  try {
+    const parsed = new URL(url, "http://turtlekeeper.local");
+    if (!parsed.pathname.startsWith("/uploads/") || parsed.searchParams.has("media-v")) return value;
+    parsed.searchParams.set("media-v", MEDIA_CACHE_VERSION);
+    return /^https?:\/\//i.test(url) ? parsed.toString() : `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return value;
+  }
+}
+
+function cacheBustMediaUrls(value) {
+  if (typeof value === "string") return cacheBustedMediaUrl(value);
+  if (Array.isArray(value)) return value.map(cacheBustMediaUrls);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cacheBustMediaUrls(item)]));
+  }
+  return value;
+}
+
 function sendJson(res, status, body) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -173,7 +198,7 @@ function sendJson(res, status, body) {
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-Auth-Phone, X-Auth-Token, X-Media-Duration"
   });
-  res.end(JSON.stringify(body));
+  res.end(JSON.stringify(cacheBustMediaUrls(body)));
 }
 
 function readJson(req) {
