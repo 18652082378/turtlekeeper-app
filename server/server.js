@@ -60,7 +60,7 @@ const OSS_PUBLIC_BASE_URL = String(process.env.OSS_PUBLIC_BASE_URL || "").trim()
 const OSS_ENABLED = Boolean(OSS_REGION && OSS_BUCKET && OSS_ACCESS_KEY_ID && OSS_ACCESS_KEY_SECRET && OSS_PUBLIC_BASE_URL);
 // Bump this value after a media-delivery fix to make iOS WebViews retry an
 // image that they cached as a failed request during a temporary outage.
-const MEDIA_CACHE_VERSION = String(process.env.MEDIA_CACHE_VERSION || "20260825.1").trim();
+const MEDIA_CACHE_VERSION = String(process.env.MEDIA_CACHE_VERSION || "20260825.2").trim();
 const REVIEW_ADMIN_PHONE = process.env.ADMIN_PHONE || "18652082378";
 const POLICY_VERSION = "2026-08-12";
 // 每次 App Store 新版已发布后，将 MIN_SUPPORTED_APP_BUILD 调整为新的 Xcode 构建号即可强制更新。
