@@ -52,6 +52,12 @@ const BACKUP_RETENTION_DAYS = Math.max(7, Math.floor(Number(process.env.BACKUP_R
 const ACCOUNT_SNAPSHOT_DIR = path.resolve(BACKUP_DIR, "account-snapshots");
 const ACCOUNT_SNAPSHOT_LIMIT = Math.min(200, Math.max(20, Math.floor(Number(process.env.ACCOUNT_SNAPSHOT_LIMIT || 100))));
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
+const OSS_REGION = String(process.env.OSS_REGION || "").trim();
+const OSS_BUCKET = String(process.env.OSS_BUCKET || "").trim();
+const OSS_ACCESS_KEY_ID = String(process.env.OSS_ACCESS_KEY_ID || "").trim();
+const OSS_ACCESS_KEY_SECRET = String(process.env.OSS_ACCESS_KEY_SECRET || "").trim();
+const OSS_PUBLIC_BASE_URL = String(process.env.OSS_PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
+const OSS_ENABLED = Boolean(OSS_REGION && OSS_BUCKET && OSS_ACCESS_KEY_ID && OSS_ACCESS_KEY_SECRET && OSS_PUBLIC_BASE_URL);
 // Bump this value after a media-delivery fix to make iOS WebViews retry an
 // image that they cached as a failed request during a temporary outage.
 const MEDIA_CACHE_VERSION = String(process.env.MEDIA_CACHE_VERSION || "20260825.1").trim();
@@ -121,6 +127,50 @@ const verifiedPhones = new Map();
 let lastServerBackupDate = "";
 let apnsPrivateKey = null;
 let apnsJwtCache = { token: "", createdAt: 0 };
+let ossClient = null;
+
+function getOssClient() {
+  if (!OSS_ENABLED) return null;
+  if (ossClient) return ossClient;
+  let OSS;
+  try { OSS = require("ali-oss"); } catch { throw new Error("已设置 OSS 配置，但未安装 ali-oss；请先执行 npm install"); }
+  ossClient = new OSS({
+    region: OSS_REGION,
+    bucket: OSS_BUCKET,
+    accessKeyId: OSS_ACCESS_KEY_ID,
+    accessKeySecret: OSS_ACCESS_KEY_SECRET,
+    authorizationV4: true
+  });
+  return ossClient;
+}
+
+function ossObjectKey(year, month, filename) {
+  return `uploads/${year}/${month}/${filename}`;
+}
+
+function ossPublicUrl(objectKey) {
+  return `${OSS_PUBLIC_BASE_URL}/${objectKey.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+async function copyUploadToOss(localPath, objectKey, mime) {
+  const client = getOssClient();
+  if (!client) return null;
+  await client.put(objectKey, localPath, { headers: { "Content-Type": mime || "application/octet-stream" } });
+  return ossPublicUrl(objectKey);
+}
+
+async function publishUpload(localPath, year, month, filename, mime) {
+  const localUrl = `/uploads/${year}/${month}/${filename}`;
+  if (!OSS_ENABLED) return localUrl;
+  try {
+    return await copyUploadToOss(localPath, ossObjectKey(year, month, filename), mime);
+  } catch (error) {
+    // Keep the local copy and preserve a usable response if OSS is temporarily
+    // unavailable. This is deliberately a fallback, not silent data loss.
+    console.error(`OSS 上传失败，已保留本地媒体 ${filename}：`, error.message);
+    return localUrl;
+  }
+}
 
 function persistSmsState() {
   const now = Date.now();
@@ -1526,9 +1576,10 @@ async function handleUploadImage(req, res) {
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(target, image.buffer);
 
+  const url = await publishUpload(target, year, month, filename, image.mime);
   return sendJson(res, 200, {
     ok: true,
-    url: `/uploads/${year}/${month}/${filename}`
+    url
   });
 }
 
@@ -1558,8 +1609,10 @@ async function handleUploadMedia(req, res) {
   const folder = path.resolve(UPLOAD_DIR, year, month);
   const filename = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}-community.${media.ext}`;
   fs.mkdirSync(folder, { recursive: true });
-  fs.writeFileSync(path.resolve(folder, filename), media.buffer);
-  return sendJson(res, 200, { ok: true, url: `/uploads/${year}/${month}/${filename}`, mediaType: media.mediaType });
+  const target = path.resolve(folder, filename);
+  fs.writeFileSync(target, media.buffer);
+  const url = await publishUpload(target, year, month, filename, media.mime);
+  return sendJson(res, 200, { ok: true, url, mediaType: media.mediaType });
 }
 
 function streamMediaInfo(mime) {
@@ -1626,12 +1679,13 @@ function handleUploadMediaStream(req, res, mime) {
     req.on("aborted", fail);
     req.on("error", fail);
     output.on("error", fail);
-    output.on("finish", () => {
-      if (!res.headersSent) sendJson(res, 200, {
-        ok: true,
-        url: `/uploads/${year}/${month}/${filename}`,
-        mediaType: media.mediaType
-      });
+    output.on("finish", async () => {
+      try {
+        const url = await publishUpload(target, year, month, filename, mime);
+        if (!res.headersSent) sendJson(res, 200, { ok: true, url, mediaType: media.mediaType });
+      } catch (error) {
+        if (!res.headersSent) sendJson(res, 500, { ok: false, message: "视频上传失败，请重试" });
+      }
       finish();
     });
     req.pipe(output);

@@ -9,6 +9,7 @@
     "test:backup-restore": "node scripts/test-backup-restore.js",
     "test:api-workflows": "node scripts/test-api-workflows.js",
     "migrate:mysql": "node scripts/migrate-json-to-mysql.js",
+    "migrate:oss-media": "node scripts/migrate-local-media-to-oss.js",
     "backup:mysql-cutover": "node scripts/backup-before-mysql-cutover.js",
     "verify:backup": "node scripts/restore-server-backup.js",
     "cap:add:ios": "npm run build && npx cap add ios",
@@ -22,6 +23,7 @@
     "@capacitor/ios": "8.4.0",
     "@capacitor/network": "^8.0.1",
     "@capacitor/push-notifications": "^8.0.1",
+    "ali-oss": "^6.23.0",
     "mysql2": "^3.14.3"
   },
   "devDependencies": {
