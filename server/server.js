@@ -139,7 +139,12 @@ function getOssClient() {
     bucket: OSS_BUCKET,
     accessKeyId: OSS_ACCESS_KEY_ID,
     accessKeySecret: OSS_ACCESS_KEY_SECRET,
-    authorizationV4: true
+    authorizationV4: true,
+    // The API server and bucket are both in Hangzhou. Use Alibaba Cloud's
+    // internal endpoint for faster, non-public upload traffic.
+    internal: process.env.OSS_INTERNAL !== "false",
+    timeout: "10m",
+    retryMax: 3
   });
   return ossClient;
 }

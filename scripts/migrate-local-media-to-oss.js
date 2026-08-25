@@ -39,6 +39,26 @@ function mimeFor(file) {
   return ({ ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".mp4": "video/mp4", ".m4v": "video/x-m4v", ".webm": "video/webm", ".mov": "video/quicktime" })[ext] || "application/octet-stream";
 }
 
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function putWithRetry(client, objectKey, file) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await client.put(objectKey, file, { headers: { "Content-Type": mimeFor(file) } });
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        console.warn(`上传超时/失败，${objectKey} 将在 ${attempt * 5} 秒后重试（第 ${attempt}/3 次）：${error.message}`);
+        await delay(attempt * 5000);
+      }
+    }
+  }
+  throw lastError;
+}
+
 function replaceMediaUrls(value, publicBase) {
   if (typeof value === "string") {
     try {
@@ -66,13 +86,22 @@ async function main() {
   const files = walk(uploadRoot);
   if (!skipUpload && !files.length) throw new Error("没有找到 server/uploads 中的文件；已停止，未修改 RDS。");
   const OSS = require("ali-oss");
-  const client = new OSS({ region, bucket, accessKeyId, accessKeySecret, authorizationV4: true });
+  const client = new OSS({
+    region,
+    bucket,
+    accessKeyId,
+    accessKeySecret,
+    authorizationV4: true,
+    internal: process.env.OSS_INTERNAL !== "false",
+    timeout: "10m",
+    retryMax: 3
+  });
   if (!skipUpload) {
     console.log(`准备上传 ${files.length} 个文件到 OSS（本地文件不会删除）。`);
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
       const key = path.relative(uploadRoot, file).split(path.sep).join("/");
-      await client.put(`uploads/${key}`, file, { headers: { "Content-Type": mimeFor(file) } });
+      await putWithRetry(client, `uploads/${key}`, file);
       console.log(`[${index + 1}/${files.length}] uploads/${key}`);
     }
   } else {
