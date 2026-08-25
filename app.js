@@ -1933,7 +1933,10 @@ function communityMedia(item, compact = false) {
   const mediaItems = communityPostMediaItems(item);
   if (!mediaItems.length) return `<div class="community-media-placeholder"><span>壳友动态</span></div>`;
   const first = mediaItems[0];
-  if (first.type === "video") return `<video class="community-media" src="${first.url}"${videoPosterAttribute(first)} ${compact ? "muted playsinline" : "controls playsinline"} preload="metadata" crossorigin="anonymous" data-community-video-autoload></video>`;
+  // Community cards must not download media until the user explicitly plays it.
+  // The API server has limited bandwidth and several metadata/autoplay requests
+  // in a scrolling feed can otherwise starve the video the user selected.
+  if (first.type === "video") return `<video class="community-media" src="${first.url}"${videoPosterAttribute(first)} ${compact ? "muted playsinline" : "controls playsinline"} preload="none" crossorigin="anonymous"></video>`;
   if (mediaItems.length === 1) return `<img class="community-media" src="${first.url}" alt="动态图片" loading="lazy">`;
   return `<div class="community-media-gallery community-media-gallery-${mediaItems.length}">${mediaItems.map((media, index) => `<img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy">`).join("")}</div>`;
 }
@@ -1943,7 +1946,7 @@ function communityFeedMedia(item) {
   const mediaButton = (media, index) => {
     const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
     if (media.type === "video") {
-      return `<div class="community-feed-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}"${videoPosterAttribute(media)} muted playsinline autoplay loop controls preload="metadata" crossorigin="anonymous" data-inline-video data-community-video-autoload data-community-video-autoplay="true"></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
+      return `<div class="community-feed-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}"${videoPosterAttribute(media)} muted playsinline controls preload="none" crossorigin="anonymous" data-inline-video></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
     }
     return `<button class="community-feed-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
   };
@@ -2062,7 +2065,7 @@ function communityDetailMedia(item) {
       ${mediaItems.map((media, index) => {
         const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
         if (media.type === "video") {
-          return `<div class="community-detail-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}"${videoPosterAttribute(media)} muted playsinline autoplay loop controls preload="metadata" crossorigin="anonymous" data-inline-video data-community-video-autoload data-community-video-autoplay="true"></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
+          return `<div class="community-detail-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}"${videoPosterAttribute(media)} muted playsinline controls preload="none" crossorigin="anonymous" data-inline-video></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
         }
         return `<button class="community-detail-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
       }).join("")}
