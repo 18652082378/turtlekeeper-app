@@ -10,6 +10,7 @@
     "test:api-workflows": "node scripts/test-api-workflows.js",
     "migrate:mysql": "node scripts/migrate-json-to-mysql.js",
     "migrate:oss-media": "node scripts/migrate-local-media-to-oss.js",
+    "migrate:ios-video": "node scripts/migrate-legacy-videos-for-ios.js",
     "backup:mysql-cutover": "node scripts/backup-before-mysql-cutover.js",
     "verify:backup": "node scripts/restore-server-backup.js",
     "cap:add:ios": "npm run build && npx cap add ios",
