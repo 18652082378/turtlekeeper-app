@@ -123,6 +123,10 @@ const initialState = {
   publicReviews: [],
   publicFeedbackItems: [],
   communityPosts: [],
+  communityFeedInitialized: false,
+  communityFeedNextOffset: 0,
+  communityFeedHasMore: true,
+  communityFeedLoadingMore: false,
   communityProfileStats: { receivedLikes: 0, followerCount: 0 },
   contentReports: [],
   blockedUsers: [],
@@ -230,6 +234,8 @@ const LEDGER_FORM_DRAFT_FIELDS = [
   "plastronLength",
   "purchaseStatus",
   "purchaseHealth",
+  "otherCategory",
+  "otherTitle",
   "recordDate",
   "amount",
   "note"
@@ -342,6 +348,7 @@ let publicFeedbackLoading = false;
 let publicFeedbackLastLoadedAt = 0;
 let communityLoading = false;
 let communityLastLoadedAt = 0;
+let communityLoadObserver = null;
 let communityChatLoading = false;
 let communityChatLoadedKey = "";
 // A notification can arrive while an existing chat request is still in
@@ -600,6 +607,10 @@ function normalizeState(next) {
     publicReviews: Array.isArray(base.publicReviews) ? base.publicReviews : [],
     publicFeedbackItems: Array.isArray(base.publicFeedbackItems) ? base.publicFeedbackItems : [],
     communityPosts: Array.isArray(base.communityPosts) ? base.communityPosts : [],
+    communityFeedInitialized: Boolean(base.communityFeedInitialized),
+    communityFeedNextOffset: Math.max(0, Number(base.communityFeedNextOffset || 0)),
+    communityFeedHasMore: base.communityFeedHasMore !== false,
+    communityFeedLoadingMore: false,
     communityProfileStats: {
       receivedLikes: Math.max(0, Number(base.communityProfileStats?.receivedLikes || 0)),
       followerCount: Math.max(0, Number(base.communityProfileStats?.followerCount || 0))
@@ -612,6 +623,7 @@ function normalizeState(next) {
     communityFollowingPosts: Array.isArray(base.communityFollowingPosts) ? base.communityFollowingPosts : [],
     communityFollowingListings: Array.isArray(base.communityFollowingListings) ? base.communityFollowingListings : [],
     marketListings: Array.isArray(base.marketListings) ? base.marketListings : [],
+    growthFilter: ["all", "measure", "breeding", "pool"].includes(base.growthFilter) ? base.growthFilter : "all",
     formGender: cleanText(base.formGender),
     turtles: (base.turtles || []).map(t => ({
       ...t,
@@ -1373,8 +1385,15 @@ function readImageAsDataUrl(file, maxSide = 960, quality = 0.66, maxLength = 260
 
 function apiAssetUrl(url) {
   const value = String(url || "");
-  if (!value || /^(https?:|data:|blob:)/i.test(value)) return value;
   const base = String(window.TURTLE_API_BASE_URL || "").replace(/\/+$/, "");
+  // During the OSS cutover some installed clients persisted the bucket's
+  // default-domain URLs.  iOS treats that domain as a download, not inline
+  // media, so a perfectly valid image appears as a broken-image icon.  Keep
+  // the stored data intact but render that legacy media through our API host,
+  // whose /uploads route supports inline images and byte-range video.
+  const legacyOssMedia = value.match(/^https?:\/\/turtlekeeper-media-hz2026\.oss-cn-hangzhou\.aliyuncs\.com(\/uploads\/.*)$/i);
+  if (legacyOssMedia && base) return `${base}${legacyOssMedia[1]}`;
+  if (!value || /^(https?:|data:|blob:)/i.test(value)) return value;
   const pathValue = value.startsWith("/") ? value : `/${value}`;
   return base ? `${base}${pathValue}` : pathValue;
 }
@@ -1899,7 +1918,9 @@ function setupBottomNavForegroundRecovery() {
 
 function communityAvatar(item, className = "community-avatar") {
   const avatar = accountAvatarSource(item.authorAvatar || item.avatar || "");
-  if (avatar) return `<img class="${className}" src="${escapeHtml(avatar)}" alt="头像">`;
+  // Avatars are tiny but visually important. Ask WebKit to fetch and decode
+  // them before feed media so the author rows appear immediately.
+  if (avatar) return `<img class="${className}" src="${escapeHtml(avatar)}" alt="头像" loading="eager" decoding="async" fetchpriority="high">`;
   return `<span class="${className} fallback-avatar">${escapeHtml(String(item.authorName || item.name || "壳").slice(0, 1))}</span>`;
 }
 
@@ -1946,7 +1967,7 @@ function communityFeedMedia(item) {
   const mediaButton = (media, index) => {
     const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
     if (media.type === "video") {
-      return `<div class="community-feed-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}"${videoPosterAttribute(media)} muted playsinline controls preload="none" crossorigin="anonymous" data-inline-video></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
+      return `<div class="community-feed-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}"${videoPosterAttribute(media)} muted playsinline preload="none" crossorigin="anonymous" data-inline-video data-video-first-frame data-community-video-autoload data-community-video-autoplay></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
     }
     return `<button class="community-feed-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
   };
@@ -1978,7 +1999,7 @@ function communityFeedCard(item) {
       <div class="community-moment-main">
         <div class="community-moment-author"><button class="community-profile-name-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}">${escapeHtml(item.authorName || "壳友")}</button>${!isOwn ? `<span class="community-author-actions"><button class="community-follow-button ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></span>` : ""}</div>
         ${item.content ? `<p class="community-post-copy">${escapeHtml(item.content)}</p>` : ""}
-        ${primaryMedia ? `<div class="community-post-media">${communityFeedMedia(item)}</div>` : ""}
+        ${primaryMedia ? `<div class="community-post-media ${primaryMedia.type === "video" ? "is-video" : ""}">${communityFeedMedia(item)}</div>` : ""}
         ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
         <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? communityMomentActionMenu(item, isOwn) : ""}</div></div>
         ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</div>` : ""}
@@ -2135,11 +2156,13 @@ function pageMessages() {
 
 function pageCommunity() {
   const posts = state.communityPosts || [];
+  const communityInitialLoading = Boolean(CONFIGURED_SMS_BACKEND && hasCloudSession() && !state.communityFeedInitialized && !posts.length);
   return `
     ${topbar("壳友圈", true, `<button class="community-camera-button" type="button" data-community-camera-button aria-label="拍摄或从相册选择"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"></path><circle cx="12" cy="13.5" r="3.5"></circle></svg></button>`)}
     <main class="content page-fresh community-page community-moments-page">
       <input class="hidden-file" type="file" accept="image/*,video/*" multiple data-community-quick-media>
-      <section class="community-feed">${communityFeedMarkup(posts)}</section>
+      <section class="community-feed ${communityInitialLoading ? "is-initial-loading" : ""}">${communityInitialLoading ? `<div class="community-feed-initial-loading" role="status" aria-live="polite"><i aria-hidden="true"></i><span>正在加载动态…</span></div>` : communityFeedMarkup(posts)}</section>
+      ${posts.length ? `<div class="community-feed-status" data-community-load-sentinel>${state.communityFeedLoadingMore ? "正在加载更多动态…" : state.communityFeedHasMore ? "继续上滑，加载更多" : "已经到底了"}</div>` : ""}
     </main>
     ${bottomNav()}
   `;
@@ -2387,7 +2410,7 @@ function marketVideoPosterUrl(media, fallbackUrl = defaultPhoto) {
 function marketDetailVideoMarkup(media, fallbackPosterUrl, sold = false, autoPlay = false) {
   // Use the video's own generated first-frame poster when available.  It
   // makes the detail page immediate without substituting an unrelated image.
-  return `<div class="market-detail-photo market-detail-video-shell is-loading"><video src="${escapeHtml(media.url)}"${videoPosterAttribute(media)} controls playsinline preload="metadata"${autoPlay ? " autoplay muted" : ""} crossorigin="anonymous" data-inline-video data-market-detail-video${autoPlay ? " data-market-detail-autoplay" : ""}></video>${inlineVideoExpandButton(media, "商品视频")}<div class="market-detail-video-loading" aria-live="polite">视频加载中</div>${sold ? `<span>已售出</span>` : ""}</div>`;
+  return `<div class="market-detail-photo market-detail-video-shell is-loading"><video src="${escapeHtml(media.url)}"${videoPosterAttribute(media)} controls playsinline preload="metadata"${autoPlay ? " autoplay muted" : ""} crossorigin="anonymous" data-inline-video data-video-first-frame data-market-detail-video${autoPlay ? " data-market-detail-autoplay" : ""}></video>${inlineVideoExpandButton(media, "商品视频")}<div class="market-detail-video-loading" aria-live="polite">视频加载中</div>${sold ? `<span>已售出</span>` : ""}</div>`;
 }
 
 function communityMessageAspectRatio(message, mediaType) {
@@ -3442,6 +3465,7 @@ function pageHome() {
         <div><strong>${s.species}</strong><span>品种</span></div>
       </section>
       <section class="action-panel care-action-panel home-module-panel">
+        <button class="care-action home-module-action growth-action" data-page="growth"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18.5V5.5"></path><path d="M5 18.5h14"></path><path d="m8.5 14 3-3 2.6 1.7 3.4-4.3"></path><circle cx="8.5" cy="14" r=".7"></circle><circle cx="11.5" cy="11" r=".7"></circle><circle cx="14.1" cy="12.7" r=".7"></circle><circle cx="17.5" cy="8.4" r=".7"></circle></svg></span><strong>成长记录</strong><small>变化与趋势</small></button>
         <button class="care-action" data-page="memos"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.5 12.5 3.3 3.3 7.7-8.2"></path></svg></span><strong>护理</strong><small>备忘与提醒</small></button>
         <button class="care-action home-module-action breeding-action" data-page="breeding"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7.7" r="4.7"></circle><circle cx="8.3" cy="14.1" r="4.7"></circle><circle cx="15.7" cy="14.1" r="4.7"></circle></svg></span><strong>繁殖</strong><small>产蛋、受精与孵化</small></button>
         <button class="care-action home-module-action pool-action" data-page="pools"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 8.3h15v9.2a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2z"></path><path d="M4.5 11.6c2.1 1.4 4.2 1.4 6.3 0 2.1-1.4 4.2-1.4 6.3 0"></path><path d="M7.5 5.5h9"></path></svg></span><strong>龟池</strong><small>数量与尺寸</small></button>
@@ -3651,6 +3675,7 @@ function pageTurtleDetail() {
   const species = speciesByCode(speciesCode) || speciesByCode(t.speciesCode) || { code: speciesCode, name: t.speciesName };
   const nickname = isEditing ? (turtleDraftValue(t, "code") || t.code) : t.code;
   const photo = isEditing && state.updateDraftPhoto === "__CLEAR__" ? defaultPhoto : (isEditing ? state.updateDraftPhoto : "") || t.photo || speciesPhoto(species) || defaultPhoto;
+  // 档案详情是完整成长时间线，始终从第 1 次成长开始向下查看。
   const historyList = [...(t.measureHistory || [])].reverse();
   const menuOpen = state.openTurtleMenuId === t.id;
   return `
@@ -3954,6 +3979,7 @@ function ledgerTypeText(type) {
   if (type === "purchase") return "收购";
   if (type === "sold") return "售出";
   if (type === "loss") return "损耗";
+  if (type === "other") return "其他支出";
   return "记录";
 }
 
@@ -3985,22 +4011,24 @@ function pageLedger() {
   const purchaseTotal = allRecords.filter(item => item.type === "purchase").reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const soldTotal = allRecords.filter(item => item.type === "sold").reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const lossTotal = allRecords.filter(item => item.type === "loss").reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const profit = soldTotal - purchaseTotal - lossTotal;
+  const otherTotal = allRecords.filter(item => item.type === "other").reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const profit = soldTotal - purchaseTotal - lossTotal - otherTotal;
   const profitLabel = profit > 0 ? "当前盈利" : profit < 0 ? "当前亏损" : "当前结余";
   const profitPrefix = profit > 0 ? "+" : profit < 0 ? "-" : "±";
   const dateText = dateRange.label;
   return `
     ${topbar("经营账本")}
     <main class="content page-fresh ${state.loggedInPhone ? "" : "guest-ledger-content"}">
-      <section class="page-intro ledger-intro"><div><p class="eyebrow dark">经营</p><h2>${records.length} 条资金明细</h2><p>${dateText}，收购、售出、损耗都可以留图、留尺寸。</p></div></section>
+      <section class="page-intro ledger-intro"><div><p class="eyebrow dark">经营</p><h2>${records.length} 条资金明细</h2><p>${dateText}，收购、售出、损耗和日常养护支出都能留图、留备注。</p></div></section>
       <section class="ledger-profit-card ${profit < 0 ? "negative" : "positive"}">
-        <div><span>${profitLabel}</span><strong><i>${profitPrefix}</i><em>${money(Math.abs(profit))}</em></strong><small>售出收入 − 收购投入 − 损耗金额</small></div>
+        <div><span>${profitLabel}</span><strong><i>${profitPrefix}</i><em>${money(Math.abs(profit))}</em></strong><small>售出收入 − 收购投入 − 损耗金额 − 日常支出</small></div>
         <mark>${dateText}</mark>
       </section>
       <section class="ledger-summary">
         <div class="purchase"><span>收购投入</span><strong class="ledger-summary-value"><i>-</i><em>${money(purchaseTotal)}</em></strong><small>${allRecords.filter(item => item.type === "purchase").length} 条</small></div>
-        <div class="sold"><span>售出收入</span><strong class="ledger-summary-value"><i>+</i><em>${money(soldTotal)}</em></strong><small>${allRecords.filter(item => item.type === "sold").length} 条</small></div>
         <div class="loss"><span>损耗金额</span><strong class="ledger-summary-value"><i>-</i><em>${money(lossTotal)}</em></strong><small>${allRecords.filter(item => item.type === "loss").length} 条</small></div>
+        <div class="other"><span>日常支出</span><strong class="ledger-summary-value"><i>-</i><em>${money(otherTotal)}</em></strong><small>${allRecords.filter(item => item.type === "other").length} 条</small></div>
+        <div class="sold"><span>售出收入</span><strong class="ledger-summary-value"><i>+</i><em>${money(soldTotal)}</em></strong><small>${allRecords.filter(item => item.type === "sold").length} 条</small></div>
       </section>
       <section class="fresh-card ledger-command-panel" aria-label="账本操作">
         <div class="ledger-command-grid" aria-label="账本日期筛选">
@@ -4013,14 +4041,15 @@ function pageLedger() {
         <div class="ledger-command-grid" aria-label="新增账本记录">
           ${[
             ["purchase", "记录收购"],
-            ["sold", "记录售出"],
-            ["loss", "记录损耗"]
+            ["loss", "记录损耗"],
+            ["other", "其他记账"],
+            ["sold", "记录售出"]
           ].map(([key, label]) => `<button class="ledger-command-button ${state.ledgerDraftType === key ? "active" : ""}" type="button" data-new-ledger="${key}">${label}</button>`).join("")}
         </div>
       </section>
       ${state.ledgerDraftType ? ledgerForm() : ""}
       <section class="memo-tabs">
-        ${["all:全部", "purchase:收购", "sold:售出", "loss:损耗"].map(item => {
+        ${["all:全部", "purchase:收购", "sold:售出", "loss:损耗", "other:其他支出"].map(item => {
           const [key, label] = item.split(":");
           return `<button class="tab ${state.ledgerTab === key ? "active" : ""}" data-ledger-tab="${key}">${label}</button>`;
         }).join("")}
@@ -4031,9 +4060,210 @@ function pageLedger() {
   `;
 }
 
+function growthTimestamp(value) {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function growthDateLabel(value) {
+  const timestamp = growthTimestamp(value);
+  return timestamp ? formatDate(new Date(timestamp)) : "日期未记录";
+}
+
+function growthChangeText(label, before, after, unit = "") {
+  const from = before === undefined || before === null || before === "" ? "-" : before;
+  const to = after === undefined || after === null || after === "" ? "-" : after;
+  if (String(from) === String(to)) return `${label} ${to}${unit}`;
+  return `${label} ${from}${unit} → ${to}${unit}`;
+}
+
+function growthElapsedLabel(timestamp) {
+  if (!timestamp) return "刚刚记录";
+  const days = Math.max(0, Math.floor((Date.now() - timestamp) / 86400000));
+  if (days === 0) return "今日更新";
+  if (days === 1) return "1 天前更新";
+  return `${days} 天前更新`;
+}
+
+function growthIntervalLabel(currentTimestamp, previousTimestamp, kind = "测量", initialTimestamp = 0) {
+  if (!currentTimestamp) return "已建立初始对比";
+  const referenceTimestamp = previousTimestamp || initialTimestamp;
+  if (!referenceTimestamp) return "已建立初始对比";
+  const days = Math.max(0, Math.round((currentTimestamp - referenceTimestamp) / 86400000));
+  if (days === 0) return `同日再次${kind}`;
+  return previousTimestamp ? `与上次${kind}相隔 ${days} 天` : `与建档记录相隔 ${days} 天`;
+}
+
+function turtleGrowthUpdates() {
+  const breedingByMother = new Map();
+  (state.breedingRecords || []).forEach(record => {
+    if (!record.motherId) return;
+    const key = String(record.motherId);
+    breedingByMother.set(key, [...(breedingByMother.get(key) || []), record]);
+  });
+  breedingByMother.forEach(records => records.sort((a, b) => growthTimestamp(b.updatedAt || b.createdAt || b.date) - growthTimestamp(a.updatedAt || a.createdAt || a.date)));
+
+  return (state.turtles || []).map(turtle => {
+    const measurements = [...(turtle.measureHistory || [])].sort((a, b) => growthTimestamp(b.updatedAt) - growthTimestamp(a.updatedAt));
+    const breedingRecords = breedingByMother.get(String(turtle.id)) || [];
+    const measurement = measurements[0];
+    const breeding = breedingRecords[0];
+    const measurementTime = growthTimestamp(measurement?.updatedAt);
+    const breedingTime = growthTimestamp(breeding?.updatedAt || breeding?.createdAt || breeding?.date);
+    if (!measurement && !breeding) return null;
+    if (breedingTime > measurementTime) {
+      return { type: "breeding", turtle, record: breeding, timestamp: breedingTime, priorTimestamp: growthTimestamp(breedingRecords[1]?.updatedAt || breedingRecords[1]?.createdAt || breedingRecords[1]?.date) };
+    }
+    const previous = measurement.oldSnapshot || {};
+    const current = measurement.newSnapshot || turtle;
+    // 最早一次更新的旧快照就是完整成长对比的基准。旧记录不再单列，
+    // 但它的体重、背甲等会持续显示在最新卡片的左侧。
+    const baseline = measurements[measurements.length - 1]?.oldSnapshot || previous;
+    const poolChanged = String(baseline.poolId || "") !== String(current.poolId || "");
+    return {
+      type: poolChanged ? "pool" : "measure",
+      turtle,
+      record: measurement,
+      timestamp: measurementTime,
+      priorTimestamp: growthTimestamp(measurements[1]?.updatedAt),
+      baseline,
+      previous,
+      current,
+      timeline: [...measurements].reverse(),
+      historyCount: measurements.length,
+      poolChanged
+    };
+  }).filter(Boolean).sort((a, b) => b.timestamp - a.timestamp);
+}
+
+function growthTrendMarkup(label, timeline = [], turtle = {}, field, unit = "") {
+  const firstSnapshot = timeline[0]?.oldSnapshot || turtle;
+  const milestones = [{ value: firstSnapshot?.[field], timestamp: growthTimestamp(turtle.createdAt || turtle.acquiredDate) }];
+  timeline.forEach(record => {
+    const snapshot = record.newSnapshot || {};
+    const nextValue = snapshot[field];
+    const last = milestones[milestones.length - 1];
+    // 连续更新但该项未变化时合并，保留真正发生变化的节点。
+    if (String(nextValue ?? "") === String(last.value ?? "")) {
+      // 数值没变也代表一次真实更新；用它刷新节点时间，下一次变化的
+      // 间隔就会准确显示为“距上次更新多少天”。
+      last.timestamp = growthTimestamp(record.updatedAt) || last.timestamp;
+      return;
+    }
+    milestones.push({ value: nextValue, timestamp: growthTimestamp(record.updatedAt) });
+  });
+  const displayValue = value => `${value === undefined || value === null || value === "" ? "-" : value}${unit}`;
+  const nodes = milestones.map((point, index) => {
+    if (index === 0) return `<span class="growth-trend-value">${escapeHtml(displayValue(point.value))}</span>`;
+    const previous = milestones[index - 1];
+    const days = previous.timestamp && point.timestamp ? Math.max(0, Math.round((point.timestamp - previous.timestamp) / 86400000)) : null;
+    const interval = days === null ? "更新后" : `${days} 天`;
+    return `<span class="growth-trend-transition"><i>${interval}</i><b aria-hidden="true">→</b></span><span class="growth-trend-value">${escapeHtml(displayValue(point.value))}</span>`;
+  }).join("");
+  return `<em class="growth-trend"><strong>${label}</strong>${nodes}</em>`;
+}
+
+function growthSnapshotMetric(snapshot = {}, field, unit) {
+  const value = snapshot[field];
+  return value === undefined || value === null || value === "" ? "-" : `${value}${unit}`;
+}
+
+function growthHistoryStepMarkup(record, index, turtleId = "") {
+  const before = record.oldSnapshot || {};
+  const after = record.newSnapshot || {};
+  const date = growthDateLabel(record.updatedAt);
+  const removeButton = record.id && turtleId
+    ? `<button class="growth-history-delete" type="button" data-delete-growth-update="${escapeHtml(record.id)}" data-growth-turtle-id="${escapeHtml(turtleId)}" aria-label="删除第 ${index + 1} 次更新" title="删除本次更新">×</button>`
+    : "";
+  return `
+    <section class="growth-history-step">
+      <div class="growth-history-step-head"><strong>第 ${index + 1} 次更新</strong><small>${date}</small>${removeButton}</div>
+      <div class="growth-history-pair">
+        <div><span>更新前</span><b>体重 ${escapeHtml(growthSnapshotMetric(before, "weight", "g"))}</b><b>背甲 ${escapeHtml(growthSnapshotMetric(before, "carapaceLength", "cm"))}</b></div>
+        <i aria-hidden="true">→</i>
+        <div><span>更新后</span><b>体重 ${escapeHtml(growthSnapshotMetric(after, "weight", "g"))}</b><b>背甲 ${escapeHtml(growthSnapshotMetric(after, "carapaceLength", "cm"))}</b></div>
+      </div>
+    </section>
+  `;
+}
+
+function growthHistoryFlowMarkup(timeline = [], turtleId = "") {
+  return timeline.map((record, index) => {
+    const step = growthHistoryStepMarkup(record, index, turtleId);
+    if (index === timeline.length - 1) return step;
+    const next = timeline[index + 1];
+    const days = Math.max(0, Math.round((growthTimestamp(next.updatedAt) - growthTimestamp(record.updatedAt)) / 86400000));
+    return `${step}<div class="growth-history-interval"><small>相隔 ${days} 天</small><b aria-hidden="true">→</b></div>`;
+  }).join("");
+}
+
+function growthUpdateCard(item) {
+  const turtle = item.turtle;
+  const photo = item.record?.newPhoto || turtle.photo || defaultPhoto;
+  const isBreeding = item.type === "breeding";
+  const timing = [
+    growthElapsedLabel(item.timestamp),
+    growthIntervalLabel(item.timestamp, item.priorTimestamp, isBreeding ? "繁殖记录" : "测量", isBreeding ? 0 : growthTimestamp(turtle.createdAt || turtle.acquiredDate))
+  ];
+  let meta = [];
+  let historyFlow = "";
+  let heading = "成长更新";
+  if (item.type === "breeding") {
+    heading = "繁殖更新";
+    meta = [`产蛋 ${item.record.eggCount || 0} 枚`, `受精 ${item.record.fertileCount || 0} 枚`, `孵化 ${item.record.hatchCount || 0} 只`];
+  } else {
+    historyFlow = growthHistoryFlowMarkup(item.timeline || [item.record], turtle.id);
+    if (item.poolChanged) {
+      heading = "龟池变动";
+      meta.push(`龟池 ${item.baseline.poolName || turtlePoolName(item.baseline.poolId)} → ${item.current.poolName || turtlePoolName(item.current.poolId)}`);
+    } else {
+      if (item.previous.health !== item.current.health) meta.push(`健康 ${item.previous.health || "-"} → ${item.current.health || "-"}`);
+      if (item.previous.status !== item.current.status) meta.push(`状态 ${item.previous.status || "-"} → ${item.current.status || "-"}`);
+    }
+  }
+  return `
+    <article class="growth-update-card fresh-card" data-view-turtle="${escapeHtml(turtle.id)}" role="button" tabindex="0" aria-label="查看 ${escapeHtml(turtle.code || turtle.speciesName || "乌龟")} 的成长详情">
+      <img src="${photo}" alt="${escapeHtml(turtle.code || turtle.speciesName || "乌龟")}" loading="lazy">
+      <div class="growth-update-main">
+        <div class="growth-update-head"><strong>${escapeHtml(turtle.code || "未命名乌龟")}</strong><span>${heading}</span></div>
+        <p>${escapeHtml(turtle.speciesName || "未填写品种")} · ${growthDateLabel(item.record?.updatedAt || item.record?.createdAt || item.record?.date)}${!isBreeding && item.historyCount > 1 ? ` · 已汇总 ${item.historyCount} 次更新` : ""}</p>
+        ${historyFlow ? `<div class="growth-history-flow" data-growth-history-flow aria-label="完整成长更新记录，可左右滑动查看每次更新">${historyFlow}</div>` : `<div class="growth-update-chips">${meta.filter(Boolean).map(text => text.startsWith("<em ") ? text : `<em>${escapeHtml(text)}</em>`).join("")}</div>`}
+      </div>
+      <div class="growth-update-timing" aria-label="记录时间"><span>${escapeHtml(timing[0])}</span><small>${escapeHtml(timing[1])}</small></div>
+      <b aria-hidden="true">›</b>
+    </article>
+  `;
+}
+
+function pageGrowth() {
+  const updates = turtleGrowthUpdates();
+  const updatedTurtleCount = new Set(updates.map(item => item.turtle.id)).size;
+  const filter = state.growthFilter || "all";
+  const visible = filter === "all" ? updates : updates.filter(item => item.type === filter || (filter === "measure" && item.type === "pool"));
+  const recentTime = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const recentCount = updates.filter(item => item.timestamp >= recentTime).length;
+  return `
+    ${topbar("成长记录", true)}
+    <main class="content page-fresh growth-page">
+      <section class="page-intro compact-intro growth-intro">
+        <div><p class="eyebrow dark">成长汇总</p><h2>${updatedTurtleCount} 只乌龟有更新</h2><p>每只乌龟保留最新一张卡片，并把最早记录到当前的体重、背甲和龟池变化完整汇总。</p></div>
+      </section>
+      <section class="growth-summary fresh-card"><div><strong>${updatedTurtleCount}</strong><span>已更新个体</span></div><div><strong>${recentCount}</strong><span>近 7 天更新</span></div><div><strong>${Math.max(0, (state.turtles || []).length - updatedTurtleCount)}</strong><span>暂无更新</span></div></section>
+      <section class="growth-filter-row" aria-label="成长记录筛选">
+        ${[["all", "全部"], ["measure", "成长测量"], ["breeding", "繁殖"], ["pool", "龟池"]].map(([value, label]) => `<button type="button" class="${filter === value ? "active" : ""}" data-growth-filter="${value}">${label}</button>`).join("")}
+      </section>
+      <section class="growth-update-list">
+        ${visible.map(growthUpdateCard).join("") || `<div class="empty small-empty"><div><strong>${updates.length ? "没有符合筛选条件的更新" : "还没有成长更新"}</strong><br>${updates.length ? "切换筛选项查看其他记录。" : "在乌龟档案中点击更新后，体重、背甲和状态变化会自动显示在这里。"}</div></div>`}
+      </section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
 function ledgerForm() {
   const type = state.ledgerDraftType;
   const isPurchase = type === "purchase";
+  const isOther = type === "other";
   // 收购是新增一只龟，不能关联或覆盖已有档案。
   const draftTurtleId = isPurchase ? "" : ledgerFormValue("turtleId", state.ledgerDraftTurtleId);
   const turtle = state.turtles.find(t => t.id === draftTurtleId);
@@ -4049,10 +4279,17 @@ function ledgerForm() {
         <div class="form-head"><div><p class="eyebrow dark">${ledgerTypeText(type)}</p><h3>基础信息</h3></div><button type="button" class="danger-link" data-cancel-ledger>取消</button></div>
         <div class="photo-uploader">
           ${state.ledgerDraftPhoto ? `<img src="${state.ledgerDraftPhoto}" alt="${ledgerTypeText(type)}照片">` : `<span>照片</span>`}
-          <div><button class="secondary" type="button" data-ledger-photo-button>上传照片</button><p class="muted">和新建档案一样，可以上传这只龟当时的照片。</p></div>
+          <div><button class="secondary" type="button" data-ledger-photo-button>上传照片</button><p class="muted">${isOther ? "可上传小票、发票或购买物品照片。" : "和新建档案一样，可以上传这只龟当时的照片。"}</p></div>
         </div>
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-ledger-photo-input>
-        ${!isPurchase ? `
+        ${isOther ? `
+          <div class="label">支出分类 <span class="required">*</span></div>
+          <select class="select" name="otherCategory" required>
+            ${["龟粮", "耗材", "设备", "药品", "水电", "运输", "检测", "其他"].map(category => `<option value="${category}" ${ledgerFormSelected("otherCategory", category, "龟粮")}>${category}</option>`).join("")}
+          </select>
+          <div class="label">记账事项 <span class="required">*</span></div>
+          <input class="field" name="otherTitle" required value="${escapeHtml(ledgerFormValue("otherTitle"))}" placeholder="例如：购买幼龟粮、加热棒、过滤棉">
+        ` : !isPurchase ? `
           <div class="label">关联档案</div>
           <select class="select" name="turtleId">
             <option value="">不关联档案</option>
@@ -4089,7 +4326,7 @@ function ledgerForm() {
         ` : ""}
       </section>
 
-      <section class="form-block fresh-card">
+      ${!isOther ? `<section class="form-block fresh-card">
         <h3>体测数据</h3>
         <div class="label">当前体重(g) ${isPurchase ? `<span class="required">*</span>` : ""}</div>
         <input class="field" name="weight" type="number" min="0" step="0.1" value="${escapeHtml(ledgerFormValue("weight", turtle?.weight || ""))}" ${isPurchase ? "required" : ""}>
@@ -4101,7 +4338,7 @@ function ledgerForm() {
           <label><span>背高(cm)</span><input class="field" name="shellHeight" type="number" min="0" step="0.1" value="${escapeHtml(ledgerFormValue("shellHeight", turtle?.shellHeight || ""))}"></label>
           <label><span>腹甲长度(cm)</span><input class="field" name="plastronLength" type="number" min="0" step="0.1" value="${escapeHtml(ledgerFormValue("plastronLength", turtle?.plastronLength || ""))}"></label>
         </details>
-      </section>
+      </section>` : ""}
 
       ${isPurchase ? `
         <section class="form-block fresh-card">
@@ -4115,12 +4352,12 @@ function ledgerForm() {
       ` : ""}
 
       <section class="form-block fresh-card">
-        <h3>${isPurchase ? "入手记录" : `${ledgerTypeText(type)}记录`}</h3>
+        <h3>${isOther ? "日常养护支出" : (isPurchase ? "入手记录" : `${ledgerTypeText(type)}记录`)}</h3>
         <div class="label">${isPurchase ? "入手日期" : "日期"}</div><input class="field" name="recordDate" type="date" value="${today}">
-        <div class="label">${isPurchase ? "花费(元)" : "金额(元)"}</div><input class="field" name="amount" type="number" min="0" step="0.01" required value="${escapeHtml(amountValue)}">
-        <div class="label">备注</div><textarea name="note" placeholder="${isPurchase ? "性格、食欲、卖家、到家表现等都可以写在这里" : "客户、损耗原因、交接情况等都可以写在这里"}">${escapeHtml(ledgerFormValue("note"))}</textarea>
+        <div class="label">${isOther ? "支出金额(元)" : (isPurchase ? "花费(元)" : "金额(元)")}</div><input class="field" name="amount" type="number" min="0" step="0.01" required value="${escapeHtml(amountValue)}">
+        <div class="label">备注</div><textarea name="note" placeholder="${isOther ? "可记录品牌、规格、数量、购买渠道、使用周期等" : (isPurchase ? "性格、食欲、卖家、到家表现等都可以写在这里" : "客户、损耗原因、交接情况等都可以写在这里")}">${escapeHtml(ledgerFormValue("note"))}</textarea>
       </section>
-      <button class="primary" type="submit">保存${ledgerTypeText(type)}</button>
+      <button class="primary" type="submit">保存${isOther ? "其他支出" : ledgerTypeText(type)}</button>
     </form>
   `;
 }
@@ -4128,8 +4365,9 @@ function ledgerForm() {
 function ledgerRow(item) {
   const turtle = state.turtles.find(t => t.id === item.turtleId) || item.turtleSnapshot;
   const typeText = ledgerTypeText(item.type);
-  const nickname = turtle?.code || String(item.title || "未关联档案").split(" · ")[0] || "未关联档案";
-  const speciesName = turtle?.speciesName || item.speciesName || String(item.title || "").split(" · ").slice(1).join(" · ") || "未填写品种";
+  const isOther = item.type === "other";
+  const nickname = isOther ? (item.title || "未命名支出") : (turtle?.code || String(item.title || "未关联档案").split(" · ")[0] || "未关联档案");
+  const speciesName = isOther ? (item.category || "日常养护支出") : (turtle?.speciesName || item.speciesName || String(item.title || "").split(" · ").slice(1).join(" · ") || "未填写品种");
   const weight = item.weight || turtle?.weight || "";
   const carapaceLength = item.carapaceLength || turtle?.carapaceLength || "";
   const weightText = weight !== "" ? `${weight}g` : "—g";
@@ -4149,7 +4387,7 @@ function ledgerRow(item) {
           <div class="ledger-row-title"><span class="ledger-inline-type ${item.type}">${typeText}</span><strong class="ledger-title-text">${escapeHtml(nickname)}</strong></div>
           <p class="ledger-row-species">${escapeHtml(speciesName)}</p>
         </div>
-        <div class="ledger-turtle-meta"><span>${escapeHtml(String(weightText))}</span><span>${escapeHtml(carapaceText)}</span></div>
+        ${isOther ? `<div class="ledger-turtle-meta"><span>${escapeHtml(item.note || "未填写备注")}</span></div>` : `<div class="ledger-turtle-meta"><span>${escapeHtml(String(weightText))}</span><span>${escapeHtml(carapaceText)}</span></div>`}
       </div>
       <div class="ledger-row-side ${linkedStatus ? "has-linked-status" : ""}">
         ${linkedStatus ? `<span class="ledger-linked-status ${linkedFollowup.type}">${linkedStatus}</span>` : ""}
@@ -4168,15 +4406,17 @@ function pageLedgerDetail() {
   const turtle = state.turtles.find(t => t.id === item.turtleId) || item.turtleSnapshot;
   const typeText = ledgerTypeText(item.type);
   const amountPrefix = item.type === "sold" ? "+" : "-";
+  const isOther = item.type === "other";
   return `
     ${topbar("账本详情", true)}
     <main class="content page-fresh">
       <section class="ledger-detail-hero">${item.photo ? `<img src="${item.photo}" alt="${typeText}照片">` : `<div class="ledger-detail-empty">${typeText}</div>`}</section>
       <section class="fresh-card ledger-detail-card">
         <div class="ledger-detail-head"><span class="ledger-inline-type ${item.type}">${typeText}</span><strong class="${item.type !== "sold" ? "danger-text" : ""}">${amountPrefix}${money(item.amount)}</strong></div>
-        <h2>${turtle ? `${turtle.code} · ${turtle.speciesName}` : (item.title || "未关联档案")}</h2>
+        <h2>${isOther ? escapeHtml(item.title || "未命名支出") : (turtle ? `${turtle.code} · ${turtle.speciesName}` : (item.title || "未关联档案"))}</h2>
         <p class="muted">${item.recordDate || formatDate(item.createdAt)}</p>
         <div class="detail-grid">
+          ${isOther ? `<div><span>支出分类</span><strong>${escapeHtml(item.category || "其他")}</strong></div><div><span>凭证</span><strong>${item.photo ? "已上传" : "未上传"}</strong></div>` : `
           <div><span>档案状态</span><strong>${turtle ? "已保留快照" : "未关联"}</strong></div>
           <div><span>性别</span><strong>${turtle?.gender || "-"}</strong></div>
           <div><span>体重</span><strong>${item.weight || turtle?.weight || "-"}g</strong></div>
@@ -4185,7 +4425,7 @@ function pageLedgerDetail() {
           <div><span>背高</span><strong>${item.shellHeight || turtle?.shellHeight || "-"}cm</strong></div>
           <div><span>腹甲长</span><strong>${item.plastronLength || turtle?.plastronLength || "-"}cm</strong></div>
           <div><span>记录时间</span><strong>${formatTime(item.createdAt)}</strong></div>
-          ${item.type === "sold" ? `<div><span>成交方式</span><strong>${escapeHtml(item.saleMethod || "未填写")}</strong></div>` : ""}
+          ${item.type === "sold" ? `<div><span>成交方式</span><strong>${escapeHtml(item.saleMethod || "未填写")}</strong></div>` : ""}`}
         </div>
         ${item.note ? `<p class="detail-note">${item.note}</p>` : ""}
       </section>
@@ -4964,6 +5204,7 @@ function render() {
     marketFavorites: pageMarketFavorites,
     marketHistory: pageMarketHistory,
     list: pageList,
+    growth: pageGrowth,
     turtleDetail: pageTurtleDetail,
     species: pageSpecies,
     breeds: pageBreeds,
@@ -5025,10 +5266,18 @@ function render() {
   }
   bindEvents();
   setupMarketInfiniteScroll();
+  setupCommunityInfiniteScroll();
   requestAnimationFrame(() => {
     hydrateVideoFirstFrames();
     hydrateCommunityPostVideos();
     hydrateMarketDetailVideos();
+    // 时间轴保持从旧到新，进入成长记录时直接定位最右侧的最新一次；
+    // 之后可自然向左回看旧记录、向右回到最新记录。
+    if (state.page === "growth") {
+      document.querySelectorAll("[data-growth-history-flow]").forEach(flow => {
+        flow.scrollLeft = Math.max(0, flow.scrollWidth - flow.clientWidth);
+      });
+    }
   });
   if (state.page === "communityChat") scrollCommunityChatToLatest();
   hydrateSpeciesImages();
@@ -5185,6 +5434,12 @@ function bindEvents() {
   document.querySelectorAll("[data-open-platform-service-dialog]").forEach(button => button.addEventListener("click", openMarketTopService));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", navigateBack));
   document.querySelectorAll("[data-view-turtle]").forEach(el => el.addEventListener("click", () => setState({ page: "turtleDetail", selectedTurtleId: el.dataset.viewTurtle, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
+  document.querySelectorAll("[data-growth-filter]").forEach(button => button.addEventListener("click", () => setState({ growthFilter: button.dataset.growthFilter }, { pageScroll: "preserve" })));
+  document.querySelectorAll("[data-delete-growth-update]").forEach(button => button.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    deleteGrowthUpdate(button.dataset.growthTurtleId, button.dataset.deleteGrowthUpdate);
+  }));
   document.querySelectorAll("[data-toggle-turtle-menu]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
     const draft = state.page === "turtleDetail" ? captureTurtleDetailDraft() : null;
@@ -7960,14 +8215,17 @@ function normalizeCommunityPosts(posts = []) {
     return {
       ...item,
       authorName: item.authorName || "壳友",
-      authorAvatar: item.authorAvatar ? apiAssetUrl(item.authorAvatar) : "",
+      // Built-in avatars live inside the iOS app bundle.  Do not turn their
+      // relative asset path into an API URL, otherwise every tiny avatar waits
+      // for the public server and makes the feed appear to load slowly.
+      authorAvatar: item.authorAvatar ? accountAvatarSource(item.authorAvatar) : "",
       mediaUrl: primaryMedia?.url || "",
       posterUrl: primaryMedia?.posterUrl || "",
       mediaType: primaryMedia?.type || "",
       mediaItems,
       comments: Array.isArray(item.comments) ? item.comments.map(comment => ({
         ...comment,
-        authorAvatar: comment.authorAvatar ? apiAssetUrl(comment.authorAvatar) : ""
+        authorAvatar: comment.authorAvatar ? accountAvatarSource(comment.authorAvatar) : ""
       })) : []
     };
   });
@@ -7978,7 +8236,7 @@ async function refreshCommunity(force = false) {
   if (!force && Date.now() - communityLastLoadedAt < 10000) return;
   communityLoading = true;
   try {
-    const result = await apiPost("/api/community/list", communityAuthPayload());
+    const result = await apiPost("/api/community/list", communityAuthPayload({ offset: 0, limit: 10 }));
     communityLastLoadedAt = Date.now();
     const friends = mergeCommunityFriends(Array.isArray(result.friends) ? result.friends : []);
     const messageUnreadCount = friends.reduce((sum, friend) => sum + Math.max(0, Number(friend.unreadCount || 0)), 0);
@@ -7992,6 +8250,10 @@ async function refreshCommunity(force = false) {
     const communityPosts = normalizeCommunityPosts(result.posts || []);
     const nextCommunityState = {
       communityPosts,
+      communityFeedInitialized: true,
+      communityFeedNextOffset: Math.max(0, Number(result.nextOffset ?? communityPosts.length)),
+      communityFeedHasMore: Boolean(result.hasMore),
+      communityFeedLoadingMore: false,
       communityProfileStats: profileStats,
       isCommunityAdmin: Boolean(result.isAdmin),
       communityFriends: friends,
@@ -8015,6 +8277,57 @@ async function refreshCommunity(force = false) {
   } finally {
     communityLoading = false;
   }
+}
+
+async function loadMoreCommunityPosts() {
+  if (!hasCloudSession() || state.page !== "community" || communityLoading || state.communityFeedLoadingMore || !state.communityFeedHasMore) return;
+  communityLoading = true;
+  state = { ...state, communityFeedLoadingMore: true };
+  saveState({ skipCloud: true });
+  const status = $app.querySelector("[data-community-load-sentinel]");
+  if (status) status.textContent = "正在加载更多动态…";
+  try {
+    const result = await apiPost("/api/community/list", communityAuthPayload({
+      offset: Math.max(0, Number(state.communityFeedNextOffset || 0)),
+      limit: 10
+    }));
+    const incoming = normalizeCommunityPosts(result.posts || []);
+    const existingPosts = state.communityPosts || [];
+    const existingIds = new Set(existingPosts.map(post => String(post.id)));
+    const appended = incoming.filter(post => !existingIds.has(String(post.id)));
+    const communityPosts = [...existingPosts, ...appended];
+    state = {
+      ...state,
+      communityPosts,
+      communityFeedInitialized: true,
+      communityFeedNextOffset: Math.max(0, Number(result.nextOffset ?? (Number(state.communityFeedNextOffset || 0) + incoming.length))),
+      communityFeedHasMore: Boolean(result.hasMore),
+      communityFeedLoadingMore: false
+    };
+    saveState({ skipCloud: true });
+    patchVisibleCommunityFeed(communityPosts, existingPosts);
+  } catch (error) {
+    state = { ...state, communityFeedLoadingMore: false };
+    saveState({ skipCloud: true });
+    console.warn(error.message || "加载更多壳友圈动态失败");
+  } finally {
+    communityLoading = false;
+    const nextStatus = $app.querySelector("[data-community-load-sentinel]");
+    if (nextStatus) nextStatus.textContent = state.communityFeedHasMore ? "继续上滑，加载更多" : "已经到底了";
+    setupCommunityInfiniteScroll();
+  }
+}
+
+function setupCommunityInfiniteScroll() {
+  communityLoadObserver?.disconnect();
+  communityLoadObserver = null;
+  if (state.page !== "community" || !state.communityFeedHasMore || state.communityFeedLoadingMore) return;
+  const sentinel = document.querySelector("[data-community-load-sentinel]");
+  if (!sentinel || typeof IntersectionObserver === "undefined") return;
+  communityLoadObserver = new IntersectionObserver(entries => {
+    if (entries.some(entry => entry.isIntersecting)) void loadMoreCommunityPosts();
+  }, { root: null, rootMargin: "0px 0px 260px", threshold: 0.01 });
+  communityLoadObserver.observe(sentinel);
 }
 
 async function refreshContentReports(force = false) {
@@ -8285,58 +8598,88 @@ function hydrateCommunityPostVideos() {
     video.muted = true;
     video.defaultMuted = true;
     video.playsInline = true;
-    // Keep off-screen videos at metadata only. The poster is already visible,
-    // so downloading full media for every feed card wastes the limited uplink.
+    // Prepare only the selected card.  The other videos stay at `none`, which
+    // is how Moments avoids making several videos compete for the connection.
     video.preload = "metadata";
     if (video.readyState < HTMLMediaElement.HAVE_METADATA) video.load();
   };
 
-  const shouldAutoplay = video => video.dataset.communityVideoAutoplay === "true";
+  const shell = video => video.closest(".community-feed-media-button");
+  const stopVideo = video => {
+    video.pause();
+    shell(video)?.classList.remove("is-playing");
+  };
   const startVideo = video => {
-    if (!shouldAutoplay(video)) return;
+    if (!video || video.dataset.communityVideoAutoplay !== "true") return;
     loadVideo(video);
     video.muted = true;
     video.defaultMuted = true;
     video.playsInline = true;
     video.autoplay = true;
-    const playback = video.play();
-    if (playback?.then) {
-      playback.then(() => video.closest("button")?.classList.add("is-playing"))
-        .catch(() => video.closest("button")?.classList.remove("is-playing"));
+    const play = () => {
+      const playback = video.play();
+      if (playback?.then) {
+        playback.then(() => shell(video)?.classList.add("is-playing"))
+          .catch(() => shell(video)?.classList.remove("is-playing"));
+      }
+    };
+    // For older posts without a stored poster, let the first-frame helper
+    // capture the decoded frame before playback begins.  The user sees that
+    // frame as the cover instead of a black native-player loading surface.
+    if (!video.getAttribute("poster") && video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      video.addEventListener("loadeddata", play, { once: true });
+      return;
     }
+    play();
   };
 
-  const stopVideo = video => {
-    if (!shouldAutoplay(video)) return;
-    video.pause();
-    video.closest("button")?.classList.remove("is-playing");
+  const selectCenteredVideo = () => {
+    const visible = videos.filter(video => video.dataset.communityVideoVisible === "true");
+    if (!visible.length) {
+      videos.forEach(stopVideo);
+      return;
+    }
+    const viewportCenter = window.innerHeight / 2;
+    const selected = visible.reduce((best, video) => {
+      const rect = video.getBoundingClientRect();
+      const distance = Math.abs((rect.top + rect.height / 2) - viewportCenter);
+      if (!best || distance < best.distance) return { video, distance };
+      return best;
+    }, null)?.video;
+    videos.forEach(video => {
+      if (video === selected) startVideo(video);
+      else stopVideo(video);
+    });
   };
 
   videos.forEach(video => {
-    if (video.dataset.communityVideoPlaybackBound === "true") return;
-    video.dataset.communityVideoPlaybackBound = "true";
-    video.addEventListener("playing", () => video.closest("button")?.classList.add("is-playing"), { once: true });
-    video.addEventListener("pause", () => video.closest("button")?.classList.remove("is-playing"));
+    video.muted = true;
+    video.defaultMuted = true;
+    video.playsInline = true;
+    video.addEventListener("playing", () => shell(video)?.classList.add("is-playing"));
+    video.addEventListener("pause", () => shell(video)?.classList.remove("is-playing"));
+    // A tap mirrors Moments: pause the currently playing card, or resume the
+    // touched one while immediately pausing every other feed video.
+    video.addEventListener("click", () => {
+      if (video.paused) {
+        videos.forEach(other => { if (other !== video) stopVideo(other); });
+        startVideo(video);
+      } else {
+        stopVideo(video);
+      }
+    });
   });
 
   if (!("IntersectionObserver" in window)) {
-    videos.forEach(video => {
-      loadVideo(video);
-      startVideo(video);
-    });
     return;
   }
 
   communityVideoLoadObserver = new IntersectionObserver(entries => {
     entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        loadVideo(entry.target);
-        startVideo(entry.target);
-      } else {
-        stopVideo(entry.target);
-      }
+      entry.target.dataset.communityVideoVisible = entry.isIntersecting ? "true" : "false";
     });
-  }, { rootMargin: "320px 0px", threshold: 0.15 });
+    selectCenteredVideo();
+  }, { rootMargin: "-18% 0px -18%", threshold: [0, 0.25, 0.5, 0.75, 1] });
   videos.forEach(video => communityVideoLoadObserver.observe(video));
 }
 
@@ -10097,6 +10440,7 @@ async function apiPost(path, payload) {
   if (!response.ok || data.ok === false) {
     const error = new Error(data.message || "服务暂时不可用");
     error.status = response.status;
+    error.code = data.code || "";
     throw error;
   }
   return data;
@@ -10318,6 +10662,13 @@ async function pushCloudDataNow(throwOnError = false) {
     if (!accountHasEmbeddedImages(state)) clearPendingCloudData();
   } catch (error) {
     console.warn(error.message || "云端同步失败");
+    // Never retry a rejected stale-history write automatically: doing so can
+    // turn a recoverable multi-device conflict into repeated overwrites.  The
+    // local journal stays intact, and the person gets a clear instruction.
+    if (error?.code === "GROWTH_HISTORY_CONFLICT") {
+      persistPendingCloudData();
+      toast("云端有更新的成长记录，本机修改已保留；刷新后再继续编辑");
+    }
     if (throwOnError) throw error;
   } finally {
     cloudSyncInFlight = false;
@@ -10620,6 +10971,103 @@ async function readUpdatePhoto(event) {
   }
 }
 
+function applyGrowthSnapshotToTurtle(turtle, snapshot = {}, photo = "") {
+  const next = { ...turtle };
+  ["code", "weight", "carapaceLength", "status", "health", "poolId"].forEach(field => {
+    if (snapshot[field] !== undefined && snapshot[field] !== null && snapshot[field] !== "") next[field] = snapshot[field];
+  });
+  if (photo) next.photo = photo;
+  return next;
+}
+
+function deleteGrowthRecordAndRebuild(turtle, historyId) {
+  const newestFirst = Array.isArray(turtle?.measureHistory) ? turtle.measureHistory : [];
+  const chronological = [...newestFirst].reverse();
+  const removedIndex = chronological.findIndex(item => item?.id === historyId);
+  if (removedIndex < 0) return null;
+  const removed = chronological[removedIndex];
+  const baseline = { ...(removedIndex === 0 ? removed.oldSnapshot : chronological[0]?.oldSnapshot || {}) };
+  let previousSnapshot = baseline;
+  let previousPhoto = removedIndex === 0 ? removed.oldPhoto || "" : chronological[0]?.oldPhoto || "";
+  const rebuilt = [];
+
+  chronological.forEach(item => {
+    if (item?.id === historyId) return;
+    const next = {
+      ...item,
+      oldSnapshot: { ...previousSnapshot },
+      oldLength: Number(previousSnapshot.carapaceLength || 0),
+      oldPhoto: previousPhoto || item.oldPhoto || ""
+    };
+    rebuilt.push(next);
+    previousSnapshot = { ...(next.newSnapshot || previousSnapshot) };
+    previousPhoto = next.newPhoto || previousPhoto;
+  });
+
+  return {
+    removed,
+    turtle: {
+      ...applyGrowthSnapshotToTurtle(turtle, previousSnapshot, previousPhoto),
+      measureHistory: rebuilt.reverse()
+    }
+  };
+}
+
+async function deleteGrowthUpdate(turtleId, historyId) {
+  if (!requireLogin()) return;
+  const turtle = (state.turtles || []).find(item => item.id === turtleId);
+  const record = turtle?.measureHistory?.find(item => item.id === historyId);
+  if (!turtle || !record) return toast("未找到这条成长记录");
+  const label = growthDateLabel(record.updatedAt);
+  const before = record.oldSnapshot || {};
+  if (!window.confirm(`确认删除 ${label} 的这一次成长更新吗？\n\n删除后无法恢复，当前档案将回退至更新前：体重 ${growthSnapshotMetric(before, "weight", "g")}、背甲 ${growthSnapshotMetric(before, "carapaceLength", "cm")}。`)) return;
+
+  try {
+    // Deliberate history deletion uses a dedicated endpoint. It is separate
+    // from the normal full-account save so the stale-device protection can
+    // keep rejecting accidental history rollback while this explicit action
+    // still works safely.
+    if (CONFIGURED_SMS_BACKEND && state.loggedInPhone && currentCloudToken()) {
+      const result = await apiPost("/api/account/growth-record/delete", {
+        phone: state.loggedInPhone,
+        token: currentCloudToken(),
+        turtleId,
+        historyId
+      });
+      if (result.user) {
+        applyCloudUser(result.user, "", { skipCloud: true, skipMigration: true, page: "growth" });
+        toast("已删除这一次成长更新，档案数据已回退");
+        return;
+      }
+    }
+    const rebuilt = deleteGrowthRecordAndRebuild(turtle, historyId);
+    if (!rebuilt) return toast("未找到这条成长记录");
+    setState({
+      turtles: state.turtles.map(item => item.id === turtleId ? rebuilt.turtle : item),
+      activityLogs: logActivity(`删除成长记录：${turtleLabel(turtle)} · ${label}`, "档案")
+    }, { page: "growth" });
+    toast("已删除这一次成长更新，档案数据已回退");
+  } catch (error) {
+    console.warn(error.message || "删除成长记录失败");
+    // The deployed server may temporarily be older than this web build and
+    // not yet expose the dedicated deletion endpoint.  Keep deletion usable
+    // during a rolling upgrade: the legacy save path still carries the fully
+    // rebuilt timeline and will be replaced by the protected endpoint as soon
+    // as the server is updated.
+    if (Number(error?.status) === 405 || String(error?.message || "") === "方法不支持") {
+      const rebuilt = deleteGrowthRecordAndRebuild(turtle, historyId);
+      if (!rebuilt) return toast("未找到这条成长记录");
+      setState({
+        turtles: state.turtles.map(item => item.id === turtleId ? rebuilt.turtle : item),
+        activityLogs: logActivity(`删除成长记录：${turtleLabel(turtle)} · ${label}`, "档案")
+      }, { page: "growth" });
+      toast("已删除这一次成长更新，档案数据已回退");
+      return;
+    }
+    toast(error.message || "删除失败，请稍后重试");
+  }
+}
+
 function submitTurtleDetail(event) {
   event.preventDefault();
   if (!requireLogin()) return;
@@ -10632,6 +11080,11 @@ function submitTurtleDetail(event) {
   const carapaceLength = Number(form.get("carapaceLength"));
   if (Number.isNaN(weight) || weight <= 0) return toast("当前体重需要填写大于 0 的数字");
   if (Number.isNaN(carapaceLength) || carapaceLength <= 0) return toast("背甲长度需要填写大于 0 的数字");
+  const sameWeight = Math.abs(weight - Number(turtle.weight || 0)) < 0.000001;
+  const sameCarapaceLength = Math.abs(carapaceLength - Number(turtle.carapaceLength || 0)) < 0.000001;
+  if (sameWeight && sameCarapaceLength) {
+    return toast("体重和背甲长度均未变化，本次不新增成长更新");
+  }
   const updated = {
     ...turtle,
     code: String(form.get("code") || "").trim() || turtle.code,
@@ -10852,10 +11305,10 @@ function deleteTurtlePool(id) {
 function openLedgerForm(type, turtleId = "") {
   if (!requireLogin()) return;
   // 收购始终新建档案；只有售出、损耗才可以操作既有档案。
-  const linkedTurtleId = type === "purchase" ? "" : turtleId;
+  const linkedTurtleId = ["sold", "loss"].includes(type) ? turtleId : "";
   const turtle = state.turtles.find(t => t.id === linkedTurtleId);
   const initialPoolId = (type === "purchase" || type === "loss") ? (turtle?.poolId || "") : "";
-  setState({ page: "ledger", ledgerDraftType: type, ledgerDraftPhoto: turtle?.photo || "", ledgerDraftTurtleId: linkedTurtleId, ledgerDraftForm: linkedTurtleId ? { turtleId: linkedTurtleId, poolId: initialPoolId } : { poolId: initialPoolId }, ledgerPurchaseGender: "未知", ledgerTab: type, openTurtleMenuId: "" }, { pageScroll: "preserve" });
+  setState({ page: "ledger", ledgerDraftType: type, ledgerDraftPhoto: turtle?.photo || "", ledgerDraftTurtleId: linkedTurtleId, ledgerDraftForm: linkedTurtleId ? { turtleId: linkedTurtleId, poolId: initialPoolId } : { poolId: initialPoolId, otherCategory: type === "other" ? "龟粮" : "" }, ledgerPurchaseGender: "未知", ledgerTab: type, openTurtleMenuId: "" }, { pageScroll: "preserve" });
   requestAnimationFrame(() => requestAnimationFrame(scrollLedgerFormIntoView));
 }
 
@@ -11071,6 +11524,9 @@ function submitLedgerRecord(event) {
   const poolName = turtlePoolName(poolId);
   const amount = Number(form.get("amount"));
   if (!type || Number.isNaN(amount) || amount < 0) return toast("请填写正确的金额");
+  const otherTitle = String(form.get("otherTitle") || "").trim();
+  const otherCategory = String(form.get("otherCategory") || "其他").trim();
+  if (type === "other" && !otherTitle) return toast("请填写记账事项");
   let nextTurtles = state.turtles;
   let nextKeptSpecies = state.keptSpecies;
   if (type === "purchase" && !turtle) {
@@ -11108,7 +11564,7 @@ function submitLedgerRecord(event) {
     nextTurtles = nextTurtles.map(item => item.id === turtle.id ? turtle : item);
   }
   if ((type === "sold" || type === "loss") && turtle) nextTurtles = nextTurtles.filter(t => t.id !== turtle.id);
-  const title = turtle ? turtleLabel(turtle) : (String(form.get("note") || "").trim().split(/[，。\n]/)[0] || "未关联档案");
+  const title = type === "other" ? otherTitle : (turtle ? turtleLabel(turtle) : (String(form.get("note") || "").trim().split(/[，。\n]/)[0] || "未关联档案"));
   const record = {
     id: crypto.randomUUID(),
     type,
@@ -11116,6 +11572,7 @@ function submitLedgerRecord(event) {
     poolId,
     poolName,
     title,
+    category: type === "other" ? otherCategory : "",
     amount,
     recordDate: form.get("recordDate"),
     weight: form.get("weight"),

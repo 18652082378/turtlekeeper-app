@@ -258,7 +258,8 @@ function sendJson(res, status, body) {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Auth-Phone, X-Auth-Token, X-Media-Duration"
+    "Access-Control-Allow-Headers": "Content-Type, Range, X-Auth-Phone, X-Auth-Token, X-Media-Duration",
+    "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range"
   });
   res.end(JSON.stringify(cacheBustMediaUrls(body)));
 }
@@ -373,6 +374,78 @@ function accountDataWasReduced(before = {}, after = {}) {
   const previous = accountRecordCounts(before);
   const next = accountRecordCounts(after);
   return Object.keys(previous).some(field => next[field] < previous[field]);
+}
+
+function nestedGrowthHistoryWasReduced(before = {}, after = {}) {
+  const previous = normalizeAccountData(before);
+  const next = normalizeAccountData(after);
+  const nextTurtles = new Map((next.turtles || []).map(turtle => [String(turtle?.id || ""), turtle]));
+
+  // A turtle that was intentionally deleted is handled by the existing
+  // account-level deletion safeguards.  This guard is specifically for a
+  // stale device submitting an older copy of a turtle that still exists.
+  for (const oldTurtle of previous.turtles || []) {
+    const turtleId = String(oldTurtle?.id || "");
+    const nextTurtle = turtleId ? nextTurtles.get(turtleId) : null;
+    if (!nextTurtle) continue;
+
+    const oldHistory = Array.isArray(oldTurtle.measureHistory) ? oldTurtle.measureHistory : [];
+    const nextHistory = Array.isArray(nextTurtle.measureHistory) ? nextTurtle.measureHistory : [];
+    if (nextHistory.length < oldHistory.length) return true;
+
+    // Newer clients give every measurement a UUID.  Check that a stale
+    // client has not silently dropped a specific known measurement even when
+    // another record happens to keep the array length unchanged.
+    const oldIds = oldHistory.map(item => String(item?.id || "")).filter(Boolean);
+    if (oldIds.length) {
+      const nextIds = new Set(nextHistory.map(item => String(item?.id || "")).filter(Boolean));
+      if (oldIds.some(id => !nextIds.has(id))) return true;
+    }
+  }
+
+  return false;
+}
+
+function applyGrowthSnapshotToTurtle(turtle, snapshot = {}, photo = "") {
+  const next = { ...turtle };
+  ["code", "weight", "carapaceLength", "status", "health", "poolId"].forEach(field => {
+    if (snapshot[field] !== undefined && snapshot[field] !== null && snapshot[field] !== "") next[field] = snapshot[field];
+  });
+  if (photo) next.photo = photo;
+  return next;
+}
+
+function deleteGrowthRecordAndRebuild(turtle, historyId) {
+  const newestFirst = Array.isArray(turtle?.measureHistory) ? turtle.measureHistory : [];
+  const chronological = [...newestFirst].reverse();
+  const removedIndex = chronological.findIndex(item => String(item?.id || "") === String(historyId || ""));
+  if (removedIndex < 0) return null;
+  const removed = chronological[removedIndex];
+  const baseline = { ...(removedIndex === 0 ? removed.oldSnapshot : chronological[0]?.oldSnapshot || {}) };
+  let previousSnapshot = baseline;
+  let previousPhoto = removedIndex === 0 ? removed.oldPhoto || "" : chronological[0]?.oldPhoto || "";
+  const rebuilt = [];
+
+  chronological.forEach(item => {
+    if (String(item?.id || "") === String(historyId || "")) return;
+    const next = {
+      ...item,
+      oldSnapshot: { ...previousSnapshot },
+      oldLength: Number(previousSnapshot.carapaceLength || 0),
+      oldPhoto: previousPhoto || item.oldPhoto || ""
+    };
+    rebuilt.push(next);
+    previousSnapshot = { ...(next.newSnapshot || previousSnapshot) };
+    previousPhoto = next.newPhoto || previousPhoto;
+  });
+
+  return {
+    removed,
+    turtle: {
+      ...applyGrowthSnapshotToTurtle(turtle, previousSnapshot, previousPhoto),
+      measureHistory: rebuilt.reverse()
+    }
+  };
 }
 
 function isSuspiciousAccountDataLoss(before = {}, after = {}) {
@@ -1279,6 +1352,13 @@ async function handleSaveAccount(req, res) {
       message: "检测到异常的大幅数据减少，已停止保存以保护档案和账本；请重新打开应用后再试"
     });
   }
+  if (nestedGrowthHistoryWasReduced(existingData, incomingData)) {
+    return sendJson(res, 409, {
+      ok: false,
+      code: "GROWTH_HISTORY_CONFLICT",
+      message: "检测到本机成长记录早于云端，已停止保存以保护最新更新；请刷新数据后再修改"
+    });
+  }
   if (accountDataWasReduced(existingData, incomingData)) {
     try {
       createAccountRecoverySnapshot(user);
@@ -1292,6 +1372,45 @@ async function handleSaveAccount(req, res) {
   user.accountName = String(body.accountName || "").trim() || user.accountName || maskPhone(phone);
   user.accountAvatar = String(body.accountAvatar || "");
   user.data = incomingData;
+  user.updatedAt = new Date().toISOString();
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });
+}
+
+async function handleDeleteGrowthRecord(req, res) {
+  const body = await readJson(req);
+  const phone = String(body.phone || "").trim();
+  const token = String(body.token || "");
+  const turtleId = String(body.turtleId || "");
+  const historyId = String(body.historyId || "");
+  const db = readDatabase();
+  const user = authenticate(db, phone, token);
+  if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
+  if (!turtleId || !historyId) return sendJson(res, 400, { ok: false, message: "缺少成长记录标识，未执行删除" });
+
+  const account = normalizeAccountData(user.data || {});
+  const turtle = account.turtles.find(item => String(item?.id || "") === turtleId);
+  if (!turtle) return sendJson(res, 404, { ok: false, message: "未找到对应的乌龟档案" });
+  const history = Array.isArray(turtle.measureHistory) ? turtle.measureHistory : [];
+  if (!history.some(item => String(item?.id || "") === historyId)) {
+    return sendJson(res, 404, { ok: false, message: "这条成长记录已不存在" });
+  }
+
+  // This is an intentional, confirmed deletion. Snapshot first so an
+  // operator can still recover an account if the user later reports a
+  // mistaken tap. Normal full-account saves remain blocked from shrinking
+  // nested measurement history.
+  try {
+    createAccountRecoverySnapshot(user);
+  } catch (error) {
+    console.error("成长记录删除前备份失败：", error.message);
+    return sendJson(res, 503, { ok: false, message: "数据保护备份暂不可用，未删除这条成长记录，请稍后重试" });
+  }
+  const rebuilt = deleteGrowthRecordAndRebuild(turtle, historyId);
+  if (!rebuilt) return sendJson(res, 404, { ok: false, message: "这条成长记录已不存在" });
+  const turtleIndex = account.turtles.findIndex(item => String(item?.id || "") === turtleId);
+  account.turtles[turtleIndex] = rebuilt.turtle;
+  user.data = account;
   user.updatedAt = new Date().toISOString();
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });
@@ -2226,9 +2345,17 @@ async function handleCommunityList(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
   const user = optionalReviewUser(db, body);
+  const allPosts = publicCommunityPosts(db, user);
+  const offset = Math.max(0, Math.floor(Number(body.offset || 0)));
+  const limit = Math.min(20, Math.max(1, Math.floor(Number(body.limit || 10))));
+  const posts = allPosts.slice(offset, offset + limit);
+  const nextOffset = offset + posts.length;
   return sendJson(res, 200, {
     ok: true,
-    posts: publicCommunityPosts(db, user),
+    posts,
+    hasMore: nextOffset < allPosts.length,
+    nextOffset,
+    total: allPosts.length,
     friends: user ? communityFriends(db, user) : [],
     profileStats: communityProfileStats(db, user),
     isAdmin: isAdminUser(user)
@@ -3466,6 +3593,8 @@ function serveUpload(req, res, url) {
       "Content-Type": contentType,
       "Cache-Control": cacheControl,
       "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Range",
+      "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range",
       "Accept-Ranges": "bytes"
     };
     const fileSize = stats.size;
@@ -3510,6 +3639,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/account/login") return await handleLogin(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/load") return await handleLoadAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/save") return await handleSaveAccount(req, res);
+    if (req.method === "POST" && url.pathname === "/api/account/growth-record/delete") return await handleDeleteGrowthRecord(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/terms/accept") return await handleAcceptTerms(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/delete") return await handleDeleteAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/device/register") return await handlePushDeviceRegister(req, res);
