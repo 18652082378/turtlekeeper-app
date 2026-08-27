@@ -4243,7 +4243,7 @@ function growthUpdateCard(item) {
       <div class="growth-update-main">
         <div class="growth-update-head"><strong>${escapeHtml(turtle.code || "未命名乌龟")}</strong><span>${heading}</span></div>
         <p>${escapeHtml(turtle.speciesName || "未填写品种")} · ${growthDateLabel(item.record?.updatedAt || item.record?.createdAt || item.record?.date)}${!isBreeding && item.historyCount > 1 ? ` · 已汇总 ${item.historyCount} 次更新` : ""}</p>
-        ${historyFlow ? `<div class="growth-history-flow" data-growth-history-flow aria-label="完整成长更新记录，可左右滑动查看每次更新">${historyFlow}</div>` : `<div class="growth-update-chips">${meta.filter(Boolean).map(text => text.startsWith("<em ") ? text : `<em>${escapeHtml(text)}</em>`).join("")}</div>`}
+        ${historyFlow ? `<div class="growth-history-flow" data-growth-history-flow aria-label="完整成长更新记录，可左右滑动查看每次更新"><div class="growth-history-track">${historyFlow}</div></div>` : `<div class="growth-update-chips">${meta.filter(Boolean).map(text => text.startsWith("<em ") ? text : `<em>${escapeHtml(text)}</em>`).join("")}</div>`}
       </div>
       <div class="growth-update-timing" aria-label="记录时间"><span>${escapeHtml(timing[0])}</span><small>${escapeHtml(timing[1])}</small></div>
       <b aria-hidden="true">›</b>

@@ -16199,12 +16199,11 @@ html[data-theme-color="dark"] .breeding-history-snapshot .breeding-history-photo
 }
 
 .growth-history-flow {
-  display: flex;
-  align-items: stretch;
-  gap: 8px;
+  display: block;
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
   padding: 2px 1px 4px;
   /* Direct pointer dragging must stay under the finger; smooth scrolling
      would make every drag frame visibly lag behind. */
@@ -16221,6 +16220,14 @@ html[data-theme-color="dark"] .breeding-history-snapshot .breeding-history-photo
 
 .growth-history-flow:active { cursor: grabbing; }
 .growth-history-flow::-webkit-scrollbar { display: none; }
+
+.growth-history-track {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  width: max-content;
+  min-width: 100%;
+}
 
 .growth-history-step {
   flex: 0 0 214px;
