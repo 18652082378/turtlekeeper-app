@@ -168,6 +168,7 @@ async function copyUploadToOss(localPath, objectKey, mime) {
       "Cache-Control": "public, max-age=31536000, immutable"
     }
   });
+  console.log(`OSS 上传成功：${objectKey}`);
   return ossPublicUrl(objectKey);
 }
 
