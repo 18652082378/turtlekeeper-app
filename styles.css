@@ -16211,15 +16211,16 @@ html[data-theme-color="dark"] .breeding-history-snapshot .breeding-history-photo
   scroll-behavior: auto;
   scroll-snap-type: x proximity;
   overscroll-behavior-x: contain;
-  /* Let the page keep its native vertical scroll. Horizontal motion is
-     handled by the timeline itself so it also works inside iOS WebView. */
-  touch-action: pan-y;
+  /* Same native compositor path as the product-detail gallery: WebKit owns
+     tracking, inertia and reversal while the finger is down. */
+  touch-action: pan-x pan-y;
   -webkit-overflow-scrolling: touch;
   cursor: grab;
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
 
 .growth-history-flow:active { cursor: grabbing; }
+.growth-history-flow::-webkit-scrollbar { display: none; }
 
 .growth-history-step {
   flex: 0 0 214px;
@@ -16228,7 +16229,8 @@ html[data-theme-color="dark"] .breeding-history-snapshot .breeding-history-photo
   border: 1px solid var(--card-border);
   border-radius: 9px;
   background: var(--raised-bg);
-  scroll-snap-align: end;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
 }
 
 .growth-history-step-head {

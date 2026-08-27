@@ -5487,58 +5487,15 @@ function bindEvents() {
   document.querySelectorAll("[data-open-platform-service-dialog]").forEach(button => button.addEventListener("click", openMarketTopService));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", navigateBack));
   document.querySelectorAll("[data-view-turtle]").forEach(el => el.addEventListener("click", () => setState({ page: "turtleDetail", selectedTurtleId: el.dataset.viewTurtle, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
-  // The history strip owns only an intentional horizontal drag.  Waiting
-  // until the drag direction is clear lets iOS keep its normal vertical page
-  // scroll, while the horizontal cards reliably follow a finger in WebView.
+  // Match the product gallery: current iOS WebViews keep this as a native
+  // scroll view from touch-down through deceleration.  JavaScript must not
+  // manipulate scrollLeft during a finger drag, otherwise the cards lag one
+  // frame behind the finger.
   document.querySelectorAll("[data-growth-history-flow]").forEach(flow => {
-    let drag = null;
-    let suppressClickUntil = 0;
-    const card = flow.closest(".growth-update-card");
-    const stopHorizontalDrag = event => {
-      if (!drag || drag.intent !== "horizontal") return;
-      suppressClickUntil = Date.now() + 420;
-      try { flow.releasePointerCapture(drag.pointerId); } catch {}
-      drag = null;
-      card?.classList.remove("is-history-interacting");
-      event?.preventDefault();
-      event?.stopPropagation();
-    };
-    flow.addEventListener("pointerdown", event => {
-      if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0) || event.target.closest("button")) return;
-      drag = {
-        pointerId: event.pointerId,
-        x: event.clientX,
-        y: event.clientY,
-        scrollLeft: flow.scrollLeft,
-        intent: "pending"
-      };
-    }, { passive: true });
-    flow.addEventListener("pointermove", event => {
-      if (!drag || drag.pointerId !== event.pointerId) return;
-      const dx = event.clientX - drag.x;
-      const dy = event.clientY - drag.y;
-      if (drag.intent === "pending") {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) < 5) return;
-        if (Math.abs(dx) <= Math.abs(dy)) {
-          drag.intent = "vertical";
-          return;
-        }
-        drag.intent = "horizontal";
-        card?.classList.add("is-history-interacting");
-        try { flow.setPointerCapture(event.pointerId); } catch {}
-      }
-      if (drag.intent !== "horizontal") return;
-      flow.scrollLeft = drag.scrollLeft - dx;
-      event.preventDefault();
-      event.stopPropagation();
-    }, { passive: false });
-    flow.addEventListener("pointerup", stopHorizontalDrag);
-    flow.addEventListener("pointercancel", stopHorizontalDrag);
     flow.addEventListener("click", event => {
       // Never let a timeline tap enter the archive. Buttons inside it (such
       // as delete) keep their own behaviour and already stop propagation.
       event.stopPropagation();
-      if (Date.now() < suppressClickUntil) event.preventDefault();
     });
   });
   document.querySelectorAll("[data-growth-filter]").forEach(button => button.addEventListener("click", () => setState({ growthFilter: button.dataset.growthFilter }, { pageScroll: "preserve" })));
