@@ -16124,6 +16124,8 @@ html[data-theme-color="dark"] .breeding-history-snapshot .breeding-history-photo
 }
 
 .growth-update-card:active { transform: scale(.992); }
+/* The embedded timeline is an inert drag surface, never a pressable card. */
+.growth-update-card.is-history-interacting { transform: none !important; }
 
 .growth-update-card > img {
   width: 50px;
@@ -16204,7 +16206,9 @@ html[data-theme-color="dark"] .breeding-history-snapshot .breeding-history-photo
   max-width: 100%;
   overflow-x: auto;
   padding: 2px 1px 4px;
-  scroll-behavior: smooth;
+  /* Direct pointer dragging must stay under the finger; smooth scrolling
+     would make every drag frame visibly lag behind. */
+  scroll-behavior: auto;
   scroll-snap-type: x proximity;
   overscroll-behavior-x: contain;
   touch-action: pan-x;

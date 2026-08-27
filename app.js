@@ -5493,17 +5493,23 @@ function bindEvents() {
   document.querySelectorAll("[data-growth-history-flow]").forEach(flow => {
     let drag = null;
     let moved = false;
+    const card = flow.closest(".growth-update-card");
     const release = event => {
       if (!drag) return;
       try { flow.releasePointerCapture(drag.pointerId); } catch {}
       drag = null;
+      // Keep the parent card visually inert until the synthetic click after a
+      // tap/drag has fully finished.
+      window.setTimeout(() => card?.classList.remove("is-history-interacting"), 0);
       if (event) event.stopPropagation();
     };
     flow.addEventListener("pointerdown", event => {
       if (event.button !== 0 || event.target.closest("button")) return;
       moved = false;
+      card?.classList.add("is-history-interacting");
       drag = { pointerId: event.pointerId, x: event.clientX, scrollLeft: flow.scrollLeft };
       try { flow.setPointerCapture(event.pointerId); } catch {}
+      event.preventDefault();
       event.stopPropagation();
     });
     flow.addEventListener("pointermove", event => {
