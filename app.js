@@ -5487,48 +5487,15 @@ function bindEvents() {
   document.querySelectorAll("[data-open-platform-service-dialog]").forEach(button => button.addEventListener("click", openMarketTopService));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", navigateBack));
   document.querySelectorAll("[data-view-turtle]").forEach(el => el.addEventListener("click", () => setState({ page: "turtleDetail", selectedTurtleId: el.dataset.viewTurtle, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
-  // The horizontal history is a dedicated hand-scroll surface.  Keep its
-  // pointer/click events inside the timeline so the surrounding card can stay
-  // a simple tap target for opening the turtle detail.
+  // Keep the history strip a real overflow scroller.  In particular, do not
+  // drive `scrollLeft` from Pointer Events here: iOS's native scroller gives
+  // the expected finger-following motion and release inertia.  A tap inside
+  // the strip is still intentionally inert, so it never opens the archive.
   document.querySelectorAll("[data-growth-history-flow]").forEach(flow => {
-    let drag = null;
-    let moved = false;
-    const card = flow.closest(".growth-update-card");
-    const release = event => {
-      if (!drag) return;
-      try { flow.releasePointerCapture(drag.pointerId); } catch {}
-      drag = null;
-      // Keep the parent card visually inert until the synthetic click after a
-      // tap/drag has fully finished.
-      window.setTimeout(() => card?.classList.remove("is-history-interacting"), 0);
-      if (event) event.stopPropagation();
-    };
-    flow.addEventListener("pointerdown", event => {
-      if (event.button !== 0 || event.target.closest("button")) return;
-      moved = false;
-      card?.classList.add("is-history-interacting");
-      drag = { pointerId: event.pointerId, x: event.clientX, scrollLeft: flow.scrollLeft };
-      try { flow.setPointerCapture(event.pointerId); } catch {}
-      event.preventDefault();
-      event.stopPropagation();
-    });
-    flow.addEventListener("pointermove", event => {
-      if (!drag || drag.pointerId !== event.pointerId) return;
-      const distance = event.clientX - drag.x;
-      if (Math.abs(distance) > 3) moved = true;
-      if (moved) {
-        flow.scrollLeft = drag.scrollLeft - distance;
-        event.preventDefault();
-      }
-      event.stopPropagation();
-    });
-    flow.addEventListener("pointerup", release);
-    flow.addEventListener("pointercancel", release);
     flow.addEventListener("click", event => {
       // Never let a timeline tap enter the archive. Buttons inside it (such
       // as delete) keep their own behaviour and already stop propagation.
       event.stopPropagation();
-      if (moved) event.preventDefault();
     });
   });
   document.querySelectorAll("[data-growth-filter]").forEach(button => button.addEventListener("click", () => setState({ growthFilter: button.dataset.growthFilter }, { pageScroll: "preserve" })));
@@ -12992,6 +12959,9 @@ function setupEdgeBackAndConversationSwipe() {
     // left-edge shield rendered above it. This prevents the page-back path
     // from competing with an image page while the finger is already on it.
     if (event.target.closest(".market-detail-gallery") && event.clientX > 24) return;
+    // Growth history is a native horizontal scroller.  It must not compete
+    // with the app-level swipe/back recognizer on iOS.
+    if (event.target.closest("[data-growth-history-flow]")) return;
     // Conversation rows are native horizontal scrollers.  Do not let the
     // document-level edge/drag handler claim their pointer: that would turn a
     // UIKit-style inertial swipe back into a JavaScript drag.
