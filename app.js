@@ -129,6 +129,8 @@ const initialState = {
   communityFeedLoadingMore: false,
   communityProfileStats: { receivedLikes: 0, followerCount: 0 },
   contentReports: [],
+  systemAnnouncements: [],
+  adminSystemAnnouncements: [],
   blockedUsers: [],
   isCommunityAdmin: false,
   communityFriends: [],
@@ -370,6 +372,8 @@ let restoredSnapshotRenderHoldUntil = 0;
 let preservedMessageSnapshotActive = false;
 let contentReportsLoading = false;
 let contentReportsLastLoadedAt = 0;
+let systemAnnouncementsLoading = false;
+let systemAnnouncementsLastLoadedAt = 0;
 let marketNetworkType = "unknown";
 let marketNetworkMonitoringStarted = false;
 let messageUnreadTimer = null;
@@ -616,6 +620,8 @@ function normalizeState(next) {
       followerCount: Math.max(0, Number(base.communityProfileStats?.followerCount || 0))
     },
     contentReports: Array.isArray(base.contentReports) ? base.contentReports : [],
+    systemAnnouncements: Array.isArray(base.systemAnnouncements) ? base.systemAnnouncements : [],
+    adminSystemAnnouncements: Array.isArray(base.adminSystemAnnouncements) ? base.adminSystemAnnouncements : [],
     blockedUsers: Array.isArray(base.blockedUsers) ? base.blockedUsers : [],
     isCommunityAdmin: Boolean(base.isCommunityAdmin),
     communityFriends: Array.isArray(base.communityFriends) ? base.communityFriends : [],
@@ -1967,7 +1973,7 @@ function communityFeedMedia(item) {
   const mediaButton = (media, index) => {
     const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
     if (media.type === "video") {
-      return `<div class="community-feed-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}"${videoPosterAttribute(media)} muted playsinline preload="none" crossorigin="anonymous" data-inline-video data-video-first-frame data-community-video-autoload data-community-video-autoplay></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
+      return `<div class="community-feed-media-button is-video" role="button" tabindex="0" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}"${videoPosterAttribute(media)} autoplay muted playsinline webkit-playsinline loop preload="none" crossorigin="anonymous" data-inline-video data-video-first-frame data-community-video-autoload data-community-video-autoplay></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
     }
     return `<button class="community-feed-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
   };
@@ -1983,26 +1989,26 @@ function communityCompactCard(item) {
       <button class="community-tile-media" type="button" data-page="community">${communityMedia(item, true)}${primaryMedia?.type === "video" ? `<span class="community-video-mark">▶</span>` : ""}</button>
       <div class="community-tile-body">
         <p>${escapeHtml(item.content || "分享了一条新动态")}</p>
-        <div class="community-tile-author">${communityAvatar(item, "community-mini-avatar")}<span>${escapeHtml(item.authorName || "壳友")}</span><b>♡ ${item.likeCount || 0}</b></div>
+        <div class="community-tile-author">${communityAvatar(item, "community-mini-avatar")}<span>${escapeHtml(item.authorName || "壳友")}${platformAdminBadge(item)}</span><b>♡ ${item.likeCount || 0}</b></div>
       </div>
     </article>
   `;
 }
 
-function communityFeedCard(item) {
+function communityFeedCard(item, { allowDetail = false } = {}) {
   const comments = Array.isArray(item.comments) ? item.comments : [];
   const isOwn = Boolean(item.isOwn || item.pendingLocal);
   const primaryMedia = communityPostMediaItems(item)[0];
   return `
-    <article class="community-moment" data-view-community-post="${item.id}" tabindex="0" role="button" aria-label="查看${escapeHtml(item.authorName || "壳友")}发布的动态">
+    <article class="community-moment" data-community-feed-card="${item.id}" ${allowDetail ? `data-view-community-post="${item.id}" tabindex="0" role="button" aria-label="查看${escapeHtml(item.authorName || "壳友")}发布的动态"` : ""}>
       <button class="community-profile-avatar-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item)}</button>
       <div class="community-moment-main">
-        <div class="community-moment-author"><button class="community-profile-name-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}">${escapeHtml(item.authorName || "壳友")}</button>${!isOwn ? `<span class="community-author-actions"><button class="community-follow-button ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></span>` : ""}</div>
+        <div class="community-moment-author"><span class="community-profile-name">${escapeHtml(item.authorName || "壳友")}${platformAdminBadge(item)}</span>${!isOwn ? `<span class="community-author-actions"><button class="community-follow-button ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></span>` : ""}</div>
         ${item.content ? `<p class="community-post-copy">${escapeHtml(item.content)}</p>` : ""}
         ${primaryMedia ? `<div class="community-post-media ${primaryMedia.type === "video" ? "is-video" : ""}">${communityFeedMedia(item)}</div>` : ""}
         ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
         <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? communityMomentActionMenu(item, isOwn) : ""}</div></div>
-        ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</div>` : ""}
+        ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}${platformAdminBadge(comment)}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</div>` : ""}
         ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="评论" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
       </div>
     </article>
@@ -2105,7 +2111,7 @@ function pageCommunityPostDetail() {
       <article class="community-detail-card fresh-card">
         <header class="community-detail-head">
           <button class="community-profile-avatar-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item)}</button>
-          <button class="community-detail-author-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}"><strong>${escapeHtml(item.authorName || "壳友")}</strong><span>${formatTime(item.createdAt)}</span></button>
+          <button class="community-detail-author-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}"><strong>${escapeHtml(item.authorName || "壳友")}${platformAdminBadge(item)}</strong><span>${formatTime(item.createdAt)}</span></button>
           ${!isOwn ? `<div class="community-author-actions"><button class="${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></div>` : ""}
         </header>
         ${item.content ? `<p class="community-detail-copy">${escapeHtml(item.content)}</p>` : ""}
@@ -2117,7 +2123,7 @@ function pageCommunityPostDetail() {
           ${!isOwn ? `<button type="button" data-open-content-report data-report-type="community" data-report-id="${item.id}">举报</button><button class="danger-link" type="button" data-block-content-user data-block-type="community" data-block-id="${item.id}" data-block-name="${escapeHtml(item.authorName || "该用户")}">屏蔽用户</button>` : ""}
           ${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}
         </div>
-        ${(item.likeCount || comments.length) ? `<section class="community-detail-social">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</section>` : ""}
+        ${(item.likeCount || comments.length) ? `<section class="community-detail-social">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}${platformAdminBadge(comment)}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</section>` : ""}
         ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="写下评论" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
       </article>
     </main>
@@ -2147,11 +2153,16 @@ function pageMessages() {
       <section class="message-discover-list">
         <button class="message-discover-row" type="button" data-page="community"><span class="message-community-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2.8c2.5 0 3.9 3 2.2 4.8M21.2 12c0 2.5-3 3.9-4.8 2.2M12 21.2c-2.5 0-3.9-3-2.2-4.8M2.8 12c0-2.5 3-3.9 4.8-2.2"></path></svg></span><strong>壳友圈</strong><span class="message-discover-preview">${latestPost?.mediaUrl ? (latestPost.mediaType === "video" ? `<span class="message-video-thumb">▶</span>` : `<img src="${latestPost.mediaUrl}" alt="最新动态">`) : ""}</span><b>›</b></button>
       </section>
-      <section class="message-friend-list">${friends.map(friend => `<article class="message-friend-swipe" data-conversation-id="${escapeHtml(friend.id)}"><button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div class="message-friend-copy"><strong>${escapeHtml(friend.name || "壳友")}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><span class="message-friend-meta">${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></span></button><div class="message-friend-actions"><button type="button" data-toggle-conversation-pin="${escapeHtml(friend.id)}">${friend.pinned ? "取消置顶" : "置顶"}</button><button class="delete" type="button" data-delete-conversation="${escapeHtml(friend.id)}">删除</button></div></article>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`}</section>
+      <section class="message-friend-list">${friends.map(friend => `<article class="message-friend-swipe" data-conversation-id="${escapeHtml(friend.id)}"><button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div class="message-friend-copy"><strong>${escapeHtml(friend.name || "壳友")}${platformAdminBadge(friend)}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><span class="message-friend-meta">${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></span></button><div class="message-friend-actions"><button type="button" data-toggle-conversation-pin="${escapeHtml(friend.id)}">${friend.pinned ? "取消置顶" : "置顶"}</button><button class="delete" type="button" data-delete-conversation="${escapeHtml(friend.id)}">删除</button></div></article>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`}</section>
     </main>
     ${guestLoginSlot()}
     ${bottomNav()}
   `;
+}
+
+function platformAdminBadge(subject = {}) {
+  if (!subject.isAdmin && !subject.authorIsAdmin && !subject.sellerIsAdmin && !subject.senderIsAdmin) return "";
+  return `<span class="platform-admin-badge" title="壳友手账官方管理员">官方管理员</span>`;
 }
 
 function pageCommunity() {
@@ -2168,8 +2179,8 @@ function pageCommunity() {
   `;
 }
 
-function communityFeedMarkup(posts = state.communityPosts || []) {
-  return posts.map(communityFeedCard).join("") || `<div class="empty small-empty"><div><strong>暂时还没有动态</strong><br>点击右上角相机发布第一条内容</div></div>`;
+function communityFeedMarkup(posts = state.communityPosts || [], options = {}) {
+  return posts.map(item => communityFeedCard(item, options)).join("") || `<div class="empty small-empty"><div><strong>暂时还没有动态</strong><br>点击右上角相机发布第一条内容</div></div>`;
 }
 
 function communityFeedSignature(posts = []) {
@@ -2227,10 +2238,11 @@ function createCommunityFeedCard(item) {
 
 function bindPatchedCommunityFeed(feed) {
   if (!feed) return;
-  const cards = feed.matches?.("[data-view-community-post]")
+  const cards = feed.matches?.("[data-community-feed-card]")
     ? [feed]
-    : [...feed.querySelectorAll("[data-view-community-post]")];
+    : [...feed.querySelectorAll("[data-community-feed-card]")];
   cards.forEach(card => {
+    if (!card.dataset.viewCommunityPost) return;
     const openDetail = event => {
       if (event.target.closest("button, input, textarea, select, form, .inline-video-shell")) return;
       setState({ page: "communityPostDetail", selectedCommunityPostId: card.dataset.viewCommunityPost, openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
@@ -2282,7 +2294,7 @@ function patchVisibleCommunityFeed(posts, previousPosts = []) {
   if (!feed) return false;
   const previousById = new Map((previousPosts || []).map(post => [String(post.id), post]));
   const existingCards = [...feed.querySelectorAll(":scope > .community-moment")];
-  const existingById = new Map(existingCards.map(card => [String(card.dataset.viewCommunityPost || ""), card]));
+  const existingById = new Map(existingCards.map(card => [String(card.dataset.communityFeedCard || ""), card]));
 
   if (!posts.length) {
     if (!existingCards.length && feed.querySelector(".empty")) return true;
@@ -2362,7 +2374,7 @@ function pageCommunityFriends() {
     ${topbar("消息联系人", true)}
     <main class="content page-fresh community-page">
       <section class="section-title"><span>联系人</span><small>${friends.length} 位</small></section>
-      <section class="community-friend-list">${friends.map(friend => `<article class="community-friend-row fresh-card">${communityAvatar(friend)}<div><strong>${escapeHtml(friend.name || "壳友")}</strong><small>${escapeHtml(friend.phone || "")}</small></div><button type="button" data-open-community-chat="${friend.id}">聊天</button></article>`).join("") || `<div class="empty small-empty"><div><strong>还没有联系人</strong><br>在龟集市联系卖家后即可继续聊天</div></div>`}</section>
+      <section class="community-friend-list">${friends.map(friend => `<article class="community-friend-row fresh-card">${communityAvatar(friend)}<div><strong>${escapeHtml(friend.name || "壳友")}${platformAdminBadge(friend)}</strong><small>${escapeHtml(friend.phone || "")}</small></div><button type="button" data-open-community-chat="${friend.id}">聊天</button></article>`).join("") || `<div class="empty small-empty"><div><strong>还没有联系人</strong><br>在龟集市联系卖家后即可继续聊天</div></div>`}</section>
     </main>
     ${bottomNav()}
   `;
@@ -2511,7 +2523,7 @@ function pageCommunityChat() {
         : `<button class="community-message-media" style="--community-media-ratio:${communityMessageAspectRatio(message, mediaType)}" type="button" data-preview-chat-media="${escapeHtml(mediaUrl)}" data-chat-media-poster="${escapeHtml(mediaPosterUrl)}" data-chat-media-type="${mediaType}" aria-label="查看聊天图片"><img src="${escapeHtml(mediaUrl)}" alt="聊天图片"></button>`)
       : "";
     const showTime = shouldShowCommunityMessageTime(visibleMessages, index);
-    const sender = { id: message.senderId || friend?.id || state.selectedCommunityFriendId, avatar: message.senderAvatar || friend?.avatar || "", name: friend?.name || "壳友" };
+    const sender = { id: message.senderId || friend?.id || state.selectedCommunityFriendId, avatar: message.senderAvatar || friend?.avatar || "", name: friend?.name || "壳友", isAdmin: Boolean(message.senderIsAdmin || friend?.isAdmin) };
     const senderMark = !message.mine
       ? (showTime
         ? `<button class="community-chat-message-avatar" type="button" data-view-community-user="${escapeHtml(sender.id)}" aria-label="查看${escapeHtml(sender.name)}的主页">${communityAvatar(sender, "community-chat-avatar")}</button>`
@@ -2533,7 +2545,7 @@ function pageCommunityChat() {
       : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`);
   const chatHeader = `
     <div class="topbar community-chat-topbar">
-      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回"><svg class="back-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 4.5-7 7.5 7 7.5"></path></svg></button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}</button><button class="community-chat-more" type="button" data-open-chat-more data-user-id="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" data-user-name="${escapeHtml(friend?.name || "该用户")}" aria-label="更多操作">•••</button></div>
+      <div class="community-chat-nav"><button class="icon-btn" type="button" data-back aria-label="返回"><svg class="back-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 4.5-7 7.5 7 7.5"></path></svg></button><button class="community-chat-user-link" type="button" data-view-community-user="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" aria-label="查看对方主页">${escapeHtml(friend?.name || "聊天")}${platformAdminBadge(friend || {})}</button><button class="community-chat-more" type="button" data-open-chat-more data-user-id="${escapeHtml(friend?.id || state.selectedCommunityFriendId || "")}" data-user-name="${escapeHtml(friend?.name || "该用户")}" aria-label="更多操作">•••</button></div>
     </div>
   `;
   return `
@@ -2702,7 +2714,7 @@ function pageFollowing() {
     <main class="content page-fresh following-page">
       <section class="section-title"><span>关注的壳友</span><small>${users.length} 人</small></section>
       <section class="following-user-list">
-        ${users.map(user => `<button class="following-user-card fresh-card" type="button" data-view-following-user="${user.id}">${communityAvatar(user, "following-user-avatar")}<div><strong>${escapeHtml(user.name || "壳友")}</strong><span>${Number(user.postCount || 0)} 条动态 · ${Number(user.listingCount || 0)} 件在售</span></div><b>›</b></button>`).join("") || `<div class="empty small-empty"><div><strong>${followingLoading ? "正在加载关注" : "还没有关注壳友"}</strong><br>可以在壳友圈或商品详情中关注对方</div></div>`}
+        ${users.map(user => `<button class="following-user-card fresh-card" type="button" data-view-following-user="${user.id}">${communityAvatar(user, "following-user-avatar")}<div><strong>${escapeHtml(user.name || "壳友")}${platformAdminBadge(user)}</strong><span>${Number(user.postCount || 0)} 条动态 · ${Number(user.listingCount || 0)} 件在售</span></div><b>›</b></button>`).join("") || `<div class="empty small-empty"><div><strong>${followingLoading ? "正在加载关注" : "还没有关注壳友"}</strong><br>可以在壳友圈或商品详情中关注对方</div></div>`}
       </section>
     </main>
     ${bottomNav()}
@@ -2718,10 +2730,10 @@ function pageFollowingProfile() {
   return `
     ${topbar(user.name || "关注详情", true)}
     <main class="content page-fresh following-profile-page">
-      <section class="following-profile-head fresh-card">${communityAvatar(user, "following-profile-avatar")}<div><h2>${escapeHtml(user.name || "壳友")}</h2><p>${posts.length} 条动态 · ${listings.length} 件在售商品</p></div><button class="active" type="button" data-toggle-community-follow="${user.id}">已关注</button></section>
+      <section class="following-profile-head fresh-card">${communityAvatar(user, "following-profile-avatar")}<div><h2>${escapeHtml(user.name || "壳友")}${platformAdminBadge(user)}</h2><p>${posts.length} 条动态 · ${listings.length} 件在售商品</p></div><button class="active" type="button" data-toggle-community-follow="${user.id}">已关注</button></section>
       ${profileContentTabs(posts.length, listings.length, activeTab)}
       <section class="profile-content-panel ${activeTab === "posts" ? "is-posts" : "is-listings"}">${activeTab === "posts"
-        ? `<section class="community-feed following-posts">${posts.map(communityFeedCard).join("") || `<div class="empty small-empty"><div><strong>暂时没有动态</strong></div></div>`}</section>`
+        ? `<section class="community-feed following-posts">${posts.map(item => communityFeedCard(item, { allowDetail: true })).join("") || `<div class="empty small-empty"><div><strong>暂时没有动态</strong></div></div>`}</section>`
         : `<section class="market-grid following-market-grid">${listings.map(marketListingCard).join("") || `<div class="empty small-empty"><div><strong>暂时没有在售商品</strong></div></div>`}</section>`}</section>
     </main>
     ${bottomNav()}
@@ -2746,10 +2758,10 @@ function pageCommunityProfile() {
   return `
     ${topbar(user.name || "壳友主页", true)}
     <main class="content page-fresh following-profile-page community-profile-page">
-      <section class="following-profile-head fresh-card">${communityAvatar(user, "following-profile-avatar")}<div><h2>${escapeHtml(user.name || "壳友")}</h2><p>${Number(user.postCount ?? posts.length)} 条动态 · ${Number(user.listingCount ?? listings.length)} 件在售商品</p></div>${user.isOwn ? "" : `<button class="${user.followed ? "active" : ""}" type="button" data-toggle-community-follow="${user.id}">${user.followed ? "已关注" : "关注"}</button>`}</section>
+      <section class="following-profile-head fresh-card">${communityAvatar(user, "following-profile-avatar")}<div><h2>${escapeHtml(user.name || "壳友")}${platformAdminBadge(user)}</h2><p>${Number(user.postCount ?? posts.length)} 条动态 · ${Number(user.listingCount ?? listings.length)} 件在售商品</p></div>${user.isOwn ? "" : `<button class="${user.followed ? "active" : ""}" type="button" data-toggle-community-follow="${user.id}">${user.followed ? "已关注" : "关注"}</button>`}</section>
       ${profileContentTabs(posts.length, listings.length, activeTab)}
       <section class="profile-content-panel ${activeTab === "posts" ? "is-posts" : "is-listings"}">${activeTab === "posts"
-        ? `<section class="community-feed following-posts">${posts.map(communityFeedCard).join("") || `<div class="empty small-empty"><div><strong>暂时没有动态</strong></div></div>`}</section>`
+        ? `<section class="community-feed following-posts">${posts.map(item => communityFeedCard(item, { allowDetail: true })).join("") || `<div class="empty small-empty"><div><strong>暂时没有动态</strong></div></div>`}</section>`
         : `<section class="market-grid following-market-grid">${listings.map(marketListingCard).join("") || `<div class="empty small-empty"><div><strong>暂时没有在售商品</strong></div></div>`}</section>`}</section>
     </main>
     ${bottomNav()}
@@ -3030,7 +3042,7 @@ function marketListingCard(item) {
         <strong>${escapeHtml(item.title || `${item.speciesName || "乌龟"}在售`)}</strong>
         <small>${escapeHtml(item.speciesName || "品种未填写")} · ${marketStageLabel(item.stage)}${item.gender ? ` · ${escapeHtml(item.gender)}` : ""}</small>
         <span class="market-card-price"><b><i>¥</i>${money(item.price)}</b><small>${Math.max(0, Number(item.wantCount || 0))}人想要</small></span>
-        <span class="market-card-seller">${marketSellerAvatar(item, "market-seller-avatar")}<i>${escapeHtml(item.sellerName || "壳友卖家")}</i>${item.delivery ? `<b class="market-card-delivery">${escapeHtml(item.delivery)}</b>` : ""}<em>${escapeHtml(item.city || "全国")}</em></span>
+        <span class="market-card-seller">${marketSellerAvatar(item, "market-seller-avatar")}<i>${escapeHtml(item.sellerName || "壳友卖家")}${platformAdminBadge(item)}</i>${item.delivery ? `<b class="market-card-delivery">${escapeHtml(item.delivery)}</b>` : ""}<em>${escapeHtml(item.city || "全国")}</em></span>
       </span>
     </button>
     ${marketFavoriteButton(item)}
@@ -3403,7 +3415,7 @@ function pageMarketDetail() {
       ${detailVideosAfterDescription.length ? `<section class="market-detail-secondary-media market-detail-video-media">${detailVideosAfterDescription.map(media => marketDetailVideoMarkup(media, detailVideoFallbackPoster)).join("")}</section>` : ""}
       <section class="market-seller-card">
         <button class="market-seller-avatar-slot market-seller-profile-link" type="button" data-view-market-seller="${escapeHtml(item.sellerId || "")}" aria-label="查看${escapeHtml(item.sellerName || "卖家")}发布的商品">${marketSellerAvatar(item, "market-detail-avatar")}</button>
-        <button class="market-seller-profile-link market-seller-name" type="button" data-view-market-seller="${escapeHtml(item.sellerId || "")}"><strong>${escapeHtml(item.sellerName || "壳友卖家")}</strong><span>${isOwn ? "这是我发布的商品" : "已通过账号认证"}</span></button>
+        <button class="market-seller-profile-link market-seller-name" type="button" data-view-market-seller="${escapeHtml(item.sellerId || "")}"><strong>${escapeHtml(item.sellerName || "壳友卖家")}${platformAdminBadge(item)}</strong><span>${isOwn ? "这是我发布的商品" : "已通过账号认证"}</span></button>
         ${isOwn ? "" : `<div class="market-seller-actions"><button class="${item.sellerFollowed ? "active" : ""}" type="button" data-toggle-community-follow="${item.sellerId}">${item.sellerFollowed ? "已关注" : "关注"}</button><button type="button" data-market-contact="${item.id}">聊一聊</button></div>`}
       </section>
       <section class="market-safe-note"><b>交易咨询</b><p>先看近期实拍或视频，再确认健康、尺寸与交付方式；如需购买，请联系平台客服并发送商品咨询码，活体运输责任以双方确认内容为准。</p></section>
@@ -3424,6 +3436,7 @@ function pageMarketSeller() {
     id: sourceListing.sellerId,
     sellerName: sourceListing.sellerName,
     sellerAvatar: sourceListing.sellerAvatar,
+    sellerIsAdmin: sourceListing.sellerIsAdmin,
     city: sourceListing.city,
     sellerFollowed: sourceListing.sellerFollowed
   } : null);
@@ -3435,7 +3448,7 @@ function pageMarketSeller() {
     <main class="content page-fresh seller-store-page">
       <section class="seller-store-head fresh-card">
         ${marketSellerAvatar(seller, "seller-store-avatar")}
-        <div><h2>${escapeHtml(seller.sellerName || "壳友卖家")}</h2><p>${escapeHtml(seller.city || "全国")} · ${listings.length} 件在售商品</p></div>
+        <div><h2>${escapeHtml(seller.sellerName || "壳友卖家")}${platformAdminBadge(seller)}</h2><p>${escapeHtml(seller.city || "全国")} · ${listings.length} 件在售商品</p></div>
         ${isOwnSeller ? "" : `<button class="${seller.sellerFollowed ? "active" : ""}" type="button" data-toggle-community-follow="${escapeHtml(seller.id)}">${seller.sellerFollowed ? "已关注" : "关注"}</button>`}
       </section>
       <section class="section-title seller-store-title"><span>全部在售商品</span><small>${listings.length} 件</small></section>
@@ -4671,6 +4684,7 @@ function pageMine() {
         <button class="mine-row" data-page="account"><span>⚙</span><strong>账号与安全</strong></button>
         <button class="mine-row" data-page="rules"><span>☷</span><strong>平台规则与隐私</strong></button>
         ${state.isCommunityAdmin ? `<button class="mine-row" data-page="moderation"><span>⚑</span><strong>举报审核</strong><em class="mine-row-count">${(state.contentReports || []).filter(item => item.status === "pending").length}</em></button>` : ""}
+        ${state.isCommunityAdmin ? `<button class="mine-row" data-page="announcements"><span>◉</span><strong>系统公告</strong></button>` : ""}
         <button class="mine-row" data-page="about"><span>i</span><strong>关于壳友手账</strong></button>
       </section>
     </main>
@@ -5173,6 +5187,38 @@ function pageModeration() {
   `;
 }
 
+function announcementStatusLabel(status) {
+  return status === "active" ? "展示中" : "已结束";
+}
+
+function pageAnnouncements() {
+  const announcements = state.adminSystemAnnouncements || [];
+  return `
+    ${topbar("系统公告", true)}
+    <main class="content page-fresh announcement-admin-page">
+      <section class="page-intro compact-intro"><div><p class="eyebrow dark">平台通知</p><h2>向所有用户发布公告</h2><p>发布后，用户下次打开 App 会看到弹窗；已开启通知的设备会同时收到推送。</p></div></section>
+      <form class="fresh-card survey-form announcement-form" data-system-announcement-form>
+        <label class="survey-field"><span>公告标题</span><input class="field" name="title" maxlength="48" required placeholder="例如：服务恢复通知"></label>
+        <label class="survey-field"><span>公告内容</span><textarea name="content" maxlength="1200" required placeholder="请清楚说明发生了什么、当前影响和预计恢复时间"></textarea></label>
+        <label class="survey-field"><span>结束展示时间（可选）</span><input class="field" type="datetime-local" name="expiresAt"></label>
+        <label class="announcement-pin"><input type="checkbox" name="pinned"><span>置顶显示</span><small>有多条公告时优先展示</small></label>
+        <button class="primary" type="submit">发布公告</button>
+      </form>
+      <section class="section-title"><span>已发布公告</span><small>${announcements.length} 条</small></section>
+      <section class="announcement-admin-list">
+        ${announcements.map(item => `<article class="fresh-card announcement-admin-card">
+          <div><span class="announcement-status ${item.status === "active" ? "active" : "ended"}">${announcementStatusLabel(item.status)}</span>${item.pinned ? `<span class="announcement-pinned">置顶</span>` : ""}<small>${formatTime(item.createdAt)}</small></div>
+          <strong>${escapeHtml(item.title || "系统公告")}</strong>
+          <p>${escapeHtml(item.content || "").replace(/\n/g, "<br>")}</p>
+          ${item.expiresAt ? `<small>计划结束：${formatTime(item.expiresAt)}</small>` : ""}
+          <footer>${item.status === "active" ? `<button type="button" data-system-announcement-action="end" data-system-announcement-id="${item.id}">结束展示</button>` : ""}<button class="danger" type="button" data-system-announcement-action="delete" data-system-announcement-id="${item.id}">删除</button></footer>
+        </article>`).join("") || `<div class="empty small-empty"><div><strong>还没有系统公告</strong><br>发布后会在这里管理展示状态。</div></div>`}
+      </section>
+    </main>
+    ${bottomNav()}
+  `;
+}
+
 function placeholder(title) {
   return `${topbar(title, true)}<main class="content page-fresh"><div class="empty"><strong>${title}</strong><br>这个入口已经放好，后续可以继续扩展。</div></main>`;
 }
@@ -5224,6 +5270,7 @@ function render() {
     rules: pageRules,
     privacy: pagePrivacy,
     moderation: pageModeration,
+    announcements: pageAnnouncements,
     breeding: pageBreeding,
     breedingAdd: pageBreedingAdd,
     breedingDetail: pageBreedingDetail,
@@ -5240,7 +5287,7 @@ function render() {
   // safe-area geometry and compositor layer therefore remain stable while only
   // the middle content is replaced.
   const persistentBottomNav = $app.querySelector(".bottom-nav");
-  $app.innerHTML = (pages[state.page] || pageHome)() + policyConsentGate();
+  $app.innerHTML = (pages[state.page] || pageHome)() + policyConsentGate() + systemAnnouncementOverlay();
   const incomingBottomNav = $app.querySelector(".bottom-nav");
   if (persistentBottomNav && incomingBottomNav) {
     incomingBottomNav.replaceWith(persistentBottomNav);
@@ -5287,12 +5334,14 @@ function render() {
   if (["messages", "community", "communityFriends", "communityProfile", "mine"].includes(state.page)) refreshCommunity();
   if (["mine", "following", "followingProfile"].includes(state.page)) refreshFollowing();
   if (state.page === "moderation") refreshContentReports();
+  if (state.page === "announcements") refreshSystemAnnouncements();
   if (state.page === "communityProfile" && state.selectedCommunityUserId) refreshCommunityUserProfile();
   if (state.page === "communityChat" && state.selectedCommunityFriendId) refreshCommunityChat();
   if (["market", "marketDetail", "marketSeller", "marketMy", "marketFavorites", "marketHistory", "following", "followingProfile", "mine"].includes(state.page)) refreshMarket();
   if (state.page === "marketAdd") requestMarketCityAutofill();
   if (state.page === "market") requestAnimationFrame(syncMarketWifiVideos);
   refreshMessageUnread();
+  refreshSystemAnnouncements();
 }
 
 function policyConsentGate() {
@@ -5399,6 +5448,7 @@ function bindEvents() {
     if (["breedingAdd", "feedbackAdd", "communityAdd", "communityFriends", "marketAdd", "poolAdd"].includes(targetPage) && !requireLogin()) return;
     if (targetPage === "reports" && !requireLogin()) return;
     if (targetPage === "moderation" && !state.isCommunityAdmin) return toast("仅平台管理员可审核举报");
+    if (targetPage === "announcements" && !state.isCommunityAdmin) return toast("仅平台管理员可管理系统公告");
     const navigationState = { page: targetPage, openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" };
     if (targetPage === "poolAdd") navigationState.editingTurtlePoolId = "";
     if (targetPage === "marketAdd") {
@@ -6182,6 +6232,9 @@ function bindEvents() {
   document.querySelector("[data-market-top-service]")?.addEventListener("click", openMarketTopService);
   document.querySelectorAll("[data-market-platform-service]").forEach(btn => btn.addEventListener("click", () => openMarketPlatformService(btn.dataset.marketPlatformService)));
   document.querySelectorAll("[data-process-content-report]").forEach(btn => btn.addEventListener("click", () => processContentReport(btn.dataset.processContentReport, btn.dataset.reportAction)));
+  document.querySelector("[data-system-announcement-form]")?.addEventListener("submit", submitSystemAnnouncement);
+  document.querySelectorAll("[data-system-announcement-action]").forEach(button => button.addEventListener("click", () => manageSystemAnnouncement(button.dataset.systemAnnouncementId, button.dataset.systemAnnouncementAction)));
+  document.querySelectorAll("[data-dismiss-system-announcement]").forEach(button => button.addEventListener("click", () => dismissSystemAnnouncement(button.dataset.dismissSystemAnnouncement)));
   document.querySelectorAll("[data-view-feedback]").forEach(el => el.addEventListener("click", event => {
     event.stopPropagation();
     setState({ page: "feedbackDetail", selectedFeedbackId: el.dataset.viewFeedback, openFeedbackMenuId: "" }, { skipCloud: true });
@@ -8318,6 +8371,44 @@ async function loadMoreCommunityPosts() {
   }
 }
 
+function announcementDismissalKey() {
+  return `turtlekeeper-announcements-dismissed-v1:${state.loggedInPhone || "guest"}`;
+}
+
+function dismissedAnnouncementIds() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(announcementDismissalKey()));
+    return new Set(Array.isArray(saved) ? saved.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function systemAnnouncementOverlay() {
+  if (state.policyConsentRequired && state.loggedInPhone) return "";
+  const dismissed = dismissedAnnouncementIds();
+  const item = (state.systemAnnouncements || []).find(announcement => announcement.status === "active" && !dismissed.has(String(announcement.id)));
+  if (!item) return "";
+  return `
+    <div class="system-announcement-overlay" role="dialog" aria-modal="true" aria-labelledby="systemAnnouncementTitle">
+      <section class="system-announcement-dialog">
+        <p>壳友手账 · 系统公告</p>
+        <h1 id="systemAnnouncementTitle">${escapeHtml(item.title || "系统公告")}</h1>
+        <div>${escapeHtml(item.content || "").replace(/\n/g, "<br>")}</div>
+        <small>${item.createdAt ? formatTime(item.createdAt) : ""}</small>
+        <button class="primary" type="button" data-dismiss-system-announcement="${item.id}">我知道了</button>
+      </section>
+    </div>
+  `;
+}
+
+function dismissSystemAnnouncement(id) {
+  const ids = dismissedAnnouncementIds();
+  ids.add(String(id));
+  try { localStorage.setItem(announcementDismissalKey(), JSON.stringify([...ids].slice(-100))); } catch {}
+  render();
+}
+
 function setupCommunityInfiniteScroll() {
   communityLoadObserver?.disconnect();
   communityLoadObserver = null;
@@ -8342,6 +8433,62 @@ async function refreshContentReports(force = false) {
     if (error.status !== 403) console.warn(error.message || "举报列表读取失败");
   } finally {
     contentReportsLoading = false;
+  }
+}
+
+async function refreshSystemAnnouncements(force = false) {
+  if (!CONFIGURED_SMS_BACKEND || systemAnnouncementsLoading) return;
+  if (!force && Date.now() - systemAnnouncementsLastLoadedAt < 30000) return;
+  systemAnnouncementsLoading = true;
+  try {
+    const result = await apiPost("/api/announcements/list", hasCloudSession() ? communityAuthPayload() : {});
+    systemAnnouncementsLastLoadedAt = Date.now();
+    const patch = {
+      systemAnnouncements: Array.isArray(result.announcements) ? result.announcements : []
+    };
+    if (state.isCommunityAdmin && Array.isArray(result.adminAnnouncements)) patch.adminSystemAnnouncements = result.adminAnnouncements;
+    setState(patch, { skipCloud: true, pageScroll: "preserve" });
+  } catch (error) {
+    if (error.status !== 401) console.warn(error.message || "系统公告读取失败");
+  } finally {
+    systemAnnouncementsLoading = false;
+  }
+}
+
+async function submitSystemAnnouncement(event) {
+  event.preventDefault();
+  if (!state.isCommunityAdmin || !requireLogin()) return;
+  const form = event.currentTarget;
+  const data = new FormData(form);
+  const title = String(data.get("title") || "").trim();
+  const content = String(data.get("content") || "").trim();
+  if (!title || !content) return toast("请填写公告标题和内容");
+  const button = form.querySelector("button[type='submit']");
+  if (button) { button.disabled = true; button.textContent = "正在发布…"; }
+  try {
+    const result = await apiPost("/api/announcements/create", communityAuthPayload({
+      title, content, pinned: data.get("pinned") === "on", expiresAt: String(data.get("expiresAt") || "")
+    }));
+    systemAnnouncementsLastLoadedAt = Date.now();
+    setState({ adminSystemAnnouncements: Array.isArray(result.announcements) ? result.announcements : state.adminSystemAnnouncements }, { skipCloud: true });
+    toast(result.message || "公告已发布");
+  } catch (error) {
+    toast(error.message || "公告发布失败");
+    if (button?.isConnected) { button.disabled = false; button.textContent = "发布公告"; }
+  }
+}
+
+async function manageSystemAnnouncement(announcementId, action) {
+  if (!state.isCommunityAdmin || !announcementId) return;
+  const verb = action === "delete" ? "删除" : "结束展示";
+  if (!confirm(`确定${verb}这条公告吗？`)) return;
+  try {
+    const result = await apiPost("/api/announcements/action", communityAuthPayload({ announcementId, action }));
+    systemAnnouncementsLastLoadedAt = Date.now();
+    setState({ adminSystemAnnouncements: Array.isArray(result.announcements) ? result.announcements : state.adminSystemAnnouncements }, { skipCloud: true });
+    toast(result.message || `公告已${verb}`);
+  } catch (error) {
+    toast(error.message || "公告操作失败");
   }
 }
 
@@ -8399,6 +8546,7 @@ function communityUserSnapshot(userId) {
     id,
     name: post?.authorName || friend?.name || listing?.sellerName || "壳友",
     avatar: post?.authorAvatar || friend?.avatar || listing?.sellerAvatar || "",
+    isAdmin: Boolean(post?.authorIsAdmin || friend?.isAdmin || listing?.sellerIsAdmin),
     followed: Boolean(post?.followed || listing?.sellerFollowed),
     isOwn: Boolean(post?.isOwn || listing?.isOwn)
   };
@@ -8598,6 +8746,10 @@ function hydrateCommunityPostVideos() {
     video.muted = true;
     video.defaultMuted = true;
     video.playsInline = true;
+    video.setAttribute("autoplay", "");
+    video.setAttribute("webkit-playsinline", "");
+    video.autoplay = true;
+    video.loop = true;
     // Prepare only the selected card.  The other videos stay at `none`, which
     // is how Moments avoids making several videos compete for the connection.
     video.preload = "metadata";
@@ -8615,7 +8767,10 @@ function hydrateCommunityPostVideos() {
     video.muted = true;
     video.defaultMuted = true;
     video.playsInline = true;
+    video.setAttribute("autoplay", "");
+    video.setAttribute("webkit-playsinline", "");
     video.autoplay = true;
+    video.loop = true;
     const play = () => {
       const playback = video.play();
       if (playback?.then) {

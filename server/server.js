@@ -465,7 +465,7 @@ function isSuspiciousAccountDataLoss(before = {}, after = {}) {
 }
 
 function emptyDatabase() {
-  return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [], reports: [], careReminderDeliveries: {} };
+  return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [], reports: [], systemAnnouncements: [], careReminderDeliveries: {} };
 }
 
 class DatabaseIntegrityError extends Error {
@@ -489,6 +489,7 @@ function normalizeDatabase(data = {}) {
     communityPosts: Array.isArray(data.communityPosts) ? data.communityPosts : [], marketListings: Array.isArray(data.marketListings) ? data.marketListings : [],
     friendships: Array.isArray(data.friendships) ? data.friendships : [], messages: Array.isArray(data.messages) ? data.messages : [],
     follows: Array.isArray(data.follows) ? data.follows : [], reports: Array.isArray(data.reports) ? data.reports : [],
+    systemAnnouncements: Array.isArray(data.systemAnnouncements) ? data.systemAnnouncements : [],
     careReminderDeliveries: data.careReminderDeliveries && typeof data.careReminderDeliveries === "object" ? data.careReminderDeliveries : {}
   };
 }
@@ -1664,6 +1665,105 @@ async function handlePushNotificationTest(req, res) {
   return sendJson(res, 200, { ok: true, message: `已向 ${result.delivered} 台本机设备发送测试通知。` });
 }
 
+function publicSystemAnnouncements(db, includeInactive = false) {
+  const now = Date.now();
+  return (Array.isArray(db.systemAnnouncements) ? db.systemAnnouncements : [])
+    .filter(item => includeInactive || (item.status === "active" && (!item.expiresAt || new Date(item.expiresAt).getTime() > now)))
+    .slice()
+    .sort((left, right) => (Number(Boolean(right.pinned)) - Number(Boolean(left.pinned))) || (new Date(right.createdAt || 0) - new Date(left.createdAt || 0)))
+    .slice(0, includeInactive ? 100 : 20)
+    .map(item => ({
+      id: item.id,
+      title: item.title || "系统公告",
+      content: item.content || "",
+      pinned: Boolean(item.pinned),
+      status: item.status === "active" ? "active" : "ended",
+      createdAt: item.createdAt || "",
+      expiresAt: item.expiresAt || "",
+      endedAt: item.endedAt || ""
+    }));
+}
+
+async function notifySystemAnnouncement(db, announcement) {
+  if (!apnsConfigured()) return 0;
+  const recipients = Object.values(db.users || {}).filter(user => normalizedPushDevices(user.pushDevices).length);
+  const payload = {
+    aps: {
+      alert: {
+        title: String(announcement.title || "壳友手账").slice(0, 80),
+        body: String(announcement.content || "您有一条新的系统公告").replace(/\s+/g, " ").slice(0, 120)
+      },
+      sound: "default"
+    },
+    route: "announcement",
+    announcementId: String(announcement.id || "")
+  };
+  let delivered = 0;
+  await Promise.all(recipients.map(async user => {
+    const devices = normalizedPushDevices(user.pushDevices);
+    const results = await Promise.all(devices.map(item => sendApnsNotification(item.token, payload)));
+    results.forEach((result, index) => {
+      if (result.ok) delivered += 1;
+      if (result.invalid) removeInvalidPushDevice(user.phone, devices[index].token);
+      else if (!result.ok && !result.skipped) console.warn("System announcement push failed:", result.reason || result.status || "unknown");
+    });
+  }));
+  return delivered;
+}
+
+async function handleSystemAnnouncementList(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = optionalReviewUser(db, body);
+  return sendJson(res, 200, {
+    ok: true,
+    announcements: publicSystemAnnouncements(db),
+    adminAnnouncements: user && isAdminUser(user) ? publicSystemAnnouncements(db, true) : undefined
+  });
+}
+
+async function handleSystemAnnouncementCreate(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (!isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "仅平台管理员可发布公告" });
+  const title = trimPublicText(body.title, 48);
+  const content = trimPublicText(body.content, 1200);
+  const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+  if (!title || !content) return sendJson(res, 400, { ok: false, message: "请填写公告标题和内容" });
+  if (expiresAt && (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= Date.now())) return sendJson(res, 400, { ok: false, message: "结束时间需晚于当前时间" });
+  const announcement = {
+    id: crypto.randomUUID(), title, content, pinned: Boolean(body.pinned), status: "active",
+    createdAt: new Date().toISOString(), expiresAt: expiresAt ? expiresAt.toISOString() : "", createdBy: user.phone
+  };
+  db.systemAnnouncements = [announcement, ...(Array.isArray(db.systemAnnouncements) ? db.systemAnnouncements : [])].slice(0, 100);
+  await writeDatabase(db);
+  void notifySystemAnnouncement(db, announcement);
+  return sendJson(res, 200, { ok: true, message: "公告已发布，用户下次打开 App 会看到该公告", announcements: publicSystemAnnouncements(db, true) });
+}
+
+async function handleSystemAnnouncementAction(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (!isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "仅平台管理员可管理公告" });
+  const announcementId = String(body.announcementId || "");
+  const action = body.action === "delete" ? "delete" : "end";
+  const list = Array.isArray(db.systemAnnouncements) ? db.systemAnnouncements : [];
+  const index = list.findIndex(item => item.id === announcementId);
+  if (index < 0) return sendJson(res, 404, { ok: false, message: "公告不存在或已删除" });
+  if (action === "delete") list.splice(index, 1);
+  else {
+    list[index].status = "ended";
+    list[index].endedAt = new Date().toISOString();
+  }
+  db.systemAnnouncements = list;
+  await writeDatabase(db);
+  return sendJson(res, 200, { ok: true, message: action === "delete" ? "公告已删除" : "公告已结束展示", announcements: publicSystemAnnouncements(db, true) });
+}
+
 function parseImageDataUrl(value) {
   const dataUrl = String(value || "");
   const match = dataUrl.match(/^data:image\/(png|jpe?g|webp);base64,([A-Za-z0-9+/=\s]+)$/i);
@@ -2146,7 +2246,8 @@ function marketChatListingSnapshot(db, listingId, sellerPhone = "") {
     unavailableReason: status === "sold" ? "sold" : "offline",
     sellerId: communityUserId(listing.sellerPhoneRaw),
     sellerName: seller?.accountName || listing.sellerName || "壳友卖家",
-    sellerAvatar: seller?.accountAvatar || listing.sellerAvatar || ""
+    sellerAvatar: seller?.accountAvatar || listing.sellerAvatar || "",
+    sellerIsAdmin: isAdminUser(seller)
   };
 }
 
@@ -2184,6 +2285,7 @@ function communityConversationMessages(db, phoneA, phoneB) {
         mine: item.fromPhone === phoneA,
         senderId: communityUserId(item.fromPhone),
         senderAvatar: db.users?.[item.fromPhone]?.accountAvatar || "",
+        senderIsAdmin: isAdminUser(db.users?.[item.fromPhone]),
         createdAt: item.createdAt,
         marketListing,
         marketReferenceOnly: Boolean(marketListing && !rawContent && !item.mediaUrl)
@@ -2220,6 +2322,7 @@ function communityFriends(db, viewer) {
         id: communityUserId(phone),
         name: user.accountName || maskPhone(phone),
         avatar: user.accountAvatar || "",
+        isAdmin: isAdminUser(user),
         phone: maskPhone(phone),
         unreadCount: messages.filter(message => message.fromPhone === phone && message.toPhone === viewer.phone && !message.readAt).length,
         lastMessage: communityMessagePreview(lastMessage),
@@ -2249,6 +2352,7 @@ function followedCommunityUsers(db, viewer) {
         id: communityUserId(item.targetPhone),
         name: user.accountName || maskPhone(item.targetPhone),
         avatar: user.accountAvatar || "",
+        isAdmin: isAdminUser(user),
         postCount: (Array.isArray(db.communityPosts) ? db.communityPosts : []).filter(post => post.authorPhoneRaw === item.targetPhone).length,
         listingCount: (Array.isArray(db.marketListings) ? db.marketListings : []).filter(listing => listing.sellerPhoneRaw === item.targetPhone && listing.status !== "sold").length,
         followedAt: item.createdAt
@@ -2313,6 +2417,7 @@ function publicCommunityPosts(db, viewer = null) {
         authorId: communityUserId(item.authorPhoneRaw),
         authorName: author?.accountName || item.authorName || "壳友",
         authorAvatar: author?.accountAvatar || item.authorAvatar || "",
+        authorIsAdmin: isAdminUser(author),
         createdAt: item.createdAt,
         likeCount: likes.length,
         liked: Boolean(viewerPhone && likes.includes(viewerPhone)),
@@ -2324,6 +2429,7 @@ function publicCommunityPosts(db, viewer = null) {
           content: comment.content || "",
           authorName: db.users?.[comment.authorPhoneRaw]?.accountName || comment.authorName || "壳友",
           authorAvatar: db.users?.[comment.authorPhoneRaw]?.accountAvatar || comment.authorAvatar || "",
+          authorIsAdmin: isAdminUser(db.users?.[comment.authorPhoneRaw]),
           createdAt: comment.createdAt
         }))
       };
@@ -2737,6 +2843,7 @@ async function handleCommunityUserProfile(req, res) {
       id: targetId,
       name: target.accountName || maskPhone(target.phone),
       avatar: target.accountAvatar || "",
+      isAdmin: isAdminUser(target),
       postCount: posts.length,
       listingCount: listings.length,
       followed: Boolean(viewer && viewer.phone !== target.phone && isFollowingCommunityUser(db, viewer.phone, target.phone)),
@@ -2773,7 +2880,7 @@ async function handleCommunityChatList(req, res) {
   const messages = communityConversationMessages(db, user.phone, target.phone);
   return sendJson(res, 200, {
     ok: true,
-    friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "" },
+    friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "", isAdmin: isAdminUser(target) },
     messages,
     marketListing: latestConversationMarketListing(messages)
   });
@@ -2832,7 +2939,7 @@ async function handleCommunityChatSend(req, res) {
   const messages = communityConversationMessages(db, user.phone, target.phone);
   return sendJson(res, 200, {
     ok: true,
-    friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "" },
+    friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "", isAdmin: isAdminUser(target) },
     messages,
     marketListing: latestConversationMarketListing(messages)
   });
@@ -2860,7 +2967,7 @@ async function handleCommunityChatRecall(req, res) {
   const messages = communityConversationMessages(db, user.phone, target.phone);
   return sendJson(res, 200, {
     ok: true,
-    friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "" },
+    friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "", isAdmin: isAdminUser(target) },
     messages,
     marketListing: latestConversationMarketListing(messages)
   });
@@ -2940,6 +3047,7 @@ function marketListingView(db, item, viewer = null) {
     sellerId: communityUserId(item.sellerPhoneRaw),
     sellerName: seller?.accountName || item.sellerName || "壳友卖家",
     sellerAvatar: seller?.accountAvatar || item.sellerAvatar || "",
+    sellerIsAdmin: isAdminUser(seller),
     isOwn: Boolean(viewerPhone && item.sellerPhoneRaw === viewerPhone),
     sellerFollowed: Boolean(viewerPhone && item.sellerPhoneRaw !== viewerPhone && isFollowingCommunityUser(db, viewerPhone, item.sellerPhoneRaw)),
     isFriend: Boolean(viewerPhone && item.sellerPhoneRaw !== viewerPhone && isCommunityFriend(db, viewerPhone, item.sellerPhoneRaw)),
@@ -3645,6 +3753,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/notifications/device/register") return await handlePushDeviceRegister(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/device/unregister") return await handlePushDeviceUnregister(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/test") return await handlePushNotificationTest(req, res);
+    if (req.method === "POST" && url.pathname === "/api/announcements/list") return await handleSystemAnnouncementList(req, res);
+    if (req.method === "POST" && url.pathname === "/api/announcements/create") return await handleSystemAnnouncementCreate(req, res);
+    if (req.method === "POST" && url.pathname === "/api/announcements/action") return await handleSystemAnnouncementAction(req, res);
     if (req.method === "POST" && url.pathname === "/api/upload/image") return await handleUploadImage(req, res);
     if (req.method === "POST" && url.pathname === "/api/upload/media") return await handleUploadMedia(req, res);
     if (req.method === "POST" && url.pathname === "/api/reviews/list") return await handleListReviews(req, res);
