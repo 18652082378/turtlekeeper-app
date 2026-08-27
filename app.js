@@ -5488,14 +5488,74 @@ function bindEvents() {
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", navigateBack));
   document.querySelectorAll("[data-view-turtle]").forEach(el => el.addEventListener("click", () => setState({ page: "turtleDetail", selectedTurtleId: el.dataset.viewTurtle, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
   // Match the product gallery: current iOS WebViews keep this as a native
-  // scroll view from touch-down through deceleration.  JavaScript must not
-  // manipulate scrollLeft during a finger drag, otherwise the cards lag one
-  // frame behind the finger.
+  // scroll view from touch-down through deceleration. Some older WebViews
+  // incorrectly leave a nested scroller stationary, so use the gallery's
+  // direct-to-finger fallback only when native scrolling has not moved it.
   document.querySelectorAll("[data-growth-history-flow]").forEach(flow => {
+    let fallbackDrag = null;
+    let suppressClickUntil = 0;
+    const card = flow.closest(".growth-update-card");
+    const clearFallbackDrag = event => {
+      if (!fallbackDrag) return;
+      const active = fallbackDrag;
+      fallbackDrag = null;
+      if (!active.manual) return;
+      suppressClickUntil = Date.now() + 420;
+      try { flow.releasePointerCapture(active.pointerId); } catch {}
+      card?.classList.remove("is-history-interacting");
+      event?.preventDefault();
+      event?.stopPropagation();
+    };
+    flow.addEventListener("scroll", () => {
+      if (!fallbackDrag || fallbackDrag.manual) return;
+      if (Math.abs(flow.scrollLeft - fallbackDrag.startScrollLeft) > 1) {
+        fallbackDrag.nativeMoved = true;
+      }
+    }, { passive: true });
+    flow.addEventListener("pointerdown", event => {
+      if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0) || event.target.closest("button")) return;
+      fallbackDrag = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        startScrollLeft: flow.scrollLeft,
+        horizontal: false,
+        manual: false,
+        nativeMoved: false
+      };
+    }, { passive: true });
+    flow.addEventListener("pointermove", event => {
+      const active = fallbackDrag;
+      if (!active || active.pointerId !== event.pointerId || !event.isPrimary) return;
+      const dx = event.clientX - active.x;
+      const dy = event.clientY - active.y;
+      if (!active.horizontal) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 6) return;
+        if (Math.abs(dy) >= Math.abs(dx)) {
+          fallbackDrag = null;
+          return;
+        }
+        active.horizontal = true;
+      }
+      // The native scroll compositor has already claimed this gesture. Never
+      // compete with it: its finger tracking and inertia are smoother.
+      if (active.nativeMoved || Math.abs(flow.scrollLeft - active.startScrollLeft) > 1) return;
+      active.manual = true;
+      card?.classList.add("is-history-interacting");
+      flow.setPointerCapture?.(active.pointerId);
+      // This is the same immediate write used by the legacy product gallery
+      // fallback; batching in requestAnimationFrame causes a visible lag.
+      flow.scrollLeft = active.startScrollLeft - dx;
+      if (event.cancelable) event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+    flow.addEventListener("pointerup", clearFallbackDrag, { passive: false });
+    flow.addEventListener("pointercancel", clearFallbackDrag, { passive: false });
     flow.addEventListener("click", event => {
       // Never let a timeline tap enter the archive. Buttons inside it (such
       // as delete) keep their own behaviour and already stop propagation.
       event.stopPropagation();
+      if (Date.now() < suppressClickUntil) event.preventDefault();
     });
   });
   document.querySelectorAll("[data-growth-filter]").forEach(button => button.addEventListener("click", () => setState({ growthFilter: button.dataset.growthFilter }, { pageScroll: "preserve" })));
