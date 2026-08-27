@@ -16207,8 +16207,13 @@ html[data-theme-color="dark"] .breeding-history-snapshot .breeding-history-photo
   scroll-behavior: smooth;
   scroll-snap-type: x proximity;
   overscroll-behavior-x: contain;
+  touch-action: pan-x;
+  -webkit-overflow-scrolling: touch;
+  cursor: grab;
   scrollbar-width: thin;
 }
+
+.growth-history-flow:active { cursor: grabbing; }
 
 .growth-history-step {
   flex: 0 0 214px;
@@ -16263,7 +16268,9 @@ html[data-theme-color="dark"] .breeding-history-snapshot .breeding-history-photo
 
 .growth-history-pair {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 15px minmax(0, 1fr);
+  /* Give the "更新后" column a little more room and pull the green change
+     arrow closer to the left-side value, so the comparison reads as one flow. */
+  grid-template-columns: minmax(66px, .78fr) 15px minmax(0, 1.22fr);
   gap: 4px;
   align-items: center;
 }

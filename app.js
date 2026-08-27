@@ -1998,6 +1998,7 @@ function communityCompactCard(item) {
 function communityFeedCard(item, { allowDetail = false } = {}) {
   const comments = Array.isArray(item.comments) ? item.comments : [];
   const isOwn = Boolean(item.isOwn || item.pendingLocal);
+  const canDelete = isOwn || state.isCommunityAdmin;
   const primaryMedia = communityPostMediaItems(item)[0];
   return `
     <article class="community-moment" data-community-feed-card="${item.id}" ${allowDetail ? `data-view-community-post="${item.id}" tabindex="0" role="button" aria-label="查看${escapeHtml(item.authorName || "壳友")}发布的动态"` : ""}>
@@ -2007,7 +2008,7 @@ function communityFeedCard(item, { allowDetail = false } = {}) {
         ${item.content ? `<p class="community-post-copy">${escapeHtml(item.content)}</p>` : ""}
         ${primaryMedia ? `<div class="community-post-media ${primaryMedia.type === "video" ? "is-video" : ""}">${communityFeedMedia(item)}</div>` : ""}
         ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
-        <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? communityMomentActionMenu(item, isOwn) : ""}</div></div>
+        <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${canDelete ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? communityMomentActionMenu(item, isOwn) : ""}</div></div>
         ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}${platformAdminBadge(comment)}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</div>` : ""}
         ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="评论" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
       </div>
@@ -2105,6 +2106,7 @@ function pageCommunityPostDetail() {
   if (!item) return `${topbar("动态详情", true)}<main class="content page-fresh"><div class="empty small-empty"><div><strong>这条动态不存在</strong></div></div></main>${bottomNav()}`;
   const comments = Array.isArray(item.comments) ? item.comments : [];
   const isOwn = Boolean(item.isOwn || item.pendingLocal);
+  const canDelete = isOwn || state.isCommunityAdmin;
   return `
     ${topbar("动态详情", true)}
     <main class="content page-fresh community-detail-page">
@@ -2121,7 +2123,7 @@ function pageCommunityPostDetail() {
           <button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "已赞" : "♡ 赞"}${item.likeCount ? ` ${item.likeCount}` : ""}</button>
           <button type="button" data-show-community-comment="${item.id}">评论${comments.length ? ` ${comments.length}` : ""}</button>
           ${!isOwn ? `<button type="button" data-open-content-report data-report-type="community" data-report-id="${item.id}">举报</button><button class="danger-link" type="button" data-block-content-user data-block-type="community" data-block-id="${item.id}" data-block-name="${escapeHtml(item.authorName || "该用户")}">屏蔽用户</button>` : ""}
-          ${isOwn ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}
+          ${canDelete ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}
         </div>
         ${(item.likeCount || comments.length) ? `<section class="community-detail-social">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}${platformAdminBadge(comment)}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</section>` : ""}
         ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="写下评论" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
@@ -3380,6 +3382,7 @@ function pageMarketDetail() {
     return `${topbar("商品详情", true)}<main class="content page-fresh market-detail-page"><div class="empty"><strong>${openingSharedListing ? "正在打开商品…" : "商品已下架"}</strong>${openingSharedListing ? "<br>正在读取商品信息" : ""}</div></main>`;
   }
   const isOwn = Boolean(item.isOwn || item.pendingLocal);
+  const canDelete = isOwn || state.isCommunityAdmin;
   const sold = item.status === "sold";
   const mediaItems = marketListingMediaItems(item);
   const firstMediaIsVideo = mediaItems[0]?.type === "video";
@@ -3423,7 +3426,7 @@ function pageMarketDetail() {
     <div class="market-detail-actions">
       ${marketFavoriteButton(item, "market-detail-favorite")}
       ${!isOwn ? `<button class="market-contact-action" type="button" data-market-contact="${item.id}">联系卖家</button>` : ""}
-      ${isOwn ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">删除</button><button class="market-sold-action" type="button" data-market-sold="${item.id}">${sold ? "恢复在售" : "标记已售"}</button>` : sold ? `<button class="market-sold-disabled" type="button" disabled>该商品已售出</button>` : `<button class="market-want-action" type="button" data-market-platform-service="${item.id}">联系平台客服</button>`}
+      ${isOwn ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">删除</button><button class="market-sold-action" type="button" data-market-sold="${item.id}">${sold ? "恢复在售" : "标记已售"}</button>` : canDelete ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">管理员删除</button>` : sold ? `<button class="market-sold-disabled" type="button" disabled>该商品已售出</button>` : `<button class="market-want-action" type="button" data-market-platform-service="${item.id}">联系平台客服</button>`}
     </div>
   `;
 }
@@ -5484,6 +5487,44 @@ function bindEvents() {
   document.querySelectorAll("[data-open-platform-service-dialog]").forEach(button => button.addEventListener("click", openMarketTopService));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", navigateBack));
   document.querySelectorAll("[data-view-turtle]").forEach(el => el.addEventListener("click", () => setState({ page: "turtleDetail", selectedTurtleId: el.dataset.viewTurtle, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
+  // The horizontal history is a dedicated hand-scroll surface.  Keep its
+  // pointer/click events inside the timeline so the surrounding card can stay
+  // a simple tap target for opening the turtle detail.
+  document.querySelectorAll("[data-growth-history-flow]").forEach(flow => {
+    let drag = null;
+    let moved = false;
+    const release = event => {
+      if (!drag) return;
+      try { flow.releasePointerCapture(drag.pointerId); } catch {}
+      drag = null;
+      if (event) event.stopPropagation();
+    };
+    flow.addEventListener("pointerdown", event => {
+      if (event.button !== 0 || event.target.closest("button")) return;
+      moved = false;
+      drag = { pointerId: event.pointerId, x: event.clientX, scrollLeft: flow.scrollLeft };
+      try { flow.setPointerCapture(event.pointerId); } catch {}
+      event.stopPropagation();
+    });
+    flow.addEventListener("pointermove", event => {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const distance = event.clientX - drag.x;
+      if (Math.abs(distance) > 3) moved = true;
+      if (moved) {
+        flow.scrollLeft = drag.scrollLeft - distance;
+        event.preventDefault();
+      }
+      event.stopPropagation();
+    });
+    flow.addEventListener("pointerup", release);
+    flow.addEventListener("pointercancel", release);
+    flow.addEventListener("click", event => {
+      // Never let a timeline tap enter the archive. Buttons inside it (such
+      // as delete) keep their own behaviour and already stop propagation.
+      event.stopPropagation();
+      if (moved) event.preventDefault();
+    });
+  });
   document.querySelectorAll("[data-growth-filter]").forEach(button => button.addEventListener("click", () => setState({ growthFilter: button.dataset.growthFilter }, { pageScroll: "preserve" })));
   document.querySelectorAll("[data-delete-growth-update]").forEach(button => button.addEventListener("click", event => {
     event.preventDefault();
