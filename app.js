@@ -5487,70 +5487,58 @@ function bindEvents() {
   document.querySelectorAll("[data-open-platform-service-dialog]").forEach(button => button.addEventListener("click", openMarketTopService));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", navigateBack));
   document.querySelectorAll("[data-view-turtle]").forEach(el => el.addEventListener("click", () => setState({ page: "turtleDetail", selectedTurtleId: el.dataset.viewTurtle, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
-  // Match the product gallery: current iOS WebViews keep this as a native
-  // scroll view from touch-down through deceleration. Some older WebViews
-  // incorrectly leave a nested scroller stationary, so use the gallery's
-  // direct-to-finger fallback only when native scrolling has not moved it.
+  // The product gallery's legacy drag path writes the exact finger position
+  // immediately instead of waiting for a scroll animation frame. Use that
+  // same single-owner strategy here: iOS keeps vertical page scroll, while
+  // growth history owns a confirmed horizontal drag from start to release.
   document.querySelectorAll("[data-growth-history-flow]").forEach(flow => {
-    let fallbackDrag = null;
+    let historyDrag = null;
     let suppressClickUntil = 0;
     const card = flow.closest(".growth-update-card");
-    const clearFallbackDrag = event => {
-      if (!fallbackDrag) return;
-      const active = fallbackDrag;
-      fallbackDrag = null;
-      if (!active.manual) return;
+    const clearHistoryDrag = event => {
+      if (!historyDrag) return;
+      const active = historyDrag;
+      historyDrag = null;
+      if (!active.horizontal) return;
       suppressClickUntil = Date.now() + 420;
       try { flow.releasePointerCapture(active.pointerId); } catch {}
       card?.classList.remove("is-history-interacting");
       event?.preventDefault();
       event?.stopPropagation();
     };
-    flow.addEventListener("scroll", () => {
-      if (!fallbackDrag || fallbackDrag.manual) return;
-      if (Math.abs(flow.scrollLeft - fallbackDrag.startScrollLeft) > 1) {
-        fallbackDrag.nativeMoved = true;
-      }
-    }, { passive: true });
     flow.addEventListener("pointerdown", event => {
       if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0) || event.target.closest("button")) return;
-      fallbackDrag = {
+      historyDrag = {
         pointerId: event.pointerId,
         x: event.clientX,
         y: event.clientY,
         startScrollLeft: flow.scrollLeft,
-        horizontal: false,
-        manual: false,
-        nativeMoved: false
+        horizontal: false
       };
     }, { passive: true });
     flow.addEventListener("pointermove", event => {
-      const active = fallbackDrag;
+      const active = historyDrag;
       if (!active || active.pointerId !== event.pointerId || !event.isPrimary) return;
       const dx = event.clientX - active.x;
       const dy = event.clientY - active.y;
       if (!active.horizontal) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) < 6) return;
         if (Math.abs(dy) >= Math.abs(dx)) {
-          fallbackDrag = null;
+          historyDrag = null;
           return;
         }
         active.horizontal = true;
       }
-      // The native scroll compositor has already claimed this gesture. Never
-      // compete with it: its finger tracking and inertia are smoother.
-      if (active.nativeMoved || Math.abs(flow.scrollLeft - active.startScrollLeft) > 1) return;
-      active.manual = true;
       card?.classList.add("is-history-interacting");
       flow.setPointerCapture?.(active.pointerId);
-      // This is the same immediate write used by the legacy product gallery
-      // fallback; batching in requestAnimationFrame causes a visible lag.
+      // Same immediate write as the legacy product-gallery drag path.
+      // Do not batch this in requestAnimationFrame: that adds visible lag.
       flow.scrollLeft = active.startScrollLeft - dx;
       if (event.cancelable) event.preventDefault();
       event.stopPropagation();
     }, { passive: false });
-    flow.addEventListener("pointerup", clearFallbackDrag, { passive: false });
-    flow.addEventListener("pointercancel", clearFallbackDrag, { passive: false });
+    flow.addEventListener("pointerup", clearHistoryDrag, { passive: false });
+    flow.addEventListener("pointercancel", clearHistoryDrag, { passive: false });
     flow.addEventListener("click", event => {
       // Never let a timeline tap enter the archive. Buttons inside it (such
       // as delete) keep their own behaviour and already stop propagation.

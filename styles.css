@@ -16208,11 +16208,10 @@ html[data-theme-color="dark"] .breeding-history-snapshot .breeding-history-photo
   /* Direct pointer dragging must stay under the finger; smooth scrolling
      would make every drag frame visibly lag behind. */
   scroll-behavior: auto;
-  scroll-snap-type: x proximity;
   overscroll-behavior-x: contain;
-  /* Same native compositor path as the product-detail gallery: WebKit owns
-     tracking, inertia and reversal while the finger is down. */
-  touch-action: pan-x pan-y;
+  /* Vertical gestures stay native; this strip owns horizontal drags so its
+     cards follow the finger instead of competing with WebKit's nested scroll. */
+  touch-action: pan-y;
   -webkit-overflow-scrolling: touch;
   cursor: grab;
   scrollbar-width: none;
@@ -16236,8 +16235,6 @@ html[data-theme-color="dark"] .breeding-history-snapshot .breeding-history-photo
   border: 1px solid var(--card-border);
   border-radius: 9px;
   background: var(--raised-bg);
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
 }
 
 .growth-history-step-head {
