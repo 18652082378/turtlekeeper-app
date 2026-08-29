@@ -4090,7 +4090,7 @@ function persistDashboardTurtleOrder(list) {
     return visibleTurtles.get(orderedIds[visibleIndex++]) || turtle;
   });
   setState({ turtles, turtleSort: "default", openTurtleMenuId: "" });
-  toast("排序已保存");
+  toast("已保存为默认排序");
 }
 
 function setupDashboardTurtleReorder() {
@@ -4098,6 +4098,39 @@ function setupDashboardTurtleReorder() {
   if (!list || list.dataset.reorderBound === "true") return;
   list.dataset.reorderBound = "true";
   let interaction = null;
+  let autoScrollFrame = 0;
+
+  const placeDraggingRow = (active, clientY) => {
+    const rows = [...list.querySelectorAll(":scope > [data-reorder-turtle]:not(.is-turtle-dragging)")];
+    const before = rows.find(row => clientY < row.getBoundingClientRect().top + row.offsetHeight / 2);
+    if (before) list.insertBefore(active.row, before);
+    else if (rows.length) list.insertBefore(active.row, rows[rows.length - 1].nextSibling);
+  };
+  const stopAutoScroll = () => {
+    if (autoScrollFrame) window.cancelAnimationFrame(autoScrollFrame);
+    autoScrollFrame = 0;
+  };
+  const runAutoScroll = () => {
+    autoScrollFrame = 0;
+    const active = interaction;
+    if (!active?.dragging) return;
+    const edge = 92;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    let speed = 0;
+    if (active.lastY < edge) speed = -Math.min(16, (edge - active.lastY) * 0.2);
+    else if (active.lastY > viewportHeight - edge) speed = Math.min(16, (active.lastY - (viewportHeight - edge)) * 0.2);
+    if (!speed) return;
+    window.scrollBy(0, speed);
+    placeDraggingRow(active, active.lastY);
+    autoScrollFrame = window.requestAnimationFrame(runAutoScroll);
+  };
+  const updateAutoScroll = active => {
+    const edge = 92;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    const nearEdge = active.lastY < edge || active.lastY > viewportHeight - edge;
+    if (nearEdge && !autoScrollFrame) autoScrollFrame = window.requestAnimationFrame(runAutoScroll);
+    else if (!nearEdge) stopAutoScroll();
+  };
 
   const clearPressTimer = active => {
     if (!active?.timer) return;
@@ -4109,6 +4142,7 @@ function setupDashboardTurtleReorder() {
     if (!active || (event?.pointerId !== undefined && event.pointerId !== active.pointerId)) return;
     interaction = null;
     clearPressTimer(active);
+    stopAutoScroll();
     if (!active.dragging) return;
     dashboardTurtleDragSuppressUntil = Date.now() + 650;
     document.documentElement.classList.remove("dashboard-turtle-reordering");
@@ -4132,6 +4166,7 @@ function setupDashboardTurtleReorder() {
       row,
       startX: event.clientX,
       startY: event.clientY,
+      lastY: event.clientY,
       dragging: false,
       timer: window.setTimeout(() => {
         const active = interaction;
@@ -4158,10 +4193,9 @@ function setupDashboardTurtleReorder() {
       }
       return;
     }
-    const rows = [...list.querySelectorAll(":scope > [data-reorder-turtle]:not(.is-turtle-dragging)")];
-    const before = rows.find(row => event.clientY < row.getBoundingClientRect().top + row.offsetHeight / 2);
-    if (before) list.insertBefore(active.row, before);
-    else if (rows.length) list.insertBefore(active.row, rows[rows.length - 1].nextSibling);
+    active.lastY = event.clientY;
+    placeDraggingRow(active, event.clientY);
+    updateAutoScroll(active);
     if (event.cancelable) event.preventDefault();
     event.stopPropagation();
   }, { passive: false });

@@ -147,8 +147,26 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePicker
             completion(status == .authorized || status == .limited)
         }
         if #available(iOS 14, *) {
+            let current = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            if current == .authorized || current == .limited {
+                completion(true)
+                return
+            }
+            if current == .denied || current == .restricted {
+                completion(false)
+                return
+            }
             PHPhotoLibrary.requestAuthorization(for: .readWrite, handler: finish)
         } else {
+            let current = PHPhotoLibrary.authorizationStatus()
+            if current == .authorized {
+                completion(true)
+                return
+            }
+            if current == .denied || current == .restricted {
+                completion(false)
+                return
+            }
             PHPhotoLibrary.requestAuthorization(finish)
         }
     }
@@ -312,6 +330,9 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
     private var currentCollection: PHAssetCollection?
     private var currentAlbumTitle = "最近项目"
     private var mediaAlbums: [TurtleMediaAlbum] = []
+    private var assetLoadToken = UUID()
+    private var albumLoadInFlight = false
+    private var albumChoicesLoaded = false
 
     var onCancel: (() -> Void)?
     var onFinish: (([PHAsset], [String: Data]) -> Void)?
@@ -325,6 +346,7 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
     private let albumOverlay = UIView()
     private let albumTable = UITableView(frame: .zero, style: .plain)
     private var albumTableHeightConstraint: NSLayoutConstraint?
+    private var albumDisplayRowCount: Int { max(mediaAlbums.count, albumLoadInFlight ? 1 : 0) }
 
     init(allowImages: Bool, allowVideos: Bool, selectionLimit: Int, maximumVideoDuration: TimeInterval) {
         self.allowImages = allowImages
@@ -351,7 +373,12 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         configureFooter()
         configureAlbumOverlay()
         loadAssets()
-        loadAlbumChoices()
+        // Album counting can be expensive on libraries with tens of thousands
+        // of items. Warm it after the picker is already visible, never before
+        // the presentation animation.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+            self?.loadAlbumChoices()
+        }
     }
 
     override func viewDidLayoutSubviews() {
@@ -364,7 +391,7 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
             layout.invalidateLayout()
         }
         albumTableHeightConstraint?.constant = min(
-            CGFloat(mediaAlbums.count) * TurtleAlbumRowCell.rowHeight,
+            CGFloat(albumDisplayRowCount) * TurtleAlbumRowCell.rowHeight,
             max(0, albumOverlay.bounds.height)
         )
     }
@@ -523,20 +550,34 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         currentCollection = collection
         currentAlbumTitle = title
         updateAlbumButton(expanded: false)
-        let options = PHFetchOptions()
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        let fetched = collection.map { PHAsset.fetchAssets(in: $0, options: options) } ?? PHAsset.fetchAssets(with: options)
-        var nextAssets: [PHAsset] = []
-        fetched.enumerateObjects { asset, _, _ in
-            if asset.mediaType == .image && self.allowImages {
-                nextAssets.append(asset)
-            } else if asset.mediaType == .video && self.allowVideos {
-                nextAssets.append(asset)
+        let token = UUID()
+        assetLoadToken = token
+        emptyLabel.text = "正在加载…"
+        emptyLabel.isHidden = false
+        let includeImages = allowImages
+        let includeVideos = allowVideos
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let nextAssets: [PHAsset] = autoreleasepool {
+                let options = PHFetchOptions()
+                options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+                if includeImages != includeVideos {
+                    let mediaType = includeImages ? PHAssetMediaType.image : PHAssetMediaType.video
+                    options.predicate = NSPredicate(format: "mediaType == %d", mediaType.rawValue)
+                }
+                let fetched = collection.map { PHAsset.fetchAssets(in: $0, options: options) } ?? PHAsset.fetchAssets(with: options)
+                var output: [PHAsset] = []
+                output.reserveCapacity(fetched.count)
+                fetched.enumerateObjects { asset, _, _ in output.append(asset) }
+                return output
+            }
+            DispatchQueue.main.async {
+                guard let self, self.assetLoadToken == token else { return }
+                self.assets = nextAssets
+                self.emptyLabel.text = "没有可选择的图片或视频"
+                self.emptyLabel.isHidden = !nextAssets.isEmpty
+                self.collectionView.reloadData()
             }
         }
-        assets = nextAssets
-        emptyLabel.isHidden = !assets.isEmpty
-        collectionView.reloadData()
     }
 
     @objc private func openAlbumList() {
@@ -547,7 +588,7 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         loadAlbumChoices()
         albumTable.reloadData()
         albumTableHeightConstraint?.constant = min(
-            CGFloat(mediaAlbums.count) * TurtleAlbumRowCell.rowHeight,
+            CGFloat(albumDisplayRowCount) * TurtleAlbumRowCell.rowHeight,
             max(0, collectionView.bounds.height)
         )
         albumOverlay.isHidden = false
@@ -593,57 +634,84 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         albumButton.accessibilityValue = expanded ? "已展开" : "已收起"
     }
 
-    private func mediaCount(in collection: PHAssetCollection?) -> Int {
+    private func mediaSummary(in collection: PHAssetCollection?) -> (count: Int, coverAsset: PHAsset?) {
         let options = PHFetchOptions()
-        let fetched = collection.map { PHAsset.fetchAssets(in: $0, options: options) } ?? PHAsset.fetchAssets(with: options)
-        var count = 0
-        fetched.enumerateObjects { asset, _, _ in
-            if (asset.mediaType == .image && self.allowImages) || (asset.mediaType == .video && self.allowVideos) {
-                count += 1
-            }
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        if allowImages != allowVideos {
+            let mediaType = allowImages ? PHAssetMediaType.image : PHAssetMediaType.video
+            options.predicate = NSPredicate(format: "mediaType == %d", mediaType.rawValue)
         }
-        return count
+        let fetched = collection.map { PHAsset.fetchAssets(in: $0, options: options) } ?? PHAsset.fetchAssets(with: options)
+        return (fetched.count, fetched.firstObject)
     }
 
     private func loadAlbumChoices() {
-        var next = [TurtleMediaAlbum(title: "最近项目", collection: nil, count: mediaCount(in: nil))]
-        var identifiers = Set<String>()
-        let appendCollections: (PHFetchResult<PHAssetCollection>) -> Void = { result in
-            result.enumerateObjects { collection, _, _ in
-                guard !identifiers.contains(collection.localIdentifier) else { return }
-                guard collection.assetCollectionSubtype != .smartAlbumUserLibrary,
-                      collection.assetCollectionSubtype != .smartAlbumAllHidden else { return }
-                let count = self.mediaCount(in: collection)
-                guard count > 0 else { return }
-                identifiers.insert(collection.localIdentifier)
-                let trimmedTitle = collection.localizedTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                next.append(TurtleMediaAlbum(
-                    title: trimmedTitle.isEmpty ? "未命名相簿" : trimmedTitle,
-                    collection: collection,
-                    count: count
-                ))
+        guard !albumChoicesLoaded, !albumLoadInFlight else { return }
+        albumLoadInFlight = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let next: [TurtleMediaAlbum] = autoreleasepool {
+                let recent = self.mediaSummary(in: nil)
+                var output = [TurtleMediaAlbum(title: "最近项目", collection: nil, count: recent.count, coverAsset: recent.coverAsset)]
+                var identifiers = Set<String>()
+                let appendCollections: (PHFetchResult<PHAssetCollection>) -> Void = { result in
+                    result.enumerateObjects { collection, _, _ in
+                        guard !identifiers.contains(collection.localIdentifier) else { return }
+                        guard collection.assetCollectionSubtype != .smartAlbumUserLibrary,
+                              collection.assetCollectionSubtype != .smartAlbumAllHidden else { return }
+                        let summary = self.mediaSummary(in: collection)
+                        guard summary.count > 0 else { return }
+                        identifiers.insert(collection.localIdentifier)
+                        let trimmedTitle = collection.localizedTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        output.append(TurtleMediaAlbum(
+                            title: trimmedTitle.isEmpty ? "未命名相簿" : trimmedTitle,
+                            collection: collection,
+                            count: summary.count,
+                            coverAsset: summary.coverAsset
+                        ))
+                    }
+                }
+                appendCollections(PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .any, options: nil))
+                appendCollections(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil))
+                return output
+            }
+            DispatchQueue.main.async {
+                self.albumLoadInFlight = false
+                self.albumChoicesLoaded = true
+                self.mediaAlbums = next
+                self.albumTable.reloadData()
+                self.albumTableHeightConstraint?.constant = min(
+                    CGFloat(next.count) * TurtleAlbumRowCell.rowHeight,
+                    max(0, self.collectionView.bounds.height)
+                )
             }
         }
-        appendCollections(PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .any, options: nil))
-        appendCollections(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil))
-        mediaAlbums = next
-        albumTable.reloadData()
     }
 
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { mediaAlbums.count }
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { albumDisplayRowCount }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        if mediaAlbums.isEmpty {
+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            cell.backgroundColor = UIColor(white: 0.12, alpha: 1)
+            cell.textLabel?.text = "正在加载相簿…"
+            cell.textLabel?.textColor = UIColor(white: 0.62, alpha: 1)
+            cell.textLabel?.font = .systemFont(ofSize: 17)
+            cell.selectionStyle = .none
+            return cell
+        }
         guard let cell = tableView.dequeueReusableCell(withIdentifier: TurtleAlbumRowCell.reuseIdentifier, for: indexPath) as? TurtleAlbumRowCell else {
             return UITableViewCell()
         }
         let album = mediaAlbums[indexPath.row]
         let selected = album.collection?.localIdentifier == currentCollection?.localIdentifier ||
             (album.collection == nil && currentCollection == nil)
-        cell.configure(album: album, selected: selected, allowImages: allowImages, allowVideos: allowVideos, imageManager: imageManager)
+        cell.configure(album: album, selected: selected, imageManager: imageManager)
         return cell
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        guard indexPath.row < mediaAlbums.count else { return }
         let album = mediaAlbums[indexPath.row]
         tableView.deselectRow(at: indexPath, animated: true)
         loadAssets(collection: album.collection, title: album.title)
@@ -782,6 +850,7 @@ private struct TurtleMediaAlbum {
     let title: String
     let collection: PHAssetCollection?
     let count: Int
+    let coverAsset: PHAsset?
 }
 
 private final class TurtleAlbumRowCell: UITableViewCell {
@@ -840,23 +909,13 @@ private final class TurtleAlbumRowCell: UITableViewCell {
         coverView.image = nil
     }
 
-    func configure(album: TurtleMediaAlbum, selected: Bool, allowImages: Bool, allowVideos: Bool, imageManager: PHCachingImageManager) {
+    func configure(album: TurtleMediaAlbum, selected: Bool, imageManager: PHCachingImageManager) {
         representedIdentifier = album.collection?.localIdentifier ?? "__recent__"
         titleLabel.text = "\(album.title)(\(album.count))"
         checkLabel.isHidden = !selected
         coverView.image = nil
 
-        let options = PHFetchOptions()
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        let fetched = album.collection.map { PHAsset.fetchAssets(in: $0, options: options) } ?? PHAsset.fetchAssets(with: options)
-        var coverAsset: PHAsset?
-        fetched.enumerateObjects { asset, _, stop in
-            if (asset.mediaType == .image && allowImages) || (asset.mediaType == .video && allowVideos) {
-                coverAsset = asset
-                stop.pointee = true
-            }
-        }
-        guard let coverAsset else { return }
+        guard let coverAsset = album.coverAsset else { return }
         let expectedIdentifier = representedIdentifier
         let requestOptions = PHImageRequestOptions()
         requestOptions.deliveryMode = .opportunistic
