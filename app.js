@@ -4159,7 +4159,10 @@ function setupDashboardTurtleReorder() {
 
   list.addEventListener("pointerdown", event => {
     const row = event.target.closest("[data-reorder-turtle]");
-    if (!row || !event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+    // iOS may cancel a PointerEvent as soon as the page recognises a vertical
+    // pan. Touches below deliberately use the native TouchEvent path so a
+    // long-press can take ownership after the normal scroll decision.
+    if (!row || event.pointerType === "touch" || !event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
     if (event.target.closest("button, a, input, select, textarea, .turtle-menu")) return;
     interaction = {
       pointerId: event.pointerId,
@@ -4204,6 +4207,67 @@ function setupDashboardTurtleReorder() {
   list.addEventListener("contextmenu", event => {
     if (interaction?.dragging || event.target.closest("[data-reorder-turtle]")) event.preventDefault();
   });
+
+  const findTouch = (event, identifier) => [...event.changedTouches].find(touch => touch.identifier === identifier)
+    || [...event.touches].find(touch => touch.identifier === identifier);
+  list.addEventListener("touchstart", event => {
+    if (event.touches.length !== 1 || interaction) return;
+    const row = event.target.closest("[data-reorder-turtle]");
+    if (!row || event.target.closest("button, a, input, select, textarea, .turtle-menu")) return;
+    const touch = event.touches[0];
+    interaction = {
+      pointerId: `touch-${touch.identifier}`,
+      touchIdentifier: touch.identifier,
+      row,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      lastY: touch.clientY,
+      dragging: false,
+      timer: window.setTimeout(() => {
+        const active = interaction;
+        if (!active || active.touchIdentifier !== touch.identifier) return;
+        active.timer = 0;
+        active.dragging = true;
+        dashboardTurtleDragSuppressUntil = Date.now() + 650;
+        document.documentElement.classList.add("dashboard-turtle-reordering");
+        active.row.classList.add("is-turtle-dragging");
+        navigator.vibrate?.(18);
+      }, 420)
+    };
+  }, { passive: true });
+  list.addEventListener("touchmove", event => {
+    const active = interaction;
+    if (!active?.touchIdentifier && active?.touchIdentifier !== 0) return;
+    const touch = findTouch(event, active.touchIdentifier);
+    if (!touch) return;
+    const distance = Math.hypot(touch.clientX - active.startX, touch.clientY - active.startY);
+    if (!active.dragging) {
+      if (distance > 9) {
+        clearPressTimer(active);
+        interaction = null;
+      }
+      return;
+    }
+    active.lastY = touch.clientY;
+    placeDraggingRow(active, touch.clientY);
+    updateAutoScroll(active);
+    // Only prevent scrolling after the long press has entered ordering mode.
+    // Before that, the dashboard keeps the normal iOS vertical scroll feel.
+    if (event.cancelable) event.preventDefault();
+    event.stopPropagation();
+  }, { passive: false });
+  list.addEventListener("touchend", event => {
+    const active = interaction;
+    if (!active?.touchIdentifier && active?.touchIdentifier !== 0) return;
+    if ([...event.touches].some(touch => touch.identifier === active.touchIdentifier)) return;
+    finish(event);
+  }, { passive: false });
+  list.addEventListener("touchcancel", event => {
+    const active = interaction;
+    if (!active?.touchIdentifier && active?.touchIdentifier !== 0) return;
+    if ([...event.touches].some(touch => touch.identifier === active.touchIdentifier)) return;
+    finish(event, true);
+  }, { passive: false });
   list.addEventListener("click", event => {
     if (Date.now() >= dashboardTurtleDragSuppressUntil) return;
     event.preventDefault();

@@ -615,15 +615,10 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
 
     private func updateAlbumButton(expanded: Bool) {
         var configuration = UIButton.Configuration.plain()
-        configuration.title = currentAlbumTitle
-        let symbol = UIImage.SymbolConfiguration(paletteColors: [
-            UIColor(white: 0.78, alpha: 1),
-            UIColor(white: 0.22, alpha: 1)
-        ])
-        configuration.image = UIImage(systemName: expanded ? "chevron.up.circle.fill" : "chevron.down.circle.fill")?.applyingSymbolConfiguration(symbol)
-        configuration.imagePlacement = .trailing
-        configuration.imagePadding = 8
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 10)
+        // The title already carries the small down indicator. Keeping the
+        // separate trailing chevron created two arrows in the picker header.
+        configuration.title = "\(currentAlbumTitle)⌄"
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)
         configuration.baseForegroundColor = .white
         configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var outgoing = incoming
