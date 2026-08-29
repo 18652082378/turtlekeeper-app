@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import Capacitor
 import Photos
 import UIKit
@@ -75,7 +76,9 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePicker
                     maximumVideoDuration: maximumVideoDuration
                 )
                 picker.onCancel = { call.resolve(["files": []]) }
-                picker.onFinish = { [weak self] assets in self?.export(assets: assets, call: call) }
+                picker.onFinish = { [weak self] assets, editedImages in
+                    self?.export(assets: assets, editedImages: editedImages, call: call)
+                }
                 host.present(picker, animated: true)
             }
         }
@@ -150,7 +153,7 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePicker
         }
     }
 
-    private func export(assets: [PHAsset], call: CAPPluginCall) {
+    private func export(assets: [PHAsset], editedImages: [String: Data] = [:], call: CAPPluginCall) {
         guard !assets.isEmpty else {
             call.resolve(["files": []])
             return
@@ -163,7 +166,7 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePicker
 
         for (index, asset) in assets.enumerated() {
             group.enter()
-            export(asset: asset) { result in
+            export(asset: asset, editedImageData: editedImages[asset.localIdentifier]) { result in
                 lock.lock()
                 switch result {
                 case .success(let file):
@@ -185,9 +188,11 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePicker
         }
     }
 
-    private func export(asset: PHAsset, completion: @escaping (Result<[String: Any], Error>) -> Void) {
+    private func export(asset: PHAsset, editedImageData: Data?, completion: @escaping (Result<[String: Any], Error>) -> Void) {
         if asset.mediaType == .video {
             exportVideo(asset: asset, completion: completion)
+        } else if let editedImageData {
+            exportImageData(editedImageData, extensionName: "jpg", mimeType: "image/jpeg", completion: completion)
         } else {
             exportImage(asset: asset, completion: completion)
         }
@@ -210,18 +215,22 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePicker
             let contentType = dataUTI.flatMap { UTType($0) } ?? .jpeg
             let extensionName = contentType.preferredFilenameExtension ?? "jpg"
             let mimeType = contentType.preferredMIMEType ?? "image/jpeg"
-            let fileURL = self.temporaryURL(extensionName: extensionName)
-            do {
-                try data.write(to: fileURL, options: .atomic)
-                completion(.success([
-                    "path": fileURL.absoluteString,
-                    "name": "photo-\(UUID().uuidString).\(extensionName)",
-                    "mimeType": mimeType,
-                    "mediaType": "image"
-                ]))
-            } catch {
-                completion(.failure(error))
-            }
+            self.exportImageData(data, extensionName: extensionName, mimeType: mimeType, completion: completion)
+        }
+    }
+
+    private func exportImageData(_ data: Data, extensionName: String, mimeType: String, completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        let fileURL = temporaryURL(extensionName: extensionName)
+        do {
+            try data.write(to: fileURL, options: .atomic)
+            completion(.success([
+                "path": fileURL.absoluteString,
+                "name": "photo-\(UUID().uuidString).\(extensionName)",
+                "mimeType": mimeType,
+                "mediaType": "image"
+            ]))
+        } catch {
+            completion(.failure(error))
         }
     }
 
@@ -298,14 +307,19 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
     private let imageManager = PHCachingImageManager()
     private var assets: [PHAsset] = []
     private var selectedIdentifiers: [String] = []
+    private var selectedAssets: [String: PHAsset] = [:]
+    private var editedImages: [String: Data] = [:]
+    private var currentCollection: PHAssetCollection?
 
     var onCancel: (() -> Void)?
-    var onFinish: (([PHAsset]) -> Void)?
+    var onFinish: (([PHAsset], [String: Data]) -> Void)?
 
     private let collectionView: UICollectionView
     private let doneButton = UIButton(type: .system)
+    private let previewButton = UIButton(type: .system)
     private let counterLabel = UILabel()
     private let emptyLabel = UILabel()
+    private let albumButton = UIButton(type: .system)
 
     init(allowImages: Bool, allowVideos: Bool, selectionLimit: Int, maximumVideoDuration: TimeInterval) {
         self.allowImages = allowImages
@@ -357,18 +371,20 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         cancel.titleLabel?.font = .systemFont(ofSize: 46, weight: .light)
         cancel.addTarget(self, action: #selector(cancelSelection), for: .touchUpInside)
 
-        let title = UILabel()
-        title.translatesAutoresizingMaskIntoConstraints = false
-        title.text = "最近项目⌄"
-        title.textColor = .white
-        title.font = .systemFont(ofSize: 18, weight: .semibold)
-        title.backgroundColor = UIColor(white: 0.26, alpha: 1)
-        title.layer.cornerRadius = 21
-        title.clipsToBounds = true
-        title.textAlignment = .center
+        albumButton.translatesAutoresizingMaskIntoConstraints = false
+        albumButton.setTitle("最近项目⌄", for: .normal)
+        albumButton.setTitleColor(.white, for: .normal)
+        albumButton.titleLabel?.font = .systemFont(ofSize: 18, weight: .semibold)
+        albumButton.titleLabel?.lineBreakMode = .byTruncatingMiddle
+        albumButton.backgroundColor = UIColor(white: 0.26, alpha: 1)
+        albumButton.layer.cornerRadius = 21
+        albumButton.clipsToBounds = true
+        albumButton.contentEdgeInsets = UIEdgeInsets(top: 0, left: 22, bottom: 0, right: 22)
+        albumButton.accessibilityLabel = "选择相簿"
+        albumButton.addTarget(self, action: #selector(openAlbumList), for: .touchUpInside)
 
         header.addSubview(cancel)
-        header.addSubview(title)
+        header.addSubview(albumButton)
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: view.topAnchor),
             header.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -378,10 +394,11 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
             cancel.bottomAnchor.constraint(equalTo: header.bottomAnchor, constant: -10),
             cancel.widthAnchor.constraint(equalToConstant: 48),
             cancel.heightAnchor.constraint(equalToConstant: 48),
-            title.centerXAnchor.constraint(equalTo: header.centerXAnchor),
-            title.centerYAnchor.constraint(equalTo: cancel.centerYAnchor),
-            title.widthAnchor.constraint(greaterThanOrEqualToConstant: 142),
-            title.heightAnchor.constraint(equalToConstant: 42)
+            albumButton.centerXAnchor.constraint(equalTo: header.centerXAnchor),
+            albumButton.centerYAnchor.constraint(equalTo: cancel.centerYAnchor),
+            albumButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 142),
+            albumButton.widthAnchor.constraint(lessThanOrEqualTo: header.widthAnchor, constant: -150),
+            albumButton.heightAnchor.constraint(equalToConstant: 42)
         ])
     }
 
@@ -418,11 +435,11 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         footer.backgroundColor = UIColor(white: 0.11, alpha: 1)
         view.addSubview(footer)
 
-        let preview = UILabel()
-        preview.translatesAutoresizingMaskIntoConstraints = false
-        preview.text = "预览"
-        preview.textColor = UIColor(white: 0.48, alpha: 1)
-        preview.font = .systemFont(ofSize: 17)
+        previewButton.translatesAutoresizingMaskIntoConstraints = false
+        previewButton.setTitle("预览", for: .normal)
+        previewButton.titleLabel?.font = .systemFont(ofSize: 17)
+        previewButton.contentHorizontalAlignment = .left
+        previewButton.addTarget(self, action: #selector(previewSelection), for: .touchUpInside)
 
         counterLabel.translatesAutoresizingMaskIntoConstraints = false
         counterLabel.textColor = .white
@@ -434,7 +451,7 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         doneButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
         doneButton.addTarget(self, action: #selector(finishSelection), for: .touchUpInside)
 
-        footer.addSubview(preview)
+        footer.addSubview(previewButton)
         footer.addSubview(counterLabel)
         footer.addSubview(doneButton)
         NSLayoutConstraint.activate([
@@ -442,8 +459,10 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
             footer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             footer.heightAnchor.constraint(equalToConstant: 90),
-            preview.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 28),
-            preview.centerYAnchor.constraint(equalTo: footer.centerYAnchor, constant: -8),
+            previewButton.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 28),
+            previewButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor, constant: -8),
+            previewButton.widthAnchor.constraint(equalToConstant: 84),
+            previewButton.heightAnchor.constraint(equalToConstant: 48),
             counterLabel.centerXAnchor.constraint(equalTo: footer.centerXAnchor),
             counterLabel.centerYAnchor.constraint(equalTo: footer.centerYAnchor, constant: -8),
             doneButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -22),
@@ -454,10 +473,12 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         updateFooter()
     }
 
-    private func loadAssets() {
+    private func loadAssets(collection: PHAssetCollection? = nil, title: String = "最近项目") {
+        currentCollection = collection
+        albumButton.setTitle("\(title)⌄", for: .normal)
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        let fetched = PHAsset.fetchAssets(with: options)
+        let fetched = collection.map { PHAsset.fetchAssets(in: $0, options: options) } ?? PHAsset.fetchAssets(with: options)
         var nextAssets: [PHAsset] = []
         fetched.enumerateObjects { asset, _, _ in
             if asset.mediaType == .image && self.allowImages {
@@ -471,15 +492,77 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         collectionView.reloadData()
     }
 
+    @objc private func openAlbumList() {
+        let albums = TurtleAlbumListViewController(
+            allowImages: allowImages,
+            allowVideos: allowVideos,
+            selectedCollection: currentCollection
+        )
+        albums.onSelect = { [weak self] collection, title in
+            self?.loadAssets(collection: collection, title: title)
+        }
+        let navigation = UINavigationController(rootViewController: albums)
+        navigation.modalPresentationStyle = .fullScreen
+        present(navigation, animated: true)
+    }
+
     @objc private func cancelSelection() {
         dismiss(animated: true) { [onCancel] in onCancel?() }
     }
 
     @objc private func finishSelection() {
         let selected = selectedIdentifiers.compactMap { identifier in
-            assets.first(where: { $0.localIdentifier == identifier })
+            selectedAssets[identifier]
         }
-        dismiss(animated: true) { [onFinish] in onFinish?(selected) }
+        let edits = editedImages
+        dismiss(animated: true) { [onFinish] in onFinish?(selected, edits) }
+    }
+
+    @objc private func previewSelection() {
+        guard let identifier = selectedIdentifiers.first,
+              let asset = selectedAssets[identifier] else { return }
+        if asset.mediaType == .video {
+            previewVideo(asset)
+            return
+        }
+        if let data = editedImages[identifier], let image = UIImage(data: data) {
+            presentEditor(image: image, identifier: identifier)
+            return
+        }
+        let options = PHImageRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .highQualityFormat
+        options.resizeMode = .none
+        PHImageManager.default().requestImage(for: asset, targetSize: PHImageManagerMaximumSize, contentMode: .aspectFit, options: options) { [weak self] image, info in
+            guard let self, let image,
+                  !(info?[PHImageCancelledKey] as? Bool ?? false),
+                  !(info?[PHImageResultIsDegradedKey] as? Bool ?? false) else { return }
+            DispatchQueue.main.async {
+                self.presentEditor(image: image, identifier: identifier)
+            }
+        }
+    }
+
+    private func previewVideo(_ asset: PHAsset) {
+        let options = PHVideoRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .highQualityFormat
+        PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { [weak self] videoAsset, _, info in
+            guard let self, let videoAsset,
+                  !(info?[PHImageCancelledKey] as? Bool ?? false) else { return }
+            DispatchQueue.main.async {
+                self.present(TurtleVideoPreviewViewController(asset: videoAsset), animated: true)
+            }
+        }
+    }
+
+    private func presentEditor(image: UIImage, identifier: String) {
+        let editor = TurtleImageEditorViewController(image: image)
+        editor.onSave = { [weak self] data in
+            self?.editedImages[identifier] = data
+            self?.previewButton.setTitle("已编辑", for: .normal)
+        }
+        present(editor, animated: true)
     }
 
     private func isSelectable(_ asset: PHAsset) -> Bool {
@@ -492,6 +575,10 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         doneButton.setTitle(count > 0 ? "完成" : "取消", for: .normal)
         doneButton.backgroundColor = count > 0 ? UIColor(red: 0.16, green: 0.68, blue: 0.45, alpha: 1) : UIColor(white: 0.25, alpha: 1)
         doneButton.setTitleColor(count > 0 ? .white : UIColor(white: 0.55, alpha: 1), for: .normal)
+        previewButton.isEnabled = count > 0
+        previewButton.setTitleColor(count > 0 ? .white : UIColor(white: 0.48, alpha: 1), for: .normal)
+        let firstIdentifier = selectedIdentifiers.first
+        previewButton.setTitle(firstIdentifier.flatMap { editedImages[$0] } == nil ? "预览" : "已编辑", for: .normal)
     }
 
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
@@ -518,6 +605,8 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         }
         if let index = selectedIdentifiers.firstIndex(of: asset.localIdentifier) {
             selectedIdentifiers.remove(at: index)
+            selectedAssets.removeValue(forKey: asset.localIdentifier)
+            editedImages.removeValue(forKey: asset.localIdentifier)
         } else {
             if selectedIdentifiers.count >= selectionLimit {
                 let alert = UIAlertController(title: "最多选择 \(selectionLimit) 项", message: nil, preferredStyle: .alert)
@@ -526,6 +615,7 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
                 return
             }
             selectedIdentifiers.append(asset.localIdentifier)
+            selectedAssets[asset.localIdentifier] = asset
         }
         collectionView.reloadItems(at: [indexPath])
         collectionView.visibleCells.forEach { cell in
@@ -534,6 +624,305 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
             (cell as? TurtleMediaGridCell)?.setSelectedIndex(selectedIdentifiers.firstIndex(of: currentAsset.localIdentifier).map { $0 + 1 })
         }
         updateFooter()
+    }
+}
+
+private struct TurtleMediaAlbum {
+    let title: String
+    let collection: PHAssetCollection?
+    let count: Int
+}
+
+private final class TurtleAlbumListViewController: UITableViewController {
+    private let allowImages: Bool
+    private let allowVideos: Bool
+    private let selectedCollectionIdentifier: String?
+    private var albums: [TurtleMediaAlbum] = []
+    var onSelect: ((PHAssetCollection?, String) -> Void)?
+
+    init(allowImages: Bool, allowVideos: Bool, selectedCollection: PHAssetCollection?) {
+        self.allowImages = allowImages
+        self.allowVideos = allowVideos
+        self.selectedCollectionIdentifier = selectedCollection?.localIdentifier
+        super.init(style: .insetGrouped)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "选择相簿"
+        view.backgroundColor = .black
+        tableView.backgroundColor = .black
+        tableView.separatorColor = UIColor(white: 0.22, alpha: 1)
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "album")
+        navigationItem.leftBarButtonItem = UIBarButtonItem(title: "取消", style: .plain, target: self, action: #selector(close))
+        if #available(iOS 13.0, *) {
+            let appearance = UINavigationBarAppearance()
+            appearance.configureWithOpaqueBackground()
+            appearance.backgroundColor = UIColor(white: 0.11, alpha: 1)
+            appearance.titleTextAttributes = [.foregroundColor: UIColor.white]
+            navigationController?.navigationBar.standardAppearance = appearance
+            navigationController?.navigationBar.scrollEdgeAppearance = appearance
+        }
+        navigationController?.navigationBar.tintColor = .white
+        loadAlbums()
+    }
+
+    private func mediaCount(in collection: PHAssetCollection?) -> Int {
+        let options = PHFetchOptions()
+        let fetched = collection.map { PHAsset.fetchAssets(in: $0, options: options) } ?? PHAsset.fetchAssets(with: options)
+        var count = 0
+        fetched.enumerateObjects { asset, _, _ in
+            if (asset.mediaType == .image && self.allowImages) || (asset.mediaType == .video && self.allowVideos) {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    private func loadAlbums() {
+        var next: [TurtleMediaAlbum] = [TurtleMediaAlbum(title: "最近项目", collection: nil, count: mediaCount(in: nil))]
+        var identifiers = Set<String>()
+        let appendCollections: (PHFetchResult<PHAssetCollection>) -> Void = { result in
+            result.enumerateObjects { collection, _, _ in
+                guard !identifiers.contains(collection.localIdentifier) else { return }
+                let count = self.mediaCount(in: collection)
+                guard count > 0 else { return }
+                identifiers.insert(collection.localIdentifier)
+                next.append(TurtleMediaAlbum(
+                    title: collection.localizedTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                        ? collection.localizedTitle!
+                        : "未命名相簿",
+                    collection: collection,
+                    count: count
+                ))
+            }
+        }
+        appendCollections(PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .any, options: nil))
+        appendCollections(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil))
+        albums = next
+        tableView.reloadData()
+    }
+
+    @objc private func close() { dismiss(animated: true) }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { albums.count }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "album", for: indexPath)
+        let album = albums[indexPath.row]
+        var content = cell.defaultContentConfiguration()
+        content.text = album.title
+        content.secondaryText = "\(album.count) 项"
+        content.textProperties.color = .white
+        content.secondaryTextProperties.color = UIColor(white: 0.62, alpha: 1)
+        cell.contentConfiguration = content
+        cell.backgroundColor = UIColor(white: 0.12, alpha: 1)
+        cell.accessoryType = album.collection?.localIdentifier == selectedCollectionIdentifier ||
+            (album.collection == nil && selectedCollectionIdentifier == nil) ? .checkmark : .disclosureIndicator
+        cell.tintColor = UIColor(red: 0.16, green: 0.68, blue: 0.45, alpha: 1)
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let album = albums[indexPath.row]
+        tableView.deselectRow(at: indexPath, animated: true)
+        dismiss(animated: true) { [onSelect] in onSelect?(album.collection, album.title) }
+    }
+}
+
+private final class TurtleVideoPreviewViewController: UIViewController {
+    private let playerController = AVPlayerViewController()
+    private let player: AVPlayer
+
+    init(asset: AVAsset) {
+        self.player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .fullScreen
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        addChild(playerController)
+        playerController.view.translatesAutoresizingMaskIntoConstraints = false
+        playerController.player = player
+        view.addSubview(playerController.view)
+        playerController.didMove(toParent: self)
+
+        let close = UIButton(type: .system)
+        close.translatesAutoresizingMaskIntoConstraints = false
+        close.setTitle("完成", for: .normal)
+        close.setTitleColor(.white, for: .normal)
+        close.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
+        close.backgroundColor = UIColor.black.withAlphaComponent(0.56)
+        close.layer.cornerRadius = 18
+        close.contentEdgeInsets = UIEdgeInsets(top: 0, left: 15, bottom: 0, right: 15)
+        close.addTarget(self, action: #selector(closePreview), for: .touchUpInside)
+        view.addSubview(close)
+
+        NSLayoutConstraint.activate([
+            playerController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            playerController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            playerController.view.topAnchor.constraint(equalTo: view.topAnchor),
+            playerController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            close.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            close.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            close.heightAnchor.constraint(equalToConstant: 36)
+        ])
+        player.play()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        player.pause()
+    }
+
+    @objc private func closePreview() { dismiss(animated: true) }
+}
+
+private final class TurtleImageEditorViewController: UIViewController, UIScrollViewDelegate {
+    private let sourceImage: UIImage
+    private let scrollView = UIScrollView()
+    private let imageView = UIImageView()
+    private let cropBorder = UIView()
+    private var didConfigureZoom = false
+    var onSave: ((Data) -> Void)?
+
+    init(image: UIImage) {
+        self.sourceImage = image
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .fullScreen
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+
+        let title = UILabel()
+        title.translatesAutoresizingMaskIntoConstraints = false
+        title.text = "预览与裁剪"
+        title.textColor = .white
+        title.font = .systemFont(ofSize: 18, weight: .semibold)
+        title.textAlignment = .center
+
+        let cancel = UIButton(type: .system)
+        cancel.translatesAutoresizingMaskIntoConstraints = false
+        cancel.setTitle("取消", for: .normal)
+        cancel.setTitleColor(.white, for: .normal)
+        cancel.addTarget(self, action: #selector(closeEditor), for: .touchUpInside)
+
+        let save = UIButton(type: .system)
+        save.translatesAutoresizingMaskIntoConstraints = false
+        save.setTitle("使用裁剪", for: .normal)
+        save.setTitleColor(UIColor(red: 0.2, green: 0.82, blue: 0.53, alpha: 1), for: .normal)
+        save.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
+        save.addTarget(self, action: #selector(saveCrop), for: .touchUpInside)
+
+        let hint = UILabel()
+        hint.translatesAutoresizingMaskIntoConstraints = false
+        hint.text = "双指缩放、拖动图片，调整选取范围"
+        hint.textColor = UIColor(white: 0.72, alpha: 1)
+        hint.font = .systemFont(ofSize: 14)
+        hint.textAlignment = .center
+
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.delegate = self
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.bouncesZoom = true
+        scrollView.decelerationRate = .fast
+        scrollView.clipsToBounds = true
+
+        imageView.image = sourceImage
+        imageView.contentMode = .scaleAspectFit
+        imageView.frame = CGRect(origin: .zero, size: sourceImage.size)
+        scrollView.addSubview(imageView)
+        scrollView.contentSize = sourceImage.size
+
+        cropBorder.translatesAutoresizingMaskIntoConstraints = false
+        cropBorder.layer.borderColor = UIColor.white.withAlphaComponent(0.85).cgColor
+        cropBorder.layer.borderWidth = 1
+        cropBorder.isUserInteractionEnabled = false
+
+        [title, cancel, save, scrollView, cropBorder, hint].forEach { view.addSubview($0) }
+        NSLayoutConstraint.activate([
+            title.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            title.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            cancel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            cancel.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            save.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            save.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scrollView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            scrollView.heightAnchor.constraint(equalTo: scrollView.widthAnchor),
+            cropBorder.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
+            cropBorder.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
+            cropBorder.topAnchor.constraint(equalTo: scrollView.topAnchor),
+            cropBorder.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
+            hint.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: 20),
+            hint.centerXAnchor.constraint(equalTo: view.centerXAnchor)
+        ])
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard !didConfigureZoom, scrollView.bounds.width > 0, sourceImage.size.width > 0, sourceImage.size.height > 0 else { return }
+        didConfigureZoom = true
+        let minimum = max(scrollView.bounds.width / sourceImage.size.width, scrollView.bounds.height / sourceImage.size.height)
+        scrollView.minimumZoomScale = minimum
+        scrollView.maximumZoomScale = max(minimum * 6, 6)
+        scrollView.zoomScale = minimum
+        centerInitialCrop()
+    }
+
+    private func centerInitialCrop() {
+        let scaledWidth = sourceImage.size.width * scrollView.zoomScale
+        let scaledHeight = sourceImage.size.height * scrollView.zoomScale
+        scrollView.contentOffset = CGPoint(
+            x: max(0, (scaledWidth - scrollView.bounds.width) / 2),
+            y: max(0, (scaledHeight - scrollView.bounds.height) / 2)
+        )
+    }
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+    @objc private func closeEditor() { dismiss(animated: true) }
+
+    @objc private func saveCrop() {
+        let zoom = max(scrollView.zoomScale, 0.0001)
+        var crop = CGRect(
+            x: scrollView.contentOffset.x / zoom,
+            y: scrollView.contentOffset.y / zoom,
+            width: scrollView.bounds.width / zoom,
+            height: scrollView.bounds.height / zoom
+        )
+        crop.origin.x = min(max(0, crop.origin.x), max(0, sourceImage.size.width - crop.width))
+        crop.origin.y = min(max(0, crop.origin.y), max(0, sourceImage.size.height - crop.height))
+        crop = crop.intersection(CGRect(origin: .zero, size: sourceImage.size))
+        guard crop.width > 1, crop.height > 1 else { return }
+        let outputSide = min(2048, max(640, Int(max(crop.width, crop.height) * sourceImage.scale)))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: CGFloat(outputSide), height: CGFloat(outputSide)), format: format)
+        let edited = renderer.image { _ in
+            let scale = CGFloat(outputSide) / crop.width
+            sourceImage.draw(in: CGRect(
+                x: -crop.origin.x * scale,
+                y: -crop.origin.y * scale,
+                width: sourceImage.size.width * scale,
+                height: sourceImage.size.height * scale
+            ))
+        }
+        guard let data = edited.jpegData(compressionQuality: 0.9) else { return }
+        dismiss(animated: true) { [onSave] in onSave?(data) }
     }
 }
 

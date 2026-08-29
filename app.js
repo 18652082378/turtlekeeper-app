@@ -65,6 +65,7 @@ let pullRefreshIndicatorLabel = null;
 let pullRefreshVisualState = "";
 let communityChatMessageMenuElement = null;
 let communityChatMessageMenuDismiss = null;
+let dashboardTurtleDragSuppressUntil = 0;
 
 const initialState = {
   page: "home",
@@ -3615,7 +3616,7 @@ function archiveDashboardSection() {
     .map(code => speciesByCode(code) || { code, name: code });
   const poolOptions = state.turtlePools || [];
   return `
-    <section class="home-archive-section">
+    <section class="home-archive-section" data-turtle-reorder-list>
       <section class="filter-dock">
         <select class="select" data-filter-species>
           <option value="all">全部品种</option>
@@ -3654,8 +3655,8 @@ function turtleActionIcon(type) {
 function turtleListRow(t) {
   const menuOpen = state.openTurtleMenuId === t.id;
   return `
-    <article class="turtle-row fresh-card ${menuOpen ? "menu-open" : ""}" data-view-turtle="${t.id}">
-      <img src="${t.photo || defaultPhoto}" alt="${t.speciesName}">
+    <article class="turtle-row fresh-card ${menuOpen ? "menu-open" : ""}" data-view-turtle="${t.id}" data-reorder-turtle="${t.id}">
+      <img src="${t.photo || defaultPhoto}" alt="${t.speciesName}" draggable="false">
       <div class="turtle-row-content">
         <div class="turtle-row-title">
           <strong>${t.code}</strong>
@@ -4074,6 +4075,106 @@ function pageLedger() {
     </main>
     ${bottomNav()}
   `;
+}
+
+function persistDashboardTurtleOrder(list) {
+  const orderedIds = [...list.querySelectorAll(":scope > [data-reorder-turtle]")]
+    .map(row => row.dataset.reorderTurtle)
+    .filter(Boolean);
+  if (orderedIds.length < 2) return;
+  const visibleIds = new Set(orderedIds);
+  const visibleTurtles = new Map((state.turtles || []).map(turtle => [turtle.id, turtle]));
+  let visibleIndex = 0;
+  const turtles = (state.turtles || []).map(turtle => {
+    if (!visibleIds.has(turtle.id)) return turtle;
+    return visibleTurtles.get(orderedIds[visibleIndex++]) || turtle;
+  });
+  setState({ turtles, turtleSort: "default", openTurtleMenuId: "" });
+  toast("排序已保存");
+}
+
+function setupDashboardTurtleReorder() {
+  const list = document.querySelector("[data-turtle-reorder-list]");
+  if (!list || list.dataset.reorderBound === "true") return;
+  list.dataset.reorderBound = "true";
+  let interaction = null;
+
+  const clearPressTimer = active => {
+    if (!active?.timer) return;
+    window.clearTimeout(active.timer);
+    active.timer = 0;
+  };
+  const finish = (event, cancelled = false) => {
+    const active = interaction;
+    if (!active || (event?.pointerId !== undefined && event.pointerId !== active.pointerId)) return;
+    interaction = null;
+    clearPressTimer(active);
+    if (!active.dragging) return;
+    dashboardTurtleDragSuppressUntil = Date.now() + 650;
+    document.documentElement.classList.remove("dashboard-turtle-reordering");
+    active.row.classList.remove("is-turtle-dragging");
+    try { active.row.releasePointerCapture(active.pointerId); } catch {}
+    if (cancelled) {
+      render();
+      return;
+    }
+    persistDashboardTurtleOrder(list);
+    event?.preventDefault();
+    event?.stopPropagation();
+  };
+
+  list.addEventListener("pointerdown", event => {
+    const row = event.target.closest("[data-reorder-turtle]");
+    if (!row || !event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+    if (event.target.closest("button, a, input, select, textarea, .turtle-menu")) return;
+    interaction = {
+      pointerId: event.pointerId,
+      row,
+      startX: event.clientX,
+      startY: event.clientY,
+      dragging: false,
+      timer: window.setTimeout(() => {
+        const active = interaction;
+        if (!active || active.pointerId !== event.pointerId) return;
+        active.timer = 0;
+        active.dragging = true;
+        dashboardTurtleDragSuppressUntil = Date.now() + 650;
+        document.documentElement.classList.add("dashboard-turtle-reordering");
+        active.row.classList.add("is-turtle-dragging");
+        try { active.row.setPointerCapture?.(active.pointerId); } catch {}
+        navigator.vibrate?.(18);
+      }, 420)
+    };
+  }, { passive: true });
+
+  list.addEventListener("pointermove", event => {
+    const active = interaction;
+    if (!active || active.pointerId !== event.pointerId || !event.isPrimary) return;
+    const distance = Math.hypot(event.clientX - active.startX, event.clientY - active.startY);
+    if (!active.dragging) {
+      if (distance > 9) {
+        clearPressTimer(active);
+        interaction = null;
+      }
+      return;
+    }
+    const rows = [...list.querySelectorAll(":scope > [data-reorder-turtle]:not(.is-turtle-dragging)")];
+    const before = rows.find(row => event.clientY < row.getBoundingClientRect().top + row.offsetHeight / 2);
+    if (before) list.insertBefore(active.row, before);
+    else if (rows.length) list.insertBefore(active.row, rows[rows.length - 1].nextSibling);
+    if (event.cancelable) event.preventDefault();
+    event.stopPropagation();
+  }, { passive: false });
+  list.addEventListener("pointerup", event => finish(event), { passive: false });
+  list.addEventListener("pointercancel", event => finish(event, true), { passive: false });
+  list.addEventListener("contextmenu", event => {
+    if (interaction?.dragging || event.target.closest("[data-reorder-turtle]")) event.preventDefault();
+  });
+  list.addEventListener("click", event => {
+    if (Date.now() >= dashboardTurtleDragSuppressUntil) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
 }
 
 function growthTimestamp(value) {
@@ -5602,6 +5703,7 @@ function bindEvents() {
     event.stopPropagation();
     deleteTurtle(btn.dataset.deleteTurtle);
   }));
+  setupDashboardTurtleReorder();
   document.querySelector("[data-filter-species]")?.addEventListener("change", e => setState({ turtleFilter: e.target.value }));
   document.querySelector("[data-filter-pool]")?.addEventListener("change", e => setState({ turtlePoolFilter: e.target.value }));
   document.querySelector("[data-sort-turtles]")?.addEventListener("change", e => setState({ turtleSort: e.target.value }));
@@ -10907,15 +11009,22 @@ async function refreshCloudAccountFromServer() {
     // Keep the route that is already on screen. During boot this is "home";
     // during a normal refresh it is the page the person is currently using.
     if (result.user) {
+      // The request may have been in flight while the person edited their
+      // profile. Read the journal after the response arrives; using a snapshot
+      // captured before the request would miss that edit and let the older
+      // server nickname/avatar visibly overwrite it.
+      const pendingAfterLoad = readPendingCloudData();
+      const localEditDuringLoad = pendingAfterLoad?.phone === result.user.phone &&
+        pendingAfterLoad.updatedAt !== pendingBeforeLoad?.updatedAt;
       applyCloudUser(result.user, "", { skipCloud: true, page: state.page });
       // A journal newer than the server is an interrupted local save. Restore
       // it after the authoritative account shell is applied, then retry the
       // normal save pipeline. A stale journal is discarded so an older device
       // never overwrites a newer cloud edit.
-      if (pendingCloudDataIsNewerThan(result.user.updatedAt, pendingBeforeLoad) && restorePendingCloudData()) {
+      if ((localEditDuringLoad || pendingCloudDataIsNewerThan(result.user.updatedAt, pendingAfterLoad)) && restorePendingCloudData()) {
         setState({}, { skipCloud: true });
         queueCloudSave();
-      } else if (pendingBeforeLoad?.phone === result.user.phone) {
+      } else if (pendingAfterLoad?.phone === result.user.phone) {
         clearPendingCloudData(result.user.phone);
       }
       return true;
