@@ -4100,11 +4100,63 @@ function setupDashboardTurtleReorder() {
   let interaction = null;
   let autoScrollFrame = 0;
 
+  const paintDragPreview = (active, clientX = active.startX, clientY = active.startY) => {
+    if (!active.preview) return;
+    active.preview.style.transform = `translate3d(${Math.round(clientX - active.dragOffsetX)}px, ${Math.round(clientY - active.dragOffsetY)}px, 0) scale(1.018)`;
+  };
+  const beginDrag = active => {
+    if (!active || active.dragging) return;
+    const rect = active.row.getBoundingClientRect();
+    active.timer = 0;
+    active.dragging = true;
+    active.dragOffsetX = active.startX - rect.left;
+    active.dragOffsetY = active.startY - rect.top;
+    const preview = active.row.cloneNode(true);
+    preview.classList.remove("is-turtle-dragging", "menu-open");
+    preview.classList.add("turtle-row-drag-preview");
+    preview.setAttribute("aria-hidden", "true");
+    preview.style.width = `${rect.width}px`;
+    preview.style.height = `${rect.height}px`;
+    document.body.appendChild(preview);
+    active.preview = preview;
+    dashboardTurtleDragSuppressUntil = Date.now() + 650;
+    document.documentElement.classList.add("dashboard-turtle-reordering");
+    active.row.classList.add("is-turtle-dragging");
+    paintDragPreview(active);
+    navigator.vibrate?.(18);
+  };
+  const settleDragPreview = (active, cancelled = false) => {
+    const preview = active?.preview;
+    if (!preview) return;
+    active.preview = null;
+    if (cancelled || !active.row.isConnected) {
+      preview.remove();
+      return;
+    }
+    const rect = active.row.getBoundingClientRect();
+    preview.style.transition = "transform 130ms cubic-bezier(.2,.8,.2,1), opacity 130ms ease";
+    preview.style.opacity = "0";
+    preview.style.transform = `translate3d(${Math.round(rect.left)}px, ${Math.round(rect.top)}px, 0) scale(.985)`;
+    window.setTimeout(() => preview.remove(), 150);
+  };
   const placeDraggingRow = (active, clientY) => {
     const rows = [...list.querySelectorAll(":scope > [data-reorder-turtle]:not(.is-turtle-dragging)")];
     const before = rows.find(row => clientY < row.getBoundingClientRect().top + row.offsetHeight / 2);
-    if (before) list.insertBefore(active.row, before);
-    else if (rows.length) list.insertBefore(active.row, rows[rows.length - 1].nextSibling);
+    const reference = before || rows[rows.length - 1]?.nextSibling || null;
+    if (active.row.nextSibling === reference) return;
+    const beforeRects = new Map(rows.map(row => [row, row.getBoundingClientRect()]));
+    list.insertBefore(active.row, reference);
+    rows.forEach(row => {
+      const oldRect = beforeRects.get(row);
+      const newRect = row.getBoundingClientRect();
+      const deltaY = oldRect ? oldRect.top - newRect.top : 0;
+      if (Math.abs(deltaY) < 1 || typeof row.animate !== "function") return;
+      row._turtleReorderAnimation?.cancel?.();
+      row._turtleReorderAnimation = row.animate([
+        { transform: `translate3d(0, ${Math.round(deltaY)}px, 0)` },
+        { transform: "translate3d(0, 0, 0)" }
+      ], { duration: 180, easing: "cubic-bezier(.2,.78,.2,1)" });
+    });
   };
   const stopAutoScroll = () => {
     if (autoScrollFrame) window.cancelAnimationFrame(autoScrollFrame);
@@ -4148,6 +4200,7 @@ function setupDashboardTurtleReorder() {
     document.documentElement.classList.remove("dashboard-turtle-reordering");
     active.row.classList.remove("is-turtle-dragging");
     try { active.row.releasePointerCapture(active.pointerId); } catch {}
+    settleDragPreview(active, cancelled);
     if (cancelled) {
       render();
       return;
@@ -4174,13 +4227,8 @@ function setupDashboardTurtleReorder() {
       timer: window.setTimeout(() => {
         const active = interaction;
         if (!active || active.pointerId !== event.pointerId) return;
-        active.timer = 0;
-        active.dragging = true;
-        dashboardTurtleDragSuppressUntil = Date.now() + 650;
-        document.documentElement.classList.add("dashboard-turtle-reordering");
-        active.row.classList.add("is-turtle-dragging");
         try { active.row.setPointerCapture?.(active.pointerId); } catch {}
-        navigator.vibrate?.(18);
+        beginDrag(active);
       }, 420)
     };
   }, { passive: true });
@@ -4197,6 +4245,7 @@ function setupDashboardTurtleReorder() {
       return;
     }
     active.lastY = event.clientY;
+    paintDragPreview(active, event.clientX, event.clientY);
     placeDraggingRow(active, event.clientY);
     updateAutoScroll(active);
     if (event.cancelable) event.preventDefault();
@@ -4226,12 +4275,7 @@ function setupDashboardTurtleReorder() {
       timer: window.setTimeout(() => {
         const active = interaction;
         if (!active || active.touchIdentifier !== touch.identifier) return;
-        active.timer = 0;
-        active.dragging = true;
-        dashboardTurtleDragSuppressUntil = Date.now() + 650;
-        document.documentElement.classList.add("dashboard-turtle-reordering");
-        active.row.classList.add("is-turtle-dragging");
-        navigator.vibrate?.(18);
+        beginDrag(active);
       }, 420)
     };
   }, { passive: true });
@@ -4249,6 +4293,7 @@ function setupDashboardTurtleReorder() {
       return;
     }
     active.lastY = touch.clientY;
+    paintDragPreview(active, touch.clientX, touch.clientY);
     placeDraggingRow(active, touch.clientY);
     updateAutoScroll(active);
     // Only prevent scrolling after the long press has entered ordering mode.
