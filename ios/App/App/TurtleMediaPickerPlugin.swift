@@ -299,7 +299,7 @@ private enum TurtleMediaPickerError: LocalizedError {
     }
 }
 
-private final class TurtleMediaGridPickerViewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
+private final class TurtleMediaGridPickerViewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate {
     private let allowImages: Bool
     private let allowVideos: Bool
     private let selectionLimit: Int
@@ -310,6 +310,8 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
     private var selectedAssets: [String: PHAsset] = [:]
     private var editedImages: [String: Data] = [:]
     private var currentCollection: PHAssetCollection?
+    private var currentAlbumTitle = "最近项目"
+    private var mediaAlbums: [TurtleMediaAlbum] = []
 
     var onCancel: (() -> Void)?
     var onFinish: (([PHAsset], [String: Data]) -> Void)?
@@ -320,6 +322,9 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
     private let counterLabel = UILabel()
     private let emptyLabel = UILabel()
     private let albumButton = UIButton(type: .system)
+    private let albumOverlay = UIView()
+    private let albumTable = UITableView(frame: .zero, style: .plain)
+    private var albumTableHeightConstraint: NSLayoutConstraint?
 
     init(allowImages: Bool, allowVideos: Bool, selectionLimit: Int, maximumVideoDuration: TimeInterval) {
         self.allowImages = allowImages
@@ -344,7 +349,9 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         configureHeader()
         configureCollection()
         configureFooter()
+        configureAlbumOverlay()
         loadAssets()
+        loadAlbumChoices()
     }
 
     override func viewDidLayoutSubviews() {
@@ -356,6 +363,10 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
             layout.itemSize = CGSize(width: itemWidth, height: itemWidth)
             layout.invalidateLayout()
         }
+        albumTableHeightConstraint?.constant = min(
+            CGFloat(mediaAlbums.count) * TurtleAlbumRowCell.rowHeight,
+            max(0, albumOverlay.bounds.height)
+        )
     }
 
     private func configureHeader() {
@@ -473,9 +484,45 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
         updateFooter()
     }
 
+    private func configureAlbumOverlay() {
+        albumOverlay.translatesAutoresizingMaskIntoConstraints = false
+        albumOverlay.backgroundColor = UIColor.black.withAlphaComponent(0.62)
+        albumOverlay.alpha = 0
+        albumOverlay.isHidden = true
+        view.addSubview(albumOverlay)
+
+        albumTable.translatesAutoresizingMaskIntoConstraints = false
+        albumTable.backgroundColor = UIColor(white: 0.12, alpha: 1)
+        albumTable.separatorColor = UIColor(white: 0.2, alpha: 1)
+        albumTable.separatorInset = UIEdgeInsets(top: 0, left: 80, bottom: 0, right: 0)
+        albumTable.rowHeight = TurtleAlbumRowCell.rowHeight
+        albumTable.dataSource = self
+        albumTable.delegate = self
+        albumTable.tableFooterView = UIView()
+        albumTable.register(TurtleAlbumRowCell.self, forCellReuseIdentifier: TurtleAlbumRowCell.reuseIdentifier)
+        albumOverlay.addSubview(albumTable)
+
+        let dismissTap = UITapGestureRecognizer(target: self, action: #selector(closeAlbumList))
+        dismissTap.delegate = self
+        albumOverlay.addGestureRecognizer(dismissTap)
+
+        albumTableHeightConstraint = albumTable.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            albumOverlay.topAnchor.constraint(equalTo: collectionView.topAnchor),
+            albumOverlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            albumOverlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            albumOverlay.bottomAnchor.constraint(equalTo: collectionView.bottomAnchor),
+            albumTable.topAnchor.constraint(equalTo: albumOverlay.topAnchor),
+            albumTable.leadingAnchor.constraint(equalTo: albumOverlay.leadingAnchor),
+            albumTable.trailingAnchor.constraint(equalTo: albumOverlay.trailingAnchor),
+            albumTableHeightConstraint!
+        ])
+    }
+
     private func loadAssets(collection: PHAssetCollection? = nil, title: String = "最近项目") {
         currentCollection = collection
-        albumButton.setTitle("\(title)⌄", for: .normal)
+        currentAlbumTitle = title
+        updateAlbumButton(expanded: false)
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         let fetched = collection.map { PHAsset.fetchAssets(in: $0, options: options) } ?? PHAsset.fetchAssets(with: options)
@@ -493,17 +540,119 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
     }
 
     @objc private func openAlbumList() {
-        let albums = TurtleAlbumListViewController(
-            allowImages: allowImages,
-            allowVideos: allowVideos,
-            selectedCollection: currentCollection
-        )
-        albums.onSelect = { [weak self] collection, title in
-            self?.loadAssets(collection: collection, title: title)
+        if !albumOverlay.isHidden {
+            closeAlbumList()
+            return
         }
-        let navigation = UINavigationController(rootViewController: albums)
-        navigation.modalPresentationStyle = .fullScreen
-        present(navigation, animated: true)
+        loadAlbumChoices()
+        albumTable.reloadData()
+        albumTableHeightConstraint?.constant = min(
+            CGFloat(mediaAlbums.count) * TurtleAlbumRowCell.rowHeight,
+            max(0, collectionView.bounds.height)
+        )
+        albumOverlay.isHidden = false
+        albumOverlay.alpha = 0
+        albumTable.transform = CGAffineTransform(translationX: 0, y: -16)
+        updateAlbumButton(expanded: true)
+        UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut]) {
+            self.albumOverlay.alpha = 1
+            self.albumTable.transform = .identity
+        }
+    }
+
+    @objc private func closeAlbumList() {
+        guard !albumOverlay.isHidden else { return }
+        updateAlbumButton(expanded: false)
+        UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseIn]) {
+            self.albumOverlay.alpha = 0
+            self.albumTable.transform = CGAffineTransform(translationX: 0, y: -12)
+        } completion: { _ in
+            self.albumOverlay.isHidden = true
+            self.albumTable.transform = .identity
+        }
+    }
+
+    private func updateAlbumButton(expanded: Bool) {
+        var configuration = UIButton.Configuration.plain()
+        configuration.title = currentAlbumTitle
+        let symbol = UIImage.SymbolConfiguration(paletteColors: [
+            UIColor(white: 0.78, alpha: 1),
+            UIColor(white: 0.22, alpha: 1)
+        ])
+        configuration.image = UIImage(systemName: expanded ? "chevron.up.circle.fill" : "chevron.down.circle.fill")?.applyingSymbolConfiguration(symbol)
+        configuration.imagePlacement = .trailing
+        configuration.imagePadding = 8
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 10)
+        configuration.baseForegroundColor = .white
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = .systemFont(ofSize: 18, weight: .semibold)
+            return outgoing
+        }
+        albumButton.configuration = configuration
+        albumButton.accessibilityValue = expanded ? "已展开" : "已收起"
+    }
+
+    private func mediaCount(in collection: PHAssetCollection?) -> Int {
+        let options = PHFetchOptions()
+        let fetched = collection.map { PHAsset.fetchAssets(in: $0, options: options) } ?? PHAsset.fetchAssets(with: options)
+        var count = 0
+        fetched.enumerateObjects { asset, _, _ in
+            if (asset.mediaType == .image && self.allowImages) || (asset.mediaType == .video && self.allowVideos) {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    private func loadAlbumChoices() {
+        var next = [TurtleMediaAlbum(title: "最近项目", collection: nil, count: mediaCount(in: nil))]
+        var identifiers = Set<String>()
+        let appendCollections: (PHFetchResult<PHAssetCollection>) -> Void = { result in
+            result.enumerateObjects { collection, _, _ in
+                guard !identifiers.contains(collection.localIdentifier) else { return }
+                guard collection.assetCollectionSubtype != .smartAlbumUserLibrary,
+                      collection.assetCollectionSubtype != .smartAlbumAllHidden else { return }
+                let count = self.mediaCount(in: collection)
+                guard count > 0 else { return }
+                identifiers.insert(collection.localIdentifier)
+                let trimmedTitle = collection.localizedTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                next.append(TurtleMediaAlbum(
+                    title: trimmedTitle.isEmpty ? "未命名相簿" : trimmedTitle,
+                    collection: collection,
+                    count: count
+                ))
+            }
+        }
+        appendCollections(PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .any, options: nil))
+        appendCollections(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil))
+        mediaAlbums = next
+        albumTable.reloadData()
+    }
+
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { mediaAlbums.count }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        guard let cell = tableView.dequeueReusableCell(withIdentifier: TurtleAlbumRowCell.reuseIdentifier, for: indexPath) as? TurtleAlbumRowCell else {
+            return UITableViewCell()
+        }
+        let album = mediaAlbums[indexPath.row]
+        let selected = album.collection?.localIdentifier == currentCollection?.localIdentifier ||
+            (album.collection == nil && currentCollection == nil)
+        cell.configure(album: album, selected: selected, allowImages: allowImages, allowVideos: allowVideos, imageManager: imageManager)
+        return cell
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let album = mediaAlbums[indexPath.row]
+        tableView.deselectRow(at: indexPath, animated: true)
+        loadAssets(collection: album.collection, title: album.title)
+        closeAlbumList()
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard let touchedView = touch.view else { return true }
+        return !touchedView.isDescendant(of: albumTable)
     }
 
     @objc private func cancelSelection() {
@@ -511,6 +660,7 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
     }
 
     @objc private func finishSelection() {
+        guard !selectedIdentifiers.isEmpty else { return }
         let selected = selectedIdentifiers.compactMap { identifier in
             selectedAssets[identifier]
         }
@@ -571,8 +721,9 @@ private final class TurtleMediaGridPickerViewController: UIViewController, UICol
 
     private func updateFooter() {
         let count = selectedIdentifiers.count
-        counterLabel.text = selectionLimit > 1 ? "已选 \(count)/\(selectionLimit)" : (count == 0 ? "选择项目" : "已选择 1 项")
-        doneButton.setTitle(count > 0 ? "完成" : "取消", for: .normal)
+        counterLabel.text = ""
+        doneButton.setTitle("完成", for: .normal)
+        doneButton.isEnabled = count > 0
         doneButton.backgroundColor = count > 0 ? UIColor(red: 0.16, green: 0.68, blue: 0.45, alpha: 1) : UIColor(white: 0.25, alpha: 1)
         doneButton.setTitleColor(count > 0 ? .white : UIColor(white: 0.55, alpha: 1), for: .normal)
         previewButton.isEnabled = count > 0
@@ -633,102 +784,93 @@ private struct TurtleMediaAlbum {
     let count: Int
 }
 
-private final class TurtleAlbumListViewController: UITableViewController {
-    private let allowImages: Bool
-    private let allowVideos: Bool
-    private let selectedCollectionIdentifier: String?
-    private var albums: [TurtleMediaAlbum] = []
-    var onSelect: ((PHAssetCollection?, String) -> Void)?
+private final class TurtleAlbumRowCell: UITableViewCell {
+    static let reuseIdentifier = "TurtleAlbumRowCell"
+    static let rowHeight: CGFloat = 64
+    private let coverView = UIImageView()
+    private let titleLabel = UILabel()
+    private let checkLabel = UILabel()
+    private var representedIdentifier = ""
 
-    init(allowImages: Bool, allowVideos: Bool, selectedCollection: PHAssetCollection?) {
-        self.allowImages = allowImages
-        self.allowVideos = allowVideos
-        self.selectedCollectionIdentifier = selectedCollection?.localIdentifier
-        super.init(style: .insetGrouped)
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        backgroundColor = UIColor(white: 0.12, alpha: 1)
+        selectedBackgroundView = {
+            let view = UIView()
+            view.backgroundColor = UIColor(white: 0.18, alpha: 1)
+            return view
+        }()
+
+        coverView.translatesAutoresizingMaskIntoConstraints = false
+        coverView.contentMode = .scaleAspectFill
+        coverView.clipsToBounds = true
+        coverView.backgroundColor = UIColor(white: 0.18, alpha: 1)
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.textColor = UIColor(white: 0.88, alpha: 1)
+        titleLabel.font = .systemFont(ofSize: 18, weight: .regular)
+        titleLabel.lineBreakMode = .byTruncatingTail
+
+        checkLabel.translatesAutoresizingMaskIntoConstraints = false
+        checkLabel.text = "✓"
+        checkLabel.textColor = UIColor(red: 0.04, green: 0.78, blue: 0.42, alpha: 1)
+        checkLabel.font = .systemFont(ofSize: 28, weight: .light)
+        checkLabel.textAlignment = .center
+
+        [coverView, titleLabel, checkLabel].forEach { contentView.addSubview($0) }
+        NSLayoutConstraint.activate([
+            coverView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            coverView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            coverView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            coverView.widthAnchor.constraint(equalToConstant: 64),
+            titleLabel.leadingAnchor.constraint(equalTo: coverView.trailingAnchor, constant: 16),
+            titleLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: checkLabel.leadingAnchor, constant: -12),
+            checkLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -22),
+            checkLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            checkLabel.widthAnchor.constraint(equalToConstant: 42)
+        ])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        title = "选择相簿"
-        view.backgroundColor = .black
-        tableView.backgroundColor = .black
-        tableView.separatorColor = UIColor(white: 0.22, alpha: 1)
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "album")
-        navigationItem.leftBarButtonItem = UIBarButtonItem(title: "取消", style: .plain, target: self, action: #selector(close))
-        if #available(iOS 13.0, *) {
-            let appearance = UINavigationBarAppearance()
-            appearance.configureWithOpaqueBackground()
-            appearance.backgroundColor = UIColor(white: 0.11, alpha: 1)
-            appearance.titleTextAttributes = [.foregroundColor: UIColor.white]
-            navigationController?.navigationBar.standardAppearance = appearance
-            navigationController?.navigationBar.scrollEdgeAppearance = appearance
-        }
-        navigationController?.navigationBar.tintColor = .white
-        loadAlbums()
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        representedIdentifier = ""
+        coverView.image = nil
     }
 
-    private func mediaCount(in collection: PHAssetCollection?) -> Int {
+    func configure(album: TurtleMediaAlbum, selected: Bool, allowImages: Bool, allowVideos: Bool, imageManager: PHCachingImageManager) {
+        representedIdentifier = album.collection?.localIdentifier ?? "__recent__"
+        titleLabel.text = "\(album.title)(\(album.count))"
+        checkLabel.isHidden = !selected
+        coverView.image = nil
+
         let options = PHFetchOptions()
-        let fetched = collection.map { PHAsset.fetchAssets(in: $0, options: options) } ?? PHAsset.fetchAssets(with: options)
-        var count = 0
-        fetched.enumerateObjects { asset, _, _ in
-            if (asset.mediaType == .image && self.allowImages) || (asset.mediaType == .video && self.allowVideos) {
-                count += 1
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        let fetched = album.collection.map { PHAsset.fetchAssets(in: $0, options: options) } ?? PHAsset.fetchAssets(with: options)
+        var coverAsset: PHAsset?
+        fetched.enumerateObjects { asset, _, stop in
+            if (asset.mediaType == .image && allowImages) || (asset.mediaType == .video && allowVideos) {
+                coverAsset = asset
+                stop.pointee = true
             }
         }
-        return count
-    }
-
-    private func loadAlbums() {
-        var next: [TurtleMediaAlbum] = [TurtleMediaAlbum(title: "最近项目", collection: nil, count: mediaCount(in: nil))]
-        var identifiers = Set<String>()
-        let appendCollections: (PHFetchResult<PHAssetCollection>) -> Void = { result in
-            result.enumerateObjects { collection, _, _ in
-                guard !identifiers.contains(collection.localIdentifier) else { return }
-                let count = self.mediaCount(in: collection)
-                guard count > 0 else { return }
-                identifiers.insert(collection.localIdentifier)
-                next.append(TurtleMediaAlbum(
-                    title: collection.localizedTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                        ? collection.localizedTitle!
-                        : "未命名相簿",
-                    collection: collection,
-                    count: count
-                ))
-            }
+        guard let coverAsset else { return }
+        let expectedIdentifier = representedIdentifier
+        let requestOptions = PHImageRequestOptions()
+        requestOptions.deliveryMode = .opportunistic
+        requestOptions.resizeMode = .fast
+        requestOptions.isNetworkAccessAllowed = true
+        imageManager.requestImage(
+            for: coverAsset,
+            targetSize: CGSize(width: 160, height: 172),
+            contentMode: .aspectFill,
+            options: requestOptions
+        ) { [weak self] image, _ in
+            guard self?.representedIdentifier == expectedIdentifier else { return }
+            self?.coverView.image = image
         }
-        appendCollections(PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .any, options: nil))
-        appendCollections(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil))
-        albums = next
-        tableView.reloadData()
-    }
-
-    @objc private func close() { dismiss(animated: true) }
-
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { albums.count }
-
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "album", for: indexPath)
-        let album = albums[indexPath.row]
-        var content = cell.defaultContentConfiguration()
-        content.text = album.title
-        content.secondaryText = "\(album.count) 项"
-        content.textProperties.color = .white
-        content.secondaryTextProperties.color = UIColor(white: 0.62, alpha: 1)
-        cell.contentConfiguration = content
-        cell.backgroundColor = UIColor(white: 0.12, alpha: 1)
-        cell.accessoryType = album.collection?.localIdentifier == selectedCollectionIdentifier ||
-            (album.collection == nil && selectedCollectionIdentifier == nil) ? .checkmark : .disclosureIndicator
-        cell.tintColor = UIColor(red: 0.16, green: 0.68, blue: 0.45, alpha: 1)
-        return cell
-    }
-
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        let album = albums[indexPath.row]
-        tableView.deselectRow(at: indexPath, animated: true)
-        dismiss(animated: true) { [onSelect] in onSelect?(album.collection, album.title) }
     }
 }
 
