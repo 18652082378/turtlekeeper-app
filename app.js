@@ -7,6 +7,7 @@ const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
 const CLOUD_SYNC_DEBOUNCE_MS = 900;
 const CHINA_TIME_ZONE = "Asia/Shanghai";
 const REVIEW_ADMIN_PHONE = "18652082378";
+const RESERVED_PLATFORM_NICKNAME = "壳友手账";
 const DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);
 // Keep this in sync with the server so accepted users are never trapped
 // behind a stale consent overlay.
@@ -10621,6 +10622,10 @@ function submitProfile(event) {
   if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const nickname = String(form.get("nickname") || "").trim() || maskPhone(state.loggedInPhone);
+  if (nickname.normalize("NFKC") === RESERVED_PLATFORM_NICKNAME && state.loggedInPhone !== REVIEW_ADMIN_PHONE) {
+    toast(`“${RESERVED_PLATFORM_NICKNAME}”仅供壳友手账官方账号使用`);
+    return;
+  }
   const registeredUsers = (state.registeredUsers || []).map(user => user.phone === state.loggedInPhone ? {
     ...user,
     accountName: nickname,

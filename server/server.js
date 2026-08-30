@@ -65,6 +65,7 @@ const MEDIA_CDN_BASE_URL = String(process.env.MEDIA_CDN_BASE_URL || "").trim().r
 // image that they cached as a failed request during a temporary outage.
 const MEDIA_CACHE_VERSION = String(process.env.MEDIA_CACHE_VERSION || "20260825.2").trim();
 const REVIEW_ADMIN_PHONE = process.env.ADMIN_PHONE || "18652082378";
+const RESERVED_PLATFORM_NICKNAME = "壳友手账";
 const POLICY_VERSION = "2026-08-12";
 // 每次 App Store 新版已发布后，将 MIN_SUPPORTED_APP_BUILD 调整为新的 Xcode 构建号即可强制更新。
 const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 12)));
@@ -783,6 +784,14 @@ function validPhone(phone) {
   return /^1[3-9]\d{9}$/.test(String(phone || ""));
 }
 
+function accountNameForPhone(value, phone, fallback = "") {
+  const name = String(value || "").normalize("NFKC").trim();
+  if (name === RESERVED_PLATFORM_NICKNAME && String(phone) !== REVIEW_ADMIN_PHONE) {
+    throw new Error(`“${RESERVED_PLATFORM_NICKNAME}”仅供壳友手账官方账号使用`);
+  }
+  return name || fallback;
+}
+
 function makeCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
@@ -1293,12 +1302,18 @@ async function handleRegister(req, res) {
   const passwordInfo = hashPassword(password);
   const token = makeAuthToken();
   const now = new Date().toISOString();
+  let accountName;
+  try {
+    accountName = accountNameForPhone(body.accountName, phone, maskPhone(phone));
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, message: error.message || "昵称不可使用" });
+  }
   const user = {
     id: crypto.randomUUID(),
     phone,
     passwordSalt: passwordInfo.salt,
     passwordHash: passwordInfo.hash,
-    accountName: String(body.accountName || "").trim() || maskPhone(phone),
+    accountName,
     accountAvatar: randomDefaultAccountAvatar(),
     data: normalizeAccountData(body.data || {}),
     termsAcceptedAt: now,
@@ -1387,7 +1402,11 @@ async function handleSaveAccount(req, res) {
       return sendJson(res, 503, { ok: false, message: "数据保护备份暂不可用，未保存本次修改，请稍后重试" });
     }
   }
-  user.accountName = String(body.accountName || "").trim() || user.accountName || maskPhone(phone);
+  try {
+    user.accountName = accountNameForPhone(body.accountName, phone, user.accountName || maskPhone(phone));
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, message: error.message || "昵称不可使用" });
+  }
   user.accountAvatar = String(body.accountAvatar || "");
   user.data = incomingData;
   user.updatedAt = new Date().toISOString();
