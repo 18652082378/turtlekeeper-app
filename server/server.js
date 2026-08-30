@@ -58,6 +58,9 @@ const OSS_ACCESS_KEY_ID = String(process.env.OSS_ACCESS_KEY_ID || "").trim();
 const OSS_ACCESS_KEY_SECRET = String(process.env.OSS_ACCESS_KEY_SECRET || "").trim();
 const OSS_PUBLIC_BASE_URL = String(process.env.OSS_PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
 const OSS_ENABLED = Boolean(OSS_REGION && OSS_BUCKET && OSS_ACCESS_KEY_ID && OSS_ACCESS_KEY_SECRET && OSS_PUBLIC_BASE_URL);
+// A separate public delivery host keeps uploads on the API/OSS side while
+// letting both new and historical media be served through the CDN.
+const MEDIA_CDN_BASE_URL = String(process.env.MEDIA_CDN_BASE_URL || "").trim().replace(/\/+$/, "");
 // Bump this value after a media-delivery fix to make iOS WebViews retry an
 // image that they cached as a failed request during a temporary outage.
 const MEDIA_CACHE_VERSION = String(process.env.MEDIA_CACHE_VERSION || "20260825.2").trim();
@@ -236,10 +239,23 @@ function cacheBustedMediaUrl(value) {
   const url = String(value || "");
   if (!MEDIA_CACHE_VERSION || !/(?:^|https?:\/\/[^/]+)\/uploads\//i.test(url)) return value;
   try {
+    const isAbsoluteUrl = /^https?:\/\//i.test(url);
     const parsed = new URL(url, "http://turtlekeeper.local");
-    if (!parsed.pathname.startsWith("/uploads/") || parsed.searchParams.has("media-v")) return value;
-    parsed.searchParams.set("media-v", MEDIA_CACHE_VERSION);
-    return /^https?:\/\//i.test(url) ? parsed.toString() : `${parsed.pathname}${parsed.search}`;
+    if (!parsed.pathname.startsWith("/uploads/")) return value;
+    if (!parsed.searchParams.has("media-v")) parsed.searchParams.set("media-v", MEDIA_CACHE_VERSION);
+
+    // Stored records may contain a relative path, the API host, or the old
+    // OSS default endpoint.  Those are all first-party media and can safely
+    // be switched to the configured CDN delivery domain.  Do not rewrite an
+    // unrelated third-party URL merely because it happens to contain /uploads/.
+    const hostname = parsed.hostname.toLowerCase();
+    const isFirstPartyMedia = !isAbsoluteUrl
+      || hostname === "api.turtleworld.cn"
+      || hostname.endsWith(".aliyuncs.com");
+    if (MEDIA_CDN_BASE_URL && isFirstPartyMedia) {
+      return `${MEDIA_CDN_BASE_URL}${parsed.pathname}${parsed.search}`;
+    }
+    return isAbsoluteUrl ? parsed.toString() : `${parsed.pathname}${parsed.search}`;
   } catch {
     return value;
   }
