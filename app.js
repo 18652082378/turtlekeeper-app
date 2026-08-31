@@ -11,7 +11,7 @@ const RESERVED_PLATFORM_NICKNAME = "壳友手账";
 const DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);
 // Keep this in sync with the server so accepted users are never trapped
 // behind a stale consent overlay.
-const POLICY_VERSION = "2026-08-12";
+const POLICY_VERSION = "2026-09-01";
 const APP_BUILD = Math.max(0, Number.parseInt(String(window.TURTLE_APP_BUILD || "0"), 10) || 0);
 const APP_STORE_URL = String(window.TURTLE_APP_STORE_URL || "https://apps.apple.com/app/id6783481335");
 let forceUpdateState = { required: false, checking: false, minimumBuild: 0, latestBuild: 0, message: "", appStoreUrl: "" };
@@ -133,6 +133,8 @@ const initialState = {
   contentReports: [],
   systemAnnouncements: [],
   adminSystemAnnouncements: [],
+  operationsOverview: { analytics: null, conversations: [] },
+  operationsTab: "analytics",
   blockedUsers: [],
   isCommunityAdmin: false,
   communityFriends: [],
@@ -3653,8 +3655,19 @@ function turtleActionIcon(type) {
   }[type] || "");
 }
 
+function turtleKeepingDays(acquiredDate) {
+  const matched = String(acquiredDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!matched) return "";
+  const startedAt = Date.UTC(Number(matched[1]), Number(matched[2]) - 1, Number(matched[3]));
+  const today = new Date();
+  const currentAt = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  if (!Number.isFinite(startedAt) || startedAt > currentAt) return "";
+  return `已饲养 ${Math.floor((currentAt - startedAt) / 86400000)} 天`;
+}
+
 function turtleListRow(t) {
   const menuOpen = state.openTurtleMenuId === t.id;
+  const keepingDays = turtleKeepingDays(t.acquiredDate);
   return `
     <article class="turtle-row fresh-card ${menuOpen ? "menu-open" : ""}" data-view-turtle="${t.id}" data-reorder-turtle="${t.id}">
       <img src="${t.photo || defaultPhoto}" alt="${t.speciesName}" draggable="false">
@@ -3665,7 +3678,7 @@ function turtleListRow(t) {
         </div>
         <div class="turtle-row-species">
           <p>${t.speciesName}</p>
-          ${Number(t.price) > 0 ? `<span class="turtle-price">¥${money(t.price)}</span>` : ""}
+          <div class="turtle-row-side">${Number(t.price) > 0 ? `<span class="turtle-price">¥${money(t.price)}</span>` : ""}${keepingDays ? `<span class="turtle-keeping-days">${keepingDays}</span>` : ""}</div>
         </div>
         <div class="turtle-row-meta">
           <span>${t.weight || "-"}g</span>
@@ -4933,6 +4946,7 @@ function pageMine() {
         <button class="mine-row" data-page="rules"><span>☷</span><strong>平台规则与隐私</strong></button>
         ${state.isCommunityAdmin ? `<button class="mine-row" data-page="moderation"><span>⚑</span><strong>举报审核</strong><em class="mine-row-count">${(state.contentReports || []).filter(item => item.status === "pending").length}</em></button>` : ""}
         ${state.isCommunityAdmin ? `<button class="mine-row" data-page="announcements"><span>◉</span><strong>系统公告</strong></button>` : ""}
+        ${state.isCommunityAdmin ? `<button class="mine-row" data-page="operations"><span>▦</span><strong>运营中心</strong></button>` : ""}
         <button class="mine-row" data-page="about"><span>i</span><strong>关于壳友手账</strong></button>
       </section>
     </main>
@@ -5339,7 +5353,7 @@ function pageRules() {
     ${topbar("平台规则", true)}
     <main class="content page-fresh compliance-page">
       <section class="page-intro compact-intro compliance-intro">
-        <div><p class="eyebrow dark">生效日期：2026 年 7 月 17 日</p><h2>服务、社区与交易规则</h2><p>壳友手账提供养龟记录、公开内容发布和商品信息展示服务。</p></div>
+        <div><p class="eyebrow dark">生效日期：2026 年 9 月 1 日</p><h2>服务、社区与交易规则</h2><p>壳友手账提供养龟记录、公开内容发布和商品信息展示服务。</p></div>
       </section>
       <section class="fresh-card policy-card">
         <h3>一、服务范围</h3>
@@ -5373,19 +5387,19 @@ function pagePrivacy() {
     ${topbar("隐私政策", true)}
     <main class="content page-fresh compliance-page">
       <section class="page-intro compact-intro compliance-intro">
-        <div><p class="eyebrow dark">生效日期：2026 年 7 月 17 日</p><h2>壳友手账隐私政策</h2><p>个人信息处理者：陈仔健。我们按合法、正当、必要原则处理与你使用服务直接相关的信息。</p></div>
+        <div><p class="eyebrow dark">生效日期：2026 年 9 月 1 日</p><h2>壳友手账隐私政策</h2><p>个人信息处理者：陈仔健。我们按合法、正当、必要原则处理与你使用服务直接相关的信息。</p></div>
       </section>
       <section class="fresh-card policy-card">
         <h3>一、我们收集的信息</h3>
-        <p>注册和登录时收集手机号、密码验证信息与昵称；你主动上传的头像、乌龟档案、龟池、护理、繁殖、账本、壳友圈、商品、聊天和反馈内容会用于提供对应功能。你主动点击定位并授权后，平台仅将所在城市用于商品发布展示。</p>
+        <p>注册和登录时收集手机号、密码验证信息与昵称；你主动上传的头像、乌龟档案、龟池、护理、繁殖、账本、壳友圈、商品、聊天和反馈内容会用于提供对应功能。应用会使用随机生成的匿名标识、会话起止时间和你主动附带在链接中的推广来源标识统计每日进入次数、独立使用人数、停留时长和推广效果，不收集设备标识或精确位置。你主动点击定位并授权后，平台仅将所在城市用于商品发布展示。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>二、使用目的</h3>
-        <p>用于账号认证、跨设备同步、内容发布与展示、买卖双方咨询、内容安全审核、故障排查和服务改进。你同意通知权限后，通知设备标识仅用于聊天消息等系统提醒。我们不会将你的个人信息用于与上述目的无关的用途。</p>
+        <p>用于账号认证、跨设备同步、内容发布与展示、买卖双方咨询、内容安全审核、服务运行统计、故障排查和服务改进。你同意通知权限后，通知设备标识仅用于聊天消息等系统提醒。我们不会将你的个人信息用于与上述目的无关的用途。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>三、存储与共享</h3>
-        <p>数据存储在中国境内服务器。公开发布的壳友圈和龟集市内容会向其他用户展示；聊天内容仅向会话双方及依法履行审核职责的人员展示。除法律法规要求、保护用户权益或获得你的单独同意外，不会向第三方出售个人信息。</p>
+        <p>数据存储在中国境内服务器。公开发布的壳友圈和龟集市内容会向其他用户展示；聊天内容仅向会话双方，以及为处理投诉、交易纠纷、违规审核、故障排查和服务运营而获得授权的平台人员展示，且遵循最小必要访问控制。除法律法规要求、保护用户权益或获得你的单独同意外，不会向第三方出售个人信息。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>四、信息保护与备份</h3>
@@ -5467,6 +5481,68 @@ function pageAnnouncements() {
   `;
 }
 
+function formatOperationDuration(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds) || 0));
+  if (value < 60) return `${value} 秒`;
+  const minutes = Math.floor(value / 60);
+  const rest = value % 60;
+  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`;
+}
+
+function adminChatMessageMarkup(message = {}) {
+  const author = message.mine ? "用户 A" : "用户 B";
+  const content = message.recalled ? "已撤回一条消息" : (message.rawContent || message.content || (message.mediaUrl ? (message.mediaType === "video" ? "[视频]" : "[图片]") : "商品咨询"));
+  return `<div class="operations-chat-message ${message.mine ? "left" : "right"}"><small>${author} · ${message.createdAt ? formatTime(message.createdAt) : ""}</small><p>${escapeHtml(content)}</p>${message.marketListing ? `<em>关联商品：${escapeHtml(message.marketListing.title || message.marketListing.speciesName || "龟集市商品")}</em>` : ""}</div>`;
+}
+
+function pageOperations() {
+  const overview = state.operationsOverview || {};
+  const analytics = overview.analytics || { visitCount: 0, uniqueVisitorCount: 0, totalDwellSeconds: 0, averageDwellSeconds: 0 };
+  const conversations = Array.isArray(overview.conversations) ? overview.conversations : [];
+  const market = overview.market || {};
+  const feedback = overview.feedback || {};
+  const safety = overview.safety || {};
+  const health = overview.health || {};
+  const tab = ["analytics", "market", "feedback", "safety", "health", "chats"].includes(state.operationsTab) ? state.operationsTab : "analytics";
+  const tabs = [["analytics", "增长"], ["market", "集市"], ["feedback", "反馈"], ["safety", "安全"], ["health", "服务"], ["chats", "聊天"]];
+  return `
+    ${topbar("运营中心", true)}
+    <main class="content page-fresh operations-page">
+      <section class="page-intro compact-intro"><div><p class="eyebrow dark">仅管理员可见</p><h2>运营中心</h2><p>查看今日使用情况，以及用户围绕商品的聊天记录。</p></div></section>
+      <section class="memo-tabs operations-tabs">${tabs.map(([key, label]) => `<button class="tab ${tab === key ? "active" : ""}" type="button" data-operations-tab="${key}">${label}</button>`).join("")}</section>
+      ${tab === "analytics" ? `
+        <section class="operations-metric-grid">
+          <article class="fresh-card operations-metric"><span>进入次数</span><strong>${Math.max(0, Number(analytics.visitCount) || 0)}</strong><small>今日启动会话</small></article>
+          <article class="fresh-card operations-metric"><span>独立用户</span><strong>${Math.max(0, Number(analytics.uniqueVisitorCount) || 0)}</strong><small>按匿名访客标识去重</small></article>
+          <article class="fresh-card operations-metric"><span>今日注册</span><strong>${Math.max(0, Number(analytics.registeredToday) || 0)}</strong><small>累计用户 ${Math.max(0, Number(analytics.totalUserCount) || 0)}</small></article>
+          <article class="fresh-card operations-metric"><span>登录活跃</span><strong>${Math.max(0, Number(analytics.activeAccountCount) || 0)}</strong><small>今日已登录账号</small></article>
+          <article class="fresh-card operations-metric"><span>7 日回访</span><strong>${Math.max(0, Number(analytics.returningVisitorCount) || 0)}</strong><small>今日访问过的回访用户</small></article>
+          <article class="fresh-card operations-metric"><span>累计停留</span><strong>${formatOperationDuration(analytics.totalDwellSeconds)}</strong><small>今日已记录时长</small></article>
+          <article class="fresh-card operations-metric"><span>平均停留</span><strong>${formatOperationDuration(analytics.averageDwellSeconds)}</strong><small>每次进入平均时长</small></article>
+        </section>
+        <section class="fresh-card operations-note"><strong>推广来源</strong><p>${Object.entries(analytics.sources || {}).map(([source, count]) => `${escapeHtml(source)}：${count} 次`).join("　") || "新版部署后开始采集来源数据。"}</p></section><section class="fresh-card operations-note"><strong>统计口径</strong><p>用户每次打开 App 记为一次进入；独立用户按匿名标识去重。停留时长在打开期间按心跳累积，关闭或切到后台前的最后一分钟可能不会计入。</p></section>
+      ` : tab === "market" ? `
+        <section class="operations-metric-grid"><article class="fresh-card operations-metric"><span>在售商品</span><strong>${market.activeCount || 0}</strong><small>已售 ${market.soldCount || 0} · 下架 ${market.inactiveCount || 0}</small></article><article class="fresh-card operations-metric"><span>商品浏览</span><strong>${market.totalViews || 0}</strong><small>累计浏览次数</small></article><article class="fresh-card operations-metric"><span>收藏意向</span><strong>${market.totalWants || 0}</strong><small>用户点击想要</small></article><article class="fresh-card operations-metric"><span>商品咨询</span><strong>${market.totalChats || 0}</strong><small>按商品去重的会话</small></article></section>
+        <section class="section-title"><span>热度商品</span><small>浏览、意向和咨询综合排序</small></section><section class="operations-simple-list">${(market.topListings || []).map(item => `<article class="fresh-card operations-simple-row"><strong>${escapeHtml(item.title || item.speciesName || "龟集市商品")}</strong><span>浏览 ${item.viewCount || 0} · 想要 ${item.wantCount || 0} · 咨询 ${item.chatCount || 0}</span></article>`).join("") || `<div class="empty small-empty"><div><strong>暂无商品数据</strong></div></div>`}</section>
+        <section class="section-title"><span>低关注提醒</span><small>发布满 3 天且没有浏览、意向或咨询</small></section><section class="operations-simple-list">${(market.lowInterestListings || []).map(item => `<article class="fresh-card operations-simple-row"><strong>${escapeHtml(item.title || item.speciesName || "龟集市商品")}</strong><span>${escapeHtml(item.sellerName || "卖家")} · ${item.createdAt ? formatTime(item.createdAt) : ""}</span></article>`).join("") || `<div class="fresh-card operations-note"><p>暂无需要关注的商品。</p></div>`}</section>
+      ` : tab === "feedback" ? `
+        <section class="fresh-card operations-note"><strong>待处理反馈 ${feedback.pendingCount || 0} 条</strong><p>在这里标记处理状态并回复用户；回复会在该用户的反馈详情中展示。</p></section><section class="operations-simple-list">${(feedback.items || []).map(item => `<article class="fresh-card operations-feedback-card"><strong>${escapeHtml(item.type || "反馈")} · ${escapeHtml(item.authorName || "壳友")}</strong><p>${escapeHtml(item.content || "")}</p><small>${item.createdAt ? formatTime(item.createdAt) : ""}</small><form data-admin-feedback-form="${item.id}"><select class="select" name="status"><option value="pending" ${item.status === "pending" ? "selected" : ""}>待处理</option><option value="processing" ${item.status === "processing" ? "selected" : ""}>处理中</option><option value="resolved" ${item.status === "resolved" ? "selected" : ""}>已解决</option><option value="declined" ${item.status === "declined" ? "selected" : ""}>不处理</option></select><textarea name="reply" maxlength="600" placeholder="给用户的回复（可选）">${escapeHtml(item.reply || "")}</textarea><button class="secondary" type="submit">保存处理结果</button></form></article>`).join("") || `<div class="empty small-empty"><div><strong>暂无用户反馈</strong></div></div>`}</section>
+      ` : tab === "safety" ? `
+        <section class="operations-metric-grid"><article class="fresh-card operations-metric"><span>待审核举报</span><strong>${safety.pendingReportCount || 0}</strong><small>全部举报 ${safety.totalReportCount || 0}</small></article></section><section class="fresh-card operations-note"><strong>聊天访问审计</strong><p>每次查看运营中心、处理举报或反馈都会留下管理员操作记录；仅用于账号安全和内部追溯。</p></section><section class="operations-simple-list">${(safety.auditLogs || []).map(item => `<article class="fresh-card operations-simple-row"><strong>${escapeHtml(item.action || "管理员操作")}</strong><span>${escapeHtml(item.detail || "")} · ${item.createdAt ? formatTime(item.createdAt) : ""}</span></article>`).join("") || `<div class="fresh-card operations-note"><p>暂无操作记录。</p></div>`}</section>
+      ` : tab === "health" ? `
+        <section class="operations-metric-grid"><article class="fresh-card operations-metric"><span>服务状态</span><strong>${health.status === "healthy" ? "正常" : "异常"}</strong><small>当前接口可用</small></article><article class="fresh-card operations-metric"><span>运行时长</span><strong>${formatOperationDuration(health.uptimeSeconds)}</strong><small>本次服务启动后</small></article><article class="fresh-card operations-metric"><span>数据库</span><strong>${escapeHtml(health.database || "未知")}</strong><small>已连接模式</small></article><article class="fresh-card operations-metric"><span>最近备份</span><strong>${escapeHtml(health.lastBackupDate || "未记录")}</strong><small>内存 ${health.memoryMb || 0} MB</small></article></section><section class="fresh-card operations-note"><strong>说明</strong><p>这里展示服务端实时运行状态。接口错误率、推送送达率等需要积累专门的监控日志，后续可以在不影响用户使用的前提下继续添加。</p></section>
+      ` : `
+        <section class="operations-chat-list">${conversations.map(conversation => {
+          const products = Array.isArray(conversation.marketListings) && conversation.marketListings.length ? conversation.marketListings : (conversation.marketListing ? [conversation.marketListing] : []);
+          const names = (conversation.users || []).map(user => user.name || "壳友").join(" · ");
+          return `<article class="fresh-card operations-chat-card"><header><div><strong>${escapeHtml(names || "用户聊天")}</strong><small>${conversation.messageCount || 0} 条消息 · ${conversation.latestAt ? formatTime(conversation.latestAt) : ""}</small></div></header>${products.length ? products.map(product => `<section class="operations-product"><b>关联商品</b><strong>${escapeHtml(product.title || product.speciesName || "龟集市商品")}</strong><span>¥${money(product.price)} · ${escapeHtml([product.city, product.delivery].filter(Boolean).join(" · ") || "商品信息")}</span></section>`).join("") : `<p class="operations-no-product">此会话没有关联商品</p>`}<div class="operations-chat-thread">${(conversation.messages || []).map(adminChatMessageMarkup).join("") || `<p class="muted">暂无可显示消息</p>`}</div></article>`;
+        }).join("") || `<div class="empty small-empty"><div><strong>暂无用户聊天</strong><br>用户从龟集市联系卖家后，聊天会显示在这里。</div></div>`}</section>
+      `}
+    </main>
+    ${bottomNav()}
+  `;
+}
+
 function placeholder(title) {
   return `${topbar(title, true)}<main class="content page-fresh"><div class="empty"><strong>${title}</strong><br>这个入口已经放好，后续可以继续扩展。</div></main>`;
 }
@@ -5519,6 +5595,7 @@ function render() {
     privacy: pagePrivacy,
     moderation: pageModeration,
     announcements: pageAnnouncements,
+    operations: pageOperations,
     breeding: pageBreeding,
     breedingAdd: pageBreedingAdd,
     breedingDetail: pageBreedingDetail,
@@ -5583,6 +5660,7 @@ function render() {
   if (["mine", "following", "followingProfile"].includes(state.page)) refreshFollowing();
   if (state.page === "moderation") refreshContentReports();
   if (state.page === "announcements") refreshSystemAnnouncements();
+  if (state.page === "operations") refreshOperationsOverview();
   if (state.page === "communityProfile" && state.selectedCommunityUserId) refreshCommunityUserProfile();
   if (state.page === "communityChat" && state.selectedCommunityFriendId) refreshCommunityChat();
   if (["market", "marketDetail", "marketSeller", "marketMy", "marketFavorites", "marketHistory", "following", "followingProfile", "mine"].includes(state.page)) refreshMarket();
@@ -5599,7 +5677,7 @@ function policyConsentGate() {
       <form class="policy-consent-dialog" data-policy-consent-form>
         <p class="policy-consent-kicker">服务协议更新</p>
         <h1 id="policyConsentTitle">请阅读并同意服务协议</h1>
-        <p>为继续使用壳友手账，请阅读最新版《服务与社区规则》和《隐私政策》。本次更新生效日期为 2026 年 7 月 17 日。</p>
+        <p>为继续使用壳友手账，请阅读最新版《服务与社区规则》和《隐私政策》。本次更新生效日期为 2026 年 9 月 1 日。</p>
         <div class="policy-consent-links">
           <a href="https://api.turtleworld.cn/terms.html" target="_blank" rel="noopener noreferrer">查看服务与社区规则 <b>›</b></a>
           <a href="https://api.turtleworld.cn/privacy.html" target="_blank" rel="noopener noreferrer">查看隐私政策 <b>›</b></a>
@@ -5697,6 +5775,7 @@ function bindEvents() {
     if (targetPage === "reports" && !requireLogin()) return;
     if (targetPage === "moderation" && !state.isCommunityAdmin) return toast("仅平台管理员可审核举报");
     if (targetPage === "announcements" && !state.isCommunityAdmin) return toast("仅平台管理员可管理系统公告");
+    if (targetPage === "operations" && !state.isCommunityAdmin) return toast("仅平台管理员可查看运营数据");
     const navigationState = { page: targetPage, openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" };
     if (targetPage === "poolAdd") navigationState.editingTurtlePoolId = "";
     if (targetPage === "marketAdd") {
@@ -6542,6 +6621,12 @@ function bindEvents() {
   document.querySelectorAll("[data-process-content-report]").forEach(btn => btn.addEventListener("click", () => processContentReport(btn.dataset.processContentReport, btn.dataset.reportAction)));
   document.querySelector("[data-system-announcement-form]")?.addEventListener("submit", submitSystemAnnouncement);
   document.querySelectorAll("[data-system-announcement-action]").forEach(button => button.addEventListener("click", () => manageSystemAnnouncement(button.dataset.systemAnnouncementId, button.dataset.systemAnnouncementAction)));
+  document.querySelectorAll("[data-operations-tab]").forEach(button => button.addEventListener("click", () => {
+    if (!state.isCommunityAdmin) return;
+    setState({ operationsTab: button.dataset.operationsTab || "analytics" }, { skipCloud: true, pageScroll: "preserve" });
+    void refreshOperationsOverview(true);
+  }));
+  document.querySelectorAll("[data-admin-feedback-form]").forEach(form => form.addEventListener("submit", submitAdminFeedbackAction));
   document.querySelectorAll("[data-dismiss-system-announcement]").forEach(button => button.addEventListener("click", () => dismissSystemAnnouncement(button.dataset.dismissSystemAnnouncement)));
   document.querySelectorAll("[data-view-feedback]").forEach(el => el.addEventListener("click", event => {
     event.stopPropagation();
@@ -8744,6 +8829,43 @@ async function refreshContentReports(force = false) {
   }
 }
 
+let operationsOverviewLoading = false;
+let operationsOverviewLastLoadedAt = 0;
+async function refreshOperationsOverview(force = false) {
+  if (!CONFIGURED_SMS_BACKEND || operationsOverviewLoading || !state.isCommunityAdmin || !state.loggedInPhone || !currentCloudToken()) return;
+  if (!force && Date.now() - operationsOverviewLastLoadedAt < 15000) return;
+  operationsOverviewLoading = true;
+  try {
+    const result = await apiPost("/api/admin/operations/overview", communityAuthPayload());
+    operationsOverviewLastLoadedAt = Date.now();
+    setState({ operationsOverview: { analytics: result.analytics || null, market: result.market || {}, feedback: result.feedback || {}, safety: result.safety || {}, health: result.health || {}, conversations: Array.isArray(result.conversations) ? result.conversations : [] } }, { skipCloud: true, pageScroll: "preserve" });
+  } catch (error) {
+    if (error.status !== 403) console.warn(error.message || "运营数据读取失败");
+  } finally {
+    operationsOverviewLoading = false;
+  }
+}
+
+async function submitAdminFeedbackAction(event) {
+  event.preventDefault();
+  if (!state.isCommunityAdmin || !requireLogin()) return;
+  const form = event.currentTarget;
+  const feedbackId = form.dataset.adminFeedbackForm || "";
+  const data = new FormData(form);
+  const button = form.querySelector("button[type='submit']");
+  if (button) { button.disabled = true; button.textContent = "保存中…"; }
+  try {
+    const result = await apiPost("/api/admin/feedback/action", communityAuthPayload({ feedbackId, status: String(data.get("status") || "pending"), reply: String(data.get("reply") || "") }));
+    const overview = state.operationsOverview || {};
+    operationsOverviewLastLoadedAt = Date.now();
+    setState({ operationsOverview: { ...overview, feedback: result.feedback || overview.feedback } }, { skipCloud: true, pageScroll: "preserve" });
+    toast("反馈处理结果已保存");
+  } catch (error) {
+    toast(error.message || "保存失败");
+    if (button?.isConnected) { button.disabled = false; button.textContent = "保存处理结果"; }
+  }
+}
+
 async function refreshSystemAnnouncements(force = false) {
   if (!CONFIGURED_SMS_BACKEND || systemAnnouncementsLoading) return;
   if (!force && Date.now() - systemAnnouncementsLastLoadedAt < 30000) return;
@@ -10911,6 +11033,57 @@ async function apiPost(path, payload) {
     throw error;
   }
   return data;
+}
+
+let appAnalyticsSessionId = "";
+let appAnalyticsHeartbeatTimer = 0;
+function analyticsVisitorId() {
+  const key = "turtlekeeper-analytics-visitor-v1";
+  try {
+    const existing = String(localStorage.getItem(key) || "");
+    if (existing) return existing;
+    const created = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(key, created);
+    return created;
+  } catch {
+    return `temporary-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+function appAnalyticsSource() {
+  try {
+    const params = new URLSearchParams(window.location.search || "");
+    const campaign = String(params.get("utm_source") || params.get("ref") || "").trim().slice(0, 60);
+    if (campaign) return campaign;
+    return document.referrer ? "外部链接" : "直接打开";
+  } catch {
+    return "直接打开";
+  }
+}
+
+function sendAnalyticsVisit(event = "heartbeat", keepalive = false) {
+  if (!appAnalyticsSessionId) return;
+  const base = window.TURTLE_API_BASE_URL || "";
+  const body = JSON.stringify({ visitorId: analyticsVisitorId(), sessionId: appAnalyticsSessionId, event, source: appAnalyticsSource(), phone: state.loggedInPhone || "", token: currentCloudToken() || "" });
+  void fetch(`${base}/api/analytics/visit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    keepalive
+  }).catch(() => {});
+}
+
+function startAppAnalytics() {
+  if (appAnalyticsSessionId) return;
+  appAnalyticsSessionId = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  sendAnalyticsVisit("start");
+  appAnalyticsHeartbeatTimer = window.setInterval(() => {
+    if (!document.hidden) sendAnalyticsVisit("heartbeat");
+  }, 60 * 1000);
+  window.addEventListener("pagehide", () => sendAnalyticsVisit("end", true));
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) sendAnalyticsVisit("end", true);
+  });
 }
 
 function isRetryableMediaUploadError(error) {
@@ -13411,3 +13584,4 @@ startCloudSessionHydration();
 setupNativePushNotifications();
 startMessageUnreadPolling();
 refreshMessageUnread(true);
+startAppAnalytics();

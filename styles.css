@@ -13261,6 +13261,26 @@ body.image-preview-open {
   gap: 8px;
 }
 
+.turtle-row-side {
+  flex: 0 0 auto;
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.turtle-keeping-days {
+  min-height: 20px;
+  padding: 2px 7px;
+  border: 1px solid rgba(7, 193, 96, .2);
+  border-radius: 999px;
+  color: #16865d;
+  background: rgba(7, 193, 96, .08);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
 .turtle-row-species > p {
   min-width: 0;
   margin: 0 !important;
@@ -15113,6 +15133,12 @@ html[data-theme-color="dark"] .profile-content-tabs button.active {
   touch-action: pan-y;
   background: #0f1110;
   contain: paint;
+}
+
+html[data-theme-color="dark"] .turtle-keeping-days {
+  color: #78dfa9;
+  border-color: rgba(7, 193, 96, .32);
+  background: rgba(7, 193, 96, .13);
 }
 
 /* Mobile ordering uses normal tap controls instead of a JavaScript
@@ -17154,4 +17180,91 @@ html[data-theme-color="dark"] [data-turtle-reorder-list] > [data-reorder-turtle]
 html[data-theme-color="dark"] .turtle-row-drag-preview {
   border-color: rgba(7, 193, 96, .52) !important;
   box-shadow: 0 18px 38px rgba(0, 0, 0, .48), 0 0 0 1px rgba(7, 193, 96, .18) !important;
+}
+
+/* Admin-only operations centre. */
+.operations-tabs { margin-bottom: 14px; }
+
+.operations-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.operations-metric {
+  min-width: 0;
+  padding: 15px;
+}
+
+.operations-metric span,
+.operations-metric small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.operations-metric strong {
+  display: block;
+  margin: 8px 0 5px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operations-note { margin-top: 12px; padding: 15px; }
+.operations-note p { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+
+.operations-chat-list { display: grid; gap: 12px; }
+.operations-chat-card { padding: 14px; overflow: hidden; }
+.operations-chat-card > header { display: flex; justify-content: space-between; gap: 12px; }
+.operations-chat-card > header strong,
+.operations-chat-card > header small { display: block; }
+.operations-chat-card > header small { margin-top: 4px; color: var(--muted); font-size: 12px; }
+
+.operations-product {
+  display: grid;
+  gap: 3px;
+  margin: 12px 0;
+  padding: 10px 11px;
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  background: var(--raised-bg);
+}
+
+.operations-product b { color: var(--aqua); font-size: 11px; }
+.operations-product strong { font-size: 14px; }
+.operations-product span,
+.operations-no-product { margin: 0; color: var(--muted); font-size: 12px; }
+
+.operations-chat-thread {
+  display: grid;
+  gap: 8px;
+  max-height: 440px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.operations-chat-message { display: grid; gap: 3px; max-width: 88%; }
+.operations-chat-message.right { justify-self: end; text-align: right; }
+.operations-chat-message small { color: var(--muted); font-size: 11px; }
+.operations-chat-message p { margin: 0; padding: 8px 10px; border-radius: 11px; background: var(--raised-bg); font-size: 13px; line-height: 1.45; text-align: left; white-space: pre-wrap; word-break: break-word; }
+.operations-chat-message.right p { background: rgba(18, 182, 140, .14); }
+.operations-chat-message em { color: var(--muted); font-size: 11px; font-style: normal; }
+
+.operations-simple-list { display: grid; gap: 9px; margin-top: 10px; }
+.operations-simple-row { display: grid; gap: 4px; padding: 13px 14px; }
+.operations-simple-row strong { font-size: 14px; }
+.operations-simple-row span { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.operations-feedback-card { display: grid; gap: 8px; padding: 14px; }
+.operations-feedback-card > p { margin: 0; color: var(--text); font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+.operations-feedback-card > small { color: var(--muted); font-size: 12px; }
+.operations-feedback-card form { display: grid; gap: 8px; margin-top: 3px; }
+.operations-feedback-card textarea { min-height: 64px; padding: 10px; border: 1px solid var(--divider); border-radius: 10px; color: var(--text); background: var(--raised-bg); font: inherit; font-size: 13px; resize: vertical; }
+.operations-feedback-card .secondary { justify-self: start; }
+
+@media (max-width: 350px) {
+  .operations-metric strong { font-size: 19px; }
 }

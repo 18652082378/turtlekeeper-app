@@ -66,7 +66,7 @@ const MEDIA_CDN_BASE_URL = String(process.env.MEDIA_CDN_BASE_URL || "").trim().r
 const MEDIA_CACHE_VERSION = String(process.env.MEDIA_CACHE_VERSION || "20260825.2").trim();
 const REVIEW_ADMIN_PHONE = process.env.ADMIN_PHONE || "18652082378";
 const RESERVED_PLATFORM_NICKNAME = "壳友手账";
-const POLICY_VERSION = "2026-08-12";
+const POLICY_VERSION = "2026-09-01";
 // 每次 App Store 新版已发布后，将 MIN_SUPPORTED_APP_BUILD 调整为新的 Xcode 构建号即可强制更新。
 const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 12)));
 const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || MIN_SUPPORTED_APP_BUILD)));
@@ -483,7 +483,7 @@ function isSuspiciousAccountDataLoss(before = {}, after = {}) {
 }
 
 function emptyDatabase() {
-  return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [], reports: [], systemAnnouncements: [], careReminderDeliveries: {} };
+  return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [], reports: [], systemAnnouncements: [], careReminderDeliveries: {}, appAnalytics: { days: {} }, adminAuditLogs: [] };
 }
 
 class DatabaseIntegrityError extends Error {
@@ -508,7 +508,9 @@ function normalizeDatabase(data = {}) {
     friendships: Array.isArray(data.friendships) ? data.friendships : [], messages: Array.isArray(data.messages) ? data.messages : [],
     follows: Array.isArray(data.follows) ? data.follows : [], reports: Array.isArray(data.reports) ? data.reports : [],
     systemAnnouncements: Array.isArray(data.systemAnnouncements) ? data.systemAnnouncements : [],
-    careReminderDeliveries: data.careReminderDeliveries && typeof data.careReminderDeliveries === "object" ? data.careReminderDeliveries : {}
+    careReminderDeliveries: data.careReminderDeliveries && typeof data.careReminderDeliveries === "object" ? data.careReminderDeliveries : {},
+    appAnalytics: data.appAnalytics && typeof data.appAnalytics === "object" ? data.appAnalytics : { days: {} },
+    adminAuditLogs: Array.isArray(data.adminAuditLogs) ? data.adminAuditLogs : []
   };
 }
 
@@ -2076,6 +2078,9 @@ function publicFeedbackItems(db, viewer) {
       likeCount: likes.length,
       liked: likes.includes(viewer?.phone),
       canDelete: admin || item.authorPhoneRaw === viewer?.phone,
+      adminStatus: ["pending", "processing", "resolved", "declined"].includes(item.adminStatus) ? item.adminStatus : "pending",
+      adminReply: admin || item.authorPhoneRaw === viewer?.phone ? String(item.adminReply || "") : "",
+      processedAt: item.processedAt || "",
       comments: (Array.isArray(item.comments) ? item.comments : []).map(comment => ({
         id: comment.id,
         content: comment.content || "",
@@ -2116,6 +2121,9 @@ async function handleCreateFeedback(req, res) {
     authorAvatar: author.avatar,
     likes: [],
     comments: [],
+    adminStatus: "pending",
+    adminReply: "",
+    processedAt: "",
     createdAt: new Date().toISOString()
   };
   db.feedbacks = [feedback, ...(Array.isArray(db.feedbacks) ? db.feedbacks : [])];
@@ -2331,6 +2339,207 @@ function communityConversationMessages(db, phoneA, phoneB) {
 
 function latestConversationMarketListing(messages = []) {
   return [...messages].reverse().find(item => item.marketListing)?.marketListing || null;
+}
+
+function adminCommunityChatConversations(db) {
+  const messages = Array.isArray(db.messages) ? db.messages : [];
+  const conversations = new Map();
+  messages.forEach(message => {
+    if (!message?.fromPhone || !message?.toPhone || message.systemType === "platform_transaction_warning") return;
+    const phones = [String(message.fromPhone), String(message.toPhone)].sort();
+    const key = phones.join(":");
+    const current = conversations.get(key) || { phones, messages: [] };
+    current.messages.push(message);
+    conversations.set(key, current);
+  });
+  return [...conversations.values()]
+    .map(conversation => {
+      const entries = conversation.messages.sort((left, right) => new Date(left.createdAt || 0) - new Date(right.createdAt || 0));
+      const users = conversation.phones.map(phone => {
+        const user = db.users?.[phone] || {};
+        return { id: communityUserId(phone), name: user.accountName || maskPhone(phone), avatar: user.accountAvatar || "", isAdmin: isAdminUser(user) };
+      });
+      const publicMessages = communityConversationMessages(db, conversation.phones[0], conversation.phones[1]);
+      const latest = publicMessages[publicMessages.length - 1] || {};
+      const marketListings = [...new Map(publicMessages
+        .filter(message => message.marketListing?.id)
+        .map(message => [message.marketListing.id, message.marketListing])).values()];
+      return {
+        id: hashValue(`admin-chat:${conversation.phones.join(":")}`).slice(0, 20),
+        users,
+        messageCount: publicMessages.length,
+        latestMessage: communityMessagePreview(latest),
+        latestAt: latest.createdAt || "",
+        marketListing: latestConversationMarketListing(publicMessages),
+        marketListings,
+        messages: publicMessages.slice(-100)
+      };
+    })
+    .sort((left, right) => new Date(right.latestAt || 0) - new Date(left.latestAt || 0));
+}
+
+function analyticsDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(date).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function analyticsDay(db, key = analyticsDateKey()) {
+  db.appAnalytics = db.appAnalytics && typeof db.appAnalytics === "object" ? db.appAnalytics : { days: {} };
+  db.appAnalytics.days = db.appAnalytics.days && typeof db.appAnalytics.days === "object" ? db.appAnalytics.days : {};
+  const days = db.appAnalytics.days;
+  Object.keys(days).forEach(dateKey => {
+    if (dateKey < analyticsDateKey(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000))) delete days[dateKey];
+  });
+  if (!days[key] || typeof days[key] !== "object") days[key] = { sessions: {} };
+  days[key].sessions = days[key].sessions && typeof days[key].sessions === "object" ? days[key].sessions : {};
+  return days[key];
+}
+
+function publicTodayAnalytics(db) {
+  const day = analyticsDay(db);
+  const now = Date.now();
+  const sessions = Object.values(day.sessions || {});
+  const dwellMs = sessions.reduce((total, session) => {
+    const startedAt = new Date(session.startedAt || 0).getTime();
+    const lastSeenAt = new Date(session.lastSeenAt || session.startedAt || 0).getTime();
+    if (!Number.isFinite(startedAt) || !Number.isFinite(lastSeenAt)) return total;
+    return total + Math.max(0, Math.min(now, lastSeenAt) - startedAt);
+  }, 0);
+  const visitors = new Set(sessions.map(session => session.visitorHash).filter(Boolean));
+  const priorVisitorHashes = new Set();
+  for (let offset = 1; offset <= 7; offset += 1) {
+    const priorDay = db.appAnalytics?.days?.[analyticsDateKey(new Date(Date.now() - offset * 24 * 60 * 60 * 1000))];
+    Object.values(priorDay?.sessions || {}).forEach(session => { if (session.visitorHash) priorVisitorHashes.add(session.visitorHash); });
+  }
+  const sources = {};
+  sessions.forEach(session => { const source = session.source || "直接打开"; sources[source] = (sources[source] || 0) + 1; });
+  return {
+    date: analyticsDateKey(),
+    visitCount: sessions.length,
+    uniqueVisitorCount: visitors.size,
+    returningVisitorCount: [...visitors].filter(hash => priorVisitorHashes.has(hash)).length,
+    sources,
+    totalDwellSeconds: Math.round(dwellMs / 1000),
+    averageDwellSeconds: sessions.length ? Math.round(dwellMs / sessions.length / 1000) : 0,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function recordAdminAudit(db, user, action, detail = "") {
+  db.adminAuditLogs = Array.isArray(db.adminAuditLogs) ? db.adminAuditLogs : [];
+  db.adminAuditLogs.unshift({ id: crypto.randomUUID(), adminPhone: user.phone, action, detail: trimPublicText(detail, 160), createdAt: new Date().toISOString() });
+  db.adminAuditLogs = db.adminAuditLogs.slice(0, 1000);
+}
+
+function operationsSummary(db) {
+  const analytics = publicTodayAnalytics(db);
+  const users = Object.values(db.users || {});
+  const sessions = Object.values(analyticsDay(db).sessions || {});
+  const today = analyticsDateKey();
+  const registeredToday = users.filter(user => {
+    const createdAt = new Date(user.createdAt || 0);
+    return Number.isFinite(createdAt.getTime()) && analyticsDateKey(createdAt) === today;
+  }).length;
+  const activeAccounts = new Set(sessions.map(session => session.accountHash).filter(Boolean));
+  const listings = Array.isArray(db.marketListings) ? db.marketListings : [];
+  const chatPairsByListing = new Map();
+  (Array.isArray(db.messages) ? db.messages : []).forEach(message => {
+    const listingId = message.marketListing?.id;
+    if (!listingId || !message.fromPhone || !message.toPhone) return;
+    const pair = [message.fromPhone, message.toPhone].sort().join(":");
+    if (!chatPairsByListing.has(listingId)) chatPairsByListing.set(listingId, new Set());
+    chatPairsByListing.get(listingId).add(pair);
+  });
+  const listingRows = listings.map(item => {
+    const view = marketListingView(db, item);
+    return { ...view, chatCount: chatPairsByListing.get(item.id)?.size || 0 };
+  });
+  const activeListings = listingRows.filter(item => item.status === "active");
+  const inactiveListings = listingRows.filter(item => item.status === "inactive");
+  const soldListings = listingRows.filter(item => item.status === "sold");
+  const lowInterestListings = activeListings.filter(item => {
+    const createdAt = new Date(item.createdAt || 0).getTime();
+    return Number.isFinite(createdAt) && Date.now() - createdAt >= 3 * 24 * 60 * 60 * 1000 && !item.viewCount && !item.wantCount && !item.chatCount;
+  }).slice(0, 30);
+  const feedbacks = (Array.isArray(db.feedbacks) ? db.feedbacks : []).slice().sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
+  const feedbackRows = feedbacks.slice(0, 100).map(item => ({
+    id: item.id, type: item.type || "反馈", content: item.content || "", authorName: item.authorName || "壳友", createdAt: item.createdAt || "",
+    status: ["pending", "processing", "resolved", "declined"].includes(item.adminStatus) ? item.adminStatus : "pending",
+    reply: item.adminReply || "", processedAt: item.processedAt || ""
+  }));
+  const reports = Array.isArray(db.reports) ? db.reports : [];
+  return {
+    analytics: { ...analytics, registeredToday, totalUserCount: users.length, activeAccountCount: activeAccounts.size },
+    market: {
+      activeCount: activeListings.length, soldCount: soldListings.length, inactiveCount: inactiveListings.length,
+      totalViews: listingRows.reduce((total, item) => total + Number(item.viewCount || 0), 0),
+      totalWants: listingRows.reduce((total, item) => total + Number(item.wantCount || 0), 0),
+      totalChats: listingRows.reduce((total, item) => total + Number(item.chatCount || 0), 0),
+      topListings: [...listingRows].sort((left, right) => (right.chatCount * 100 + right.wantCount * 10 + right.viewCount) - (left.chatCount * 100 + left.wantCount * 10 + left.viewCount)).slice(0, 20),
+      lowInterestListings
+    },
+    safety: { pendingReportCount: reports.filter(item => item.status === "pending").length, totalReportCount: reports.length, auditLogs: (Array.isArray(db.adminAuditLogs) ? db.adminAuditLogs : []).slice(0, 100) },
+    feedback: { pendingCount: feedbackRows.filter(item => item.status === "pending").length, items: feedbackRows },
+    health: { status: "healthy", uptimeSeconds: Math.round(process.uptime()), database: MYSQL_ENABLED ? "MySQL" : "本地文件", lastBackupDate: lastServerBackupDate || "未记录", memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024) }
+  };
+}
+
+async function handleAnalyticsVisit(req, res) {
+  const body = await readJson(req);
+  const visitorId = trimPublicText(body.visitorId, 160);
+  const sessionId = trimPublicText(body.sessionId, 160);
+  const event = ["start", "heartbeat", "end"].includes(body.event) ? body.event : "heartbeat";
+  if (!visitorId || !sessionId) return sendJson(res, 400, { ok: false, message: "访问标识无效" });
+  const db = readDatabase();
+  const day = analyticsDay(db);
+  const sessionKey = hashValue(`session:${sessionId}`).slice(0, 48);
+  const now = new Date().toISOString();
+  const existing = day.sessions[sessionKey];
+  if (!existing && event !== "start") return sendJson(res, 200, { ok: true });
+  if (!existing) {
+    const account = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
+    day.sessions[sessionKey] = { visitorHash: hashValue(`visitor:${visitorId}`).slice(0, 48), accountHash: account ? hashValue(`account:${account.phone}`).slice(0, 48) : "", source: trimPublicText(body.source, 60) || "直接打开", startedAt: now, lastSeenAt: now };
+  } else {
+    existing.lastSeenAt = now;
+    const account = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
+    if (account) existing.accountHash = hashValue(`account:${account.phone}`).slice(0, 48);
+    if (event === "end") existing.endedAt = now;
+  }
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true });
+}
+
+async function handleAdminOperationsOverview(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (!isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "仅平台管理员可查看运营数据" });
+  recordAdminAudit(db, user, "查看运营中心", "读取聊天、统计与服务状态");
+  const overview = operationsSummary(db);
+  const conversations = adminCommunityChatConversations(db);
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, ...overview, conversations });
+}
+
+async function handleAdminFeedbackAction(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (!isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "仅平台管理员可处理反馈" });
+  const feedback = (Array.isArray(db.feedbacks) ? db.feedbacks : []).find(item => item.id === String(body.feedbackId || ""));
+  if (!feedback) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
+  const status = ["pending", "processing", "resolved", "declined"].includes(body.status) ? body.status : "pending";
+  const reply = trimPublicText(body.reply, 600);
+  feedback.adminStatus = status;
+  feedback.adminReply = reply;
+  feedback.processedAt = new Date().toISOString();
+  recordAdminAudit(db, user, "处理用户反馈", `${feedback.type || "反馈"}：${status}`);
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, feedback: operationsSummary(db).feedback });
 }
 
 function communityFriends(db, viewer) {
@@ -2817,6 +3026,7 @@ async function handleContentReportAction(req, res) {
   report.status = action === "remove" ? "removed" : "resolved";
   report.processedAt = new Date().toISOString();
   report.processedBy = user.phone;
+  recordAdminAudit(db, user, action === "remove" ? "处置举报内容" : "处理举报", report.targetType || "内容");
   writeDatabase(db);
   return sendJson(res, 200, {
     ok: true,
@@ -3792,6 +4002,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/announcements/list") return await handleSystemAnnouncementList(req, res);
     if (req.method === "POST" && url.pathname === "/api/announcements/create") return await handleSystemAnnouncementCreate(req, res);
     if (req.method === "POST" && url.pathname === "/api/announcements/action") return await handleSystemAnnouncementAction(req, res);
+    if (req.method === "POST" && url.pathname === "/api/analytics/visit") return await handleAnalyticsVisit(req, res);
+    if (req.method === "POST" && url.pathname === "/api/admin/operations/overview") return await handleAdminOperationsOverview(req, res);
+    if (req.method === "POST" && url.pathname === "/api/admin/feedback/action") return await handleAdminFeedbackAction(req, res);
     if (req.method === "POST" && url.pathname === "/api/upload/image") return await handleUploadImage(req, res);
     if (req.method === "POST" && url.pathname === "/api/upload/media") return await handleUploadMedia(req, res);
     if (req.method === "POST" && url.pathname === "/api/reviews/list") return await handleListReviews(req, res);
