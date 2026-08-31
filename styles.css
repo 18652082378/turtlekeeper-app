@@ -13261,13 +13261,6 @@ body.image-preview-open {
   gap: 8px;
 }
 
-.turtle-row-side {
-  flex: 0 0 auto;
-  display: grid;
-  justify-items: end;
-  gap: 4px;
-}
-
 .turtle-keeping-days {
   min-height: 20px;
   padding: 2px 7px;

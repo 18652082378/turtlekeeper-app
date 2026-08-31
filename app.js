@@ -3678,11 +3678,12 @@ function turtleListRow(t) {
         </div>
         <div class="turtle-row-species">
           <p>${t.speciesName}</p>
-          <div class="turtle-row-side">${Number(t.price) > 0 ? `<span class="turtle-price">¥${money(t.price)}</span>` : ""}${keepingDays ? `<span class="turtle-keeping-days">${keepingDays}</span>` : ""}</div>
+          ${Number(t.price) > 0 ? `<span class="turtle-price">¥${money(t.price)}</span>` : ""}
         </div>
         <div class="turtle-row-meta">
           <span>${t.weight || "-"}g</span>
           <span>背甲 ${t.carapaceLength || "-"}cm</span>
+          ${keepingDays ? `<span class="turtle-keeping-days">${keepingDays}</span>` : ""}
         </div>
       </div>
       <button class="more-btn" data-toggle-turtle-menu="${t.id}" aria-label="档案操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
