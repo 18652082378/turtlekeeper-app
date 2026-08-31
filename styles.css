@@ -13292,6 +13292,19 @@ body.image-preview-open {
   flex-wrap: wrap;
 }
 
+.turtle-row-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.turtle-row-bottom .turtle-row-meta {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .turtle-row-meta > span {
   min-height: 22px;
   padding: 2px 7px;

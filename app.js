@@ -3680,9 +3680,11 @@ function turtleListRow(t) {
           <p>${t.speciesName}</p>
           ${Number(t.price) > 0 ? `<span class="turtle-price">¥${money(t.price)}</span>` : ""}
         </div>
-        <div class="turtle-row-meta">
-          <span>${t.weight || "-"}g</span>
-          <span>背甲 ${t.carapaceLength || "-"}cm</span>
+        <div class="turtle-row-bottom">
+          <div class="turtle-row-meta">
+            <span>${t.weight || "-"}g</span>
+            <span>背甲 ${t.carapaceLength || "-"}cm</span>
+          </div>
           ${keepingDays ? `<span class="turtle-keeping-days">${keepingDays}</span>` : ""}
         </div>
       </div>
