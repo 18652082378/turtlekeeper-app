@@ -1056,6 +1056,9 @@ function marketSpeciesRestrictionMessage() {
 const SPECIES_IMPORT_ALIASES = {
   "果核": "GHG",
   "果核龟": "GHG",
+  "红面": "HMG",
+  "红面泥": "HMG",
+  "红面泥龟": "HMG",
   "头盔": "TBG",
   "头盔蛋龟": "TBG"
 };
@@ -3611,6 +3614,9 @@ function sortedTurtles() {
   if (state.turtleSort === "latest") list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   if (state.turtleSort === "weight") list.sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0));
   if (state.turtleSort === "shellLength") list.sort((a, b) => Number(b.carapaceLength || 0) - Number(a.carapaceLength || 0));
+  // Keep pinned archives in front while retaining the selected ordering
+  // inside the pinned and unpinned groups.
+  list.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
   return list;
 }
 
@@ -3648,6 +3654,7 @@ function pageList() {
 
 function turtleActionIcon(type) {
   return ({
+    pin: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 4 8 0"></path><path d="m9.5 4 .6 5.2-3.4 3.4h10.6l-3.4-3.4.6-5.2"></path><path d="M12 12.6V20"></path></svg>`,
     update: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 8a7.5 7.5 0 1 0 .3 7.5"></path><path d="M19 4v4h-4"></path></svg>`,
     sold: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 8.5h15v11h-15z"></path><path d="M8 8.5V6.8a4 4 0 0 1 8 0v1.7"></path><path d="M9 13h6"></path></svg>`,
     loss: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M8.5 12h7"></path></svg>`,
@@ -3671,6 +3678,7 @@ function turtleListRow(t) {
   return `
     <article class="turtle-row fresh-card ${menuOpen ? "menu-open" : ""}" data-view-turtle="${t.id}" data-reorder-turtle="${t.id}">
       <img src="${t.photo || defaultPhoto}" alt="${t.speciesName}" draggable="false">
+      ${t.pinned ? `<span class="turtle-pinned-badge" aria-label="已置顶">置顶</span>` : ""}
       <div class="turtle-row-content">
         <div class="turtle-row-title">
           <strong>${t.code}</strong>
@@ -3691,6 +3699,7 @@ function turtleListRow(t) {
       <button class="more-btn" data-toggle-turtle-menu="${t.id}" aria-label="档案操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
       ${menuOpen ? `
         <div class="turtle-menu archive-turtle-menu" role="menu" aria-label="${escapeHtml(t.code || t.speciesName || "乌龟")}的档案操作">
+          <button class="pin-link ${t.pinned ? "active" : ""}" data-toggle-turtle-pin="${t.id}" role="menuitem">${turtleActionIcon("pin")}<span>${t.pinned ? "取消置顶" : "置顶"}</span></button>
           <button data-update-turtle="${t.id}" role="menuitem">${turtleActionIcon("update")}<span>更新</span></button>
           <button data-ledger-for-turtle="sold:${t.id}" role="menuitem">${turtleActionIcon("sold")}<span>售出</span></button>
           <button data-ledger-for-turtle="loss:${t.id}" role="menuitem">${turtleActionIcon("loss")}<span>损耗</span></button>
@@ -3724,6 +3733,7 @@ function pageTurtleDetail() {
         <button class="detail-more" data-toggle-turtle-menu="${t.id}" aria-label="档案操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
         ${menuOpen ? `
           <div class="turtle-menu detail-menu detail-actions-menu" role="menu" aria-label="${escapeHtml(nickname || species.name || "乌龟")}的档案操作">
+            <button class="pin-link ${t.pinned ? "active" : ""}" data-toggle-turtle-pin="${t.id}" role="menuitem">${turtleActionIcon("pin")}<span>${t.pinned ? "取消置顶" : "置顶"}</span></button>
             <button data-update-turtle="${t.id}" role="menuitem">${turtleActionIcon("update")}<span>更新</span></button>
             <button data-ledger-for-turtle="sold:${t.id}" role="menuitem">${turtleActionIcon("sold")}<span>售出</span></button>
             <button data-ledger-for-turtle="loss:${t.id}" role="menuitem">${turtleActionIcon("loss")}<span>损耗</span></button>
@@ -5928,6 +5938,10 @@ function bindEvents() {
   document.querySelectorAll("[data-delete-turtle]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
     deleteTurtle(btn.dataset.deleteTurtle);
+  }));
+  document.querySelectorAll("[data-toggle-turtle-pin]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    toggleTurtlePin(btn.dataset.toggleTurtlePin);
   }));
   setupDashboardTurtleReorder();
   document.querySelector("[data-filter-species]")?.addEventListener("change", e => setState({ turtleFilter: e.target.value }));
@@ -10616,6 +10630,7 @@ async function submitAccountInner(event) {
         password,
         code,
         termsAccepted: true,
+        termsVersion: POLICY_VERSION,
         accountName: maskPhone(phone),
         accountAvatar: randomDefaultAccountAvatar(),
         data: initialCloudData
@@ -11328,7 +11343,8 @@ async function refreshCloudAccountFromServer() {
   try {
     const result = await apiPost("/api/account/load", {
       phone: state.loggedInPhone,
-      token: currentCloudToken()
+      token: currentCloudToken(),
+      termsVersion: POLICY_VERSION
     });
     // Keep the route that is already on screen. During boot this is "home";
     // during a normal refresh it is the page the person is currently using.
@@ -11619,6 +11635,19 @@ async function readUpdatePhoto(event) {
     input.value = "";
     toast(error.message || "图片读取失败");
   }
+}
+
+function toggleTurtlePin(id) {
+  if (!requireLogin()) return;
+  const turtle = state.turtles.find(item => item.id === id);
+  if (!turtle) return;
+  const pinned = !Boolean(turtle.pinned);
+  setState({
+    turtles: state.turtles.map(item => item.id === id ? { ...item, pinned } : item),
+    openTurtleMenuId: "",
+    activityLogs: logActivity(`${pinned ? "置顶" : "取消置顶"}档案：${turtleLabel(turtle)}`, "档案")
+  });
+  toast(pinned ? "已置顶到档案列表前方" : "已取消置顶");
 }
 
 function applyGrowthSnapshotToTurtle(turtle, snapshot = {}, photo = "") {

@@ -8390,8 +8390,8 @@ html[data-theme-color="dark"] .turtle-row.menu-open .archive-turtle-menu {
   border-top: 1px solid var(--divider) !important;
   border-radius: 0 !important;
   display: grid !important;
-  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
-  gap: 5px !important;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  gap: 3px !important;
   overflow: visible !important;
   color: var(--text) !important;
   background: transparent !important;
@@ -8403,7 +8403,7 @@ html[data-theme-color="dark"] .turtle-row.menu-open .archive-turtle-menu {
 html[data-theme-color="dark"] .turtle-row .archive-turtle-menu button {
   width: 100% !important;
   min-width: 0 !important;
-  min-height: 48px !important;
+  min-height: 42px !important;
   padding: 5px 2px !important;
   border: 0 !important;
   border-radius: 9px !important;
@@ -8411,10 +8411,10 @@ html[data-theme-color="dark"] .turtle-row .archive-turtle-menu button {
   flex-direction: column !important;
   align-items: center !important;
   justify-content: center !important;
-  gap: 4px !important;
+  gap: 3px !important;
   color: var(--text) !important;
   background: var(--raised-bg) !important;
-  font-size: 12px !important;
+  font-size: 11px !important;
   font-weight: 550 !important;
   line-height: 1 !important;
   text-align: center !important;
@@ -8426,8 +8426,8 @@ html[data-theme-color="dark"] .turtle-row .archive-turtle-menu button {
 }
 
 .archive-turtle-menu svg {
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
   display: block;
   fill: none;
   stroke: currentColor;
@@ -8440,6 +8440,12 @@ html[data-theme-color="dark"] .turtle-row .archive-turtle-menu button {
 html[data-theme-color="dark"] .turtle-row .archive-turtle-menu .danger-link {
   color: #e05260 !important;
   background: rgba(224, 82, 96, .08) !important;
+}
+
+.turtle-row .archive-turtle-menu .pin-link.active,
+html[data-theme-color="dark"] .turtle-row .archive-turtle-menu .pin-link.active {
+  color: var(--accent) !important;
+  background: rgba(47, 167, 127, .13) !important;
 }
 
 @keyframes archive-actions-in {
@@ -8516,8 +8522,8 @@ html[data-theme-color="dark"] .detail-summary-card.menu-open .detail-actions-men
   border-top: 1px solid var(--divider) !important;
   border-radius: 0 !important;
   display: grid !important;
-  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
-  gap: 5px !important;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  gap: 3px !important;
   overflow: visible !important;
   color: var(--text) !important;
   background: transparent !important;
@@ -8530,7 +8536,7 @@ html[data-theme-color="dark"] .detail-summary-card.menu-open .detail-actions-men
 html[data-theme-color="dark"] .detail-summary-card .detail-actions-menu button {
   width: 100% !important;
   min-width: 0 !important;
-  min-height: 48px !important;
+  min-height: 42px !important;
   padding: 5px 2px !important;
   border: 0 !important;
   border-radius: 9px !important;
@@ -8538,10 +8544,10 @@ html[data-theme-color="dark"] .detail-summary-card .detail-actions-menu button {
   flex-direction: column !important;
   align-items: center !important;
   justify-content: center !important;
-  gap: 4px !important;
+  gap: 3px !important;
   color: var(--text) !important;
   background: var(--raised-bg) !important;
-  font-size: 12px !important;
+  font-size: 11px !important;
   font-weight: 550 !important;
   line-height: 1 !important;
   text-align: center !important;
@@ -8553,8 +8559,8 @@ html[data-theme-color="dark"] .detail-summary-card .detail-actions-menu button {
 }
 
 .detail-actions-menu svg {
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
   display: block;
   fill: none;
   stroke: currentColor;
@@ -8567,6 +8573,12 @@ html[data-theme-color="dark"] .detail-summary-card .detail-actions-menu button {
 html[data-theme-color="dark"] .detail-summary-card .detail-actions-menu .danger-link {
   color: #e05260 !important;
   background: rgba(224, 82, 96, .08) !important;
+}
+
+.detail-summary-card .detail-actions-menu .pin-link.active,
+html[data-theme-color="dark"] .detail-summary-card .detail-actions-menu .pin-link.active {
+  color: var(--accent) !important;
+  background: rgba(47, 167, 127, .13) !important;
 }
 
 /* A restrained page-entry motion for cards, add flows, community and detail views. */
@@ -13388,6 +13400,40 @@ html[data-theme-color="dark"] .turtle-price {
 .home-archive-section .turtle-row > img {
   width: 58px;
   height: 58px;
+}
+
+/* A pinned archive is identifiable at a glance without taking room away
+   from its nickname, price, or measurements. */
+.turtle-pinned-badge {
+  position: absolute;
+  top: 4px;
+  left: 12px;
+  z-index: 3;
+  min-width: 30px;
+  padding: 2px 5px;
+  border: 1px solid rgba(47, 167, 127, .28);
+  border-radius: 999px;
+  color: #16835d;
+  background: rgba(238, 251, 245, .96);
+  box-shadow: 0 2px 7px rgba(22, 131, 93, .16);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: .02em;
+  pointer-events: none;
+  transform: none;
+}
+
+.home-archive-section .turtle-pinned-badge {
+  top: 3px;
+  left: 12px;
+}
+
+html[data-theme-color="dark"] .turtle-pinned-badge {
+  border-color: rgba(91, 214, 164, .3);
+  color: #8de0b8;
+  background: rgba(19, 69, 52, .94);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .3);
 }
 
 .home-archive-section .turtle-row-content {

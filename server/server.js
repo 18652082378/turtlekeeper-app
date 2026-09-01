@@ -67,6 +67,22 @@ const MEDIA_CACHE_VERSION = String(process.env.MEDIA_CACHE_VERSION || "20260825.
 const REVIEW_ADMIN_PHONE = process.env.ADMIN_PHONE || "18652082378";
 const RESERVED_PLATFORM_NICKNAME = "壳友手账";
 const POLICY_VERSION = "2026-09-01";
+const LEGACY_POLICY_VERSION = "2026-08-12";
+const SUPPORTED_POLICY_VERSIONS = new Set([LEGACY_POLICY_VERSION, POLICY_VERSION]);
+
+function clientPolicyVersion(body = {}, fallback = POLICY_VERSION) {
+  const requested = String(body.termsVersion || "").trim();
+  return SUPPORTED_POLICY_VERSIONS.has(requested) ? requested : fallback;
+}
+
+function publicUserForPolicyClient(user, token, db, body = {}) {
+  const result = publicUser(user, token, db);
+  // App Store 1.0.3 (84) predates the policy-version field on /account/load.
+  // Do not return a newer version to that immutable client: it would compare
+  // it with its bundled 2026-08-12 value and show the consent overlay forever.
+  if (!String(body.termsVersion || "").trim()) result.termsVersion = LEGACY_POLICY_VERSION;
+  return result;
+}
 // 每次 App Store 新版已发布后，将 MIN_SUPPORTED_APP_BUILD 调整为新的 Xcode 构建号即可强制更新。
 const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 12)));
 const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || MIN_SUPPORTED_APP_BUILD)));
@@ -1319,7 +1335,9 @@ async function handleRegister(req, res) {
     accountAvatar: randomDefaultAccountAvatar(),
     data: normalizeAccountData(body.data || {}),
     termsAcceptedAt: now,
-    termsVersion: POLICY_VERSION,
+    // App Store 1.0.3 (84) does not include termsVersion while registering.
+    // Keep those new legacy accounts on the version bundled in that app.
+    termsVersion: clientPolicyVersion(body, LEGACY_POLICY_VERSION),
     tokens: [{ hash: hashValue(token), createdAt: now }],
     createdAt: now,
     updatedAt: now
@@ -1328,7 +1346,7 @@ async function handleRegister(req, res) {
   writeDatabase(db);
   verifiedPhones.delete(phone);
   forgetCode(phone);
-  return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });
+  return sendJson(res, 200, { ok: true, user: publicUserForPolicyClient(user, token, db, body) });
 }
 
 async function handleLogin(req, res) {
@@ -1347,10 +1365,10 @@ async function handleLogin(req, res) {
   user.tokens = [...(Array.isArray(user.tokens) ? user.tokens : []), { hash: hashValue(token), createdAt: now }].slice(-5);
   // Keep a server-side audit trail for the agreement accepted at login.
   user.termsAcceptedAt = now;
-  user.termsVersion = POLICY_VERSION;
+  user.termsVersion = clientPolicyVersion(body);
   user.updatedAt = now;
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });
+  return sendJson(res, 200, { ok: true, user: publicUserForPolicyClient(user, token, db, body) });
 }
 
 async function handleLoadAccount(req, res) {
@@ -1360,7 +1378,7 @@ async function handleLoadAccount(req, res) {
   const db = readDatabase();
   const user = authenticate(db, phone, token);
   if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
-  return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });
+  return sendJson(res, 200, { ok: true, user: publicUserForPolicyClient(user, token, db, body) });
 }
 
 async function handleSaveAccount(req, res) {
@@ -1462,7 +1480,7 @@ async function handleAcceptTerms(req, res) {
   if (!user) return;
   if (body.accepted !== true) return sendJson(res, 400, { ok: false, message: "请先确认已阅读服务规则和隐私政策" });
   user.termsAcceptedAt = new Date().toISOString();
-  user.termsVersion = POLICY_VERSION;
+  user.termsVersion = clientPolicyVersion(body);
   user.updatedAt = user.termsAcceptedAt;
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, user: publicUser(user, String(body.token || ""), db) });

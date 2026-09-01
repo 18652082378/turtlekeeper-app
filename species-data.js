@@ -54,6 +54,7 @@ window.TURTLE_SPECIES = [
   { code: "HDG", name: "红肚短颈龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Emydura%20subglobosa.jpg" },
   { code: "HED", name: "红耳龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Trachemys%20scripta%20elegans.jpg" },
   { code: "HET", name: "黄额闭壳龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Cuora%20galbinifrons.jpg" },
+  { code: "HMG", name: "红面泥龟", letter: "H", image: "" },
   { code: "HWM", name: "虎纹麝香龟", letter: "H", scientific: "Sternotherus minor peltifer", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Sternotherus%20minor%20peltifer.jpg" },
   { code: "HGG", name: "黑腹刺颈龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Acanthochelys%20spixii.jpg" },
   { code: "HHG", name: "黄喉拟水龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Mauremys%20mutica.jpg" },
