@@ -161,6 +161,7 @@ window.TURTLE_SPECIES = [
   { code: "YTG", name: "亚洲黄头庙龟", letter: "Y", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Heosemys%20annandalii.jpg" },
 
   { code: "ZBG", name: "中部锦龟", letter: "Z", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Chrysemys%20picta%20marginata.jpg" },
+  { code: "ZCJ", name: "侏儒侧颈龟", letter: "Z", image: "assets/species/ZCJ.jpg" },
   { code: "ZCG", name: "中华草龟", letter: "Z", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Mauremys%20reevesii.jpg" },
   { code: "ZDG", name: "钻纹龟", letter: "Z", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Malaclemys%20terrapin.jpg" },
   { code: "ZHG", name: "中华花龟", letter: "Z", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Mauremys%20sinensis.jpg" },
