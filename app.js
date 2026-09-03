@@ -433,6 +433,7 @@ let marketGalleryPreviewSuppressUntil = 0;
 // loading state until the public market list finishes its first request.
 let incomingMarketShareListingId = "";
 let incomingMarketShareLoading = false;
+let sharedTurtlePreview = null;
 let nativeMarketShareLinksBound = false;
 
 if (CONFIGURED_SMS_BACKEND && state.pendingAuthCode && state.pendingAuthCode !== SERVER_SMS_CODE) {
@@ -1420,6 +1421,47 @@ function apiAssetUrl(url) {
   if (!value || /^(https?:|data:|blob:)/i.test(value)) return value;
   const pathValue = value.startsWith("/") ? value : `/${value}`;
   return base ? `${base}${pathValue}` : pathValue;
+}
+
+function toggleGrowthReminder(turtleId) {
+  if (!requireLogin()) return;
+  const turtle = (state.turtles || []).find(item => item.id === turtleId);
+  if (!turtle) return toast("没有找到这份档案");
+  const existing = (state.memos || []).find(memo => memo.turtleId === turtleId && memo.growthReminder);
+  const isEnabled = Boolean(existing && existing.remindTime && existing.reminderEnabled !== false);
+  if (isEnabled) {
+    const disabledMemo = { ...existing, reminderEnabled: false, remindTime: "", updatedAt: new Date().toISOString() };
+    setState({ memos: state.memos.map(memo => memo.id === existing.id ? disabledMemo : memo) });
+    void cancelNativeCareReminder(disabledMemo);
+    toast("成长提醒已关闭");
+    return;
+  }
+  let dueDate = existing?.dueDate || nextGrowthRecordDate(turtle);
+  if (dueDate < formatDate(new Date())) {
+    const nextDate = new Date();
+    nextDate.setDate(nextDate.getDate() + 30);
+    dueDate = formatDate(nextDate);
+  }
+  const enabledMemo = {
+    ...(existing || {}),
+    id: existing?.id || crypto.randomUUID(),
+    turtleId,
+    growthReminder: true,
+    reminderEnabled: true,
+    title: `该给${turtle.code || "龟龟"}记录成长啦`,
+    content: existing?.content || "测量体重和背甲、拍一张新照片，回来领取成长曲线和照片对比。",
+    dueDate,
+    remindTime: "09:00",
+    repeat: false,
+    weekdays: [],
+    updatedAt: new Date().toISOString()
+  };
+  setState({
+    turtles: state.turtles.map(item => item.id === turtleId ? { ...item, nextGrowthAt: dueDate } : item),
+    memos: existing ? state.memos.map(memo => memo.id === existing.id ? enabledMemo : memo) : [enabledMemo, ...(state.memos || [])]
+  });
+  void activateCareReminder(enabledMemo);
+  toast("成长提醒已开启，将在当天 09:00 提醒");
 }
 
 function randomDefaultAccountAvatar() {
@@ -3670,7 +3712,8 @@ function turtleActionIcon(type) {
     update: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 8a7.5 7.5 0 1 0 .3 7.5"></path><path d="M19 4v4h-4"></path></svg>`,
     sold: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 8.5h15v11h-15z"></path><path d="M8 8.5V6.8a4 4 0 0 1 8 0v1.7"></path><path d="M9 13h6"></path></svg>`,
     loss: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M8.5 12h7"></path></svg>`,
-    delete: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10l-.7 11H7.7L7 8Z"></path><path d="M5.5 8h13M9.5 8V5.5h5V8"></path></svg>`
+    delete: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10l-.7 11H7.7L7 8Z"></path><path d="M5.5 8h13M9.5 8V5.5h5V8"></path></svg>`,
+    share: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2.2"></circle><circle cx="17.5" cy="6" r="2.2"></circle><circle cx="17.5" cy="18" r="2.2"></circle><path d="m8 11 7.5-4M8 13l7.5 4"></path></svg>`
   }[type] || "");
 }
 
@@ -3713,6 +3756,60 @@ function growthSparkline(values = []) {
   return `<svg class="reward-sparkline" viewBox="0 0 ${width} ${height}" role="img" aria-label="成长曲线"><path d="M12 ${height - 12}H${width - 12}"/><polyline points="${points}"/>${points.split(" ").map(point => { const [cx, cy] = point.split(","); return `<circle cx="${cx}" cy="${cy}" r="4"/>`; }).join("")}</svg>`;
 }
 
+function turtleDetailGrowthChart(turtle) {
+  const history = [...(turtle?.measureHistory || [])].reverse();
+  const baseline = history[0]?.oldSnapshot || turtle || {};
+  const records = [{
+    weight: Number(baseline.weight || turtle.weight || 0),
+    length: Number(baseline.carapaceLength || turtle.carapaceLength || 0),
+    date: turtle.acquiredDate || String(turtle.createdAt || "").slice(0, 10)
+  }, ...history.map(item => ({
+    weight: Number(item.newSnapshot?.weight || 0),
+    length: Number(item.newSnapshot?.carapaceLength || item.newLength || 0),
+    date: String(item.updatedAt || "").slice(0, 10)
+  }))];
+  const width = 640;
+  const height = 210;
+  const left = 42;
+  const right = 620;
+  const top = 22;
+  const bottom = 160;
+  const x = index => records.length === 1 ? (left + right) / 2 : left + index * ((right - left) / (records.length - 1));
+  const scaledY = (value, values) => {
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const padding = (max - min) * .18 || Math.max(max * .08, 1);
+    return bottom - ((value - (min - padding)) / ((max + padding) - (min - padding))) * (bottom - top);
+  };
+  const weights = records.map(item => item.weight);
+  const lengths = records.map(item => item.length);
+  const weightPoints = records.map((item, index) => `${x(index)},${scaledY(item.weight, weights)}`).join(" ");
+  const lengthPoints = records.map((item, index) => `${x(index)},${scaledY(item.length, lengths)}`).join(" ");
+  const first = records[0];
+  const latest = records[records.length - 1];
+  const weightChange = latest.weight - first.weight;
+  const lengthChange = latest.length - first.length;
+  const pointMarkup = (field, values, className, unit) => records.map((item, index) => {
+    const value = item[field];
+    return `<g><circle class="${className}" cx="${x(index)}" cy="${scaledY(value, values)}" r="5"/><title>${item.date || `第 ${index + 1} 次`} · ${value}${unit}</title></g>`;
+  }).join("");
+  return `
+    <section class="detail-growth-chart fresh-card" aria-labelledby="detailGrowthChartTitle">
+      <header><div><small>累计 ${records.length} 次数据</small><h3 id="detailGrowthChartTitle">成长曲线</h3></div><div class="detail-chart-legend"><span class="weight">体重</span><span class="length">背甲</span></div></header>
+      <div class="detail-chart-summary"><span><small>当前体重</small><strong>${latest.weight}g</strong><em class="${weightChange >= 0 ? "up" : ""}">${weightChange >= 0 ? "+" : ""}${weightChange.toFixed(1)}g</em></span><span><small>当前背甲</small><strong>${latest.length}cm</strong><em class="${lengthChange >= 0 ? "up" : ""}">${lengthChange >= 0 ? "+" : ""}${lengthChange.toFixed(1)}cm</em></span></div>
+      <div class="detail-chart-canvas">
+        <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(turtle.code || "乌龟")}的体重和背甲成长曲线">
+          <g class="detail-chart-grid"><path d="M${left} ${top}H${right}M${left} ${(top + bottom) / 2}H${right}M${left} ${bottom}H${right}"/></g>
+          <polyline class="detail-chart-line weight" points="${weightPoints}"/>
+          <polyline class="detail-chart-line length" points="${lengthPoints}"/>
+          ${pointMarkup("weight", weights, "detail-chart-point weight", "g")}${pointMarkup("length", lengths, "detail-chart-point length", "cm")}
+          ${records.map((item, index) => `<text x="${x(index)}" y="194" text-anchor="middle">${item.date ? item.date.slice(5).replace("-", "/") : `第${index + 1}次`}</text>`).join("")}
+        </svg>
+      </div>
+      ${history.length ? `<footer><span>从首次建档到现在</span><strong>${weightChange >= 0 ? "增重" : "减重"} ${Math.abs(weightChange).toFixed(1)}g · 背甲${lengthChange >= 0 ? "增长" : "减少"} ${Math.abs(lengthChange).toFixed(1)}cm</strong></footer>` : `<footer class="is-empty"><span>完成下一次记录后，曲线会自动连接</span><button type="button" data-update-turtle="${escapeHtml(turtle.id)}">记录成长</button></footer>`}
+    </section>`;
+}
+
 function pageTurtleReward() {
   const turtle = state.turtles.find(item => item.id === state.selectedTurtleId);
   if (!turtle) return `${topbar("成长成果", true)}<main class="content page-fresh"><div class="empty"><strong>没有找到这份档案</strong></div></main>${bottomNav()}`;
@@ -3723,19 +3820,21 @@ function pageTurtleReward() {
   const weightGain = Number(turtle.weight || 0) - firstWeight;
   const latest = history[0];
   const nextDate = nextGrowthRecordDate(turtle);
+  const growthMemo = (state.memos || []).find(memo => memo.turtleId === turtle.id && memo.growthReminder);
+  const reminderEnabled = Boolean(growthMemo && growthMemo.remindTime && growthMemo.reminderEnabled !== false);
   return `
     ${topbar(hasGrowth ? "成长报告" : "建档成功", true)}
     <main class="content page-fresh reward-page">
-      <section class="reward-celebration"><span>✓</span><div><p>${hasGrowth ? `第 ${history.length + 1} 次记录完成` : "第一份成长档案已点亮"}</p><h2>${hasGrowth ? "这次变化，值得被看见" : "从今天起，认真记录陪伴"}</h2></div></section>
+      <section class="reward-celebration"><span>✓</span><div><p>${hasGrowth ? `第 ${history.length + 1} 次记录完成` : "建档完成 · 成长旅程已开启"}</p><h2>${hasGrowth ? "这次变化，值得被看见" : `欢迎你，${escapeHtml(turtle.code || "新朋友")}`}</h2><small>${hasGrowth ? "新的成长数据已加入报告" : "第一份成长档案已经保存好了"}</small></div></section>
       <article class="turtle-profile-card" data-reward-card>
         <header><div><small>壳友手账 · 龟档案</small><h1>${escapeHtml(turtle.code || "未命名龟龟")}</h1><p>${escapeHtml(turtle.speciesName || "品种未填写")}</p></div><b>${turtleKeepingDaysNumber(turtle.acquiredDate)}<small>陪伴天数</small></b></header>
         <img src="${turtle.photo || defaultPhoto}" alt="${escapeHtml(turtle.code || turtle.speciesName || "乌龟")}的照片" data-reward-photo>
         <div class="reward-card-stats"><span><small>入手日期</small><strong>${escapeHtml(turtle.acquiredDate || "-")}</strong></span><span><small>当前体重</small><strong>${escapeHtml(turtle.weight || "-")} g</strong></span><span><small>背甲长度</small><strong>${escapeHtml(turtle.carapaceLength || "-")} cm</strong></span></div>
         <footer><span>每一次记录，都在见证生命成长</span><b>壳友手账</b></footer>
       </article>
-      <div class="reward-actions"><button class="primary" type="button" data-share-growth-card>${hasGrowth ? "分享成长报告" : "保存 / 分享档案卡"}</button><button class="secondary" type="button" data-save-growth-card>保存图片</button></div>
-      <section class="next-growth-card fresh-card"><div class="next-growth-date"><strong>${nextDate.slice(5).replace("-", "月")}日</strong><span>${nextDate}</span></div><div><small>下一次记录</small><h3>30 天后再量一次</h3><p>记录体重、背甲和新照片，就能看到增重变化、成长曲线与前后对比。</p></div><span class="reminder-on">提醒已开启</span></section>
-      ${hasGrowth ? `<section class="growth-report-card fresh-card"><div class="growth-report-heading"><div><small>累计成长报告</small><h3>${history.length + 1} 次记录 · ${escapeHtml(turtle.code || turtle.speciesName)}</h3></div><strong class="${weightGain >= 0 ? "positive" : ""}">${weightGain >= 0 ? "+" : ""}${weightGain.toFixed(1)}g</strong></div>${growthSparkline(weightPoints)}<div class="growth-report-legend"><span>初始 ${firstWeight}g</span><span>现在 ${turtle.weight}g</span></div><div class="photo-compare"><figure><img src="${latest?.oldPhoto || turtle.photo || defaultPhoto}" alt="上次照片"><figcaption>上次</figcaption></figure><b>→</b><figure><img src="${latest?.newPhoto || turtle.photo || defaultPhoto}" alt="本次照片"><figcaption>本次</figcaption></figure></div></section>` : `<section class="reward-preview-lock fresh-card"><span>再记录 1 次即可解锁</span><h3>成长曲线 · 增重变化 · 照片对比</h3><p>不用整理表格，下一次保存后会自动生成。</p></section>`}
+      <div class="reward-actions"><button class="primary" type="button" data-share-growth-card><span aria-hidden="true">↗</span>${hasGrowth ? "分享成长报告" : "分享档案卡"}</button><button class="secondary" type="button" data-save-growth-card><span aria-hidden="true">↓</span>保存图片</button></div>
+      <section class="next-growth-card fresh-card"><div class="next-growth-date"><strong>${nextDate.slice(5, 7)}<small>月</small>${nextDate.slice(8)}<small>日</small></strong><span>${reminderEnabled ? "上午 09:00" : "成长计划"}</span></div><div class="next-growth-copy"><div><small>下一次记录</small><button class="reminder-on ${reminderEnabled ? "is-on" : "is-off"}" type="button" data-toggle-growth-reminder="${escapeHtml(turtle.id)}" aria-pressed="${reminderEnabled ? "true" : "false"}" aria-label="${reminderEnabled ? "关闭成长记录提醒" : "开启成长记录提醒"}"><i></i>${reminderEnabled ? "提醒已开启" : "提醒已关闭"}</button></div><h3>30 天后，再看看它长大多少</h3><p>拍一张新照片，记录体重和背甲，即可生成第一次成长对比。</p></div></section>
+      ${hasGrowth ? `<section class="growth-report-card fresh-card"><div class="growth-report-heading"><div><small>累计成长报告</small><h3>${history.length + 1} 次记录 · ${escapeHtml(turtle.code || turtle.speciesName)}</h3></div><strong class="${weightGain >= 0 ? "positive" : ""}">${weightGain >= 0 ? "+" : ""}${weightGain.toFixed(1)}g</strong></div>${growthSparkline(weightPoints)}<div class="growth-report-legend"><span>初始 ${firstWeight}g</span><span>现在 ${turtle.weight}g</span></div><div class="photo-compare"><figure><img src="${latest?.oldPhoto || turtle.photo || defaultPhoto}" alt="上次照片"><figcaption>上次</figcaption></figure><b>→</b><figure><img src="${latest?.newPhoto || turtle.photo || defaultPhoto}" alt="本次照片"><figcaption>本次</figcaption></figure></div></section>` : `<section class="reward-preview-lock fresh-card"><div class="reward-lock-head"><span>成长奖励</span><small>再记录 1 次解锁</small></div><h3>下次回来，会自动生成</h3><div class="reward-unlock-list"><span><i>↗</i>成长曲线</span><span><i>＋</i>增重变化</span><span><i>◫</i>照片对比</span></div><p>无需整理数据，每次记录都会自动累积。</p></section>`}
       <button class="text-green reward-finish" type="button" data-page="home">完成，返回看板</button>
     </main>${bottomNav()}`;
 }
@@ -3771,6 +3870,7 @@ function turtleListRow(t) {
           <button data-update-turtle="${t.id}" role="menuitem">${turtleActionIcon("update")}<span>更新</span></button>
           <button data-ledger-for-turtle="sold:${t.id}" role="menuitem">${turtleActionIcon("sold")}<span>售出</span></button>
           <button data-ledger-for-turtle="loss:${t.id}" role="menuitem">${turtleActionIcon("loss")}<span>损耗</span></button>
+          <button data-share-turtle="${t.id}" role="menuitem">${turtleActionIcon("share")}<span>分享</span></button>
           <button class="danger-link" data-delete-turtle="${t.id}" role="menuitem">${turtleActionIcon("delete")}<span>删除</span></button>
         </div>
       ` : ""}
@@ -3779,7 +3879,7 @@ function turtleListRow(t) {
 }
 
 function pageTurtleDetail() {
-  const t = state.turtles.find(item => item.id === state.selectedTurtleId);
+  const t = (sharedTurtlePreview?.id === state.selectedTurtleId ? sharedTurtlePreview : null) || state.turtles.find(item => item.id === state.selectedTurtleId);
   if (!t) return `${topbar("档案详情", true)}<main class="content page-fresh"><div class="empty"><strong>没有找到这份档案</strong></div></main>${bottomNav()}`;
   const isEditing = state.updatingTurtleId === t.id;
   const speciesCode = isEditing ? (turtleDraftValue(t, "speciesCode") || t.speciesCode) : t.speciesCode;
@@ -3798,13 +3898,14 @@ function pageTurtleDetail() {
           <h2>${nickname || "未命名档案"}</h2>
           <p>${species.name || t.speciesName} · ${turtleDraftValue(t, "status") || t.status} · ${turtleDraftValue(t, "health") || t.health}</p>
         </div>
-        <button class="detail-more" data-toggle-turtle-menu="${t.id}" aria-label="档案操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
+        ${t.sharedView ? `<span class="shared-turtle-badge">公开分享</span>` : `<button class="detail-more" data-toggle-turtle-menu="${t.id}" aria-label="档案操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>`}
         ${menuOpen ? `
           <div class="turtle-menu detail-menu detail-actions-menu" role="menu" aria-label="${escapeHtml(nickname || species.name || "乌龟")}的档案操作">
             <button class="pin-link ${t.pinned ? "active" : ""}" data-toggle-turtle-pin="${t.id}" role="menuitem">${turtleActionIcon("pin")}<span>${t.pinned ? "取消置顶" : "置顶"}</span></button>
             <button data-update-turtle="${t.id}" role="menuitem">${turtleActionIcon("update")}<span>更新</span></button>
             <button data-ledger-for-turtle="sold:${t.id}" role="menuitem">${turtleActionIcon("sold")}<span>售出</span></button>
             <button data-ledger-for-turtle="loss:${t.id}" role="menuitem">${turtleActionIcon("loss")}<span>损耗</span></button>
+            <button data-share-turtle="${t.id}" role="menuitem">${turtleActionIcon("share")}<span>分享</span></button>
             <button class="danger-link" data-delete-turtle="${t.id}" role="menuitem">${turtleActionIcon("delete")}<span>删除</span></button>
           </div>
         ` : ""}
@@ -3844,7 +3945,8 @@ function pageTurtleDetail() {
         <label class="breeding-note"><span>备注</span><textarea name="note" placeholder="性格、饮食、状态变化、到家表现等">${turtleDraftValue(t, "note") || ""}</textarea></label>
         <button class="primary" type="submit">保存修改</button>
       </form>
-      ` : turtleReadOnlyDetail(t, species, photo)}
+      ` : `${turtleReadOnlyDetail(t, species, photo)}${turtleDetailGrowthChart(t)}`}
+      ${t.sharedView ? `<section class="shared-turtle-note">由壳友手账生成 · 仅展示主人选择公开的成长信息</section>` : ""}
       <section class="section-title"><h3>成长记录</h3></section>
       ${historyList.map((h, index) => `
         <div class="growth-history-entry">
@@ -6004,6 +6106,7 @@ function bindEvents() {
   document.querySelector("#turtleDetailForm")?.addEventListener("submit", submitTurtleDetail);
   document.querySelector("[data-share-growth-card]")?.addEventListener("click", shareGrowthCard);
   document.querySelector("[data-save-growth-card]")?.addEventListener("click", saveGrowthCard);
+  document.querySelector("[data-toggle-growth-reminder]")?.addEventListener("click", event => toggleGrowthReminder(event.currentTarget.dataset.toggleGrowthReminder));
   document.querySelectorAll("[data-ledger-for-turtle]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
     if (!requireLogin()) return;
@@ -6017,6 +6120,10 @@ function bindEvents() {
   document.querySelectorAll("[data-toggle-turtle-pin]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
     toggleTurtlePin(btn.dataset.toggleTurtlePin);
+  }));
+  document.querySelectorAll("[data-share-turtle]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    shareTurtleProfile(btn.dataset.shareTurtle);
   }));
   setupDashboardTurtleReorder();
   document.querySelector("[data-filter-species]")?.addEventListener("change", e => setState({ turtleFilter: e.target.value }));
@@ -8390,19 +8497,21 @@ function setupMarketShareDeepLinks() {
   if (nativeApp) {
     try {
       const listener = nativeApp.addListener("appUrlOpen", event => {
-        openSharedMarketListing(event?.url);
+        if (!openSharedTurtleFromLocation(event?.url)) openSharedMarketListing(event?.url);
       });
       listener?.catch?.(error => console.warn("商品链接监听失败", error));
       nativeApp.getLaunchUrl?.()
         .then(result => {
-          if (result?.url) openSharedMarketListing(result.url);
+          if (result?.url && !openSharedTurtleFromLocation(result.url)) openSharedMarketListing(result.url);
         })
         .catch(error => console.warn("商品启动链接读取失败", error));
     } catch (error) {
       console.warn("商品链接初始化失败", error);
     }
   }
-  window.addEventListener("popstate", () => openSharedMarketListing(window.location.href));
+  window.addEventListener("popstate", () => {
+    if (!openSharedTurtleFromLocation(window.location.href)) openSharedMarketListing(window.location.href);
+  });
 }
 
 function marketShareUrl(listing) {
@@ -11607,6 +11716,86 @@ function loadRewardImage(src) {
   });
 }
 
+function encodeSharedTurtle(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let binary = "";
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function decodeSharedTurtle(value) {
+  try {
+    const base64 = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(base64 + "=".repeat((4 - base64.length % 4) % 4));
+    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch { return null; }
+}
+
+function publicTurtleSnapshot(turtle) {
+  const publicPhoto = /^https?:\/\//i.test(String(turtle.photo || "")) ? turtle.photo : "";
+  return {
+    id: `shared-${String(turtle.id || "").slice(0, 36)}`,
+    sharedView: true,
+    code: String(turtle.code || "未命名龟龟").slice(0, 40),
+    speciesCode: String(turtle.speciesCode || "").slice(0, 20),
+    speciesName: String(turtle.speciesName || "品种未填写").slice(0, 50),
+    gender: String(turtle.gender || "未知").slice(0, 10),
+    weight: Number(turtle.weight || 0),
+    carapaceLength: Number(turtle.carapaceLength || 0),
+    acquiredDate: String(turtle.acquiredDate || "").slice(0, 10),
+    status: "成长记录",
+    health: "",
+    photo: publicPhoto,
+    createdAt: turtle.createdAt || "",
+    measureHistory: [...(turtle.measureHistory || [])].slice(0, 8).map(item => ({
+      id: item.id,
+      updatedAt: item.updatedAt,
+      oldLength: item.oldLength,
+      newLength: item.newLength,
+      oldPhoto: /^https?:\/\//i.test(String(item.oldPhoto || "")) ? item.oldPhoto : "",
+      newPhoto: /^https?:\/\//i.test(String(item.newPhoto || "")) ? item.newPhoto : "",
+      oldSnapshot: { weight: item.oldSnapshot?.weight, carapaceLength: item.oldSnapshot?.carapaceLength, code: turtle.code },
+      newSnapshot: { weight: item.newSnapshot?.weight, carapaceLength: item.newSnapshot?.carapaceLength, code: turtle.code }
+    }))
+  };
+}
+
+async function shareTurtleProfile(turtleId) {
+  if (!requireLogin()) return;
+  const turtle = state.turtles.find(item => item.id === turtleId);
+  if (!turtle) return toast("没有找到这份档案");
+  const payload = encodeSharedTurtle(publicTurtleSnapshot(turtle));
+  const base = String(window.TURTLE_PUBLIC_APP_URL || "https://api.turtleworld.cn/").trim() || "https://api.turtleworld.cn/";
+  const url = new URL(base, window.location.href);
+  url.search = ""; url.hash = "";
+  url.searchParams.set("turtle", payload);
+  const title = `${turtle.code || turtle.speciesName || "龟龟"}的成长档案`;
+  const text = `${turtle.speciesName || "龟龟"} · ${turtle.weight || "-"}g · 背甲 ${turtle.carapaceLength || "-"}cm`;
+  try {
+    if (navigator.share) await navigator.share({ title, text, url: url.toString() });
+    else await copyText(url.toString(), "档案链接已复制");
+  } catch (error) {
+    if (error?.name !== "AbortError") {
+      await copyText(url.toString(), "档案链接已复制");
+    }
+  }
+}
+
+function openSharedTurtleFromLocation(rawUrl, options = {}) {
+  try {
+    const url = new URL(rawUrl, window.location.href);
+    const encoded = url.searchParams.get("turtle");
+    if (!encoded || encoded.length > 12000) return false;
+    const turtle = decodeSharedTurtle(encoded);
+    if (!turtle?.id || !turtle?.code) return false;
+    sharedTurtlePreview = { ...turtle, sharedView: true };
+    if (options.initial) state = { ...state, page: "turtleDetail", selectedTurtleId: turtle.id, updatingTurtleId: "" };
+    else setState({ page: "turtleDetail", selectedTurtleId: turtle.id, updatingTurtleId: "" });
+    return true;
+  } catch { return false; }
+}
+
 async function renderGrowthCardBlob() {
   const turtle = state.turtles.find(item => item.id === state.selectedTurtleId);
   if (!turtle) throw new Error("没有找到这份档案");
@@ -12060,6 +12249,7 @@ function submitTurtleDetail(event) {
     id: existingGrowthMemo?.id || crypto.randomUUID(),
     turtleId: turtle.id,
     growthReminder: true,
+    reminderEnabled: true,
     title: `该给${updated.code}记录成长啦`,
     content: "测量体重和背甲、拍一张新照片，回来领取新的成长报告。",
     dueDate: updated.nextGrowthAt,
@@ -12122,6 +12312,7 @@ function submitTurtle(event) {
     id: crypto.randomUUID(),
     turtleId: turtle.id,
     growthReminder: true,
+    reminderEnabled: true,
     title: `该给${turtle.code}记录成长啦`,
     content: "测量体重和背甲、拍一张新照片，回来领取成长曲线和照片对比。",
     dueDate: turtle.nextGrowthAt,
@@ -13877,6 +14068,7 @@ restorePendingCloudData();
 // Browser share links already contain their target in location. Route before
 // the first render so a shared product never flashes the dashboard first.
 openSharedMarketListing(window.location.href, { initial: true });
+openSharedTurtleFromLocation(window.location.href, { initial: true });
 setupMobileKeyboardGuard();
 setupPullToRefresh();
 setupEdgeBackAndConversationSwipe();
