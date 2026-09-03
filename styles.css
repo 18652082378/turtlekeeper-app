@@ -17310,6 +17310,14 @@ html[data-theme-color="dark"] .turtle-row-drag-preview {
 .operations-simple-row { display: grid; gap: 4px; padding: 13px 14px; }
 .operations-simple-row strong { font-size: 14px; }
 .operations-simple-row span { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.operations-usage-row { display: grid; gap: 10px; padding: 13px 14px; }
+.operations-usage-row header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.operations-usage-row header > div { display: grid; gap: 4px; min-width: 0; }
+.operations-usage-row header strong { font-size: 14px; }
+.operations-usage-row header small { color: var(--muted); font-size: 12px; }
+.operations-usage-row header > b { color: var(--accent); font-size: 13px; white-space: nowrap; }
+.operations-module-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.operations-module-chips span { padding: 4px 7px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: 11px; }
 .operations-feedback-card { display: grid; gap: 8px; padding: 14px; }
 .operations-feedback-card > p { margin: 0; color: var(--text); font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
 .operations-feedback-card > small { color: var(--muted); font-size: 12px; }
@@ -17320,3 +17328,42 @@ html[data-theme-color="dark"] .turtle-row-drag-preview {
 @media (max-width: 350px) {
   .operations-metric strong { font-size: 19px; }
 }
+/* Growth rewards: turn each saved measurement into an immediately useful, shareable result. */
+.reward-page { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+.reward-celebration { display: flex; align-items: center; gap: 14px; margin: 8px 2px 18px; }
+.reward-celebration > span { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; color: #fff; background: #16806a; font-size: 23px; box-shadow: 0 8px 20px rgba(22,128,106,.24); }
+.reward-celebration p, .reward-celebration h2 { margin: 0; }
+.reward-celebration p { color: #16806a; font-size: 13px; font-weight: 700; }
+.reward-celebration h2 { margin-top: 3px; font-size: 20px; }
+.turtle-profile-card { overflow: hidden; color: #f8f6ee; border-radius: 26px; padding: 22px; background: radial-gradient(circle at 95% 0, rgba(255,255,255,.17), transparent 32%), linear-gradient(145deg,#0e6755,#153f37); box-shadow: 0 18px 42px rgba(13,73,61,.24); }
+.turtle-profile-card header { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 16px; }
+.turtle-profile-card header small, .turtle-profile-card header p { color: #b9d8d0; }
+.turtle-profile-card h1, .turtle-profile-card p { margin: 0; }
+.turtle-profile-card h1 { margin: 7px 0 3px; font-size: 29px; }
+.turtle-profile-card header > b { min-width: 62px; text-align: center; color: #f4cf78; font-size: 28px; }
+.turtle-profile-card header > b small { display: block; font-size: 10px; font-weight: 500; }
+.turtle-profile-card > img { width: 100%; height: 245px; object-fit: cover; border-radius: 19px; background: #d7e5df; }
+.reward-card-stats { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 8px; margin-top: 18px; }
+.reward-card-stats span { min-width: 0; }
+.reward-card-stats small, .reward-card-stats strong { display: block; }
+.reward-card-stats small { margin-bottom: 5px; color: #9fc8bc; font-size: 10px; }
+.reward-card-stats strong { white-space: nowrap; font-size: 14px; }
+.turtle-profile-card footer { display: flex; justify-content: space-between; padding-top: 18px; margin-top: 16px; border-top: 1px solid rgba(255,255,255,.15); color: #c9ddd8; font-size: 11px; }
+.turtle-profile-card footer b { color: #f4cf78; }
+.reward-actions { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin: 15px 0 22px; }
+.reward-actions button { margin: 0; min-height: 46px; }
+.next-growth-card { position: relative; display: grid; grid-template-columns: 82px 1fr; gap: 16px; padding: 18px; }
+.next-growth-date { display: grid; place-content: center; text-align: center; border-radius: 16px; background: #e6f3ee; color: #116451; }
+.next-growth-date strong { font-size: 18px; }.next-growth-date span { margin-top: 4px; font-size: 9px; }
+.next-growth-card h3, .next-growth-card p { margin: 2px 0; }.next-growth-card p { color: var(--muted, #68736f); font-size: 12px; line-height: 1.55; }
+.next-growth-card > div > small { color: #16806a; font-weight: 700; }
+.reminder-on { position: absolute; right: 14px; top: 14px; padding: 4px 7px; border-radius: 99px; color: #14705c; background: #e8f5f0; font-size: 9px; }
+.growth-report-card, .reward-preview-lock { margin-top: 14px; padding: 20px; }
+.growth-report-heading { display: flex; justify-content: space-between; align-items: start; }.growth-report-heading h3 { margin: 4px 0 0; }.growth-report-heading > strong { color: #16806a; font-size: 24px; }
+.reward-sparkline { width: 100%; height: 112px; margin-top: 12px; overflow: visible; }.reward-sparkline path { stroke: #dce9e4; stroke-width: 2; }.reward-sparkline polyline { fill: none; stroke: #16806a; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }.reward-sparkline circle { fill: #f3c761; stroke: #fff; stroke-width: 3; }
+.growth-report-legend { display: flex; justify-content: space-between; color: #77827e; font-size: 11px; }
+.photo-compare { display: grid; grid-template-columns: 1fr 28px 1fr; align-items: center; gap: 8px; margin-top: 18px; }.photo-compare figure { margin: 0; }.photo-compare img { width: 100%; height: 118px; object-fit: cover; border-radius: 14px; }.photo-compare figcaption { margin-top: 5px; color: #77827e; font-size: 10px; text-align: center; }.photo-compare > b { text-align: center; color: #16806a; }
+.reward-preview-lock { text-align: center; background: linear-gradient(145deg,#fffaf0,#f6f1e7); }.reward-preview-lock span { color: #a06c12; font-size: 11px; font-weight: 700; }.reward-preview-lock h3 { margin: 9px 0 6px; font-size: 17px; }.reward-preview-lock p { margin: 0; color: #7e776a; font-size: 12px; }
+.reward-finish { display: block; margin: 20px auto 0; }
+html[data-theme-color="dark"] .next-growth-date { background: #173f37; color: #9ed6c7; }
+html[data-theme-color="dark"] .reward-preview-lock { background: linear-gradient(145deg,#2d2b26,#24231f); }

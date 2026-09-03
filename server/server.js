@@ -1066,6 +1066,7 @@ function careReminderClock(date = new Date()) {
 function careReminderDue(memo, clock) {
   if (!memo || !/^\d{2}:\d{2}$/.test(String(memo.remindTime || ""))) return false;
   if (String(memo.remindTime) !== clock.time) return false;
+  if (memo.dueDate && String(memo.dueDate) !== clock.date) return false;
   if (!memo.repeat) return true;
   const weekdays = Array.isArray(memo.weekdays) ? memo.weekdays.map(String) : [];
   return !weekdays.length || weekdays.includes(clock.weekday);
@@ -1365,7 +1366,11 @@ async function handleLogin(req, res) {
   user.tokens = [...(Array.isArray(user.tokens) ? user.tokens : []), { hash: hashValue(token), createdAt: now }].slice(-5);
   // Keep a server-side audit trail for the agreement accepted at login.
   user.termsAcceptedAt = now;
-  user.termsVersion = clientPolicyVersion(body);
+  // Older App Store builds do not send termsVersion. Keep their server-side
+  // record on the agreement bundled with that build; otherwise a later
+  // account-save response can make the immutable client show the update gate
+  // again on every launch.
+  user.termsVersion = clientPolicyVersion(body, LEGACY_POLICY_VERSION);
   user.updatedAt = now;
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, user: publicUserForPolicyClient(user, token, db, body) });
@@ -1431,7 +1436,10 @@ async function handleSaveAccount(req, res) {
   user.data = incomingData;
   user.updatedAt = new Date().toISOString();
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });
+  // A legacy client does not send termsVersion when saving. Return the same
+  // compatible version as /account/load so its background auto-save cannot
+  // reintroduce a newer agreement version into local state.
+  return sendJson(res, 200, { ok: true, user: publicUserForPolicyClient(user, token, db, body) });
 }
 
 async function handleDeleteGrowthRecord(req, res) {
@@ -1480,7 +1488,7 @@ async function handleAcceptTerms(req, res) {
   if (!user) return;
   if (body.accepted !== true) return sendJson(res, 400, { ok: false, message: "请先确认已阅读服务规则和隐私政策" });
   user.termsAcceptedAt = new Date().toISOString();
-  user.termsVersion = clientPolicyVersion(body);
+  user.termsVersion = clientPolicyVersion(body, LEGACY_POLICY_VERSION);
   user.updatedAt = user.termsAcceptedAt;
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, user: publicUser(user, String(body.token || ""), db) });
@@ -2296,6 +2304,7 @@ function marketChatListingSnapshot(db, listingId, sellerPhone = "") {
     city: listing.city || "",
     delivery: listing.delivery || "",
     description: listing.description || "",
+    impressionCount: Math.max(0, Number(listing.impressionCount || 0)),
     viewCount: Math.max(0, Number(listing.viewCount || 0)),
     wantCount: (Array.isArray(listing.wantedPhones) ? listing.wantedPhones : []).length,
     mediaUrl: primaryMedia.url || "",
@@ -2364,6 +2373,7 @@ function adminCommunityChatConversations(db) {
   const conversations = new Map();
   messages.forEach(message => {
     if (!message?.fromPhone || !message?.toPhone || message.systemType === "platform_transaction_warning") return;
+    if (String(message.fromPhone) === REVIEW_ADMIN_PHONE || String(message.toPhone) === REVIEW_ADMIN_PHONE) return;
     const phones = [String(message.fromPhone), String(message.toPhone)].sort();
     const key = phones.join(":");
     const current = conversations.get(key) || { phones, messages: [] };
@@ -2415,21 +2425,86 @@ function analyticsDay(db, key = analyticsDateKey()) {
   return days[key];
 }
 
+function isAdministratorAnalyticsSession(session) {
+  const administratorHash = hashValue(`account:${REVIEW_ADMIN_PHONE}`).slice(0, 48);
+  return String(session?.accountHash || "") === administratorHash;
+}
+
+function publicAnalyticsSessions(day) {
+  return Object.values(day?.sessions || {}).filter(session => !isAdministratorAnalyticsSession(session));
+}
+
+const ANALYTICS_MODULES = ["看板", "账本", "龟集市", "消息", "空间"];
+const ANALYTICS_MAX_INTERVAL_MS = 70 * 1000;
+
+function analyticsModule(value) {
+  return ANALYTICS_MODULES.includes(value) ? value : "";
+}
+
+function sessionDwellMs(session) {
+  const stored = Number(session?.dwellMs);
+  if (Number.isFinite(stored) && stored >= 0) return stored;
+  const startedAt = new Date(session?.startedAt || 0).getTime();
+  const lastSeenAt = new Date(session?.lastSeenAt || session?.startedAt || 0).getTime();
+  return Number.isFinite(startedAt) && Number.isFinite(lastSeenAt) ? Math.max(0, lastSeenAt - startedAt) : 0;
+}
+
+function sessionModuleDwellMs(session) {
+  const recorded = session?.moduleDwellMs && typeof session.moduleDwellMs === "object" ? session.moduleDwellMs : {};
+  return Object.fromEntries(ANALYTICS_MODULES.map(name => [name, Math.max(0, Number(recorded[name]) || 0)]));
+}
+
+function settleAnalyticsSession(session, nowMs) {
+  const lastSeenAt = new Date(session?.lastSeenAt || 0).getTime();
+  if (!Number.isFinite(lastSeenAt)) return;
+  const elapsed = Math.max(0, Math.min(ANALYTICS_MAX_INTERVAL_MS, nowMs - lastSeenAt));
+  if (!elapsed) return;
+  const module = analyticsModule(session.activeModule);
+  const modules = sessionModuleDwellMs(session);
+  if (module) modules[module] += elapsed;
+  session.moduleDwellMs = modules;
+  session.dwellMs = sessionDwellMs(session) + elapsed;
+}
+
+function operationsUserUsage(db, sessions) {
+  const usersByHash = new Map(Object.values(db.users || {})
+    .filter(user => !isAdminUser(user))
+    .map(user => [hashValue(`account:${user.phone}`).slice(0, 48), user]));
+  const rows = new Map();
+  sessions.forEach(session => {
+    const account = usersByHash.get(String(session.accountHash || ""));
+    const key = account ? `account:${session.accountHash}` : `visitor:${session.visitorHash || "unknown"}`;
+    if (!rows.has(key)) {
+      rows.set(key, {
+        name: account ? (account.accountName || maskPhone(account.phone)) : "匿名访客",
+        identity: account ? maskPhone(account.phone) : `匿名标识 ${String(session.visitorHash || "").slice(-6) || "未知"}`,
+        visitCount: 0,
+        totalDwellMs: 0,
+        modules: Object.fromEntries(ANALYTICS_MODULES.map(name => [name, 0]))
+      });
+    }
+    const row = rows.get(key);
+    row.visitCount += 1;
+    row.totalDwellMs += sessionDwellMs(session);
+    const modules = sessionModuleDwellMs(session);
+    ANALYTICS_MODULES.forEach(name => { row.modules[name] += modules[name]; });
+  });
+  return [...rows.values()].map(row => ({
+    ...row,
+    totalDwellSeconds: Math.round(row.totalDwellMs / 1000),
+    modules: Object.fromEntries(ANALYTICS_MODULES.map(name => [name, Math.round(row.modules[name] / 1000)]))
+  })).sort((left, right) => right.totalDwellSeconds - left.totalDwellSeconds || right.visitCount - left.visitCount).slice(0, 200);
+}
+
 function publicTodayAnalytics(db) {
   const day = analyticsDay(db);
-  const now = Date.now();
-  const sessions = Object.values(day.sessions || {});
-  const dwellMs = sessions.reduce((total, session) => {
-    const startedAt = new Date(session.startedAt || 0).getTime();
-    const lastSeenAt = new Date(session.lastSeenAt || session.startedAt || 0).getTime();
-    if (!Number.isFinite(startedAt) || !Number.isFinite(lastSeenAt)) return total;
-    return total + Math.max(0, Math.min(now, lastSeenAt) - startedAt);
-  }, 0);
+  const sessions = publicAnalyticsSessions(day);
+  const dwellMs = sessions.reduce((total, session) => total + sessionDwellMs(session), 0);
   const visitors = new Set(sessions.map(session => session.visitorHash).filter(Boolean));
   const priorVisitorHashes = new Set();
   for (let offset = 1; offset <= 7; offset += 1) {
     const priorDay = db.appAnalytics?.days?.[analyticsDateKey(new Date(Date.now() - offset * 24 * 60 * 60 * 1000))];
-    Object.values(priorDay?.sessions || {}).forEach(session => { if (session.visitorHash) priorVisitorHashes.add(session.visitorHash); });
+    publicAnalyticsSessions(priorDay).forEach(session => { if (session.visitorHash) priorVisitorHashes.add(session.visitorHash); });
   }
   const sources = {};
   sessions.forEach(session => { const source = session.source || "直接打开"; sources[source] = (sources[source] || 0) + 1; });
@@ -2453,52 +2528,60 @@ function recordAdminAudit(db, user, action, detail = "") {
 
 function operationsSummary(db) {
   const analytics = publicTodayAnalytics(db);
-  const users = Object.values(db.users || {});
-  const sessions = Object.values(analyticsDay(db).sessions || {});
+  const users = Object.values(db.users || {}).filter(user => !isAdminUser(user));
+  const sessions = publicAnalyticsSessions(analyticsDay(db));
   const today = analyticsDateKey();
   const registeredToday = users.filter(user => {
     const createdAt = new Date(user.createdAt || 0);
     return Number.isFinite(createdAt.getTime()) && analyticsDateKey(createdAt) === today;
   }).length;
   const activeAccounts = new Set(sessions.map(session => session.accountHash).filter(Boolean));
-  const listings = Array.isArray(db.marketListings) ? db.marketListings : [];
+  const listings = (Array.isArray(db.marketListings) ? db.marketListings : []).filter(item => String(item?.sellerPhoneRaw || "") !== REVIEW_ADMIN_PHONE);
   const chatPairsByListing = new Map();
   (Array.isArray(db.messages) ? db.messages : []).forEach(message => {
     const listingId = message.marketListing?.id;
     if (!listingId || !message.fromPhone || !message.toPhone) return;
+    if (String(message.fromPhone) === REVIEW_ADMIN_PHONE || String(message.toPhone) === REVIEW_ADMIN_PHONE) return;
     const pair = [message.fromPhone, message.toPhone].sort().join(":");
     if (!chatPairsByListing.has(listingId)) chatPairsByListing.set(listingId, new Set());
     chatPairsByListing.get(listingId).add(pair);
   });
   const listingRows = listings.map(item => {
     const view = marketListingView(db, item);
-    return { ...view, chatCount: chatPairsByListing.get(item.id)?.size || 0 };
+    const wantCount = (Array.isArray(item.wantedPhones) ? item.wantedPhones : []).filter(phone => String(phone) !== REVIEW_ADMIN_PHONE).length;
+    return { ...view, wantCount, chatCount: chatPairsByListing.get(item.id)?.size || 0 };
   });
   const activeListings = listingRows.filter(item => item.status === "active");
   const inactiveListings = listingRows.filter(item => item.status === "inactive");
   const soldListings = listingRows.filter(item => item.status === "sold");
   const lowInterestListings = activeListings.filter(item => {
     const createdAt = new Date(item.createdAt || 0).getTime();
-    return Number.isFinite(createdAt) && Date.now() - createdAt >= 3 * 24 * 60 * 60 * 1000 && !item.viewCount && !item.wantCount && !item.chatCount;
+    return Number.isFinite(createdAt) && Date.now() - createdAt >= 3 * 24 * 60 * 60 * 1000 && !item.impressionCount && !item.viewCount && !item.wantCount && !item.chatCount;
   }).slice(0, 30);
-  const feedbacks = (Array.isArray(db.feedbacks) ? db.feedbacks : []).slice().sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
+  const feedbacks = (Array.isArray(db.feedbacks) ? db.feedbacks : [])
+    .filter(item => String(item?.authorPhoneRaw || "") !== REVIEW_ADMIN_PHONE)
+    .slice().sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
   const feedbackRows = feedbacks.slice(0, 100).map(item => ({
     id: item.id, type: item.type || "反馈", content: item.content || "", authorName: item.authorName || "壳友", createdAt: item.createdAt || "",
     status: ["pending", "processing", "resolved", "declined"].includes(item.adminStatus) ? item.adminStatus : "pending",
     reply: item.adminReply || "", processedAt: item.processedAt || ""
   }));
-  const reports = Array.isArray(db.reports) ? db.reports : [];
+  const reports = (Array.isArray(db.reports) ? db.reports : []).filter(item =>
+    String(item?.reporterPhone || "") !== REVIEW_ADMIN_PHONE && String(item?.targetOwnerPhone || "") !== REVIEW_ADMIN_PHONE
+  );
   return {
     analytics: { ...analytics, registeredToday, totalUserCount: users.length, activeAccountCount: activeAccounts.size },
+    userUsage: operationsUserUsage(db, sessions),
     market: {
       activeCount: activeListings.length, soldCount: soldListings.length, inactiveCount: inactiveListings.length,
+      totalImpressions: listingRows.reduce((total, item) => total + Number(item.impressionCount || 0), 0),
       totalViews: listingRows.reduce((total, item) => total + Number(item.viewCount || 0), 0),
       totalWants: listingRows.reduce((total, item) => total + Number(item.wantCount || 0), 0),
       totalChats: listingRows.reduce((total, item) => total + Number(item.chatCount || 0), 0),
-      topListings: [...listingRows].sort((left, right) => (right.chatCount * 100 + right.wantCount * 10 + right.viewCount) - (left.chatCount * 100 + left.wantCount * 10 + left.viewCount)).slice(0, 20),
+      topListings: [...listingRows].sort((left, right) => (right.chatCount * 100 + right.wantCount * 10 + right.viewCount + right.impressionCount * 0.1) - (left.chatCount * 100 + left.wantCount * 10 + left.viewCount + left.impressionCount * 0.1)).slice(0, 20),
       lowInterestListings
     },
-    safety: { pendingReportCount: reports.filter(item => item.status === "pending").length, totalReportCount: reports.length, auditLogs: (Array.isArray(db.adminAuditLogs) ? db.adminAuditLogs : []).slice(0, 100) },
+    safety: { pendingReportCount: reports.filter(item => item.status === "pending").length, totalReportCount: reports.length, auditLogs: [] },
     feedback: { pendingCount: feedbackRows.filter(item => item.status === "pending").length, items: feedbackRows },
     health: { status: "healthy", uptimeSeconds: Math.round(process.uptime()), database: MYSQL_ENABLED ? "MySQL" : "本地文件", lastBackupDate: lastServerBackupDate || "未记录", memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024) }
   };
@@ -2508,22 +2591,46 @@ async function handleAnalyticsVisit(req, res) {
   const body = await readJson(req);
   const visitorId = trimPublicText(body.visitorId, 160);
   const sessionId = trimPublicText(body.sessionId, 160);
-  const event = ["start", "heartbeat", "end"].includes(body.event) ? body.event : "heartbeat";
+  const event = ["start", "heartbeat", "end", "resume"].includes(body.event) ? body.event : "heartbeat";
+  const currentModule = analyticsModule(body.module);
   if (!visitorId || !sessionId) return sendJson(res, 400, { ok: false, message: "访问标识无效" });
   const db = readDatabase();
   const day = analyticsDay(db);
   const sessionKey = hashValue(`session:${sessionId}`).slice(0, 48);
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
   const existing = day.sessions[sessionKey];
+  const account = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
+  // The official administrator account is never part of growth analytics.
+  // Remove any earlier session as soon as it is recognised, too.
+  if (isAdminUser(account)) {
+    if (existing) {
+      delete day.sessions[sessionKey];
+      writeDatabase(db);
+    }
+    return sendJson(res, 200, { ok: true, excluded: true });
+  }
   if (!existing && event !== "start") return sendJson(res, 200, { ok: true });
   if (!existing) {
-    const account = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
-    day.sessions[sessionKey] = { visitorHash: hashValue(`visitor:${visitorId}`).slice(0, 48), accountHash: account ? hashValue(`account:${account.phone}`).slice(0, 48) : "", source: trimPublicText(body.source, 60) || "直接打开", startedAt: now, lastSeenAt: now };
+    day.sessions[sessionKey] = {
+      visitorHash: hashValue(`visitor:${visitorId}`).slice(0, 48),
+      accountHash: account ? hashValue(`account:${account.phone}`).slice(0, 48) : "",
+      source: trimPublicText(body.source, 60) || "直接打开",
+      activeModule: currentModule,
+      moduleDwellMs: Object.fromEntries(ANALYTICS_MODULES.map(name => [name, 0])),
+      dwellMs: 0,
+      startedAt: now,
+      lastSeenAt: now
+    };
   } else {
+    // A foreground resume deliberately does not add the time spent in the
+    // background. For all other events, settle the preceding module first.
+    if (event !== "resume") settleAnalyticsSession(existing, nowMs);
     existing.lastSeenAt = now;
-    const account = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
+    existing.activeModule = currentModule;
     if (account) existing.accountHash = hashValue(`account:${account.phone}`).slice(0, 48);
     if (event === "end") existing.endedAt = now;
+    else delete existing.endedAt;
   }
   writeDatabase(db);
   return sendJson(res, 200, { ok: true });
@@ -3296,6 +3403,7 @@ function marketListingView(db, item, viewer = null) {
     city: item.city || "",
     delivery: item.delivery || "",
     description: item.description || "",
+    impressionCount: Math.max(0, Number(item.impressionCount || 0)),
     viewCount: Math.max(0, Number(item.viewCount || 0)),
     wantCount: (Array.isArray(item.wantedPhones) ? item.wantedPhones : []).length,
     photoUrl: item.photoUrl || "",
@@ -3502,6 +3610,7 @@ async function handleMarketCreate(req, res) {
     description: trimPublicText(body.description, 600),
     photoUrl: mediaItems[0]?.url || trimPublicText(body.photoUrl, 800),
     mediaItems,
+    impressionCount: 0,
     viewCount: 0,
     wantedPhones: [],
     status: "active",
@@ -3779,12 +3888,36 @@ async function handleMarketView(req, res) {
   const listing = (Array.isArray(db.marketListings) ? db.marketListings : [])
     .find(item => item.id === String(body.listingId || ""));
   if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
-  listing.viewCount = Math.max(0, Number(listing.viewCount || 0)) + 1;
-  writeDatabase(db);
+  const viewer = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
+  if (!isAdminUser(viewer)) {
+    listing.viewCount = Math.max(0, Number(listing.viewCount || 0)) + 1;
+    writeDatabase(db);
+  }
   return sendJson(res, 200, {
     ok: true,
     listingId: listing.id,
+    impressionCount: Math.max(0, Number(listing.impressionCount || 0)),
     viewCount: listing.viewCount,
+    wantCount: (Array.isArray(listing.wantedPhones) ? listing.wantedPhones : []).length
+  });
+}
+
+async function handleMarketImpression(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const listing = (Array.isArray(db.marketListings) ? db.marketListings : [])
+    .find(item => item.id === String(body.listingId || ""));
+  if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
+  const viewer = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
+  if (!isAdminUser(viewer)) {
+    listing.impressionCount = Math.max(0, Number(listing.impressionCount || 0)) + 1;
+    writeDatabase(db);
+  }
+  return sendJson(res, 200, {
+    ok: true,
+    listingId: listing.id,
+    impressionCount: Math.max(0, Number(listing.impressionCount || 0)),
+    viewCount: Math.max(0, Number(listing.viewCount || 0)),
     wantCount: (Array.isArray(listing.wantedPhones) ? listing.wantedPhones : []).length
   });
 }
@@ -3798,13 +3931,14 @@ async function handleMarketWant(req, res) {
     .find(item => item.id === String(body.listingId || ""));
   if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
   listing.wantedPhones = Array.isArray(listing.wantedPhones) ? listing.wantedPhones : [];
-  if (listing.sellerPhoneRaw !== user.phone && !listing.wantedPhones.includes(user.phone)) {
+  if (!isAdminUser(user) && listing.sellerPhoneRaw !== user.phone && !listing.wantedPhones.includes(user.phone)) {
     listing.wantedPhones.push(user.phone);
     writeDatabase(db);
   }
   return sendJson(res, 200, {
     ok: true,
     listingId: listing.id,
+    impressionCount: Math.max(0, Number(listing.impressionCount || 0)),
     viewCount: Math.max(0, Number(listing.viewCount || 0)),
     wantCount: listing.wantedPhones.length
   });
@@ -4058,6 +4192,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/chat/delete") return await handleCommunityConversationDelete(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/list") return await handleMarketList(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/detail") return await handleMarketPublicDetail(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/impression") return await handleMarketImpression(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/view") return await handleMarketView(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/want") return await handleMarketWant(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/create") return await handleMarketCreate(req, res);

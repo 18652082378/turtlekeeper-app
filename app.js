@@ -390,6 +390,9 @@ let communityDraftText = "";
 let marketLoading = false;
 let marketLastLoadedAt = 0;
 let marketLoadObserver = null;
+let marketImpressionObserver = null;
+let marketImpressionSeenIds = new Set();
+let marketImpressionTimers = new Map();
 let marketChatDraft = "";
 // A publish can involve several large uploads.  Keep one operation alive until
 // the server has answered so repeated taps cannot start parallel listings.
@@ -776,6 +779,11 @@ function saveState(options = {}) {
 function setState(patch, options = {}) {
   const pageChanged = Object.prototype.hasOwnProperty.call(patch, "page") && patch.page && patch.page !== state.page;
   if (pageChanged) {
+    if (patch.page !== "market") {
+      marketImpressionTimers.forEach(timer => window.clearTimeout(timer));
+      marketImpressionTimers.clear();
+    }
+    if (patch.page === "market") marketImpressionSeenIds = new Set();
     // A preserved list is only valid for its current messages page. Any
     // normal navigation will build the destination page from current state.
     preservedMessageSnapshotActive = false;
@@ -837,6 +845,9 @@ function setState(patch, options = {}) {
   if (!pageChanged && !options.forceRender && Date.now() < restoredSnapshotRenderHoldUntil) return;
   render();
   refreshCareReminderTimers();
+  // Report a route change immediately. The server settles the time spent in
+  // the previous module before switching this session to the new one.
+  if (pageChanged && appAnalyticsSessionId && !document.hidden) sendAnalyticsVisit("heartbeat");
 }
 
 function cleanNavigationSnapshotDom(root) {
@@ -1806,7 +1817,7 @@ function tabIcon(name) {
 }
 
 function bottomNav() {
-  const dashboardPages = ["home", "list", "turtleDetail", "species", "breeds", "add", "memos", "breeding", "breedingAdd", "breedingDetail", "pools", "poolAdd"];
+  const dashboardPages = ["home", "list", "turtleDetail", "turtleReward", "species", "breeds", "add", "memos", "breeding", "breedingAdd", "breedingDetail", "pools", "poolAdd"];
   const ledgerPages = ["ledger", "ledgerDetail"];
   const marketPages = ["market", "marketAdd", "marketDetail", "marketSeller"];
   const messagePages = ["messages", "community", "communityAdd", "communityFriends", "communityChat", "communityPostDetail", "communityProfile"];
@@ -1825,7 +1836,7 @@ function bottomNav() {
 }
 
 function bottomNavActivePage(page = state.page) {
-  if (["home", "list", "turtleDetail", "species", "breeds", "add", "memos", "breeding", "breedingAdd", "breedingDetail", "pools", "poolAdd"].includes(page)) return "home";
+  if (["home", "list", "turtleDetail", "turtleReward", "species", "breeds", "add", "memos", "breeding", "breedingAdd", "breedingDetail", "pools", "poolAdd"].includes(page)) return "home";
   if (["ledger", "ledgerDetail"].includes(page)) return "ledger";
   if (["market", "marketAdd", "marketDetail", "marketSeller"].includes(page)) return "market";
   if (["messages", "community", "communityAdd", "communityFriends", "communityChat", "communityPostDetail", "communityProfile"].includes(page)) return "messages";
@@ -2969,6 +2980,7 @@ function normalizeMarketListings(listings = []) {
     ...item,
     status,
     price: Number(item.price || 0),
+    impressionCount: Math.max(0, Number(item.impressionCount || 0)),
     viewCount: Math.max(0, Number(item.viewCount || 0)),
     wantCount: Math.max(0, Number(item.wantCount || 0)),
     photoUrl: item.photoUrl ? apiAssetUrl(item.photoUrl) : "",
@@ -3041,7 +3053,7 @@ function marketListingCard(item) {
   const firstMedia = marketListingMediaItems(item)[0];
   const wifiAutoplay = firstMedia?.type === "video" && shouldAutoplayMarketVideo();
   return `
-    <article class="market-card-wrap">
+    <article class="market-card-wrap" data-market-impression="${item.id}">
     <button class="market-card ${unavailable ? "is-sold" : ""}" type="button" data-view-market="${item.id}">
       <span class="market-card-photo ${wifiAutoplay ? "wifi-video-autoplay" : ""}">
         ${firstMedia?.type === "video" ? `<video src="${firstMedia.url}"${videoPosterAttribute(firstMedia)} muted playsinline crossorigin="anonymous" data-video-first-frame ${wifiAutoplay ? "autoplay loop preload=\"auto\" data-market-wifi-video" : "preload=\"auto\""}></video>${wifiAutoplay ? "" : `<b class="market-video-mark">▶</b>`}` : `<img src="${marketListingPhoto(item)}" alt="${escapeHtml(item.title || item.speciesName || "在售乌龟")}" loading="lazy">`}
@@ -3412,7 +3424,7 @@ function pageMarketDetail() {
         <div class="market-detail-price"><strong><i>¥</i>${money(item.price)}</strong>${item.negotiable ? `<span>可议价</span>` : ""}</div>
         <h2>${escapeHtml(item.title || `${item.speciesName || "乌龟"}在售`)}</h2>
         <p>${escapeHtml(item.speciesName || "品种未填写")} · ${marketStageLabel(item.stage)} · ${escapeHtml(item.gender || "性别未知")}</p>
-        <div class="market-detail-stats"><span>曝光 ${Math.max(0, Number(item.viewCount || 0))} 次</span><i></i><span><b>${Math.max(0, Number(item.wantCount || 0))}</b> 人想要</span></div>
+        <div class="market-detail-stats"><span>曝光 ${Math.max(0, Number(item.impressionCount || 0))} 次</span><i></i><span>浏览 ${Math.max(0, Number(item.viewCount || 0))} 次</span><i></i><span><b>${Math.max(0, Number(item.wantCount || 0))}</b> 人想要</span></div>
       </section>
       <section class="market-detail-specs">
         <div><span>当前克重</span><strong>${item.weight ? `${escapeHtml(item.weight)}g` : "未填写"}</strong></div>
@@ -3670,6 +3682,62 @@ function turtleKeepingDays(acquiredDate) {
   const currentAt = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
   if (!Number.isFinite(startedAt) || startedAt > currentAt) return "";
   return `已饲养 ${Math.floor((currentAt - startedAt) / 86400000)} 天`;
+}
+
+function turtleKeepingDaysNumber(acquiredDate) {
+  const matched = turtleKeepingDays(acquiredDate).match(/(\d+)/);
+  return matched ? Number(matched[1]) : 0;
+}
+
+function nextGrowthRecordDate(turtle) {
+  if (turtle?.nextGrowthAt) return String(turtle.nextGrowthAt).slice(0, 10);
+  const date = new Date(turtle?.createdAt || Date.now());
+  date.setDate(date.getDate() + 30);
+  return formatDate(date);
+}
+
+function growthPoints(turtle, field) {
+  const history = [...(turtle?.measureHistory || [])].reverse();
+  const baseline = history[0]?.oldSnapshot?.[field] ?? turtle?.[field];
+  return [Number(baseline || 0), ...history.map(item => Number(item.newSnapshot?.[field] || 0))].filter(Number.isFinite);
+}
+
+function growthSparkline(values = []) {
+  const width = 292;
+  const height = 92;
+  const safe = values.length > 1 ? values : [values[0] || 0, values[0] || 0];
+  const min = Math.min(...safe);
+  const max = Math.max(...safe);
+  const range = max - min || 1;
+  const points = safe.map((value, index) => `${12 + index * ((width - 24) / (safe.length - 1))},${height - 12 - ((value - min) / range) * (height - 30)}`).join(" ");
+  return `<svg class="reward-sparkline" viewBox="0 0 ${width} ${height}" role="img" aria-label="成长曲线"><path d="M12 ${height - 12}H${width - 12}"/><polyline points="${points}"/>${points.split(" ").map(point => { const [cx, cy] = point.split(","); return `<circle cx="${cx}" cy="${cy}" r="4"/>`; }).join("")}</svg>`;
+}
+
+function pageTurtleReward() {
+  const turtle = state.turtles.find(item => item.id === state.selectedTurtleId);
+  if (!turtle) return `${topbar("成长成果", true)}<main class="content page-fresh"><div class="empty"><strong>没有找到这份档案</strong></div></main>${bottomNav()}`;
+  const history = turtle.measureHistory || [];
+  const hasGrowth = history.length > 0;
+  const weightPoints = growthPoints(turtle, "weight");
+  const firstWeight = weightPoints[0] || Number(turtle.weight || 0);
+  const weightGain = Number(turtle.weight || 0) - firstWeight;
+  const latest = history[0];
+  const nextDate = nextGrowthRecordDate(turtle);
+  return `
+    ${topbar(hasGrowth ? "成长报告" : "建档成功", true)}
+    <main class="content page-fresh reward-page">
+      <section class="reward-celebration"><span>✓</span><div><p>${hasGrowth ? `第 ${history.length + 1} 次记录完成` : "第一份成长档案已点亮"}</p><h2>${hasGrowth ? "这次变化，值得被看见" : "从今天起，认真记录陪伴"}</h2></div></section>
+      <article class="turtle-profile-card" data-reward-card>
+        <header><div><small>壳友手账 · 龟档案</small><h1>${escapeHtml(turtle.code || "未命名龟龟")}</h1><p>${escapeHtml(turtle.speciesName || "品种未填写")}</p></div><b>${turtleKeepingDaysNumber(turtle.acquiredDate)}<small>陪伴天数</small></b></header>
+        <img src="${turtle.photo || defaultPhoto}" alt="${escapeHtml(turtle.code || turtle.speciesName || "乌龟")}的照片" data-reward-photo>
+        <div class="reward-card-stats"><span><small>入手日期</small><strong>${escapeHtml(turtle.acquiredDate || "-")}</strong></span><span><small>当前体重</small><strong>${escapeHtml(turtle.weight || "-")} g</strong></span><span><small>背甲长度</small><strong>${escapeHtml(turtle.carapaceLength || "-")} cm</strong></span></div>
+        <footer><span>每一次记录，都在见证生命成长</span><b>壳友手账</b></footer>
+      </article>
+      <div class="reward-actions"><button class="primary" type="button" data-share-growth-card>${hasGrowth ? "分享成长报告" : "保存 / 分享档案卡"}</button><button class="secondary" type="button" data-save-growth-card>保存图片</button></div>
+      <section class="next-growth-card fresh-card"><div class="next-growth-date"><strong>${nextDate.slice(5).replace("-", "月")}日</strong><span>${nextDate}</span></div><div><small>下一次记录</small><h3>30 天后再量一次</h3><p>记录体重、背甲和新照片，就能看到增重变化、成长曲线与前后对比。</p></div><span class="reminder-on">提醒已开启</span></section>
+      ${hasGrowth ? `<section class="growth-report-card fresh-card"><div class="growth-report-heading"><div><small>累计成长报告</small><h3>${history.length + 1} 次记录 · ${escapeHtml(turtle.code || turtle.speciesName)}</h3></div><strong class="${weightGain >= 0 ? "positive" : ""}">${weightGain >= 0 ? "+" : ""}${weightGain.toFixed(1)}g</strong></div>${growthSparkline(weightPoints)}<div class="growth-report-legend"><span>初始 ${firstWeight}g</span><span>现在 ${turtle.weight}g</span></div><div class="photo-compare"><figure><img src="${latest?.oldPhoto || turtle.photo || defaultPhoto}" alt="上次照片"><figcaption>上次</figcaption></figure><b>→</b><figure><img src="${latest?.newPhoto || turtle.photo || defaultPhoto}" alt="本次照片"><figcaption>本次</figcaption></figure></div></section>` : `<section class="reward-preview-lock fresh-card"><span>再记录 1 次即可解锁</span><h3>成长曲线 · 增重变化 · 照片对比</h3><p>不用整理表格，下一次保存后会自动生成。</p></section>`}
+      <button class="text-green reward-finish" type="button" data-page="home">完成，返回看板</button>
+    </main>${bottomNav()}`;
 }
 
 function turtleListRow(t) {
@@ -4011,7 +4079,7 @@ function pageMemos() {
       </section>
       ${list.map(m => `
         <article class="card memo-row">
-          <div><strong>${m.title}</strong><p>${m.content || "无备注"}</p><small class="muted">上次操作 ${formatTime(m.updatedAt)} · ${m.remindTime || "未设时间"} · ${m.repeat ? "重复执行" : "只执行一次"}</small></div>
+          <div><strong>${m.title}</strong><p>${m.content || "无备注"}</p><small class="muted">${m.dueDate ? `${m.dueDate} · ` : `上次操作 ${formatTime(m.updatedAt)} · `}${m.remindTime || "未设时间"} · ${m.repeat ? "重复执行" : "只执行一次"}</small></div>
           <div><button class="text-green" data-edit-memo="${m.id}">调整</button><button class="danger-link" data-delete-memo="${m.id}">移除</button></div>
         </article>
       `).join("") || `<div class="empty"><div><strong>还没有护理提醒</strong><br>点击加号新建一条</div></div>`}
@@ -5404,7 +5472,7 @@ function pagePrivacy() {
       </section>
       <section class="fresh-card policy-card">
         <h3>一、我们收集的信息</h3>
-        <p>注册和登录时收集手机号、密码验证信息与昵称；你主动上传的头像、乌龟档案、龟池、护理、繁殖、账本、壳友圈、商品、聊天和反馈内容会用于提供对应功能。应用会使用随机生成的匿名标识、会话起止时间和你主动附带在链接中的推广来源标识统计每日进入次数、独立使用人数、停留时长和推广效果，不收集设备标识或精确位置。你主动点击定位并授权后，平台仅将所在城市用于商品发布展示。</p>
+        <p>注册和登录时收集手机号、密码验证信息与昵称；你主动上传的头像、乌龟档案、龟池、护理、繁殖、账本、壳友圈、商品、聊天和反馈内容会用于提供对应功能。应用会使用随机生成的匿名标识、会话起止时间、主模块停留时长和你主动附带在链接中的推广来源标识统计每日进入次数、独立使用人数、停留时长和推广效果；已登录账号仅以不可逆账号摘要关联到运营统计，不收集设备标识或精确位置。你主动点击定位并授权后，平台仅将所在城市用于商品发布展示。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>二、使用目的</h3>
@@ -5511,6 +5579,7 @@ function adminChatMessageMarkup(message = {}) {
 function pageOperations() {
   const overview = state.operationsOverview || {};
   const analytics = overview.analytics || { visitCount: 0, uniqueVisitorCount: 0, totalDwellSeconds: 0, averageDwellSeconds: 0 };
+  const userUsage = Array.isArray(overview.userUsage) ? overview.userUsage : [];
   const conversations = Array.isArray(overview.conversations) ? overview.conversations : [];
   const market = overview.market || {};
   const feedback = overview.feedback || {};
@@ -5533,11 +5602,14 @@ function pageOperations() {
           <article class="fresh-card operations-metric"><span>累计停留</span><strong>${formatOperationDuration(analytics.totalDwellSeconds)}</strong><small>今日已记录时长</small></article>
           <article class="fresh-card operations-metric"><span>平均停留</span><strong>${formatOperationDuration(analytics.averageDwellSeconds)}</strong><small>每次进入平均时长</small></article>
         </section>
-        <section class="fresh-card operations-note"><strong>推广来源</strong><p>${Object.entries(analytics.sources || {}).map(([source, count]) => `${escapeHtml(source)}：${count} 次`).join("　") || "新版部署后开始采集来源数据。"}</p></section><section class="fresh-card operations-note"><strong>统计口径</strong><p>用户每次打开 App 记为一次进入；独立用户按匿名标识去重。停留时长在打开期间按心跳累积，关闭或切到后台前的最后一分钟可能不会计入。</p></section>
+        <section class="fresh-card operations-note"><strong>推广来源</strong><p>${Object.entries(analytics.sources || {}).map(([source, count]) => `${escapeHtml(source)}：${count} 次`).join("　") || "新版部署后开始采集来源数据。"}</p></section>
+        <section class="section-title"><span>用户模块停留</span><small>今日各用户在五个主模块的已记录时长</small></section>
+        <section class="operations-simple-list">${userUsage.map(item => `<article class="fresh-card operations-usage-row"><header><div><strong>${escapeHtml(item.name || "匿名访客")}</strong><small>${escapeHtml(item.identity || "匿名访问")} · 进入 ${Math.max(0, Number(item.visitCount) || 0)} 次</small></div><b>${formatOperationDuration(item.totalDwellSeconds)}</b></header><div class="operations-module-chips">${Object.entries(item.modules || {}).map(([name, seconds]) => `<span>${escapeHtml(name)} ${formatOperationDuration(seconds)}</span>`).join("")}</div></article>`).join("") || `<div class="fresh-card operations-note"><p>暂无用户停留数据。新版开始采集后会显示在这里。</p></div>`}</section>
+        <section class="fresh-card operations-note"><strong>统计口径</strong><p>用户每次打开 App 记为一次进入；独立用户按匿名标识去重。页面切换、每分钟心跳、进入后台和回到前台都会结算模块时长。管理员账号不计入运营中心的使用、互动与内容统计。</p></section>
       ` : tab === "market" ? `
-        <section class="operations-metric-grid"><article class="fresh-card operations-metric"><span>在售商品</span><strong>${market.activeCount || 0}</strong><small>已售 ${market.soldCount || 0} · 下架 ${market.inactiveCount || 0}</small></article><article class="fresh-card operations-metric"><span>商品浏览</span><strong>${market.totalViews || 0}</strong><small>累计浏览次数</small></article><article class="fresh-card operations-metric"><span>收藏意向</span><strong>${market.totalWants || 0}</strong><small>用户点击想要</small></article><article class="fresh-card operations-metric"><span>商品咨询</span><strong>${market.totalChats || 0}</strong><small>按商品去重的会话</small></article></section>
-        <section class="section-title"><span>热度商品</span><small>浏览、意向和咨询综合排序</small></section><section class="operations-simple-list">${(market.topListings || []).map(item => `<article class="fresh-card operations-simple-row"><strong>${escapeHtml(item.title || item.speciesName || "龟集市商品")}</strong><span>浏览 ${item.viewCount || 0} · 想要 ${item.wantCount || 0} · 咨询 ${item.chatCount || 0}</span></article>`).join("") || `<div class="empty small-empty"><div><strong>暂无商品数据</strong></div></div>`}</section>
-        <section class="section-title"><span>低关注提醒</span><small>发布满 3 天且没有浏览、意向或咨询</small></section><section class="operations-simple-list">${(market.lowInterestListings || []).map(item => `<article class="fresh-card operations-simple-row"><strong>${escapeHtml(item.title || item.speciesName || "龟集市商品")}</strong><span>${escapeHtml(item.sellerName || "卖家")} · ${item.createdAt ? formatTime(item.createdAt) : ""}</span></article>`).join("") || `<div class="fresh-card operations-note"><p>暂无需要关注的商品。</p></div>`}</section>
+        <section class="operations-metric-grid"><article class="fresh-card operations-metric"><span>在售商品</span><strong>${market.activeCount || 0}</strong><small>已售 ${market.soldCount || 0} · 下架 ${market.inactiveCount || 0}</small></article><article class="fresh-card operations-metric"><span>商品曝光</span><strong>${market.totalImpressions || 0}</strong><small>商品卡进入可视区域</small></article><article class="fresh-card operations-metric"><span>商品浏览</span><strong>${market.totalViews || 0}</strong><small>用户点击进入详情</small></article><article class="fresh-card operations-metric"><span>收藏意向</span><strong>${market.totalWants || 0}</strong><small>用户点击想要</small></article><article class="fresh-card operations-metric"><span>商品咨询</span><strong>${market.totalChats || 0}</strong><small>按商品去重的会话</small></article></section>
+        <section class="section-title"><span>热度商品</span><small>曝光、浏览、意向和咨询综合排序</small></section><section class="operations-simple-list">${(market.topListings || []).map(item => `<article class="fresh-card operations-simple-row"><strong>${escapeHtml(item.title || item.speciesName || "龟集市商品")}</strong><span>曝光 ${item.impressionCount || 0} · 浏览 ${item.viewCount || 0} · 想要 ${item.wantCount || 0} · 咨询 ${item.chatCount || 0}</span></article>`).join("") || `<div class="empty small-empty"><div><strong>暂无商品数据</strong></div></div>`}</section>
+        <section class="section-title"><span>低关注提醒</span><small>发布满 3 天且没有曝光、浏览、意向或咨询</small></section><section class="operations-simple-list">${(market.lowInterestListings || []).map(item => `<article class="fresh-card operations-simple-row"><strong>${escapeHtml(item.title || item.speciesName || "龟集市商品")}</strong><span>${escapeHtml(item.sellerName || "卖家")} · ${item.createdAt ? formatTime(item.createdAt) : ""}</span></article>`).join("") || `<div class="fresh-card operations-note"><p>暂无需要关注的商品。</p></div>`}</section>
       ` : tab === "feedback" ? `
         <section class="fresh-card operations-note"><strong>待处理反馈 ${feedback.pendingCount || 0} 条</strong><p>在这里标记处理状态并回复用户；回复会在该用户的反馈详情中展示。</p></section><section class="operations-simple-list">${(feedback.items || []).map(item => `<article class="fresh-card operations-feedback-card"><strong>${escapeHtml(item.type || "反馈")} · ${escapeHtml(item.authorName || "壳友")}</strong><p>${escapeHtml(item.content || "")}</p><small>${item.createdAt ? formatTime(item.createdAt) : ""}</small><form data-admin-feedback-form="${item.id}"><select class="select" name="status"><option value="pending" ${item.status === "pending" ? "selected" : ""}>待处理</option><option value="processing" ${item.status === "processing" ? "selected" : ""}>处理中</option><option value="resolved" ${item.status === "resolved" ? "selected" : ""}>已解决</option><option value="declined" ${item.status === "declined" ? "selected" : ""}>不处理</option></select><textarea name="reply" maxlength="600" placeholder="给用户的回复（可选）">${escapeHtml(item.reply || "")}</textarea><button class="secondary" type="submit">保存处理结果</button></form></article>`).join("") || `<div class="empty small-empty"><div><strong>暂无用户反馈</strong></div></div>`}</section>
       ` : tab === "safety" ? `
@@ -5589,6 +5661,7 @@ function render() {
     list: pageList,
     growth: pageGrowth,
     turtleDetail: pageTurtleDetail,
+    turtleReward: pageTurtleReward,
     species: pageSpecies,
     breeds: pageBreeds,
     add: pageAdd,
@@ -5929,6 +6002,8 @@ function bindEvents() {
   });
   document.querySelector("[data-update-photo-input]")?.addEventListener("change", readUpdatePhoto);
   document.querySelector("#turtleDetailForm")?.addEventListener("submit", submitTurtleDetail);
+  document.querySelector("[data-share-growth-card]")?.addEventListener("click", shareGrowthCard);
+  document.querySelector("[data-save-growth-card]")?.addEventListener("click", saveGrowthCard);
   document.querySelectorAll("[data-ledger-for-turtle]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
     if (!requireLogin()) return;
@@ -7000,6 +7075,7 @@ async function loadMoreMarketListings() {
 function setupMarketInfiniteScroll() {
   marketLoadObserver?.disconnect();
   marketLoadObserver = null;
+  setupMarketImpressionTracking();
   if (state.page !== "market" || !state.marketFeedHasMore || state.marketFeedLoadingMore) return;
   const sentinel = document.querySelector("[data-market-load-sentinel]");
   if (!sentinel || typeof IntersectionObserver === "undefined") return;
@@ -7009,11 +7085,60 @@ function setupMarketInfiniteScroll() {
   marketLoadObserver.observe(sentinel);
 }
 
+function setupMarketImpressionTracking() {
+  marketImpressionObserver?.disconnect();
+  marketImpressionObserver = null;
+  marketImpressionTimers.forEach(timer => window.clearTimeout(timer));
+  marketImpressionTimers.clear();
+  if (state.page !== "market") return;
+  const cards = [...document.querySelectorAll("[data-market-impression]")].filter(card => !marketImpressionSeenIds.has(String(card.dataset.marketImpression || "")));
+  if (!cards.length) return;
+  const record = card => {
+    const id = String(card.dataset.marketImpression || "");
+    if (!id || marketImpressionSeenIds.has(id)) return;
+    marketImpressionSeenIds.add(id);
+    const timer = marketImpressionTimers.get(card);
+    if (timer) window.clearTimeout(timer);
+    marketImpressionTimers.delete(card);
+    recordMarketImpression(id);
+  };
+  const scheduleRecord = card => {
+    const id = String(card.dataset.marketImpression || "");
+    if (!id || marketImpressionSeenIds.has(id) || marketImpressionTimers.has(card)) return;
+    marketImpressionTimers.set(card, window.setTimeout(() => {
+      marketImpressionTimers.delete(card);
+      if (state.page === "market" && card.isConnected) record(card);
+    }, 1000));
+  };
+  if (typeof IntersectionObserver === "undefined") {
+    requestAnimationFrame(() => cards.filter(card => {
+      const rect = card.getBoundingClientRect();
+      return rect.top < window.innerHeight && rect.bottom > 0;
+    }).forEach(scheduleRecord));
+    return;
+  }
+  marketImpressionObserver = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      const card = entry.target;
+      const visible = entry.isIntersecting && entry.intersectionRatio >= 0.5;
+      if (!visible) {
+        const timer = marketImpressionTimers.get(card);
+        if (timer) window.clearTimeout(timer);
+        marketImpressionTimers.delete(card);
+        return;
+      }
+      scheduleRecord(card);
+    });
+  }, { root: null, threshold: [0, 0.5] });
+  cards.forEach(card => marketImpressionObserver.observe(card));
+}
+
 function updateMarketMetrics(listingId, metrics = {}) {
   setState({
     marketListings: (state.marketListings || []).map(item => item.id === listingId
       ? {
           ...item,
+          impressionCount: Math.max(0, Number(metrics.impressionCount ?? item.impressionCount ?? 0)),
           viewCount: Math.max(0, Number(metrics.viewCount ?? item.viewCount ?? 0)),
           wantCount: Math.max(0, Number(metrics.wantCount ?? item.wantCount ?? 0))
         }
@@ -7062,7 +7187,18 @@ async function recordMarketView(listingId) {
   const listing = (state.marketListings || []).find(item => item.id === listingId);
   if (!listing || listing.pendingLocal) return;
   try {
-    const result = await apiPost("/api/market/view", { listingId });
+    const result = await apiPost("/api/market/view", communityAuthPayload({ listingId }));
+    updateMarketMetrics(listingId, result);
+  } catch (error) {
+    if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "商品浏览统计失败");
+  }
+}
+
+async function recordMarketImpression(listingId) {
+  const listing = (state.marketListings || []).find(item => item.id === listingId);
+  if (!listing || listing.pendingLocal) return;
+  try {
+    const result = await apiPost("/api/market/impression", communityAuthPayload({ listingId }));
     updateMarketMetrics(listingId, result);
   } catch (error) {
     if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "商品曝光统计失败");
@@ -8855,7 +8991,7 @@ async function refreshOperationsOverview(force = false) {
   try {
     const result = await apiPost("/api/admin/operations/overview", communityAuthPayload());
     operationsOverviewLastLoadedAt = Date.now();
-    setState({ operationsOverview: { analytics: result.analytics || null, market: result.market || {}, feedback: result.feedback || {}, safety: result.safety || {}, health: result.health || {}, conversations: Array.isArray(result.conversations) ? result.conversations : [] } }, { skipCloud: true, pageScroll: "preserve" });
+    setState({ operationsOverview: { analytics: result.analytics || null, userUsage: Array.isArray(result.userUsage) ? result.userUsage : [], market: result.market || {}, feedback: result.feedback || {}, safety: result.safety || {}, health: result.health || {}, conversations: Array.isArray(result.conversations) ? result.conversations : [] } }, { skipCloud: true, pageScroll: "preserve" });
   } catch (error) {
     if (error.status !== 403) console.warn(error.message || "运营数据读取失败");
   } finally {
@@ -11079,10 +11215,19 @@ function appAnalyticsSource() {
   }
 }
 
+function appAnalyticsModule() {
+  const page = String(state.page || "home");
+  if (["market", "marketAdd", "marketDetail", "marketSeller", "myMarketListings", "marketFavorites", "marketHistory"].includes(page)) return "龟集市";
+  if (["messages", "community", "communityAdd", "communityPostDetail", "communityFriends", "communityChat", "following", "followingProfile", "communityProfile"].includes(page)) return "消息";
+  if (["ledger", "ledgerDetail", "calendar", "breeding", "breedingAdd", "breedingDetail"].includes(page)) return "账本";
+  if (["mine", "satisfaction", "publicSatisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "reports", "sync", "about", "rules", "privacy", "moderation", "announcements", "operations"].includes(page)) return "空间";
+  return "看板";
+}
+
 function sendAnalyticsVisit(event = "heartbeat", keepalive = false) {
   if (!appAnalyticsSessionId) return;
   const base = window.TURTLE_API_BASE_URL || "";
-  const body = JSON.stringify({ visitorId: analyticsVisitorId(), sessionId: appAnalyticsSessionId, event, source: appAnalyticsSource(), phone: state.loggedInPhone || "", token: currentCloudToken() || "" });
+  const body = JSON.stringify({ visitorId: analyticsVisitorId(), sessionId: appAnalyticsSessionId, event, module: appAnalyticsModule(), source: appAnalyticsSource(), phone: state.loggedInPhone || "", token: currentCloudToken() || "" });
   void fetch(`${base}/api/analytics/visit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -11101,6 +11246,7 @@ function startAppAnalytics() {
   window.addEventListener("pagehide", () => sendAnalyticsVisit("end", true));
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) sendAnalyticsVisit("end", true);
+    else sendAnalyticsVisit("resume");
   });
 }
 
@@ -11313,6 +11459,7 @@ async function pushCloudDataNow(throwOnError = false) {
     await apiPost("/api/account/save", {
       phone: state.loggedInPhone,
       token: currentCloudToken(),
+      termsVersion: POLICY_VERSION,
       accountName: state.accountName,
       accountAvatar: state.accountAvatar,
       data: accountDataSnapshot(state)
@@ -11448,6 +11595,98 @@ function csvCell(value) {
 
 function exportNickname(value) {
   return String(value ?? "").split("·")[0].trim();
+}
+
+function loadRewardImage(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+}
+
+async function renderGrowthCardBlob() {
+  const turtle = state.turtles.find(item => item.id === state.selectedTurtleId);
+  if (!turtle) throw new Error("没有找到这份档案");
+  const canvas = document.createElement("canvas");
+  canvas.width = 1080;
+  canvas.height = 1440;
+  const context = canvas.getContext("2d");
+  const gradient = context.createLinearGradient(0, 0, 1080, 1440);
+  gradient.addColorStop(0, "#0e5b4d");
+  gradient.addColorStop(1, "#173e36");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 1080, 1440);
+  context.fillStyle = "rgba(255,255,255,.08)";
+  context.beginPath(); context.arc(960, 130, 260, 0, Math.PI * 2); context.fill();
+  context.fillStyle = "#f7f2e7";
+  context.font = "500 34px sans-serif";
+  context.fillText("壳友手账 · 龟档案", 76, 86);
+  context.font = "700 74px sans-serif";
+  context.fillText(String(turtle.code || "未命名龟龟").slice(0, 12), 76, 180);
+  context.font = "400 36px sans-serif";
+  context.fillStyle = "#bad8cf";
+  context.fillText(turtle.speciesName || "品种未填写", 76, 238);
+  try {
+    const image = await loadRewardImage(turtle.photo || defaultPhoto);
+    const ratio = Math.max(928 / image.width, 690 / image.height);
+    const width = image.width * ratio;
+    const height = image.height * ratio;
+    context.save();
+    context.beginPath(); context.roundRect(76, 300, 928, 690, 32); context.clip();
+    context.drawImage(image, 76 + (928 - width) / 2, 300 + (690 - height) / 2, width, height);
+    context.restore();
+  } catch {
+    context.fillStyle = "#d8e6df";
+    context.fillRect(76, 300, 928, 690);
+  }
+  const stats = [["陪伴", `${turtleKeepingDaysNumber(turtle.acquiredDate)} 天`], ["体重", `${turtle.weight || "-"} g`], ["背甲", `${turtle.carapaceLength || "-"} cm`]];
+  stats.forEach(([label, value], index) => {
+    const x = 76 + index * 310;
+    context.fillStyle = "#9fc6bb"; context.font = "400 28px sans-serif"; context.fillText(label, x, 1070);
+    context.fillStyle = "#ffffff"; context.font = "700 45px sans-serif"; context.fillText(value, x, 1128);
+  });
+  const history = turtle.measureHistory || [];
+  context.fillStyle = "#f2c86b";
+  context.font = "600 31px sans-serif";
+  context.fillText(history.length ? `已完成 ${history.length + 1} 次记录 · 成长报告持续更新` : `入手于 ${turtle.acquiredDate || "今天"} · 下一次记录 ${nextGrowthRecordDate(turtle)}`, 76, 1240);
+  context.fillStyle = "#d8e9e4"; context.font = "400 30px sans-serif";
+  context.fillText("每一次记录，都在见证生命成长", 76, 1340);
+  context.textAlign = "right"; context.font = "700 32px sans-serif"; context.fillText("壳友手账", 1004, 1340);
+  return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("图片生成失败")), "image/png", 0.95));
+}
+
+async function saveGrowthCard() {
+  try {
+    const turtle = state.turtles.find(item => item.id === state.selectedTurtleId);
+    const blob = await renderGrowthCardBlob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${turtle?.code || "龟龟"}-成长卡.png`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast("成长卡已保存");
+  } catch (error) { toast(error.message || "成长卡生成失败"); }
+}
+
+async function shareGrowthCard() {
+  try {
+    const turtle = state.turtles.find(item => item.id === state.selectedTurtleId);
+    const blob = await renderGrowthCardBlob();
+    const file = new File([blob], `${turtle?.code || "龟龟"}-成长卡.png`, { type: "image/png" });
+    const text = `${turtle?.code || "我的龟龟"}的成长记录：${turtle?.weight || "-"}g，背甲 ${turtle?.carapaceLength || "-"}cm。来自壳友手账`;
+    if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+      await navigator.share({ title: `${turtle?.code || "龟龟"}的成长卡`, text, files: [file] });
+      return;
+    }
+    await saveGrowthCard();
+    toast("图片已保存，可发到微信或抖音");
+  } catch (error) {
+    if (error?.name !== "AbortError") toast(error.message || "分享失败，请先保存图片");
+  }
 }
 
 function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") {
@@ -11785,6 +12024,9 @@ function submitTurtleDetail(event) {
     note: String(form.get("note") || ""),
     photo: state.updateDraftPhoto === "__CLEAR__" ? "" : state.updateDraftPhoto || turtle.photo || speciesPhoto(species) || defaultPhoto
   };
+  const nextGrowth = new Date();
+  nextGrowth.setDate(nextGrowth.getDate() + 30);
+  updated.nextGrowthAt = formatDate(nextGrowth);
   const historyItem = {
     id: crypto.randomUUID(),
     oldLength: Number(turtle.carapaceLength || 0),
@@ -11812,18 +12054,35 @@ function submitTurtleDetail(event) {
     updatedAt: new Date().toISOString()
   };
   const keptSpecies = state.keptSpecies.includes(species.code) ? state.keptSpecies : [...state.keptSpecies, species.code];
+  const existingGrowthMemo = (state.memos || []).find(memo => memo.turtleId === turtle.id && memo.growthReminder);
+  const growthMemo = {
+    ...(existingGrowthMemo || {}),
+    id: existingGrowthMemo?.id || crypto.randomUUID(),
+    turtleId: turtle.id,
+    growthReminder: true,
+    title: `该给${updated.code}记录成长啦`,
+    content: "测量体重和背甲、拍一张新照片，回来领取新的成长报告。",
+    dueDate: updated.nextGrowthAt,
+    remindTime: "09:00",
+    repeat: false,
+    weekdays: [],
+    updatedAt: new Date().toISOString()
+  };
   saveWithDeferredImages({
     turtles: state.turtles.map(t => t.id === turtle.id ? {
       ...updated,
       measureHistory: [historyItem, ...(t.measureHistory || [])]
     } : t),
     keptSpecies,
+    memos: existingGrowthMemo ? state.memos.map(memo => memo.id === existingGrowthMemo.id ? growthMemo : memo) : [growthMemo, ...(state.memos || [])],
     updatingTurtleId: "",
     turtleDetailDraftId: "",
     turtleDetailDraft: null,
     updateDraftPhoto: "",
+    page: "turtleReward",
     activityLogs: logActivity(`更新档案：${turtleLabel(updated)}，背甲 ${historyItem.oldLength}cm → ${carapaceLength}cm${state.updateDraftPhoto ? "，并更换照片" : ""}`, "档案")
   }, [updated.photo, historyItem.newPhoto]);
+  activateCareReminder(growthMemo);
   toast("档案已更新，旧记录已经留存");
 }
 
@@ -11856,6 +12115,21 @@ function submitTurtle(event) {
     createdAt: new Date().toISOString(),
     measureHistory: []
   };
+  const nextGrowth = new Date();
+  nextGrowth.setDate(nextGrowth.getDate() + 30);
+  turtle.nextGrowthAt = formatDate(nextGrowth);
+  const growthMemo = {
+    id: crypto.randomUUID(),
+    turtleId: turtle.id,
+    growthReminder: true,
+    title: `该给${turtle.code}记录成长啦`,
+    content: "测量体重和背甲、拍一张新照片，回来领取成长曲线和照片对比。",
+    dueDate: turtle.nextGrowthAt,
+    remindTime: "09:00",
+    repeat: false,
+    weekdays: [],
+    updatedAt: new Date().toISOString()
+  };
   const keptSpecies = state.keptSpecies.includes(species.code) ? state.keptSpecies : [...state.keptSpecies, species.code];
   const ledgerRecords = [...state.ledgerRecords];
   const logs = [makeActivity(`新增档案：${turtleLabel(turtle)}`, "档案")];
@@ -11883,13 +12157,16 @@ function submitTurtle(event) {
     turtles: [turtle, ...state.turtles],
     keptSpecies,
     ledgerRecords,
+    memos: [growthMemo, ...(state.memos || [])],
     formPhoto: "",
     formGender: "未知",
     formDraft: {},
     selectedSpeciesCode: "",
-    page: "home",
+    page: "turtleReward",
+    selectedTurtleId: turtle.id,
     activityLogs: [...logs, ...(state.activityLogs || [])]
   }, [turtle.photo]);
+  activateCareReminder(growthMemo);
   toast(turtle.source === "购买" ? "档案已保存，并已同步到收购账本" : "档案已保存");
 }
 
