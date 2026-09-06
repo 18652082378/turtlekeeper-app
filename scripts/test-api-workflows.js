@@ -194,13 +194,17 @@ async function main() {
 
     const post = await request("/api/community/create", {
       ...auth(seller),
+      title: "Regression turtle post",
       content: "Regression community post",
       mediaItems: [{ url: uploadedImage.json.url, type: "image" }]
     });
     const postId = post.json.posts[0]?.id;
     assert.ok(postId, "community post should be returned after creation");
     await request("/api/community/create", {
-      ...auth(seller), content: "提供 色-情 裸聊服务"
+      ...auth(seller), title: "Objectionable turtle post", content: "提供 色-情 裸聊服务"
+    }, { status: 400 });
+    await request("/api/community/create", {
+      ...auth(seller), title: "Video turtle post", content: "Regression video rejection", mediaItems: [{ url: uploadedVideo.json.url, type: "video" }]
     }, { status: 400 });
     await request("/api/community/like", { ...auth(buyer), postId });
     await request("/api/community/comment", { ...auth(buyer), postId, content: "Regression comment" });
@@ -213,6 +217,20 @@ async function main() {
 
     const sellerId = communityId(seller.phone);
     const buyerId = communityId(buyer.phone);
+    const privatePost = await request("/api/community/create", {
+      ...auth(seller), title: "Private turtle post", content: "Only the author can see this", visibility: "private"
+    });
+    const privatePostId = privatePost.json.posts.find(item => item.title === "Private turtle post")?.id;
+    const followersPost = await request("/api/community/create", {
+      ...auth(seller), title: "Followers turtle post", content: "Followers can see this", visibility: "followers"
+    });
+    const followersPostId = followersPost.json.posts.find(item => item.title === "Followers turtle post")?.id;
+    const buyerBeforeFollow = await request("/api/community/list", auth(buyer));
+    assert.ok(!buyerBeforeFollow.json.posts.some(item => item.id === privatePostId || item.id === followersPostId));
+    await request("/api/community/follow/toggle", { ...auth(buyer), userId: sellerId });
+    const buyerAfterFollow = await request("/api/community/list", auth(buyer));
+    assert.ok(buyerAfterFollow.json.posts.some(item => item.id === followersPostId));
+    assert.ok(!buyerAfterFollow.json.posts.some(item => item.id === privatePostId));
     const sent = await request("/api/community/chat/send", {
       ...auth(buyer),
       userId: sellerId,

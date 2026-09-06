@@ -2709,6 +2709,18 @@ function isFollowingCommunityUser(db, followerPhone, targetPhone) {
   return (Array.isArray(db.follows) ? db.follows : []).some(item => item.followerPhone === followerPhone && item.targetPhone === targetPhone);
 }
 
+function normalizedCommunityVisibility(value) {
+  return ["public", "followers", "private"].includes(String(value || "")) ? String(value) : "public";
+}
+
+function canViewCommunityPost(db, post, viewer = null) {
+  const visibility = normalizedCommunityVisibility(post?.visibility);
+  if (visibility === "public") return true;
+  if (!viewer?.phone) return false;
+  if (post?.authorPhoneRaw === viewer.phone) return true;
+  return visibility === "followers" && isFollowingCommunityUser(db, viewer.phone, post?.authorPhoneRaw);
+}
+
 function followedCommunityUsers(db, viewer) {
   const blocked = blockedPhoneSet(viewer);
   return (Array.isArray(db.follows) ? db.follows : [])
@@ -2757,9 +2769,8 @@ function communityMediaItemsFromPost(item) {
       posterUrl: trimPublicText(media?.posterUrl || media?.poster, 800),
       type: media?.type === "video" ? "video" : "image"
     }))
-    .filter(media => media.url);
-  const video = mediaItems.find(media => media.type === "video");
-  return video ? [video] : mediaItems.slice(0, 9);
+    .filter(media => media.url && media.type === "image");
+  return mediaItems.slice(0, 9);
 }
 
 function publicCommunityPosts(db, viewer = null) {
@@ -2767,8 +2778,9 @@ function publicCommunityPosts(db, viewer = null) {
   const blocked = blockedPhoneSet(viewer);
   return (Array.isArray(db.communityPosts) ? db.communityPosts : [])
     .filter(item => !blocked.has(item.authorPhoneRaw))
+    .filter(item => canViewCommunityPost(db, item, viewer))
     .slice()
-    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    .sort((a, b) => Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned)) || new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
     .map(item => {
       const author = db.users?.[item.authorPhoneRaw];
       const likes = Array.isArray(item.likes) ? item.likes : [];
@@ -2776,14 +2788,22 @@ function publicCommunityPosts(db, viewer = null) {
       const primaryMedia = mediaItems[0] || null;
       return {
         id: item.id,
+        title: item.title || trimPublicText(item.question || item.content || "壳友交流帖", 80),
+        circleId: ["general", "mud", "tortoise", "sideneck", "health", "habitat", "breeding", "identify"].includes(item.circleId) ? item.circleId : (item.topic === "identify" ? "identify" : item.topic === "question" ? "health" : "general"),
+        isPinned: Boolean(item.isPinned),
+        isFeatured: Boolean(item.isFeatured),
         content: item.content || "",
+        topic: ["daily", "growth", "identify", "question"].includes(item.topic) ? item.topic : "daily",
+        question: item.question || "",
+        speciesCode: item.speciesCode || "",
+        speciesName: item.speciesName || "",
         mediaUrl: primaryMedia?.url || "",
         posterUrl: primaryMedia?.posterUrl || "",
         mediaType: primaryMedia?.type || "",
         mediaItems,
         location: item.location || "",
         mentions: item.mentions || "",
-        visibility: item.visibility || "public",
+        visibility: normalizedCommunityVisibility(item.visibility),
         authorId: communityUserId(item.authorPhoneRaw),
         authorName: author?.accountName || item.authorName || "壳友",
         authorAvatar: author?.accountAvatar || item.authorAvatar || "",
@@ -2800,6 +2820,8 @@ function publicCommunityPosts(db, viewer = null) {
           authorName: db.users?.[comment.authorPhoneRaw]?.accountName || comment.authorName || "壳友",
           authorAvatar: db.users?.[comment.authorPhoneRaw]?.accountAvatar || comment.authorAvatar || "",
           authorIsAdmin: isAdminUser(db.users?.[comment.authorPhoneRaw]),
+          replyToCommentId: comment.replyToCommentId || "",
+          replyToName: comment.replyToName || "",
           createdAt: comment.createdAt
         }))
       };
@@ -2834,6 +2856,7 @@ async function handleCommunityList(req, res) {
     total: allPosts.length,
     friends: user ? communityFriends(db, user) : [],
     profileStats: communityProfileStats(db, user),
+    followedCircleIds: user && Array.isArray(user.communityCircleIds) ? user.communityCircleIds : [],
     isAdmin: isAdminUser(user)
   });
 }
@@ -2843,7 +2866,14 @@ async function handleCommunityCreate(req, res) {
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
-  const content = trimPublicText(body.content, 1200);
+  const content = trimPublicText(body.content, 2000);
+  const submittedTitle = trimPublicText(body.title, 31);
+  const title = submittedTitle || trimPublicText(body.question || body.content || "壳友交流帖", 31);
+  const circleId = ["general", "mud", "tortoise", "sideneck", "health", "habitat", "breeding", "identify"].includes(String(body.circleId || "")) ? String(body.circleId) : "general";
+  const topic = ["daily", "growth", "identify", "question"].includes(String(body.topic || "")) ? String(body.topic) : "daily";
+  const question = trimPublicText(body.question, 160);
+  const speciesCode = trimPublicText(body.speciesCode, 20);
+  const speciesName = trimPublicText(body.speciesName, 60);
   const rawMediaItems = Array.isArray(body.mediaItems)
     ? body.mediaItems
     : (body.mediaUrl ? [{ url: body.mediaUrl, posterUrl: body.posterUrl, type: body.mediaType }] : []);
@@ -2855,19 +2885,24 @@ async function handleCommunityCreate(req, res) {
       type: media?.type === "video" ? "video" : "image"
     }))
     .filter(media => media.url);
-  const videoCount = mediaItems.filter(media => media.type === "video").length;
-  if (videoCount && mediaItems.length !== 1) {
-    return sendJson(res, 400, { ok: false, message: "视频和图片不可混合发布，每条动态只能发布 1 个视频" });
-  }
+  if (mediaItems.some(media => media.type === "video")) return sendJson(res, 400, { ok: false, message: "壳友圈只允许发布图片" });
   const primaryMedia = mediaItems[0] || null;
   const location = trimPublicText(body.location, 100);
   const mentions = trimPublicText(body.mentions, 200);
-  const visibility = "public";
-  if (!content && !primaryMedia) return sendJson(res, 400, { ok: false, message: "请填写内容或选择图片、视频" });
-  if (rejectObjectionableContent(res, content, location, mentions)) return;
+  const visibility = normalizedCommunityVisibility(body.visibility);
+  if ([...submittedTitle].length < 5 || [...submittedTitle].length > 31) return sendJson(res, 400, { ok: false, message: "帖子标题需为 5–31 个字" });
+  if (rejectObjectionableContent(res, title, content, question, location, mentions)) return;
   const post = {
     id: crypto.randomUUID(),
+    title,
+    circleId,
+    isPinned: false,
+    isFeatured: false,
     content,
+    topic,
+    question,
+    speciesCode,
+    speciesName,
     mediaUrl: primaryMedia?.url || "",
     posterUrl: primaryMedia?.posterUrl || "",
     mediaType: primaryMedia?.type || "",
@@ -2894,6 +2929,7 @@ async function handleCommunityLike(req, res) {
   if (!user) return;
   const post = (Array.isArray(db.communityPosts) ? db.communityPosts : []).find(item => item.id === String(body.postId || ""));
   if (!post) return sendJson(res, 404, { ok: false, message: "动态不存在" });
+  if (!canViewCommunityPost(db, post, user)) return sendJson(res, 403, { ok: false, message: "你无权查看这篇帖子" });
   const likes = Array.isArray(post.likes) ? post.likes : [];
   post.likes = likes.includes(user.phone) ? likes.filter(phone => phone !== user.phone) : [...likes, user.phone];
   writeDatabase(db);
@@ -2907,7 +2943,10 @@ async function handleCommunityComment(req, res) {
   if (!user) return;
   const post = (Array.isArray(db.communityPosts) ? db.communityPosts : []).find(item => item.id === String(body.postId || ""));
   const content = trimPublicText(body.content, 500);
+  const replyToCommentId = trimPublicText(body.replyToCommentId, 100);
+  const replyTarget = replyToCommentId ? (Array.isArray(post?.comments) ? post.comments : []).find(item => item.id === replyToCommentId) : null;
   if (!post) return sendJson(res, 404, { ok: false, message: "动态不存在" });
+  if (!canViewCommunityPost(db, post, user)) return sendJson(res, 403, { ok: false, message: "你无权查看这篇帖子" });
   if (!content) return sendJson(res, 400, { ok: false, message: "请输入评论" });
   if (rejectObjectionableContent(res, content)) return;
   post.comments = [...(Array.isArray(post.comments) ? post.comments : []), {
@@ -2916,8 +2955,41 @@ async function handleCommunityComment(req, res) {
     authorPhoneRaw: user.phone,
     authorName: user.accountName || maskPhone(user.phone),
     authorAvatar: user.accountAvatar || "",
+    replyToCommentId: replyTarget?.id || "",
+    replyToName: replyTarget ? (db.users?.[replyTarget.authorPhoneRaw]?.accountName || replyTarget.authorName || "壳友") : "",
     createdAt: new Date().toISOString()
   }];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
+}
+
+async function handleCommunityCircleFollow(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const allowed = ["general", "mud", "tortoise", "sideneck", "health", "habitat", "breeding", "identify"];
+  const circleId = String(body.circleId || "");
+  if (!allowed.includes(circleId)) return sendJson(res, 400, { ok: false, message: "圈子不存在" });
+  const followed = new Set(Array.isArray(user.communityCircleIds) ? user.communityCircleIds : []);
+  if (followed.has(circleId)) followed.delete(circleId);
+  else followed.add(circleId);
+  user.communityCircleIds = [...followed];
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, followedCircleIds: user.communityCircleIds });
+}
+
+async function handleCommunityAdminAction(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (!isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "仅管理员可执行此操作" });
+  const post = (Array.isArray(db.communityPosts) ? db.communityPosts : []).find(item => item.id === String(body.postId || ""));
+  if (!post) return sendJson(res, 404, { ok: false, message: "帖子不存在" });
+  if (body.action === "pin") post.isPinned = !post.isPinned;
+  else if (body.action === "feature") post.isFeatured = !post.isFeatured;
+  else return sendJson(res, 400, { ok: false, message: "操作无效" });
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
 }
@@ -2931,6 +3003,7 @@ async function handleCommunityDelete(req, res) {
   const post = (Array.isArray(db.communityPosts) ? db.communityPosts : []).find(item => item.id === postId);
   if (!post) return sendJson(res, 404, { ok: false, message: "动态不存在" });
   if (post.authorPhoneRaw !== user.phone && !isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "只能删除自己的动态" });
+  if (post.authorPhoneRaw !== user.phone && isAdminUser(user)) recordAdminAudit(db, user, "删除用户作品", post.title || post.id);
   db.communityPosts = db.communityPosts.filter(item => item.id !== postId);
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
@@ -2961,7 +3034,7 @@ function reportedContent(db, targetType, targetId) {
     type,
     id: item.id,
     ownerPhone: item.authorPhoneRaw,
-    title: trimPublicText(item.content || (item.mediaUrl ? "含图片或视频的壳友圈动态" : "壳友圈动态"), 120)
+    title: trimPublicText(item.title || item.content || (item.mediaUrl ? "含图片或视频的壳友圈帖子" : "壳友圈帖子"), 120)
   } : null;
 }
 
@@ -4174,6 +4247,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/create") return await handleCommunityCreate(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/like") return await handleCommunityLike(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/comment") return await handleCommunityComment(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/circle/follow") return await handleCommunityCircleFollow(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/admin/action") return await handleCommunityAdminAction(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/delete") return await handleCommunityDelete(req, res);
     if (req.method === "POST" && url.pathname === "/api/content-reports/create") return await handleContentReportCreate(req, res);
     if (req.method === "POST" && url.pathname === "/api/content-reports/list") return await handleContentReportList(req, res);

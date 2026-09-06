@@ -14,6 +14,7 @@ const DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/asset
 const POLICY_VERSION = "2026-09-01";
 const APP_BUILD = Math.max(0, Number.parseInt(String(window.TURTLE_APP_BUILD || "0"), 10) || 0);
 const APP_STORE_URL = String(window.TURTLE_APP_STORE_URL || "https://apps.apple.com/app/id6783481335");
+const APP_REVIEW_INVITE_STORAGE = "turtlekeeper-app-review-invite-v1";
 let forceUpdateState = { required: false, checking: false, minimumBuild: 0, latestBuild: 0, message: "", appStoreUrl: "" };
 // 龟集市的购买咨询统一由平台客服承接；修改此处即可同步更新商品页和“关于”页。
 const PLATFORM_SERVICE_WECHAT = "keyousz001";
@@ -55,7 +56,7 @@ const WEEKDAY_OPTIONS = [
   { value: "6", label: "六" },
   { value: "0", label: "日" }
 ];
-const BOTTOM_NAV_ROOT_PAGES = new Set(["home", "ledger", "market", "messages", "mine"]);
+const BOTTOM_NAV_ROOT_PAGES = new Set(["home", "ledger", "market", "community", "messages"]);
 const PULL_REFRESH_THRESHOLD = 72;
 const PULL_REFRESH_MAX_OFFSET = 96;
 let pullRefreshState = { tracking: false, refreshing: false, startX: 0, startY: 0, distance: 0, ready: false, direction: "" };
@@ -130,6 +131,7 @@ const initialState = {
   communityFeedHasMore: true,
   communityFeedLoadingMore: false,
   communityProfileStats: { receivedLikes: 0, followerCount: 0 },
+  communityFollowedCircleIds: [],
   contentReports: [],
   systemAnnouncements: [],
   adminSystemAnnouncements: [],
@@ -387,6 +389,17 @@ let communityDraftMediaFile = null;
 let communityDraftMediaDuration = 0;
 let communityDraftMediaItems = [];
 let communityDraftText = "";
+let communityDraftTopic = "daily";
+let communityDraftQuestion = "";
+let communityDraftTurtleId = "";
+let communityTopicFilter = "all";
+let communityDraftTitle = "";
+let communityDraftCircleId = "general";
+let communityDraftVisibility = "public";
+let communityVisibilitySheetOpen = false;
+let communityForumSort = "hot";
+let communitySelectedCircleId = "all";
+let communityReplyTarget = null;
 let marketLoading = false;
 let marketLastLoadedAt = 0;
 let marketLoadObserver = null;
@@ -627,6 +640,7 @@ function normalizeState(next) {
       receivedLikes: Math.max(0, Number(base.communityProfileStats?.receivedLikes || 0)),
       followerCount: Math.max(0, Number(base.communityProfileStats?.followerCount || 0))
     },
+    communityFollowedCircleIds: Array.isArray(base.communityFollowedCircleIds) ? base.communityFollowedCircleIds.map(String) : [],
     contentReports: Array.isArray(base.contentReports) ? base.contentReports : [],
     systemAnnouncements: Array.isArray(base.systemAnnouncements) ? base.systemAnnouncements : [],
     adminSystemAnnouncements: Array.isArray(base.adminSystemAnnouncements) ? base.adminSystemAnnouncements : [],
@@ -762,6 +776,7 @@ function saveState(options = {}) {
       accountCodeCooldownUntil: state.accountCodeCooldownUntil,
       communityPosts: state.communityPosts || [],
       communityFriends: state.communityFriends || [],
+      communityFollowedCircleIds: state.communityFollowedCircleIds || [],
       communityFollowingUsers: state.communityFollowingUsers || [],
       messageUnreadCount: Number(state.messageUnreadCount || 0),
       marketListings: state.marketListings || [],
@@ -1840,6 +1855,12 @@ function tabIcon(name) {
         <path d="M8.5 10h7"></path>
       </svg>
     `,
+    community: `
+      <svg viewBox="0 0 24 24" focusable="false">
+        <circle cx="12" cy="12" r="3.4"></circle>
+        <path d="M12 3.2c2.4 0 3.8 2.9 2.1 4.6M20.8 12c0 2.4-2.9 3.8-4.6 2.1M12 20.8c-2.4 0-3.8-2.9-2.1-4.6M3.2 12c0-2.4 2.9-3.8 4.6-2.1"></path>
+      </svg>
+    `,
     market: `
       <svg viewBox="0 0 24 24" focusable="false">
         <path d="M4 9h16l-1.2-4H5.2z"></path>
@@ -1862,7 +1883,8 @@ function bottomNav() {
   const dashboardPages = ["home", "list", "turtleDetail", "turtleReward", "species", "breeds", "add", "memos", "breeding", "breedingAdd", "breedingDetail", "pools", "poolAdd"];
   const ledgerPages = ["ledger", "ledgerDetail"];
   const marketPages = ["market", "marketAdd", "marketDetail", "marketSeller"];
-  const messagePages = ["messages", "community", "communityAdd", "communityFriends", "communityChat", "communityPostDetail", "communityProfile"];
+  const communityPages = ["community", "communityAdd", "communityPostDetail", "communityProfile"];
+  const messagePages = ["messages", "communityFriends", "communityChat"];
   const minePages = ["mine", "calendar", "satisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "about", "rules", "privacy", "moderation", "reports", "marketFavorites", "marketHistory", "following", "followingProfile"];
   const unreadCount = Math.max(0, Number(state.messageUnreadCount || 0));
   const unreadText = unreadCount > 99 ? "99+" : String(unreadCount);
@@ -1871,8 +1893,8 @@ function bottomNav() {
       <button class="${dashboardPages.includes(state.page) ? "active" : ""}" data-page="home">${tabIcon("home")}看板</button>
       <button class="${ledgerPages.includes(state.page) ? "active" : ""}" data-page="ledger">${tabIcon("ledger")}账本</button>
       <button class="${marketPages.includes(state.page) ? "active" : ""}" data-page="market">${tabIcon("market")}龟集市</button>
-      <button class="nav-message-tab ${messagePages.includes(state.page) ? "active" : ""}" data-page="messages">${tabIcon("messages")}${unreadCount ? `<i class="nav-unread-badge">${unreadText}</i>` : ""}消息</button>
-      <button class="${minePages.includes(state.page) ? "active" : ""}" data-page="mine">${tabIcon("mine")}空间</button>
+      <button class="${communityPages.includes(state.page) ? "active" : ""}" data-page="community">${tabIcon("community")}壳友圈</button>
+      <button class="nav-message-tab ${messagePages.includes(state.page) || minePages.includes(state.page) ? "active" : ""}" data-page="messages">${tabIcon("mine")}${unreadCount ? `<i class="nav-unread-badge">${unreadText}</i>` : ""}空间</button>
     </nav>
   `;
 }
@@ -1881,8 +1903,16 @@ function bottomNavActivePage(page = state.page) {
   if (["home", "list", "turtleDetail", "turtleReward", "species", "breeds", "add", "memos", "breeding", "breedingAdd", "breedingDetail", "pools", "poolAdd"].includes(page)) return "home";
   if (["ledger", "ledgerDetail"].includes(page)) return "ledger";
   if (["market", "marketAdd", "marketDetail", "marketSeller"].includes(page)) return "market";
-  if (["messages", "community", "communityAdd", "communityFriends", "communityChat", "communityPostDetail", "communityProfile"].includes(page)) return "messages";
-  return "mine";
+  if (["community", "communityAdd", "communityPostDetail", "communityProfile"].includes(page)) return "community";
+  return "messages";
+}
+
+function platformServiceTopButton() {
+  return `<button class="market-top-service" type="button" data-market-top-service aria-label="联系平台客服"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.2v-1.1a7.5 7.5 0 0 1 15 0v1.1"></path><path d="M4.5 12.6H3.8a1.8 1.8 0 0 0-1.8 1.8v2.1a1.8 1.8 0 0 0 1.8 1.8h1.7v-5.7ZM19.5 12.6h.7a1.8 1.8 0 0 1 1.8 1.8v2.1a1.8 1.8 0 0 1-1.8 1.8h-1.7v-5.7ZM19.5 18.1c0 1.3-1.2 2.4-2.7 2.4h-1.5"></path><path d="M13.2 20.5h2.4"></path></svg></button>`;
+}
+
+function spaceAvatarTopButton() {
+  return `<button class="space-entry-button" type="button" data-page="mine" aria-label="进入我的空间">${accountAvatarMarkup("space-entry-avatar")}<span class="space-entry-label">我的空间</span></button>`;
 }
 
 // Keep the guest view recognisable: visitors can see the normal page layout,
@@ -2006,7 +2036,7 @@ function communityPostMediaItems(item) {
       posterUrl: String(media?.posterUrl || media?.poster || ""),
       type: media?.type === "video" ? "video" : "image"
     }))
-    .filter(media => media.url)
+    .filter(media => media.url && media.type === "image")
     .slice(0, 9);
 }
 
@@ -2039,7 +2069,8 @@ function communityFeedMedia(item) {
   };
   if (!mediaItems.length) return "";
   if (mediaItems.length === 1) return mediaButton(mediaItems[0], 0);
-  return `<div class="community-media-gallery community-media-gallery-${mediaItems.length}">${mediaItems.map(mediaButton).join("")}</div>`;
+  const visibleItems = mediaItems.slice(0, 3);
+  return `<div class="community-media-gallery community-media-gallery-${visibleItems.length}">${visibleItems.map((media, index) => `<div class="community-feed-media-cell">${mediaButton(media, index)}${index === 2 && mediaItems.length > 3 ? `<span class="community-media-more">+${mediaItems.length - 3}</span>` : ""}</div>`).join("")}</div>`;
 }
 
 function communityCompactCard(item) {
@@ -2065,12 +2096,14 @@ function communityFeedCard(item, { allowDetail = false } = {}) {
       <button class="community-profile-avatar-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item)}</button>
       <div class="community-moment-main">
         <div class="community-moment-author"><span class="community-profile-name">${escapeHtml(item.authorName || "壳友")}${platformAdminBadge(item)}</span>${!isOwn ? `<span class="community-author-actions"><button class="community-follow-button ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></span>` : ""}</div>
+        ${communityPostTopicMarkup(item)}
         ${item.content ? `<p class="community-post-copy">${escapeHtml(item.content)}</p>` : ""}
         ${primaryMedia ? `<div class="community-post-media ${primaryMedia.type === "video" ? "is-video" : ""}">${communityFeedMedia(item)}</div>` : ""}
+        ${communityPostQuestionMarkup(item)}
         ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
         <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${canDelete ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? communityMomentActionMenu(item, isOwn) : ""}</div></div>
         ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}${platformAdminBadge(comment)}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</div>` : ""}
-        ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="评论" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
+        ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="${item.question ? "分享你的经验" : "评论"}" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
       </div>
     </article>
   `;
@@ -2078,7 +2111,7 @@ function communityFeedCard(item, { allowDetail = false } = {}) {
 
 function communityMomentActionMenu(item, isOwn = Boolean(item?.isOwn || item?.pendingLocal)) {
   if (!item?.id) return "";
-  return `<div class="community-moment-popover" data-community-moment-popover><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "取消" : "赞"}</button><button type="button" data-show-community-comment="${item.id}">评论</button></div>`;
+  return `<div class="community-moment-popover" data-community-moment-popover><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "取消" : "赞"}</button><button type="button" data-show-community-comment="${item.id}">${item.question ? "说经验" : "评论"}</button></div>`;
 }
 
 function findCommunityPost(postId) {
@@ -2163,38 +2196,51 @@ function communityDetailMedia(item) {
 
 function pageCommunityPostDetail() {
   const item = findCommunityPost(state.selectedCommunityPostId);
-  if (!item) return `${topbar("动态详情", true)}<main class="content page-fresh"><div class="empty small-empty"><div><strong>这条动态不存在</strong></div></div></main>${bottomNav()}`;
+  if (!item) return `${topbar("帖子详情", true)}<main class="content page-fresh"><div class="empty small-empty"><div><strong>这篇帖子不存在</strong></div></div></main>${bottomNav()}`;
   const comments = Array.isArray(item.comments) ? item.comments : [];
   const isOwn = Boolean(item.isOwn || item.pendingLocal);
   const canDelete = isOwn || state.isCommunityAdmin;
-  return `
-    ${topbar("动态详情", true)}
-    <main class="content page-fresh community-detail-page">
-      <article class="community-detail-card fresh-card">
-        <header class="community-detail-head">
+  const circle = communityCircle(communityPostCircleId(item));
+  const mediaCount = communityPostMediaItems(item).length;
+  const singleImage = mediaCount === 1;
+  const replyTarget = communityReplyTarget?.postId === item.id ? communityReplyTarget : null;
+  const circleContext = `<div class="forum-detail-context"><span>${circle.icon}</span><div><b>${circle.name}</b><small>${item.isPinned ? "置顶 · " : ""}${item.isFeatured ? "精华 · " : ""}${comments.length} 条回复</small></div></div>`;
+  const authorHeader = `<header class="community-detail-head">
           <button class="community-profile-avatar-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item)}</button>
           <button class="community-detail-author-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}"><strong>${escapeHtml(item.authorName || "壳友")}${platformAdminBadge(item)}</strong><span>${formatTime(item.createdAt)}</span></button>
           ${!isOwn ? `<div class="community-author-actions"><button class="${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></div>` : ""}
-        </header>
-        ${item.content ? `<p class="community-detail-copy">${escapeHtml(item.content)}</p>` : ""}
-        ${communityDetailMedia(item)}
-        ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
-        <div class="community-detail-actions">
-          <button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}">${item.liked ? "已赞" : "♡ 赞"}${item.likeCount ? ` ${item.likeCount}` : ""}</button>
+        </header>`;
+  const detailActions = `<div class="community-detail-actions">
+          <button type="button" data-share-community-post="${item.id}">分享</button>
           <button type="button" data-show-community-comment="${item.id}">评论${comments.length ? ` ${comments.length}` : ""}</button>
+          <button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}" aria-label="${item.liked ? "取消点赞" : "点赞"}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10H4V10h3Zm3 10V9l4-6c1.7.7 2 2.2 1.3 4.3L15 9h4.2c1.3 0 2 1.1 1.7 2.3l-1.6 6.5c-.3 1.3-1.2 2.2-2.6 2.2H10Z"></path></svg><span>${item.likeCount ? item.likeCount : "赞"}</span></button>
           ${!isOwn ? `<button type="button" data-open-content-report data-report-type="community" data-report-id="${item.id}">举报</button><button class="danger-link" type="button" data-block-content-user data-block-type="community" data-block-id="${item.id}" data-block-name="${escapeHtml(item.authorName || "该用户")}">屏蔽用户</button>` : ""}
           ${canDelete ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}
-        </div>
-        ${(item.likeCount || comments.length) ? `<section class="community-detail-social">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}${platformAdminBadge(comment)}</strong>：${escapeHtml(comment.content)}</p>`).join("")}</section>` : ""}
-        ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="写下评论" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
+        </div>`;
+  return `
+    ${topbar(singleImage ? circle.name : "帖子详情", true)}
+    <main class="content page-fresh community-detail-page ${singleImage ? "is-single-image-detail" : ""}">
+      <article class="community-detail-card fresh-card ${singleImage ? "is-single-image" : ""}">
+        ${singleImage ? authorHeader : circleContext}
+        <h2 class="forum-detail-title">${escapeHtml(communityPostTitle(item))}</h2>
+        ${singleImage ? "" : authorHeader}
+        ${communityPostTopicMarkup(item)}
+        ${item.content ? `<p class="community-detail-copy">${escapeHtml(item.content)}</p>` : ""}
+        ${communityDetailMedia(item)}
+        ${communityPostQuestionMarkup(item)}
+        ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
+        ${detailActions}
+        ${singleImage ? circleContext : ""}
+        ${state.isCommunityAdmin ? `<div class="forum-admin-actions"><button class="${item.isPinned ? "active" : ""}" type="button" data-community-admin-action="pin" data-post-id="${item.id}">${item.isPinned ? "取消置顶" : "置顶帖子"}</button><button class="${item.isFeatured ? "active" : ""}" type="button" data-community-admin-action="feature" data-post-id="${item.id}">${item.isFeatured ? "取消精华" : "设为精华"}</button></div>` : ""}
       </article>
+      <section class="forum-reply-section"><div class="forum-reply-heading"><strong>全部回复</strong><span>${comments.length} 楼</span></div>${comments.map((comment, index) => `<article class="forum-floor"><div class="forum-floor-avatar">${communityAvatar(comment, "forum-reply-avatar")}</div><div><header><strong>${escapeHtml(comment.authorName || "壳友")}${platformAdminBadge(comment)}</strong><span>${index + 1} 楼 · ${formatTime(comment.createdAt)}</span></header>${comment.replyToName ? `<small>回复 ${escapeHtml(comment.replyToName)}</small>` : ""}<p>${escapeHtml(comment.content)}</p><button type="button" data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${escapeHtml(comment.authorName || "壳友")}" data-post-id="${escapeHtml(item.id)}">回复</button></div></article>`).join("") || `<div class="empty small-empty"><div><strong>还没有回复</strong><br>来坐第一个沙发</div></div>`}</section>
+      <form class="community-comment-form forum-reply-composer" data-community-comment-form="${item.id}"><input name="content" placeholder="${replyTarget ? `回复 ${escapeHtml(replyTarget.name)}` : "友善交流，说说你的经验"}" maxlength="500"><button type="submit">发送</button></form>
     </main>
     ${bottomNav()}
   `;
 }
 
 function pageMessages() {
-  const latestPost = (state.communityPosts || [])[0];
   const chatPreview = latestCommunityMessagePreview(state.communityChatMessages || []);
   const friends = (() => {
     const rows = [...(state.communityFriends || [])];
@@ -2210,11 +2256,8 @@ function pageMessages() {
     return rows;
   })();
   return `
-    ${topbar("消息")}
+    ${topbar("消息", false, spaceAvatarTopButton(), platformServiceTopButton())}
     <main class="content page-fresh message-page">
-      <section class="message-discover-list">
-        <button class="message-discover-row" type="button" data-page="community"><span class="message-community-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2.8c2.5 0 3.9 3 2.2 4.8M21.2 12c0 2.5-3 3.9-4.8 2.2M12 21.2c-2.5 0-3.9-3-2.2-4.8M2.8 12c0-2.5 3-3.9 4.8-2.2"></path></svg></span><strong>壳友圈</strong><span class="message-discover-preview">${latestPost?.mediaUrl ? (latestPost.mediaType === "video" ? `<span class="message-video-thumb">▶</span>` : `<img src="${latestPost.mediaUrl}" alt="最新动态">`) : ""}</span><b>›</b></button>
-      </section>
       <section class="message-friend-list">${friends.map(friend => `<article class="message-friend-swipe" data-conversation-id="${escapeHtml(friend.id)}"><button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div class="message-friend-copy"><strong>${escapeHtml(friend.name || "壳友")}${platformAdminBadge(friend)}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><span class="message-friend-meta">${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></span></button><div class="message-friend-actions"><button type="button" data-toggle-conversation-pin="${escapeHtml(friend.id)}">${friend.pinned ? "取消置顶" : "置顶"}</button><button class="delete" type="button" data-delete-conversation="${escapeHtml(friend.id)}">删除</button></div></article>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`}</section>
     </main>
     ${guestLoginSlot()}
@@ -2227,14 +2270,188 @@ function platformAdminBadge(subject = {}) {
   return `<span class="platform-admin-badge" title="壳友手账官方管理员">官方管理员</span>`;
 }
 
+const COMMUNITY_TOPICS = {
+  daily: { label: "晒龟龟", badge: "今日晒龟", prompt: "今天它又做了什么有趣的事？", question: "留个问题，更容易收到回复（选填）" },
+  growth: { label: "晒成长", badge: "成长记录", prompt: "把这次真实变化分享给壳友", question: "问问同品种龟友的成长情况（选填）" },
+  identify: { label: "求鉴定", badge: "求鉴定", prompt: "拍清楚背甲、腹甲和头纹，说说你的判断", question: "你最想让大家帮忙鉴定什么？" },
+  question: { label: "问问题", badge: "饲养求助", prompt: "写清环境、温度、喂食和症状，更容易得到好建议", question: "一句话写出你最想解决的问题" }
+};
+
+const COMMUNITY_VISIBILITY_OPTIONS = {
+  public: { label: "所有壳友可见", note: "任何人都可以看到这篇帖子", icon: "◎" },
+  followers: { label: "仅粉丝可见", note: "只有关注你的壳友可以看到", icon: "◉" },
+  private: { label: "仅自己可见", note: "只保存到自己的空间", icon: "●" }
+};
+
+function communityVisibilityOption(value = communityDraftVisibility) {
+  return COMMUNITY_VISIBILITY_OPTIONS[value] || COMMUNITY_VISIBILITY_OPTIONS.public;
+}
+
+const COMMUNITY_CIRCLES = [
+  { id: "general", name: "综合交流", icon: "聊", note: "日常分享与交流" },
+  { id: "mud", name: "蛋龟交流", icon: "蛋", note: "麝香、剃刀与泥龟" },
+  { id: "tortoise", name: "陆龟交流", icon: "陆", note: "环境、饮食与健康" },
+  { id: "sideneck", name: "侧颈龟圈", icon: "侧", note: "侧颈龟饲养经验" },
+  { id: "health", name: "疾病求助", icon: "+", note: "症状记录与经验建议" },
+  { id: "habitat", name: "环境布置", icon: "景", note: "龟池、过滤与设备" },
+  { id: "breeding", name: "繁殖交流", icon: "育", note: "产蛋、孵化与育苗" },
+  { id: "identify", name: "品种鉴定", icon: "鉴", note: "让壳友一起掌眼" }
+];
+
+function communityCircle(circleId = "general") {
+  return COMMUNITY_CIRCLES.find(item => item.id === circleId) || COMMUNITY_CIRCLES[0];
+}
+
+function inferredCommunityCircle(topic = "daily") {
+  if (topic === "identify") return "identify";
+  if (topic === "question") return "health";
+  if (topic === "growth") return "general";
+  return "general";
+}
+
+function communityPostCircleId(item = {}) {
+  return COMMUNITY_CIRCLES.some(circle => circle.id === item.circleId) ? item.circleId : inferredCommunityCircle(item.topic);
+}
+
+function communityPostTitle(item = {}) {
+  const explicit = String(item.title || "").trim();
+  if (explicit) return explicit;
+  const source = String(item.question || item.content || (item.mediaUrl ? "分享了一张龟龟照片" : "壳友交流帖")).replace(/\s+/g, " ").trim();
+  return source.length > 34 ? `${source.slice(0, 34)}…` : source;
+}
+
+function communityTopicConfig(topic = "daily") {
+  return COMMUNITY_TOPICS[topic] || COMMUNITY_TOPICS.daily;
+}
+
+function communityPostTopicMarkup(item = {}) {
+  const topic = COMMUNITY_TOPICS[item.topic];
+  if (!topic) return "";
+  const species = item.speciesName ? `<span>${escapeHtml(item.speciesName)}</span>` : "";
+  return `<div class="community-post-context"><b># ${topic.badge}</b>${species}</div>`;
+}
+
+function communityPostQuestionMarkup(item = {}) {
+  if (!item.question) return "";
+  return `<button class="community-discussion-hook" type="button" data-show-community-comment="${escapeHtml(item.id || "")}"><span>楼主想问</span><strong>${escapeHtml(item.question)}</strong><i>去讨论 ›</i></button>`;
+}
+
+function communityGrowthTemplate(turtle) {
+  if (!turtle) return "";
+  const history = Array.isArray(turtle.measureHistory) ? turtle.measureHistory : [];
+  const latest = history[0] || null;
+  const oldWeight = Number(latest?.oldSnapshot?.weight || 0);
+  const newWeight = Number(latest?.newSnapshot?.weight || turtle.weight || 0);
+  const oldLength = Number(latest?.oldLength || latest?.oldSnapshot?.carapaceLength || 0);
+  const newLength = Number(latest?.newLength || latest?.newSnapshot?.carapaceLength || turtle.carapaceLength || 0);
+  const lines = [`${turtle.code || turtle.speciesName || "我的龟"}完成第 ${Math.max(1, history.length)} 次成长记录`];
+  if (newWeight > 0) lines.push(oldWeight > 0 ? `体重 ${oldWeight}g → ${newWeight}g（${newWeight - oldWeight >= 0 ? "+" : ""}${Number((newWeight - oldWeight).toFixed(2))}g）` : `当前体重 ${newWeight}g`);
+  if (newLength > 0) lines.push(oldLength > 0 ? `背甲 ${oldLength}cm → ${newLength}cm（${newLength - oldLength >= 0 ? "+" : ""}${Number((newLength - oldLength).toFixed(2))}cm）` : `当前背甲 ${newLength}cm`);
+  return lines.join("\n");
+}
+
+function openCommunityComposer(topic = "daily") {
+  if (!canUseCommunity()) return;
+  communityDraftTopic = COMMUNITY_TOPICS[topic] ? topic : "daily";
+  if (!communityDraftTurtleId || !(state.turtles || []).some(item => item.id === communityDraftTurtleId)) {
+    communityDraftTurtleId = state.turtles?.[0]?.id || "";
+  }
+  communityDraftQuestion = "";
+  communityDraftTitle = "";
+  communityDraftCircleId = inferredCommunityCircle(communityDraftTopic);
+  communityDraftVisibility = "public";
+  communityVisibilitySheetOpen = false;
+  communityDraftText = communityDraftTopic === "growth"
+    ? communityGrowthTemplate((state.turtles || []).find(item => item.id === communityDraftTurtleId))
+    : "";
+  setState({ page: "communityAdd" }, { skipCloud: true });
+}
+
+function communityCreateHub() {
+  return `<section class="community-create-hub" aria-label="发布帖子">
+    <div class="community-create-head"><div><small>壳友圈</small><strong>今天，想分享哪件养龟小事？</strong><span>晒成长、问经验，也可以只记录一个可爱瞬间</span></div><button type="button" data-community-compose="daily"><i>＋</i><span>发帖</span></button></div>
+    <div class="community-create-strip">
+      <button type="button" data-community-compose="daily"><i>晒</i><span><b>晒龟龟</b><small>分享日常</small></span></button>
+      <button type="button" data-community-compose="growth"><i>长</i><span><b>晒成长</b><small>带入档案</small></span></button>
+      <button type="button" data-community-compose="identify"><i>鉴</i><span><b>求鉴定</b><small>龟友掌眼</small></span></button>
+      <button type="button" data-community-compose="question"><i>问</i><span><b>问问题</b><small>交流经验</small></span></button>
+    </div>
+  </section>`;
+}
+
+function communityTopicTabs() {
+  const tabs = [["hot", "热门"], ["latest", "最新"], ["featured", "精华"], ["followed", "关注"]];
+  return `<nav class="community-topic-tabs forum-sort-tabs" aria-label="帖子排序">${tabs.map(([value, label]) => `<button class="${communityForumSort === value ? "active" : ""}" type="button" data-community-forum-sort="${value}" aria-pressed="${communityForumSort === value}">${label}</button>`).join("")}</nav>`;
+}
+
+function communityCircleStrip(posts = []) {
+  const followed = new Set(state.communityFollowedCircleIds || []);
+  return `<section class="forum-circle-section"><div class="forum-section-head"><div><small>DISCOVER</small><strong>逛圈子</strong></div><span>滑动查看更多</span></div><div class="forum-circle-strip"><button class="forum-circle-card ${communitySelectedCircleId === "all" ? "active" : ""}" type="button" data-community-circle="all"><i>全</i><span><b>全部帖子</b><small>${posts.length} 篇讨论</small></span></button>${COMMUNITY_CIRCLES.map(circle => { const count = posts.filter(post => communityPostCircleId(post) === circle.id).length; return `<button class="forum-circle-card ${communitySelectedCircleId === circle.id ? "active" : ""}" type="button" data-community-circle="${circle.id}"><i>${circle.icon}</i><span><b>${circle.name}</b><small>${count ? `${count} 篇讨论` : circle.note}</small></span>${followed.has(circle.id) ? `<em>已关注</em>` : ""}</button>`; }).join("")}</div></section>`;
+}
+
+function communityForumPosts(posts = []) {
+  let result = [...posts];
+  if (communitySelectedCircleId !== "all") result = result.filter(item => communityPostCircleId(item) === communitySelectedCircleId);
+  if (communityForumSort === "featured") result = result.filter(item => item.isFeatured);
+  if (communityForumSort === "followed") {
+    const followed = new Set(state.communityFollowedCircleIds || []);
+    result = result.filter(item => followed.has(communityPostCircleId(item)));
+  }
+  const score = item => Number(item.likeCount || 0) * 2 + Number(item.comments?.length || 0) * 3 + Math.max(0, 72 - ((Date.now() - new Date(item.createdAt || 0).getTime()) / 3600000));
+  result.sort((a, b) => Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned)) || (communityForumSort === "hot" ? score(b) - score(a) : new Date(b.createdAt || 0) - new Date(a.createdAt || 0)));
+  return result;
+}
+
+function communityForumCard(item) {
+  const mediaItems = communityPostMediaItems(item);
+  const circle = communityCircle(communityPostCircleId(item));
+  const replies = Array.isArray(item.comments) ? item.comments.length : 0;
+  const isOwn = Boolean(item.isOwn || item.pendingLocal);
+  return `<article class="forum-thread-card ${item.isPinned ? "is-pinned" : ""}" data-community-feed-card="${escapeHtml(item.id)}" data-view-community-post="${escapeHtml(item.id)}" tabindex="0" role="button" aria-label="查看帖子：${escapeHtml(communityPostTitle(item))}">
+    <header class="forum-thread-author"><button type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item, "forum-thread-avatar")}</button><div class="forum-thread-author-copy"><strong>${escapeHtml(item.authorName || "壳友")}${platformAdminBadge(item)}</strong><span>${formatTime(item.createdAt)} · ${circle.name}</span></div>${!isOwn ? `<button class="forum-thread-follow ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${escapeHtml(item.authorId || "")}">${item.followed ? "已关注" : "+ 关注"}</button>` : ""}<div class="community-moment-action-wrap forum-thread-more-wrap"><button class="forum-thread-more" type="button" data-community-more="${escapeHtml(item.id)}" aria-label="更多操作">•••</button></div></header>
+    <div class="forum-thread-main"><div class="forum-thread-badges">${item.isPinned ? "<b>置顶</b>" : ""}${item.isFeatured ? "<b class=\"featured\">精华</b>" : ""}${item.isOwn && item.visibility !== "public" ? `<span class="visibility">${communityVisibilityOption(item.visibility).label}</span>` : ""}${item.speciesName ? `<span>${escapeHtml(item.speciesName)}</span>` : ""}</div><h3>${escapeHtml(communityPostTitle(item))}</h3>${item.content || item.question ? `<p>${escapeHtml(String(item.content || item.question).replace(/\s+/g, " ").slice(0, 180))}</p>` : ""}${mediaItems.length ? `<div class="forum-thread-media ${mediaItems.length === 1 ? "is-single" : "is-grid"}">${communityFeedMedia(item)}</div>` : ""}</div>
+    <footer class="forum-thread-actions"><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${escapeHtml(item.id)}" aria-label="点赞"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10H4V10h3Zm3 10V9l4-6c1.7.7 2 2.2 1.3 4.3L15 9h4.2c1.3 0 2 1.1 1.7 2.3l-1.6 6.5c-.3 1.3-1.2 2.2-2.6 2.2H10Z"></path></svg><span>${Number(item.likeCount || 0) || "赞"}</span></button><button type="button" data-open-community-comments="${escapeHtml(item.id)}" aria-label="查看回复"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 4V5Z"></path></svg><span>${replies || "评论"}</span></button><button type="button" data-share-community-post="${escapeHtml(item.id)}" aria-label="分享帖子"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 8l5-5 5 5M5 12v8h14v-8"></path></svg><span>分享</span></button></footer>
+  </article>`;
+}
+
+function communityShareUrl(post) {
+  const base = String(window.TURTLE_PUBLIC_APP_URL || "https://api.turtleworld.cn/").trim() || "https://api.turtleworld.cn/";
+  const url = new URL(base, window.location.href);
+  url.searchParams.set("communityPost", String(post?.id || ""));
+  return url.toString();
+}
+
+async function shareCommunityPost(postId) {
+  const post = findCommunityPost(postId);
+  if (!post) return toast("帖子不存在");
+  const title = communityPostTitle(post);
+  const text = String(post.content || post.question || `${post.authorName || "壳友"}发布了一篇帖子`).slice(0, 100);
+  const url = communityShareUrl(post);
+  try {
+    const nativeShare = window.Capacitor?.Plugins?.Share;
+    if (nativeShare?.share) return await nativeShare.share({ title, text, url, dialogTitle: "分享帖子" });
+    if (navigator.share) return await navigator.share({ title, text, url });
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+  }
+  copyText(url, "帖子链接已复制");
+}
+
 function pageCommunity() {
   const posts = state.communityPosts || [];
+  const visiblePosts = communityForumPosts(posts);
+  const selectedCircle = communitySelectedCircleId === "all" ? null : communityCircle(communitySelectedCircleId);
+  const followed = selectedCircle && (state.communityFollowedCircleIds || []).includes(selectedCircle.id);
   const communityInitialLoading = Boolean(CONFIGURED_SMS_BACKEND && hasCloudSession() && !state.communityFeedInitialized && !posts.length);
   return `
-    ${topbar("壳友圈", true, `<button class="community-camera-button" type="button" data-community-camera-button aria-label="拍摄或从相册选择"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"></path><circle cx="12" cy="13.5" r="3.5"></circle></svg></button>`)}
+    ${topbar("壳友圈", false, `<button class="community-camera-button" type="button" data-community-camera-button aria-label="拍摄或从相册选择"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"></path><circle cx="12" cy="13.5" r="3.5"></circle></svg></button>`, platformServiceTopButton())}
     <main class="content page-fresh community-page community-moments-page">
-      <input class="hidden-file" type="file" accept="image/*,video/*" multiple data-community-quick-media>
-      <section class="community-feed ${communityInitialLoading ? "is-initial-loading" : ""}">${communityInitialLoading ? `<div class="community-feed-initial-loading" role="status" aria-live="polite"><i aria-hidden="true"></i><span>正在加载动态…</span></div>` : communityFeedMarkup(posts)}</section>
+      <input class="hidden-file" type="file" accept="image/jpeg,image/png,image/webp" multiple data-community-quick-media>
+      ${communityCreateHub()}
+      ${communityCircleStrip(posts)}
+      ${selectedCircle ? `<section class="forum-selected-circle"><div><i>${selectedCircle.icon}</i><span><strong>${selectedCircle.name}</strong><small>${selectedCircle.note}</small></span></div><button class="${followed ? "active" : ""}" type="button" data-toggle-community-circle="${selectedCircle.id}">${followed ? "已关注" : "+ 关注"}</button></section>` : ""}
+      ${communityTopicTabs()}
+      <section class="community-feed ${communityInitialLoading ? "is-initial-loading" : ""}">${communityInitialLoading ? `<div class="community-feed-initial-loading" role="status" aria-live="polite"><i aria-hidden="true"></i><span>正在加载帖子…</span></div>` : communityFeedMarkup(visiblePosts)}</section>
       ${posts.length ? `<div class="community-feed-status" data-community-load-sentinel>${state.communityFeedLoadingMore ? "正在加载更多动态…" : state.communityFeedHasMore ? "继续上滑，加载更多" : "已经到底了"}</div>` : ""}
     </main>
     ${bottomNav()}
@@ -2242,7 +2459,8 @@ function pageCommunity() {
 }
 
 function communityFeedMarkup(posts = state.communityPosts || [], options = {}) {
-  return posts.map(item => communityFeedCard(item, options)).join("") || `<div class="empty small-empty"><div><strong>暂时还没有动态</strong><br>点击右上角相机发布第一条内容</div></div>`;
+  if (options.allowDetail) return posts.map(item => communityFeedCard(item, options)).join("");
+  return posts.map(communityForumCard).join("") || `<div class="empty small-empty"><div><strong>这里还没有帖子</strong><br>发布第一篇讨论，邀请同好来回复</div></div>`;
 }
 
 function communityFeedSignature(posts = []) {
@@ -2254,6 +2472,13 @@ function communityFeedSignature(posts = []) {
     post.authorName,
     post.authorAvatar,
     post.content,
+    post.title,
+    post.circleId,
+    Boolean(post.isPinned),
+    Boolean(post.isFeatured),
+    post.topic,
+    post.question,
+    post.speciesName,
     post.createdAt,
     post.location,
     Boolean(post.isOwn),
@@ -2276,6 +2501,13 @@ function communityPostRenderSignature(post = {}) {
     post.authorName,
     post.authorAvatar,
     post.content,
+    post.title,
+    post.circleId,
+    Boolean(post.isPinned),
+    Boolean(post.isFeatured),
+    post.topic,
+    post.question,
+    post.speciesName,
     post.createdAt,
     post.location,
     Boolean(post.isOwn),
@@ -2294,7 +2526,7 @@ function communityPostMediaSignature(post = {}) {
 
 function createCommunityFeedCard(item) {
   const template = document.createElement("template");
-  template.innerHTML = communityFeedCard(item).trim();
+  template.innerHTML = communityForumCard(item).trim();
   return template.content.firstElementChild;
 }
 
@@ -2307,6 +2539,7 @@ function bindPatchedCommunityFeed(feed) {
     if (!card.dataset.viewCommunityPost) return;
     const openDetail = event => {
       if (event.target.closest("button, input, textarea, select, form, .inline-video-shell")) return;
+      communityReplyTarget = null;
       setState({ page: "communityPostDetail", selectedCommunityPostId: card.dataset.viewCommunityPost, openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
     };
     card.addEventListener("click", openDetail);
@@ -2325,9 +2558,18 @@ function bindPatchedCommunityFeed(feed) {
     const media = mediaItems[index];
     if (!media) return;
     if (media.type === "video") openVideoPreview(media.url, "动态视频", media.posterUrl || "");
-    else openImagePreview(media.url, "动态图片");
+    else openImagePreview(media.url, "帖子图片", { index, gallery: mediaItems.filter(item => item.type === "image").map((item, imageIndex) => ({ src: item.url, alt: `帖子图片 ${imageIndex + 1}` })) });
   }));
   feed.querySelectorAll("[data-like-community-post]").forEach(btn => btn.addEventListener("click", () => toggleCommunityLike(btn.dataset.likeCommunityPost)));
+  feed.querySelectorAll("[data-open-community-comments]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    communityReplyTarget = null;
+    setState({ page: "communityPostDetail", selectedCommunityPostId: btn.dataset.openCommunityComments, openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
+  }));
+  feed.querySelectorAll("[data-share-community-post]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    shareCommunityPost(btn.dataset.shareCommunityPost);
+  }));
   feed.querySelectorAll("[data-community-more]").forEach(btn => btn.addEventListener("click", event => {
     event.preventDefault();
     event.stopPropagation();
@@ -2352,6 +2594,8 @@ function bindPatchedCommunityFeed(feed) {
 
 function patchVisibleCommunityFeed(posts, previousPosts = []) {
   if (state.page !== "community") return false;
+  posts = communityForumPosts(posts || []);
+  previousPosts = communityForumPosts(previousPosts || []);
   const feed = $app.querySelector(".community-feed");
   if (!feed) return false;
   const previousById = new Map((previousPosts || []).map(post => [String(post.id), post]));
@@ -2412,20 +2656,33 @@ function patchVisibleCommunityFeed(posts, previousPosts = []) {
 
 function pageCommunityAdd() {
   const mediaItems = communityDraftMediaItems;
-  const canPublish = Boolean(communityDraftText.trim() || mediaItems.length);
-  const canAddMedia = !mediaItems.length || (mediaItems[0].type === "image" && mediaItems.length < 9);
+  const topic = communityTopicConfig(communityDraftTopic);
+  const titleLength = [...communityDraftTitle.trim()].length;
+  const canPublish = titleLength >= 5 && titleLength <= 31;
+  const canAddMedia = mediaItems.length < 9;
+  const visibilityOption = communityVisibilityOption();
   return `
-    <div class="community-compose-nav"><button type="button" data-back>取消</button><button class="community-compose-submit ${canPublish ? "is-ready" : ""}" type="submit" form="communityPostForm" data-ready="${canPublish ? "true" : "false"}" aria-disabled="${canPublish ? "false" : "true"}" ${canPublish ? "" : "disabled"}>发表</button></div>
-    <main class="community-compose-page">
+    <div class="community-compose-nav forum-publish-nav"><button class="forum-publish-close" type="button" data-back aria-label="关闭">×</button><div class="forum-publish-types" aria-label="帖子类型">${Object.entries(COMMUNITY_TOPICS).map(([value, item]) => `<button class="${communityDraftTopic === value ? "active" : ""}" type="button" data-community-compose-mode="${value}">${value === "daily" ? "日常" : value === "growth" ? "成长" : value === "identify" ? "鉴定" : "求助"}</button>`).join("")}</div><button class="community-compose-submit ${canPublish ? "is-ready" : ""}" type="submit" form="communityPostForm" data-ready="${canPublish ? "true" : "false"}" aria-disabled="${canPublish ? "false" : "true"}" ${canPublish ? "" : "disabled"}>发布</button></div>
+    <main class="community-compose-page forum-publish-page">
       <form class="community-publish-form" id="communityPostForm">
-        <textarea name="content" maxlength="1200" placeholder="这一刻的想法…">${escapeHtml(communityDraftText)}</textarea>
+        <label class="forum-compose-title"><input name="title" minlength="5" maxlength="31" value="${escapeHtml(communityDraftTitle)}" placeholder="请输入完整帖子标题（5–31个字）" required></label>
+        <label class="community-compose-copy"><textarea name="content" maxlength="2000" placeholder="请输入正文（建议200–2000字）">${escapeHtml(communityDraftText)}</textarea></label>
         <div class="community-draft-media-grid">
-          ${mediaItems.map((media, index) => `<div class="community-draft-media-item">${media.type === "video" ? `<video src="${media.previewUrl}" muted playsinline></video><i>▶</i>` : `<img src="${media.previewUrl}" alt="待发布图片 ${index + 1}">`}<button type="button" data-remove-community-media="${index}" aria-label="移除媒体">×</button></div>`).join("")}
-          ${canAddMedia ? `<button class="community-media-preview community-media-add" type="button" data-community-media-button><span>＋<small>${mediaItems.length ? "继续添加图片" : "添加图片或视频"}</small></span></button>` : ""}
+          ${mediaItems.map((media, index) => `<div class="community-draft-media-item"><img src="${media.previewUrl}" alt="待发布图片 ${index + 1}"><button type="button" data-remove-community-media="${index}" aria-label="移除图片">×</button></div>`).join("")}
+          ${canAddMedia ? `<button class="community-media-preview community-media-add" type="button" data-community-media-button aria-label="添加图片"><span>＋<small>${mediaItems.length}/9</small></span></button>` : ""}
         </div>
-        ${mediaItems.length ? `<p class="community-draft-media-tip">${mediaItems[0].type === "video" ? "已选择 1 个视频（视频与图片不可混合发布）" : `已选择 ${mediaItems.length}/9 张图片（图片与视频不可混合发布）`}</p>` : ""}
-        <input class="hidden-file" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime" multiple data-community-media-input>
+        <p class="community-draft-media-tip">最多选择 9 张图片，发布页展示前三张</p>
+        ${communityDraftTopic === "growth" ? `<section class="community-growth-source forum-publish-growth"><span>关联龟档案</span>${state.turtles?.length ? `<div class="community-turtle-picker">${state.turtles.map(turtle => `<button class="${communityDraftTurtleId === turtle.id ? "active" : ""}" type="button" data-community-draft-turtle="${escapeHtml(turtle.id)}"><img src="${escapeHtml(turtle.photo || speciesPhoto(speciesByCode(turtle.speciesCode)) || defaultPhoto)}" alt=""><span><b>${escapeHtml(turtle.code || "未命名")}</b><small>${escapeHtml(turtle.speciesName || "龟档案")}</small></span></button>`).join("")}</div>` : `<button class="community-create-archive" type="button" data-page="turtleAdd">先建立一份龟档案 ›</button>`}</section>` : ""}
+        <section class="forum-publish-settings">
+          <div class="forum-publish-setting-head"><span><i>◉</i><b>选择圈子</b></span><small>${communityCircle(communityDraftCircleId).name} ›</small></div>
+          <div class="forum-publish-circle-strip">${COMMUNITY_CIRCLES.map(circle => `<button class="${communityDraftCircleId === circle.id ? "active" : ""}" type="button" data-community-draft-circle="${circle.id}"><i>${circle.icon}</i>${circle.name}</button>`).join("")}</div>
+          <label class="forum-publish-setting-row"><span><i>#</i><b>添加话题</b></span><input name="question" maxlength="160" value="${escapeHtml(communityDraftQuestion)}" placeholder="添加话题会获得更多讨论"></label>
+          <button class="forum-publish-setting-row" type="button" data-open-community-visibility><span><i>◉</i><b>展示范围</b></span><small>${visibilityOption.label} ›</small></button>
+          <div class="forum-publish-setting-row"><span><i>!</i><b>内容声明</b></span><small>原创内容 ›</small></div>
+        </section>
+        <input class="hidden-file" type="file" accept="image/jpeg,image/png,image/webp" multiple data-community-media-input>
       </form>
+      ${communityVisibilitySheetOpen ? `<div class="community-visibility-overlay" data-close-community-visibility><section class="community-visibility-sheet" role="dialog" aria-modal="true" aria-label="选择展示范围"><i class="community-sheet-handle" aria-hidden="true"></i><header><div><strong>谁可以看到这篇帖子</strong><span>发布后暂不支持修改</span></div><button type="button" data-close-community-visibility aria-label="关闭">×</button></header><div class="community-visibility-options">${Object.entries(COMMUNITY_VISIBILITY_OPTIONS).map(([value, option]) => `<button class="${communityDraftVisibility === value ? "active" : ""}" type="button" data-community-visibility="${value}"><i>${option.icon}</i><span><b>${option.label}</b><small>${option.note}</small></span><em>✓</em></button>`).join("")}</div></section></div>` : ""}
     </main>
   `;
 }
@@ -2632,7 +2889,7 @@ function pageCommunityChat() {
 
 function backNavigationState() {
   return {
-    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" ? "community" : state.page === "community" || state.page === "communityFriends" || state.page === "communityChat" || state.page === "communityProfile" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
+    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" || state.page === "communityProfile" ? "community" : state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "mine" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "",
     editingTurtlePoolId: "", editingMarketListingId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: ""
   };
@@ -3278,7 +3535,7 @@ function pageMarket() {
     : `<div class="market-empty"><span>龟</span><strong>${keyword || stage !== "all" ? "没有找到合适的商品" : "龟集市还没有商品"}</strong><p>从自己的乌龟档案一键发布，尺寸和状态会自动带入。</p><button type="button" data-page="marketAdd">发布第一只</button></div>`;
   return `
     ${marketPublishProgressMarkup()}
-    ${topbar("龟集市", false, `<button class="market-top-add" type="button" data-page="marketAdd" aria-label="发布出售">＋</button>`, `<button class="market-top-service" type="button" data-market-top-service aria-label="联系平台客服"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.2v-1.1a7.5 7.5 0 0 1 15 0v1.1"></path><path d="M4.5 12.6H3.8a1.8 1.8 0 0 0-1.8 1.8v2.1a1.8 1.8 0 0 0 1.8 1.8h1.7v-5.7ZM19.5 12.6h.7a1.8 1.8 0 0 1 1.8 1.8v2.1a1.8 1.8 0 0 1-1.8 1.8h-1.7v-5.7ZM19.5 18.1c0 1.3-1.2 2.4-2.7 2.4h-1.5"></path><path d="M13.2 20.5h2.4"></path></svg></button>`)}
+    ${topbar("龟集市", false, `<button class="market-top-add" type="button" data-page="marketAdd" aria-label="发布出售">＋</button>`, platformServiceTopButton())}
     <main class="content page-fresh market-page">
       <div class="market-search-area">
         <form class="market-search-wrap" role="search" data-market-search-form>
@@ -3525,7 +3782,7 @@ function pageMarketSeller() {
 function pageHome() {
   const s = stats();
   return `
-    ${topbar("壳友手账")}
+    ${topbar("壳友手账", false, "", platformServiceTopButton())}
     <main class="content home-redesign">
       <section class="home-hero">
         <div>
@@ -4231,7 +4488,7 @@ function pageLedger() {
   const profitPrefix = profit > 0 ? "+" : profit < 0 ? "-" : "±";
   const dateText = dateRange.label;
   return `
-    ${topbar("经营账本")}
+    ${topbar("经营账本", false, "", platformServiceTopButton())}
     <main class="content page-fresh ${state.loggedInPhone ? "" : "guest-ledger-content"}">
       <section class="page-intro ledger-intro"><div><p class="eyebrow dark">经营</p><h2>${records.length} 条资金明细</h2><p>${dateText}，收购、售出、损耗和日常养护支出都能留图、留备注。</p></div></section>
       <section class="ledger-profit-card ${profit < 0 ? "negative" : "positive"}">
@@ -5086,7 +5343,7 @@ function pageMine() {
   const receivedLikes = Math.max(0, Number(state.communityProfileStats?.receivedLikes || localReceivedLikes));
   const followerCount = Math.max(0, Number(state.communityProfileStats?.followerCount || 0));
   return `
-    ${topbar("我的空间")}
+    ${topbar("我的空间", true)}
     <section class="profile fresh-profile account-profile space-profile-card">
       <button class="space-profile-avatar-button" type="button" data-page="account" aria-label="编辑头像">
         ${accountAvatarMarkup()}
@@ -5125,6 +5382,7 @@ function pageMine() {
         <button class="mine-row" data-page="calendar"><span>◷</span><strong>操作日志</strong></button>
         <button class="mine-row" data-page="satisfaction"><span>☆</span><strong>满意度调查</strong></button>
         <button class="mine-row" data-page="feedback"><span>✎</span><strong>意见反馈</strong></button>
+        <button class="mine-row" type="button" data-open-platform-service-dialog><span>客</span><strong>联系人工客服</strong><em class="mine-row-hint">微信</em></button>
         <button class="mine-row" data-page="account"><span>⚙</span><strong>账号与安全</strong></button>
         <button class="mine-row" data-page="rules"><span>☷</span><strong>平台规则与隐私</strong></button>
         ${state.isCommunityAdmin ? `<button class="mine-row" data-page="moderation"><span>⚑</span><strong>举报审核</strong><em class="mine-row-count">${(state.contentReports || []).filter(item => item.status === "pending").length}</em></button>` : ""}
@@ -5519,7 +5777,7 @@ function pageAbout() {
         <div class="settings-title">交流与商务合作</div>
         <div class="about-contact-row"><span>微信号</span><strong>${PLATFORM_SERVICE_WECHAT}</strong></div>
         <button class="about-contact-action" type="button" data-open-platform-wechat>复制微信号并打开微信</button>
-        <p class="muted about-contact-tip">微信打开后，粘贴客服微信号并搜索即可添加。</p>
+        <p class="muted about-contact-tip">欢迎反馈功能建议；如在买卖龟过程中需要咨询、信息核验与交易保障协助，也可以联系我们。客服提供沟通协助，具体交易及责任以双方确认内容为准。</p>
       </section>
       <section class="fresh-card settings-card about-compliance-card">
         <div class="settings-title">规则与隐私</div>
@@ -5996,7 +6254,7 @@ function bindEvents() {
     });
   });
   document.querySelectorAll("[data-open-platform-wechat]").forEach(button => button.addEventListener("click", openPlatformWeChat));
-  document.querySelectorAll("[data-open-platform-service-dialog]").forEach(button => button.addEventListener("click", openMarketTopService));
+  document.querySelectorAll("[data-open-platform-service-dialog]").forEach(button => button.addEventListener("click", openGeneralServiceDialog));
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", navigateBack));
   document.querySelectorAll("[data-view-turtle]").forEach(el => el.addEventListener("click", () => setState({ page: "turtleDetail", selectedTurtleId: el.dataset.viewTurtle, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
   // The product gallery's legacy drag path writes the exact finger position
@@ -6345,11 +6603,72 @@ function bindEvents() {
   document.querySelectorAll("[data-remove-community-media]").forEach(button => button.addEventListener("click", () => removeCommunityDraftMedia(Number(button.dataset.removeCommunityMedia))));
   document.querySelector("[data-community-camera-button]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
+    communityDraftTopic = "daily";
+    communityDraftQuestion = "";
+    communityDraftTitle = "";
+    communityDraftCircleId = "general";
     document.querySelector("[data-community-quick-media]")?.click();
   });
   document.querySelector("[data-community-quick-media]")?.addEventListener("change", readCommunityMedia);
-  document.querySelector("#communityPostForm textarea")?.addEventListener("input", event => {
+  document.querySelectorAll("[data-community-compose]").forEach(button => button.addEventListener("click", () => openCommunityComposer(button.dataset.communityCompose)));
+  document.querySelectorAll("[data-community-topic-filter]").forEach(button => button.addEventListener("click", () => {
+    communityTopicFilter = button.dataset.communityTopicFilter || "all";
+    render();
+  }));
+  document.querySelectorAll("[data-community-forum-sort]").forEach(button => button.addEventListener("click", () => {
+    communityForumSort = button.dataset.communityForumSort || "hot";
+    render();
+  }));
+  document.querySelectorAll("[data-community-circle]").forEach(button => button.addEventListener("click", () => {
+    communitySelectedCircleId = button.dataset.communityCircle || "all";
+    render();
+  }));
+  document.querySelectorAll("[data-toggle-community-circle]").forEach(button => button.addEventListener("click", () => toggleCommunityCircleFollow(button.dataset.toggleCommunityCircle)));
+  document.querySelectorAll("[data-community-compose-mode]").forEach(button => button.addEventListener("click", () => {
+    communityDraftText = document.querySelector("#communityPostForm textarea[name='content']")?.value || communityDraftText;
+    communityDraftQuestion = document.querySelector("#communityPostForm input[name='question']")?.value || communityDraftQuestion;
+    communityDraftTopic = button.dataset.communityComposeMode || "daily";
+    communityDraftCircleId = inferredCommunityCircle(communityDraftTopic);
+    if (communityDraftTopic === "growth" && !communityDraftText.trim()) {
+      communityDraftTurtleId ||= state.turtles?.[0]?.id || "";
+      communityDraftText = communityGrowthTemplate((state.turtles || []).find(item => item.id === communityDraftTurtleId));
+    }
+    render();
+  }));
+  document.querySelectorAll("[data-community-draft-circle]").forEach(button => button.addEventListener("click", () => {
+    communityDraftCircleId = button.dataset.communityDraftCircle || "general";
+    render();
+  }));
+  document.querySelector("[data-open-community-visibility]")?.addEventListener("click", () => {
+    communityVisibilitySheetOpen = true;
+    render();
+  });
+  document.querySelectorAll("[data-close-community-visibility]").forEach(element => element.addEventListener("click", event => {
+    if (element.classList.contains("community-visibility-overlay") && event.target !== element) return;
+    communityVisibilitySheetOpen = false;
+    render();
+  }));
+  document.querySelectorAll("[data-community-visibility]").forEach(button => button.addEventListener("click", event => {
+    event.stopPropagation();
+    communityDraftVisibility = COMMUNITY_VISIBILITY_OPTIONS[button.dataset.communityVisibility] ? button.dataset.communityVisibility : "public";
+    communityVisibilitySheetOpen = false;
+    render();
+  }));
+  document.querySelectorAll("[data-community-draft-turtle]").forEach(button => button.addEventListener("click", () => {
+    communityDraftTurtleId = button.dataset.communityDraftTurtle || "";
+    communityDraftText = communityGrowthTemplate((state.turtles || []).find(item => item.id === communityDraftTurtleId));
+    render();
+  }));
+  document.querySelector("#communityPostForm textarea[name='content']")?.addEventListener("input", event => {
     communityDraftText = event.target.value;
+    syncCommunityPublishButton();
+  });
+  document.querySelector("#communityPostForm input[name='question']")?.addEventListener("input", event => {
+    communityDraftQuestion = event.target.value;
+    syncCommunityPublishButton();
+  });
+  document.querySelector("#communityPostForm input[name='title']")?.addEventListener("input", event => {
+    communityDraftTitle = event.target.value;
     syncCommunityPublishButton();
   });
   syncCommunityPublishButton();
@@ -6357,6 +6676,7 @@ function bindEvents() {
   document.querySelectorAll("[data-view-community-post]").forEach(card => {
     const openDetail = event => {
       if (event.target.closest("button, input, textarea, select, form, .inline-video-shell")) return;
+      communityReplyTarget = null;
       setState({ page: "communityPostDetail", selectedCommunityPostId: card.dataset.viewCommunityPost, openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
     };
     card.addEventListener("click", openDetail);
@@ -6375,9 +6695,18 @@ function bindEvents() {
     const media = mediaItems[index];
     if (!media) return;
     if (media.type === "video") openVideoPreview(media.url, "动态视频", media.posterUrl || "");
-    else openImagePreview(media.url, "动态图片");
+    else openImagePreview(media.url, "帖子图片", { index, gallery: mediaItems.filter(item => item.type === "image").map((item, imageIndex) => ({ src: item.url, alt: `帖子图片 ${imageIndex + 1}` })) });
   }));
   document.querySelectorAll("[data-like-community-post]").forEach(btn => btn.addEventListener("click", () => toggleCommunityLike(btn.dataset.likeCommunityPost)));
+  document.querySelectorAll("[data-open-community-comments]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    communityReplyTarget = null;
+    setState({ page: "communityPostDetail", selectedCommunityPostId: btn.dataset.openCommunityComments, openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
+  }));
+  document.querySelectorAll("[data-share-community-post]").forEach(btn => btn.addEventListener("click", event => {
+    event.stopPropagation();
+    shareCommunityPost(btn.dataset.shareCommunityPost);
+  }));
   document.querySelectorAll("[data-community-more]").forEach(btn => btn.addEventListener("click", event => {
     event.preventDefault();
     event.stopPropagation();
@@ -6401,6 +6730,12 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-show-community-comment]").forEach(btn => btn.addEventListener("click", () => setState({ communityCommentPostId: btn.dataset.showCommunityComment, openCommunityActionId: "" }, { skipCloud: true })));
   document.querySelectorAll("[data-community-comment-form]").forEach(form => form.addEventListener("submit", submitCommunityComment));
+  document.querySelectorAll("[data-reply-community-comment]").forEach(button => button.addEventListener("click", () => {
+    communityReplyTarget = { postId: button.dataset.postId, commentId: button.dataset.replyCommunityComment, name: button.dataset.replyAuthor || "壳友" };
+    render();
+    document.querySelector(".forum-reply-composer input")?.focus();
+  }));
+  document.querySelectorAll("[data-community-admin-action]").forEach(button => button.addEventListener("click", () => communityAdminPostAction(button.dataset.postId, button.dataset.communityAdminAction)));
   document.querySelectorAll("[data-toggle-community-follow]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
     toggleCommunityFollow(btn.dataset.toggleCommunityFollow);
@@ -8643,7 +8978,9 @@ function openMarketTopService() {
         <div><small>平台客服</small><h2 id="marketTopServiceTitle">联系平台客服</h2></div>
         <button type="button" data-market-service-close aria-label="关闭">×</button>
       </div>
+      <p class="market-service-tip">对功能有任何意见或建议，或在买卖龟过程中需要咨询、信息核验与交易保障协助，欢迎联系我们。</p>
       <div class="market-service-wechat"><span>平台客服微信</span><strong>${escapeHtml(PLATFORM_SERVICE_WECHAT)}</strong></div>
+      <p class="market-top-service-note">客服可协助沟通和核验信息，具体交易及责任以买卖双方确认内容为准。</p>
       <button class="market-top-service-copy" type="button" data-copy-market-wechat>复制微信号并打开微信</button>
     </section>
   `;
@@ -8689,7 +9026,7 @@ function openMarketPlatformService(listingId) {
       <p class="market-service-product">${escapeHtml(productName)}</p>
       <div class="market-service-wechat"><span>平台客服微信</span><strong>${escapeHtml(PLATFORM_SERVICE_WECHAT)}</strong></div>
       <div class="market-service-code"><span>商品咨询码</span><b>${escapeHtml(inquiryCode)}</b></div>
-      <p class="market-service-tip">添加客服微信后，请发送咨询内容或商品咨询码，以便确认商品、健康情况和交付方式。</p>
+      <p class="market-service-tip">添加客服微信后，请发送咨询内容或商品咨询码。客服可协助沟通、核验商品信息与交易注意事项，具体交易及责任以买卖双方确认内容为准。</p>
       <div class="market-service-buttons">
         <button type="button" data-copy-market-consultation>复制咨询内容</button>
         <button type="button" data-copy-market-wechat>复制微信号并打开微信</button>
@@ -8922,6 +9259,7 @@ function normalizeCommunityPosts(posts = []) {
     const primaryMedia = mediaItems[0] || null;
     return {
       ...item,
+      visibility: COMMUNITY_VISIBILITY_OPTIONS[item.visibility] ? item.visibility : "public",
       authorName: item.authorName || "壳友",
       // Built-in avatars live inside the iOS app bundle.  Do not turn their
       // relative asset path into an API URL, otherwise every tiny avatar waits
@@ -8963,6 +9301,7 @@ async function refreshCommunity(force = false) {
       communityFeedHasMore: Boolean(result.hasMore),
       communityFeedLoadingMore: false,
       communityProfileStats: profileStats,
+      communityFollowedCircleIds: Array.isArray(result.followedCircleIds) ? result.followedCircleIds : state.communityFollowedCircleIds,
       isCommunityAdmin: Boolean(result.isAdmin),
       communityFriends: friends,
       messageUnreadCount
@@ -9024,6 +9363,44 @@ async function loadMoreCommunityPosts() {
     if (nextStatus) nextStatus.textContent = state.communityFeedHasMore ? "继续上滑，加载更多" : "已经到底了";
     setupCommunityInfiniteScroll();
   }
+}
+
+function openGeneralServiceDialog() {
+  document.querySelector(".market-service-overlay")?.remove();
+  const previousFocus = document.activeElement;
+  const overlay = document.createElement("div");
+  overlay.className = "market-service-overlay general-service-overlay";
+  overlay.innerHTML = `
+    <section class="market-service-dialog general-service-dialog" role="dialog" aria-modal="true" aria-labelledby="generalServiceTitle">
+      <div class="market-service-head">
+        <div><small>壳友手账客服</small><h2 id="generalServiceTitle">联系人工客服</h2></div>
+        <button type="button" data-market-service-close aria-label="关闭">×</button>
+      </div>
+      <p class="general-service-intro">对功能有任何意见或建议，或在买卖龟过程中需要咨询、信息核验与交易保障协助，都可以添加客服微信。</p>
+      <div class="market-service-wechat"><span>客服微信号</span><strong>${escapeHtml(PLATFORM_SERVICE_WECHAT)}</strong></div>
+      <p class="market-service-tip">客服可协助沟通和核验信息，具体交易及责任以买卖双方确认内容为准。添加时请备注“壳友手账”。</p>
+      <div class="general-service-actions"><button type="button" data-market-service-close>暂时不用</button><button type="button" data-copy-market-wechat>复制并打开微信</button></div>
+    </section>
+  `;
+  document.body.appendChild(overlay);
+  document.body.classList.add("market-service-open");
+
+  const close = () => {
+    document.removeEventListener("keydown", onKeydown);
+    document.body.classList.remove("market-service-open");
+    overlay.remove();
+    if (previousFocus?.isConnected) previousFocus.focus();
+  };
+  const onKeydown = event => {
+    if (event.key === "Escape") close();
+  };
+  overlay.querySelectorAll("[data-market-service-close]").forEach(button => button.addEventListener("click", close));
+  overlay.addEventListener("click", event => {
+    if (event.target === overlay) close();
+  });
+  overlay.querySelector("[data-copy-market-wechat]")?.addEventListener("click", openPlatformWeChat);
+  document.addEventListener("keydown", onKeydown);
+  overlay.querySelector("[data-copy-market-wechat]")?.focus();
 }
 
 function announcementDismissalKey() {
@@ -9565,9 +9942,9 @@ function hydrateMarketDetailVideos() {
 function syncCommunityPublishButton() {
   const submit = document.querySelector(".community-compose-submit");
   if (!submit) return;
-  const text = document.querySelector("#communityPostForm textarea")?.value.trim() || "";
-  const hasMedia = communityDraftMediaItems.length > 0;
-  const ready = Boolean(text || hasMedia);
+  const title = document.querySelector("#communityPostForm input[name='title']")?.value.trim() || "";
+  const titleLength = [...title].length;
+  const ready = titleLength >= 5 && titleLength <= 31;
   submit.classList.toggle("is-ready", ready);
   submit.dataset.ready = ready ? "true" : "false";
   if (ready) submit.removeAttribute("disabled");
@@ -9608,33 +9985,19 @@ async function readCommunityMedia(event) {
   communityDraftText = document.querySelector("#communityPostForm textarea")?.value || communityDraftText;
   event.target.value = "";
   const kinds = files.map(localMediaFileKind);
-  if (kinds.some(kind => !kind)) {
-    return toast("请选择 JPG、PNG、WebP、MP4、WebM 或 MOV");
-  }
-  const mediaType = kinds[0];
-  if (kinds.some(kind => kind !== mediaType)) return toast("图片和视频不能混合发布，请重新选择");
-  if (mediaType === "video" && files.length !== 1) return toast("壳友圈每条动态只能发布 1 个视频");
-  if (communityDraftMediaItems.length && communityDraftMediaItems[0].type !== mediaType) {
-    return toast("图片和视频不能混合发布，请先移除已选媒体");
-  }
-  if (mediaType === "video" && communityDraftMediaItems.length) return toast("壳友圈每条动态只能发布 1 个视频");
-  const remaining = mediaType === "image" ? Math.max(0, 9 - communityDraftMediaItems.length) : 1;
+  if (kinds.some(kind => kind !== "image")) return toast("壳友圈只支持 JPG、PNG 或 WebP 图片");
+  const remaining = Math.max(0, 9 - communityDraftMediaItems.length);
   if (!remaining) return toast("图片最多可发布 9 张");
   const selectedFiles = files.slice(0, remaining);
   if (files.length > selectedFiles.length) toast("图片最多可发布 9 张，已保留前 9 张");
-  if (selectedFiles.some(file => mediaType === "image" && file.size > 10 * 1024 * 1024)) return toast("每张图片不能超过 10MB");
+  if (selectedFiles.some(file => file.size > 10 * 1024 * 1024)) return toast("每张图片不能超过 10MB");
   try {
     const addedMedia = [];
     for (const file of selectedFiles) {
-      let duration = 0;
-      if (mediaType === "video") {
-        duration = await readVideoDuration(file);
-        if (duration > 30) return toast("视频时长不能超过 30 秒");
-      }
       addedMedia.push({
         file,
-        type: mediaType,
-        duration,
+        type: "image",
+        duration: 0,
         previewUrl: URL.createObjectURL(file)
       });
     }
@@ -9652,31 +10015,25 @@ async function submitCommunityPost(event) {
   if (!canUseCommunity()) return;
   const form = new FormData(event.currentTarget);
   const content = String(form.get("content") || "").trim();
-  const visibility = "public";
+  const title = String(form.get("title") || "").trim();
+  const question = String(form.get("question") || "").trim();
+  const topic = COMMUNITY_TOPICS[communityDraftTopic] ? communityDraftTopic : "daily";
+  const linkedTurtle = topic === "growth" ? (state.turtles || []).find(item => item.id === communityDraftTurtleId) : null;
+  const visibility = COMMUNITY_VISIBILITY_OPTIONS[communityDraftVisibility] ? communityDraftVisibility : "public";
   const draftMedia = [...communityDraftMediaItems];
-  if (!content && !draftMedia.length) return toast("写点内容，或添加图片、视频");
+  const titleLength = [...title].length;
+  if (titleLength < 5 || titleLength > 31) return toast("帖子标题需为 5–31 个字");
+  if (draftMedia.some(media => media.type !== "image")) return toast("壳友圈只允许发布图片");
   try {
     const mediaItems = [];
     for (let index = 0; index < draftMedia.length; index += 1) {
       const media = draftMedia[index];
       const uploaded = await apiUploadMediaFile(media.file, media.duration || 0);
       if (!uploaded?.url) throw new Error("媒体上传失败，请稍后重试");
-      let posterUrl = String(uploaded.posterUrl || "");
-      if (media.type === "video" && !posterUrl) {
-        const poster = await createVideoPoster(media.file);
-        try {
-          if (poster?.file) {
-            const uploadedPoster = await apiUploadMediaFile(poster.file);
-            posterUrl = String(uploadedPoster?.url || "");
-          }
-        } finally {
-          if (String(poster?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(poster.previewUrl);
-        }
-      }
       mediaItems.push({
         url: uploaded.url,
-        posterUrl,
-        type: uploaded.mediaType === "video" ? "video" : media.type
+        posterUrl: "",
+        type: "image"
       });
     }
     const primaryMedia = mediaItems[0] || null;
@@ -9686,13 +10043,25 @@ async function submitCommunityPost(event) {
       posterUrl: primaryMedia?.posterUrl || "",
       mediaType: primaryMedia?.type || "",
       mediaItems,
+      title,
+      circleId: communityDraftCircleId,
+      topic,
+      question,
+      speciesCode: linkedTurtle?.speciesCode || "",
+      speciesName: linkedTurtle?.speciesName || "",
       visibility
     }));
     clearCommunityDraftMedia();
     communityDraftText = "";
+    communityDraftQuestion = "";
+    communityDraftTopic = "daily";
+    communityDraftTitle = "";
+    communityDraftCircleId = "general";
+    communityDraftVisibility = "public";
+    communityVisibilitySheetOpen = false;
     communityLastLoadedAt = Date.now();
     setState({ page: "community", communityPosts: normalizeCommunityPosts(result.posts || []), communityFriends: result.friends || state.communityFriends }, { skipCloud: true });
-    toast("动态已发布");
+    toast("帖子已发布");
   } catch (error) {
     if (error.status === 405 || error.message === "方法不支持") {
       const localMediaItems = draftMedia.map(media => ({
@@ -9707,6 +10076,12 @@ async function submitCommunityPost(event) {
         mediaUrl: primaryMedia?.url || "",
         mediaType: primaryMedia?.type || "",
         mediaItems: localMediaItems,
+        title,
+        circleId: communityDraftCircleId,
+        topic,
+        question,
+        speciesCode: linkedTurtle?.speciesCode || "",
+        speciesName: linkedTurtle?.speciesName || "",
         visibility,
         authorId: state.loggedInPhone,
         authorName: state.accountName || "壳友",
@@ -9721,8 +10096,14 @@ async function submitCommunityPost(event) {
       };
       clearCommunityDraftMedia({ revoke: false });
       communityDraftText = "";
+      communityDraftQuestion = "";
+      communityDraftTopic = "daily";
+      communityDraftVisibility = "public";
+      communityVisibilitySheetOpen = false;
+      communityDraftTitle = "";
+      communityDraftCircleId = "general";
       setState({ page: "community", communityPosts: [localPost, ...(state.communityPosts || [])] }, { skipCloud: true });
-      toast("动态已发布");
+      toast("帖子已发布");
       return;
     }
     toast(error.message || "发布失败");
@@ -9754,7 +10135,9 @@ async function submitCommunityComment(event) {
   const content = String(new FormData(event.currentTarget).get("content") || "").trim();
   if (!content) return;
   try {
-    const result = await apiPost("/api/community/comment", communityAuthPayload({ postId: event.currentTarget.dataset.communityCommentForm, content }));
+    const replyToCommentId = communityReplyTarget?.postId === event.currentTarget.dataset.communityCommentForm ? communityReplyTarget.commentId : "";
+    const result = await apiPost("/api/community/comment", communityAuthPayload({ postId: event.currentTarget.dataset.communityCommentForm, content, replyToCommentId }));
+    communityReplyTarget = null;
     setState({ communityPosts: normalizeCommunityPosts(result.posts || []), communityCommentPostId: "" }, { skipCloud: true });
   } catch (error) {
     if (error.status === 405 || error.message === "方法不支持") {
@@ -9766,6 +10149,11 @@ async function submitCommunityComment(event) {
         authorAvatar: state.accountAvatar || "",
         createdAt: new Date().toISOString()
       };
+      if (communityReplyTarget?.postId === postId) {
+        comment.replyToCommentId = communityReplyTarget.commentId;
+        comment.replyToName = communityReplyTarget.name;
+      }
+      communityReplyTarget = null;
       const posts = (state.communityPosts || []).map(item => item.id === postId
         ? { ...item, comments: [...(item.comments || []), comment] }
         : item);
@@ -9997,6 +10385,34 @@ async function toggleCommunityConversationPin(userId) {
     toast(error.message || "操作失败，请重试");
   } finally {
     communityConversationActionPending.delete(userId);
+  }
+}
+
+async function communityAdminPostAction(postId, action) {
+  if (!state.isCommunityAdmin || !["pin", "feature"].includes(action)) return;
+  try {
+    const result = await apiPost("/api/community/admin/action", communityAuthPayload({ postId, action }));
+    setState({ communityPosts: normalizeCommunityPosts(result.posts || []) }, { skipCloud: true });
+    toast(action === "pin" ? "置顶状态已更新" : "精华状态已更新");
+  } catch (error) {
+    toast(error.message || "管理操作失败");
+  }
+}
+
+async function toggleCommunityCircleFollow(circleId) {
+  if (!canUseCommunity()) return;
+  const id = COMMUNITY_CIRCLES.some(circle => circle.id === circleId) ? circleId : "";
+  if (!id) return;
+  const current = new Set(state.communityFollowedCircleIds || []);
+  if (current.has(id)) current.delete(id);
+  else current.add(id);
+  const optimistic = [...current];
+  setState({ communityFollowedCircleIds: optimistic }, { skipCloud: true });
+  try {
+    const result = await apiPost("/api/community/circle/follow", communityAuthPayload({ circleId: id }));
+    if (Array.isArray(result.followedCircleIds)) setState({ communityFollowedCircleIds: result.followedCircleIds }, { skipCloud: true });
+  } catch (error) {
+    if (error.status !== 405 && error.message !== "方法不支持") toast(error.message || "关注圈子失败");
   }
 }
 
@@ -10638,15 +11054,20 @@ async function sendCommunityChatMedia(event) {
 }
 
 async function deleteCommunityPost(postId) {
-  if (!canUseCommunity() || !confirm("确定删除这条动态吗？")) return;
+  if (!canUseCommunity()) return;
+  const post = findCommunityPost(postId);
+  const deletingAsAdmin = Boolean(state.isCommunityAdmin && post && !post.isOwn);
+  if (!confirm(deletingAsAdmin ? "确定以管理员身份删除这篇用户作品吗？\n\n删除后无法恢复。" : "确定删除这篇帖子吗？\n\n删除后无法恢复。")) return;
   try {
     const result = await apiPost("/api/community/delete", communityAuthPayload({ postId }));
-    setState({ communityPosts: normalizeCommunityPosts(result.posts || []) }, { skipCloud: true });
-    toast("动态已删除");
+    const leavingDetail = state.page === "communityPostDetail" && state.selectedCommunityPostId === postId;
+    setState({ communityPosts: normalizeCommunityPosts(result.posts || []), ...(leavingDetail ? { page: "community", selectedCommunityPostId: "" } : {}) }, { skipCloud: true });
+    toast(deletingAsAdmin ? "用户作品已由管理员删除" : "帖子已删除");
   } catch (error) {
     if (error.status === 405 || error.message === "方法不支持") {
-      setState({ communityPosts: (state.communityPosts || []).filter(item => item.id !== postId) }, { skipCloud: true });
-      toast("动态已删除");
+      const leavingDetail = state.page === "communityPostDetail" && state.selectedCommunityPostId === postId;
+      setState({ communityPosts: (state.communityPosts || []).filter(item => item.id !== postId), ...(leavingDetail ? { page: "community", selectedCommunityPostId: "" } : {}) }, { skipCloud: true });
+      toast(deletingAsAdmin ? "用户作品已由管理员删除" : "帖子已删除");
       return;
     }
     toast(error.message || "删除失败");
@@ -12282,6 +12703,9 @@ function submitTurtle(event) {
   const form = new FormData(event.currentTarget);
   const species = speciesByCode(form.get("speciesCode"));
   if (!species) return toast("先选择一个品种，再保存档案");
+  // Invite after any successful new archive once the account has reached the
+  // fifth archive. This also covers existing users who already have 5+ turtles.
+  const shouldInviteAppReview = state.turtles.length >= 4;
   const code = form.get("code") || `${species.code}-${state.turtles.filter(t => t.speciesCode === species.code).length + 1}`;
   const turtle = {
     id: crypto.randomUUID(),
@@ -12359,6 +12783,27 @@ function submitTurtle(event) {
   }, [turtle.photo]);
   activateCareReminder(growthMemo);
   toast(turtle.source === "购买" ? "档案已保存，并已同步到收购账本" : "档案已保存");
+  if (shouldInviteAppReview) window.setTimeout(requestAppReviewAfterEligibleArchive, 900);
+}
+
+async function requestAppReviewAfterEligibleArchive() {
+  const capacitor = window.Capacitor;
+  if (!capacitor || capacitor.getPlatform?.() !== "ios") return;
+  const plugin = capacitor.Plugins?.TurtleAppReview || capacitor.registerPlugin?.("TurtleAppReview");
+  if (!plugin?.requestReview) return;
+  const accountKey = state.loggedInPhone || "device";
+  const storageKey = `${APP_REVIEW_INVITE_STORAGE}:${accountKey}`;
+  try {
+    if (localStorage.getItem(storageKey)) return;
+    localStorage.setItem(storageKey, new Date().toISOString());
+  } catch (error) {
+    console.warn("无法记录评分邀请状态", error);
+  }
+  try {
+    await plugin.requestReview();
+  } catch (error) {
+    console.warn("系统评分邀请暂时不可用", error);
+  }
 }
 
 function submitMemoForm(event) {

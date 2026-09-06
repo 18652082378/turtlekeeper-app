@@ -10,6 +10,7 @@ if (!fs.existsSync(configPath)) {
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 const plugins = new Set(Array.isArray(config.packageClassList) ? config.packageClassList : []);
 plugins.add("TurtleMediaPickerPlugin");
+plugins.add("TurtleAppReviewPlugin");
 config.packageClassList = [...plugins];
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-console.log("Registered local iOS plugin: TurtleMediaPickerPlugin");
+console.log("Registered local iOS plugins: TurtleMediaPickerPlugin, TurtleAppReviewPlugin");
