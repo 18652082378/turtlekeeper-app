@@ -10411,7 +10411,7 @@ html[data-theme-color="dark"] .forum-thread-badges b.featured { color: #ffd777; 
   box-shadow: 0 4px 16px rgba(18,42,34,.055);
   transition: transform .18s ease, box-shadow .18s ease;
 }
-.community-page .forum-thread-card:active { opacity: 1; transform: scale(.985); box-shadow: 0 2px 8px rgba(18,42,34,.05); }
+.community-page .forum-thread-card:active { opacity: 1; transform: none; box-shadow: 0 4px 16px rgba(18,42,34,.055); }
 .community-page .forum-thread-card.is-pinned { border-color: color-mix(in srgb, var(--primary) 25%, var(--divider)); }
 .community-page .forum-thread-badges { min-height: 18px; gap: 5px; }
 .community-page .forum-thread-badges b,
@@ -18414,15 +18414,26 @@ html[data-theme-color="dark"] .shared-turtle-badge { color: #85d1bc; background:
 }
 .community-page .forum-thread-actions button {
   min-height: 46px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
+  display: grid;
+  place-items: center;
   color: var(--muted);
   background: transparent;
   font-size: 12px;
 }
-.community-page .forum-thread-actions button:active { opacity: .58; }
+.community-page .forum-thread-actions .forum-action-content {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.community-page .forum-thread-actions button:active {
+  opacity: .58;
+  transform: none;
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+  border-radius: 10px;
+}
 .community-page .forum-thread-actions button.active { color: var(--primary); }
 .community-page .forum-thread-actions svg {
   width: 18px;
@@ -18739,8 +18750,10 @@ html[data-theme-color="dark"] .community-page .forum-thread-card { box-shadow: 0
 .community-detail-card.is-single-image .community-detail-actions button:nth-child(-n+3) {
   min-height: 46px;
   flex: 1 1 33.333%;
-  display: grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   font-size: 12px;
 }
 .community-detail-card.is-single-image .community-detail-actions button:nth-child(n+4) {
@@ -18796,7 +18809,7 @@ button.forum-publish-setting-row { width: 100%; padding: 0; color: inherit; back
   min-height: 68px;
   padding: 8px 4px;
   display: grid;
-  grid-template-columns: 40px minmax(0,1fr) 26px;
+  grid-template-columns: 40px minmax(0,1fr);
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid var(--divider);
@@ -18805,12 +18818,30 @@ button.forum-publish-setting-row { width: 100%; padding: 0; color: inherit; back
   text-align: left;
 }
 .community-visibility-options > button:last-child { border-bottom: 0; }
-.community-visibility-options > button > i { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 13px; color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--raised-bg)); font-size: 17px; font-style: normal; }
+.community-visibility-options > button > i {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  margin-left: 10px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid transparent;
+  border-radius: 50%;
+  color: var(--text);
+  background: transparent;
+  font-style: normal;
+}
+.community-visibility-options > button > i::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.community-visibility-options > button.active > i { border-color: currentColor; }
 .community-visibility-options > button > span { min-width: 0; display: grid; gap: 4px; }
 .community-visibility-options b { font-size: 15px; }
 .community-visibility-options small { color: var(--muted); font-size: 12px; }
-.community-visibility-options em { opacity: 0; color: var(--primary); font-size: 18px; font-style: normal; font-weight: 800; }
-.community-visibility-options > button.active em { opacity: 1; }
 .community-visibility-options > button:active { opacity: .58; }
 @keyframes communityVisibilityFade { from { opacity: 0; } }
 @keyframes communityVisibilityRise { from { opacity: .7; transform: translateY(24px); } }
@@ -18838,13 +18869,13 @@ html[data-theme-color="dark"] .community-detail-card.is-single-image .community-
   background: #fff !important;
 }
 .community-page .forum-thread-media.is-single > .community-feed-media-button {
-  width: 100%;
+  width: fit-content;
   height: auto;
-  max-width: none;
+  max-width: 100%;
   max-height: none;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   overflow: visible;
   background: #fff !important;
 }
@@ -18853,8 +18884,13 @@ html[data-theme-color="dark"] .community-detail-card.is-single-image .community-
   height: auto !important;
   max-width: 100% !important;
   max-height: min(48dvh, 460px) !important;
-  margin: 0 auto;
+  margin: 0;
   object-fit: contain !important;
+}
+
+/* 帖子详情是独立层级：隐藏主导航后，回复框贴合底部安全区。 */
+.community-detail-page .forum-reply-composer {
+  bottom: env(safe-area-inset-bottom);
 }
 
 /* 点赞采用 iOS 红色确认态，取消后恢复原有中性色。 */
@@ -18876,9 +18912,11 @@ html[data-theme-color="dark"] .community-detail-card.is-single-image .community-
   justify-content: center;
   gap: 5px;
 }
-.community-detail-actions button[data-like-community-post] svg {
+.community-detail-actions button > svg {
   width: 18px;
   height: 18px;
+  flex: none;
+  fill: none;
   stroke: currentColor;
   stroke-width: 1.7;
   stroke-linecap: round;

@@ -2196,7 +2196,7 @@ function communityDetailMedia(item) {
 
 function pageCommunityPostDetail() {
   const item = findCommunityPost(state.selectedCommunityPostId);
-  if (!item) return `${topbar("帖子详情", true)}<main class="content page-fresh"><div class="empty small-empty"><div><strong>这篇帖子不存在</strong></div></div></main>${bottomNav()}`;
+  if (!item) return `${topbar("帖子详情", true)}<main class="content page-fresh"><div class="empty small-empty"><div><strong>这篇帖子不存在</strong></div></div></main>`;
   const comments = Array.isArray(item.comments) ? item.comments : [];
   const isOwn = Boolean(item.isOwn || item.pendingLocal);
   const canDelete = isOwn || state.isCommunityAdmin;
@@ -2211,9 +2211,9 @@ function pageCommunityPostDetail() {
           ${!isOwn ? `<div class="community-author-actions"><button class="${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></div>` : ""}
         </header>`;
   const detailActions = `<div class="community-detail-actions">
-          <button type="button" data-share-community-post="${item.id}">分享</button>
-          <button type="button" data-show-community-comment="${item.id}">评论${comments.length ? ` ${comments.length}` : ""}</button>
           <button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${item.id}" aria-label="${item.liked ? "取消点赞" : "点赞"}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10H4V10h3Zm3 10V9l4-6c1.7.7 2 2.2 1.3 4.3L15 9h4.2c1.3 0 2 1.1 1.7 2.3l-1.6 6.5c-.3 1.3-1.2 2.2-2.6 2.2H10Z"></path></svg><span>${item.likeCount ? item.likeCount : "赞"}</span></button>
+          <button type="button" data-show-community-comment="${item.id}" aria-label="评论"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 4V5Z"></path></svg><span>评论${comments.length ? ` ${comments.length}` : ""}</span></button>
+          <button type="button" data-share-community-post="${item.id}" aria-label="分享"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 8l5-5 5 5M5 12v8h14v-8"></path></svg><span>分享</span></button>
           ${!isOwn ? `<button type="button" data-open-content-report data-report-type="community" data-report-id="${item.id}">举报</button><button class="danger-link" type="button" data-block-content-user data-block-type="community" data-block-id="${item.id}" data-block-name="${escapeHtml(item.authorName || "该用户")}">屏蔽用户</button>` : ""}
           ${canDelete ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}
         </div>`;
@@ -2236,7 +2236,6 @@ function pageCommunityPostDetail() {
       <section class="forum-reply-section"><div class="forum-reply-heading"><strong>全部回复</strong><span>${comments.length} 楼</span></div>${comments.map((comment, index) => `<article class="forum-floor"><div class="forum-floor-avatar">${communityAvatar(comment, "forum-reply-avatar")}</div><div><header><strong>${escapeHtml(comment.authorName || "壳友")}${platformAdminBadge(comment)}</strong><span>${index + 1} 楼 · ${formatTime(comment.createdAt)}</span></header>${comment.replyToName ? `<small>回复 ${escapeHtml(comment.replyToName)}</small>` : ""}<p>${escapeHtml(comment.content)}</p><button type="button" data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${escapeHtml(comment.authorName || "壳友")}" data-post-id="${escapeHtml(item.id)}">回复</button></div></article>`).join("") || `<div class="empty small-empty"><div><strong>还没有回复</strong><br>来坐第一个沙发</div></div>`}</section>
       <form class="community-comment-form forum-reply-composer" data-community-comment-form="${item.id}"><input name="content" placeholder="${replyTarget ? `回复 ${escapeHtml(replyTarget.name)}` : "友善交流，说说你的经验"}" maxlength="500"><button type="submit">发送</button></form>
     </main>
-    ${bottomNav()}
   `;
 }
 
@@ -2278,9 +2277,9 @@ const COMMUNITY_TOPICS = {
 };
 
 const COMMUNITY_VISIBILITY_OPTIONS = {
-  public: { label: "所有壳友可见", note: "任何人都可以看到这篇帖子", icon: "◎" },
-  followers: { label: "仅粉丝可见", note: "只有关注你的壳友可以看到", icon: "◉" },
-  private: { label: "仅自己可见", note: "只保存到自己的空间", icon: "●" }
+  public: { label: "所有壳友可见", note: "任何人都可以看到这篇帖子" },
+  followers: { label: "仅粉丝可见", note: "只有关注你的壳友可以看到" },
+  private: { label: "仅自己可见", note: "只保存到自己的空间" }
 };
 
 function communityVisibilityOption(value = communityDraftVisibility) {
@@ -2410,7 +2409,7 @@ function communityForumCard(item) {
   return `<article class="forum-thread-card ${item.isPinned ? "is-pinned" : ""}" data-community-feed-card="${escapeHtml(item.id)}" data-view-community-post="${escapeHtml(item.id)}" tabindex="0" role="button" aria-label="查看帖子：${escapeHtml(communityPostTitle(item))}">
     <header class="forum-thread-author"><button type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item, "forum-thread-avatar")}</button><div class="forum-thread-author-copy"><strong>${escapeHtml(item.authorName || "壳友")}${platformAdminBadge(item)}</strong><span>${formatTime(item.createdAt)} · ${circle.name}</span></div>${!isOwn ? `<button class="forum-thread-follow ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${escapeHtml(item.authorId || "")}">${item.followed ? "已关注" : "+ 关注"}</button>` : ""}<div class="community-moment-action-wrap forum-thread-more-wrap"><button class="forum-thread-more" type="button" data-community-more="${escapeHtml(item.id)}" aria-label="更多操作">•••</button></div></header>
     <div class="forum-thread-main"><div class="forum-thread-badges">${item.isPinned ? "<b>置顶</b>" : ""}${item.isFeatured ? "<b class=\"featured\">精华</b>" : ""}${item.isOwn && item.visibility !== "public" ? `<span class="visibility">${communityVisibilityOption(item.visibility).label}</span>` : ""}${item.speciesName ? `<span>${escapeHtml(item.speciesName)}</span>` : ""}</div><h3>${escapeHtml(communityPostTitle(item))}</h3>${item.content || item.question ? `<p>${escapeHtml(String(item.content || item.question).replace(/\s+/g, " ").slice(0, 180))}</p>` : ""}${mediaItems.length ? `<div class="forum-thread-media ${mediaItems.length === 1 ? "is-single" : "is-grid"}">${communityFeedMedia(item)}</div>` : ""}</div>
-    <footer class="forum-thread-actions"><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${escapeHtml(item.id)}" aria-label="点赞"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10H4V10h3Zm3 10V9l4-6c1.7.7 2 2.2 1.3 4.3L15 9h4.2c1.3 0 2 1.1 1.7 2.3l-1.6 6.5c-.3 1.3-1.2 2.2-2.6 2.2H10Z"></path></svg><span>${Number(item.likeCount || 0) || "赞"}</span></button><button type="button" data-open-community-comments="${escapeHtml(item.id)}" aria-label="查看回复"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 4V5Z"></path></svg><span>${replies || "评论"}</span></button><button type="button" data-share-community-post="${escapeHtml(item.id)}" aria-label="分享帖子"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 8l5-5 5 5M5 12v8h14v-8"></path></svg><span>分享</span></button></footer>
+    <footer class="forum-thread-actions"><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${escapeHtml(item.id)}" aria-label="点赞"><span class="forum-action-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10H4V10h3Zm3 10V9l4-6c1.7.7 2 2.2 1.3 4.3L15 9h4.2c1.3 0 2 1.1 1.7 2.3l-1.6 6.5c-.3 1.3-1.2 2.2-2.6 2.2H10Z"></path></svg><span>${Number(item.likeCount || 0) || "赞"}</span></span></button><button type="button" data-open-community-comments="${escapeHtml(item.id)}" aria-label="查看回复"><span class="forum-action-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 4V5Z"></path></svg><span>${replies || "评论"}</span></span></button><button type="button" data-share-community-post="${escapeHtml(item.id)}" aria-label="分享帖子"><span class="forum-action-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 8l5-5 5 5M5 12v8h14v-8"></path></svg><span>分享</span></span></button></footer>
   </article>`;
 }
 
@@ -2682,7 +2681,7 @@ function pageCommunityAdd() {
         </section>
         <input class="hidden-file" type="file" accept="image/jpeg,image/png,image/webp" multiple data-community-media-input>
       </form>
-      ${communityVisibilitySheetOpen ? `<div class="community-visibility-overlay" data-close-community-visibility><section class="community-visibility-sheet" role="dialog" aria-modal="true" aria-label="选择展示范围"><i class="community-sheet-handle" aria-hidden="true"></i><header><div><strong>谁可以看到这篇帖子</strong><span>发布后暂不支持修改</span></div><button type="button" data-close-community-visibility aria-label="关闭">×</button></header><div class="community-visibility-options">${Object.entries(COMMUNITY_VISIBILITY_OPTIONS).map(([value, option]) => `<button class="${communityDraftVisibility === value ? "active" : ""}" type="button" data-community-visibility="${value}"><i>${option.icon}</i><span><b>${option.label}</b><small>${option.note}</small></span><em>✓</em></button>`).join("")}</div></section></div>` : ""}
+      ${communityVisibilitySheetOpen ? `<div class="community-visibility-overlay" data-close-community-visibility><section class="community-visibility-sheet" role="dialog" aria-modal="true" aria-label="选择展示范围"><i class="community-sheet-handle" aria-hidden="true"></i><header><div><strong>谁可以看到这篇帖子</strong><span>发布后暂不支持修改</span></div><button type="button" data-close-community-visibility aria-label="关闭">×</button></header><div class="community-visibility-options">${Object.entries(COMMUNITY_VISIBILITY_OPTIONS).map(([value, option]) => `<button class="${communityDraftVisibility === value ? "active" : ""}" type="button" data-community-visibility="${value}" aria-pressed="${communityDraftVisibility === value ? "true" : "false"}"><i aria-hidden="true"></i><span><b>${option.label}</b><small>${option.note}</small></span></button>`).join("")}</div></section></div>` : ""}
     </main>
   `;
 }
