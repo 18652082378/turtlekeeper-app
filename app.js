@@ -400,6 +400,11 @@ let communityDraftVisibility = "public";
 let communityVisibilitySheetOpen = false;
 let communityForumSort = "hot";
 let communitySelectedCircleId = "all";
+let communitySearchQuery = "";
+let communitySearchResults = [];
+let communitySearchTimer = 0;
+let communitySearchRequestId = 0;
+let communitySearchLoading = false;
 let communityReplyTarget = null;
 // Match the market publish flow: lock repeated taps and retain one stable
 // submission id until the server confirms the result.
@@ -1738,8 +1743,7 @@ function captureTurtleDetailDraft() {
     shellHeight: String(data.get("shellHeight") || ""),
     plastronLength: String(data.get("plastronLength") || ""),
     status: String(data.get("status") || turtle?.status || "正常饲养"),
-    // 成长记录不修改健康、入手日期或购入价；草稿切换时保留档案原值。
-    health: String(turtle?.health || "健康"),
+    health: String(data.get("health") || turtle?.health || "健康"),
     acquiredDate: String(turtle?.acquiredDate || ""),
     source: String(data.get("source") || turtle?.source || "购买"),
     price: String(turtle?.price || ""),
@@ -2462,6 +2466,64 @@ async function shareCommunityPost(postId) {
   copyText(url, "帖子链接已复制");
 }
 
+function communitySearchSuggestionsMarkup() {
+  const query = communitySearchQuery.trim();
+  if (!query) return "";
+  if (communitySearchLoading) return `<div class="community-search-state" role="status">正在搜索相关帖子…</div>`;
+  if (!communitySearchResults.length) return `<div class="community-search-state">没有找到相关内容</div>`;
+  return `<div class="community-search-suggestions" role="listbox" aria-label="相关帖子">${communitySearchResults.slice(0, 5).map(post => {
+    const media = communityPostMediaItems(post)[0];
+    const summary = String(post.content || post.question || communityCircle(communityPostCircleId(post)).name || "壳友交流").replace(/\s+/g, " ").slice(0, 64);
+    return `<button type="button" role="option" data-community-search-post="${escapeHtml(post.id)}"><span class="community-search-result-copy"><strong>${escapeHtml(communityPostTitle(post))}</strong><small>${escapeHtml(post.authorName || "壳友")} · ${escapeHtml(summary)}</small></span>${media?.url ? `<img src="${escapeHtml(media.url)}" alt="" loading="lazy">` : `<i aria-hidden="true">帖</i>`}</button>`;
+  }).join("")}</div>`;
+}
+
+function communitySearchMarkup() {
+  return `<section class="community-search-shell"><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input type="search" value="${escapeHtml(communitySearchQuery)}" placeholder="搜索帖子、品种或壳友" autocomplete="off" enterkeyhint="search" aria-label="搜索壳友圈" data-community-search><button type="button" data-community-search-clear aria-label="清除搜索" ${communitySearchQuery ? "" : "hidden"}>×</button></label><div data-community-search-results>${communitySearchSuggestionsMarkup()}</div></section>`;
+}
+
+function bindCommunitySearchResults(container = document.querySelector("[data-community-search-results]")) {
+  container?.querySelectorAll("[data-community-search-post]").forEach(button => button.addEventListener("click", () => {
+    const post = communitySearchResults.find(item => String(item.id) === button.dataset.communitySearchPost);
+    if (!post) return;
+    const posts = [post, ...(state.communityPosts || []).filter(item => String(item.id) !== String(post.id))];
+    communitySearchQuery = "";
+    communitySearchResults = [];
+    setState({ communityPosts: posts, page: "communityPostDetail", selectedCommunityPostId: post.id, openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
+  }));
+}
+
+function localCommunitySearch(query) {
+  const needle = String(query || "").toLocaleLowerCase().replace(/\s+/g, "");
+  return (state.communityPosts || []).map(post => {
+    const title = communityPostTitle(post).toLocaleLowerCase().replace(/\s+/g, "");
+    const content = [post.content, post.question, post.speciesName, post.authorName].filter(Boolean).join(" ").toLocaleLowerCase().replace(/\s+/g, "");
+    const position = `${title}|${content}`.indexOf(needle);
+    return { post, score: title.startsWith(needle) ? 800 : title.includes(needle) ? 650 : content.includes(needle) ? 500 - Math.max(0, position) : 0 };
+  }).filter(item => item.score > 0).sort((a, b) => b.score - a.score).slice(0, 5).map(item => item.post);
+}
+
+async function searchCommunityPosts(query) {
+  const requestId = ++communitySearchRequestId;
+  communitySearchLoading = true;
+  const container = document.querySelector("[data-community-search-results]");
+  if (container) container.innerHTML = communitySearchSuggestionsMarkup();
+  try {
+    const result = CONFIGURED_SMS_BACKEND ? await apiPost("/api/community/search", communityAuthPayload({ query })) : { posts: localCommunitySearch(query) };
+    if (requestId !== communitySearchRequestId || query !== communitySearchQuery.trim()) return;
+    communitySearchResults = normalizeCommunityPosts(result.posts || []).slice(0, 5);
+  } catch (error) {
+    if (requestId !== communitySearchRequestId) return;
+    communitySearchResults = localCommunitySearch(query);
+  } finally {
+    if (requestId !== communitySearchRequestId) return;
+    communitySearchLoading = false;
+    const current = document.querySelector("[data-community-search-results]");
+    if (current) current.innerHTML = communitySearchSuggestionsMarkup();
+    bindCommunitySearchResults(current);
+  }
+}
+
 function pageCommunity() {
   const posts = state.communityPosts || [];
   const visiblePosts = communityForumPosts(posts);
@@ -2473,6 +2535,7 @@ function pageCommunity() {
     ${topbar("壳友圈", false, `<button class="community-camera-button" type="button" data-community-camera-button aria-label="拍摄或从相册选择"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"></path><circle cx="12" cy="13.5" r="3.5"></circle></svg></button>`, platformServiceTopButton())}
     <main class="content page-fresh community-page community-moments-page">
       <input class="hidden-file" type="file" accept="image/jpeg,image/png,image/webp" multiple data-community-quick-media>
+      ${communitySearchMarkup()}
       ${communityCreateHub()}
       ${communityCircleStrip(posts)}
       ${selectedCircle ? `<section class="forum-selected-circle"><div><i>${selectedCircle.icon}</i><span><strong>${selectedCircle.name}</strong><small>${selectedCircle.note}</small></span></div><button class="${followed ? "active" : ""}" type="button" data-toggle-community-circle="${selectedCircle.id}">${followed ? "已关注" : "+ 关注"}</button></section>` : ""}
@@ -2831,7 +2894,7 @@ function communityChatListingCard(listing) {
   const unavailableMark = unavailable ? `<em class="community-chat-product-unavailable-mark">已售出</em>` : "";
   const preview = listing.mediaUrl
     ? (listing.mediaType === "video"
-      ? `<span class="community-chat-product-media is-video ${unavailable ? "is-unavailable" : ""}"><video src="${escapeHtml(listing.mediaUrl)}"${videoPosterAttribute(listing)} muted playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video><i>▶</i>${unavailableMark}</span>`
+      ? `<span class="community-chat-product-media is-video ${unavailable ? "is-unavailable" : ""}"><video src="${escapeHtml(listing.mediaUrl)}"${videoPosterAttribute(listing)} muted playsinline preload="none" crossorigin="anonymous" data-video-first-frame></video><i>▶</i>${unavailableMark}</span>`
       : `<span class="community-chat-product-media ${unavailable ? "is-unavailable" : ""}"><img src="${escapeHtml(listing.mediaUrl)}" alt="${escapeHtml(title)}">${unavailableMark}</span>`)
     : `<span class="community-chat-product-media is-placeholder ${unavailable ? "is-unavailable" : ""}">龟${unavailableMark}</span>`;
   return `
@@ -2864,7 +2927,7 @@ function pageCommunityChat() {
     const mediaPosterUrl = message.posterUrl ? apiAssetUrl(message.posterUrl) : "";
     const media = mediaUrl
       ? (mediaType === "video"
-        ? `<div class="community-message-media is-video" style="--community-media-ratio:${communityMessageAspectRatio(message, mediaType)}" aria-label="查看聊天视频"><div class="inline-video-shell"><video src="${escapeHtml(mediaUrl)}"${videoPosterAttribute({ posterUrl: mediaPosterUrl })} muted playsinline controls preload="auto" crossorigin="anonymous" data-inline-video data-video-first-frame></video>${inlineVideoExpandButton({ url: mediaUrl, posterUrl: mediaPosterUrl }, "聊天视频")}</div></div>`
+        ? `<div class="community-message-media is-video" style="--community-media-ratio:${communityMessageAspectRatio(message, mediaType)}" aria-label="查看聊天视频"><div class="inline-video-shell"><video src="${escapeHtml(mediaUrl)}"${videoPosterAttribute({ posterUrl: mediaPosterUrl })} muted playsinline controls preload="none" crossorigin="anonymous" data-inline-video data-video-first-frame></video>${inlineVideoExpandButton({ url: mediaUrl, posterUrl: mediaPosterUrl }, "聊天视频")}</div></div>`
         : `<button class="community-message-media" style="--community-media-ratio:${communityMessageAspectRatio(message, mediaType)}" type="button" data-preview-chat-media="${escapeHtml(mediaUrl)}" data-chat-media-poster="${escapeHtml(mediaPosterUrl)}" data-chat-media-type="${mediaType}" aria-label="查看聊天图片"><img src="${escapeHtml(mediaUrl)}" alt="聊天图片"></button>`)
       : "";
     const showTime = shouldShowCommunityMessageTime(visibleMessages, index);
@@ -3345,6 +3408,7 @@ function syncMarketWifiVideos() {
     video.defaultMuted = true;
     video.play().catch(() => {});
   });
+  prefetchNextMarketVideo();
 }
 
 function updateMarketNetworkType(status) {
@@ -3381,7 +3445,7 @@ function marketListingCard(item) {
     <article class="market-card-wrap" data-market-impression="${item.id}">
     <button class="market-card ${unavailable ? "is-sold" : ""}" type="button" data-view-market="${item.id}">
       <span class="market-card-photo ${wifiAutoplay ? "wifi-video-autoplay" : ""}">
-        ${firstMedia?.type === "video" ? `<video src="${firstMedia.url}"${videoPosterAttribute(firstMedia)} muted playsinline crossorigin="anonymous" data-video-first-frame ${wifiAutoplay ? "autoplay loop preload=\"auto\" data-market-wifi-video" : "preload=\"auto\""}></video>${wifiAutoplay ? "" : `<b class="market-video-mark">▶</b>`}` : `<img src="${marketListingPhoto(item)}" alt="${escapeHtml(item.title || item.speciesName || "在售乌龟")}" loading="lazy">`}
+        ${firstMedia?.type === "video" ? `<video src="${firstMedia.url}"${videoPosterAttribute(firstMedia)} muted playsinline crossorigin="anonymous" data-video-first-frame ${wifiAutoplay ? "autoplay loop preload=\"metadata\" data-market-wifi-video" : "preload=\"none\""}></video>${wifiAutoplay ? "" : `<b class="market-video-mark">▶</b>`}` : `<img src="${marketListingPhoto(item)}" alt="${escapeHtml(item.title || item.speciesName || "在售乌龟")}" loading="lazy">`}
         ${unavailable ? `<i>已售出</i>` : item.negotiable ? `<i class="negotiable">可议价</i>` : ""}
       </span>
       <span class="market-card-body">
@@ -3546,6 +3610,77 @@ function updateMarketPublishProgress(patch = {}) {
 function clearMarketPublishProgress() {
   marketPublishProgress = { active: false, current: 0, total: 0, stage: "" };
   document.querySelector("[data-market-publish-progress]")?.remove();
+}
+
+function nativeVideoCachePlugin() {
+  const capacitor = window.Capacitor;
+  if (!capacitor || typeof capacitor.isNativePlatform !== "function" || !capacitor.isNativePlatform()) return null;
+  const plugin = capacitor.Plugins?.TurtleVideoCache || capacitor.registerPlugin?.("TurtleVideoCache");
+  return plugin && typeof plugin.resolve === "function" ? plugin : null;
+}
+
+function videoCacheSizeLabel(bytes) {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / 1024 / 1024).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+async function refreshVideoCacheStats() {
+  const label = document.querySelector("[data-video-cache-size]");
+  if (!label) return;
+  const plugin = nativeVideoCachePlugin();
+  if (!plugin?.stats) { label.textContent = "仅 iPhone 可用"; return; }
+  try {
+    const result = await plugin.stats();
+    label.textContent = videoCacheSizeLabel(result?.bytes);
+  } catch { label.textContent = "暂不可用"; }
+}
+
+async function clearVideoCache() {
+  const plugin = nativeVideoCachePlugin();
+  if (!plugin?.clear) return toast("请在 iPhone App 中清理缓存");
+  try {
+    await plugin.clear();
+    toast("视频缓存已清理");
+    await refreshVideoCacheStats();
+  } catch { toast("清理失败，请稍后重试"); }
+}
+
+function bindNativeVideoCache(video) {
+  if (!video || video.dataset.nativeVideoCacheBound === "true") return;
+  video.dataset.nativeVideoCacheBound = "true";
+  video.addEventListener("play", async () => {
+    const plugin = nativeVideoCachePlugin();
+    const remoteUrl = video.dataset.remoteVideoUrl || video.currentSrc || video.src;
+    if (!plugin || !/^https?:/i.test(remoteUrl) || video.dataset.cacheResolving === "true") return;
+    video.dataset.remoteVideoUrl = remoteUrl;
+    video.dataset.cacheResolving = "true";
+    try {
+      const result = await plugin.resolve({ url: remoteUrl });
+      if (!result?.cached || !result.url || result.url === video.src) return;
+      const currentTime = Number(video.currentTime || 0);
+      const localUrl = typeof window.Capacitor?.convertFileSrc === "function" ? window.Capacitor.convertFileSrc(result.url) : result.url;
+      video.pause();
+      video.src = localUrl;
+      video.load();
+      video.addEventListener("loadedmetadata", () => {
+        if (currentTime > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(currentTime, Math.max(0, video.duration - 0.1));
+        video.play().catch(() => {});
+      }, { once: true });
+    } catch { /* Remote playback remains available when caching fails. */ }
+    finally { video.dataset.cacheResolving = "false"; }
+  });
+}
+
+function prefetchNextMarketVideo() {
+  if (!shouldAutoplayMarketVideo()) return;
+  const plugin = nativeVideoCachePlugin();
+  if (!plugin?.prefetch) return;
+  const videos = [...document.querySelectorAll(".market-card video")];
+  const playingIndex = videos.findIndex(video => !video.paused);
+  const candidates = playingIndex >= 0 ? videos.slice(playingIndex + 1) : videos;
+  const next = candidates.find(video => /^https?:/i.test(video.dataset.remoteVideoUrl || video.currentSrc || video.src));
+  if (next) plugin.prefetch({ url: next.dataset.remoteVideoUrl || next.currentSrc || next.src }).catch(() => {});
 }
 
 function communityPublishProgressMarkup() {
@@ -4245,6 +4380,15 @@ function pageTurtleDetail() {
               <input type="hidden" name="gender" value="${turtleDraftValue(t, "gender") || "未知"}">
               <div class="radio-row">
                 ${["公", "母", "未知"].map(value => `<button class="choice ${turtleDraftValue(t, "gender") === value ? "active" : ""}" type="button" data-detail-choice="gender" data-choice-value="${value}">${value}</button>`).join("")}
+              </div>
+            </div>
+          </div>
+          <div class="detail-choice-row health-choice-row">
+            <span>健康状态</span>
+            <div>
+              <input type="hidden" name="health" value="${turtleDraftValue(t, "health") || "健康"}">
+              <div class="radio-row">
+                ${["健康", "生病"].map(value => `<button class="choice ${turtleDraftValue(t, "health") === value ? "active" : ""}" type="button" data-detail-choice="health" data-choice-value="${value}">${value}</button>`).join("")}
               </div>
             </div>
           </div>
@@ -5691,6 +5835,12 @@ function pageAccount() {
             ${(state.blockedUsers || []).map(user => `<div class="blocked-user-row">${communityAvatar(user, "blocked-user-avatar")}<span><strong>${escapeHtml(user.name || "壳友")}</strong><small>${user.type === "blacklist" ? "已拉黑" : "已屏蔽"}</small></span><button type="button" data-unblock-user="${escapeHtml(user.id || "")}">${user.type === "blacklist" ? "解除拉黑" : "解除屏蔽"}</button></div>`).join("") || `<p class="muted blocked-user-empty">暂无已屏蔽或拉黑的用户</p>`}
           </div>
         </section>
+        <section class="fresh-card settings-card video-cache-settings">
+          <div class="settings-title">视频缓存</div>
+          <div class="account-settings-row"><span><strong>本机视频缓存</strong><small>播放过的视频会保存在本机，Wi-Fi 下会提前缓存下一条</small></span><em data-video-cache-size>正在计算</em></div>
+          <button class="secondary" type="button" data-clear-video-cache>清理缓存</button>
+          <p class="muted">缓存上限 500 MB；空间不足时会自动清理最久未观看的视频。</p>
+        </section>
         <section class="fresh-card settings-card account-danger-zone">
           <div class="settings-title">账号注销</div>
           <p class="muted">永久删除账号及相关档案、动态、商品和聊天记录。注销完成后无法恢复。</p>
@@ -6003,12 +6153,11 @@ function operationMonthSelector(scope, rows, selectedMonth) {
   return `<section class="fresh-card operations-month-picker"><div><span>统计月份</span><strong>${operationMonthLabel(selectedMonth)}</strong></div><select class="select" data-operations-month="${scope}">${rows.map(row => `<option value="${row.month}" ${row.month === selectedMonth ? "selected" : ""}>${operationMonthLabel(row.month)}</option>`).join("")}</select></section>`;
 }
 
-function operationCompare(value, previous, formatter = number => String(Math.max(0, Number(number) || 0))) {
-  const current = Math.max(0, Number(value) || 0);
-  const prior = Math.max(0, Number(previous) || 0);
-  const delta = current - prior;
-  const tone = delta > 0 ? "up" : delta < 0 ? "down" : "flat";
-  return `<strong>${formatter(current)}</strong><small class="operations-compare ${tone}">较上月 ${delta > 0 ? "+" : delta < 0 ? "-" : ""}${formatter(Math.abs(delta))}</small>`;
+function operationsDatePicker(selectedDate) {
+  const chinaNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const maximum = chinaNow.toISOString().slice(0, 10);
+  const minimum = new Date(chinaNow.getTime() - 399 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return `<section class="fresh-card operations-date-picker"><div><span>单日数据</span><strong>${escapeHtml(selectedDate)}</strong></div><input class="field" type="date" min="${minimum}" max="${maximum}" value="${escapeHtml(selectedDate)}" data-operations-date aria-label="选择运营统计日期"></section>`;
 }
 
 function pageOperations() {
@@ -6025,10 +6174,9 @@ function pageOperations() {
   const growthIndex = Math.max(0, growthMonthly.findIndex(row => row.month === growthMonth));
   const marketIndex = Math.max(0, marketMonthly.findIndex(row => row.month === marketMonth));
   const growthSelected = growthMonthly[growthIndex] || {};
-  const growthPrevious = growthMonthly[growthIndex - 1] || {};
   const marketSelected = marketMonthly[marketIndex] || {};
-  const marketPrevious = marketMonthly[marketIndex - 1] || {};
   const marketToday = market.today || {};
+  const operationsDate = String(state.operationsDate || analytics.date || "").slice(0, 10);
   const feedback = overview.feedback || {};
   const safety = overview.safety || {};
   const health = overview.health || {};
@@ -6039,26 +6187,30 @@ function pageOperations() {
     <main class="content page-fresh operations-page">
       <section class="page-intro compact-intro"><div><p class="eyebrow dark">仅管理员可见</p><h2>运营中心</h2><p>查看今日使用情况，以及用户围绕商品的聊天记录。</p></div></section>
       <section class="memo-tabs operations-tabs">${tabs.map(([key, label]) => `<button class="tab ${tab === key ? "active" : ""}" type="button" data-operations-tab="${key}">${label}</button>`).join("")}</section>
+      ${["analytics", "market"].includes(tab) ? operationsDatePicker(operationsDate) : ""}
       ${tab === "analytics" ? `
-        ${operationMonthSelector("growth", growthMonthly, growthMonth)}
+        <section class="section-title"><span>单日增长</span><small>${escapeHtml(analytics.date || "所选日期")} 数据</small></section>
         <section class="operations-metric-grid">
-          <article class="fresh-card operations-metric"><span>进入次数</span>${operationCompare(growthSelected.visitCount, growthPrevious.visitCount)}</article>
-          <article class="fresh-card operations-metric"><span>独立用户</span>${operationCompare(growthSelected.uniqueVisitorCount, growthPrevious.uniqueVisitorCount)}</article>
-          <article class="fresh-card operations-metric"><span>新增注册</span>${operationCompare(growthSelected.registeredCount, growthPrevious.registeredCount)}</article>
-          <article class="fresh-card operations-metric"><span>登录活跃</span>${operationCompare(growthSelected.activeAccountCount, growthPrevious.activeAccountCount)}</article>
-          <article class="fresh-card operations-metric"><span>7 日回访</span><strong>${Math.max(0, Number(analytics.returningVisitorCount) || 0)}</strong><small>今日访问过的回访用户</small></article>
-          <article class="fresh-card operations-metric"><span>累计停留</span><strong>${formatOperationDuration(analytics.totalDwellSeconds)}</strong><small>今日已记录时长</small></article>
+          <article class="fresh-card operations-metric"><span>进入次数</span><strong>${Math.max(0, Number(analytics.visitCount) || 0)}</strong><small>今日启动会话</small></article>
+          <article class="fresh-card operations-metric"><span>独立用户</span><strong>${Math.max(0, Number(analytics.uniqueVisitorCount) || 0)}</strong><small>今日去重访客</small></article>
+          <article class="fresh-card operations-metric"><span>当日注册</span><strong>${Math.max(0, Number(analytics.registeredToday) || 0)}</strong><small>累计用户 ${Math.max(0, Number(analytics.totalUserCount) || 0)}</small></article>
+          <article class="fresh-card operations-metric"><span>登录活跃</span><strong>${Math.max(0, Number(analytics.activeAccountCount) || 0)}</strong><small>当日已登录账号</small></article>
+          <article class="fresh-card operations-metric"><span>7 日回访</span><strong>${Math.max(0, Number(analytics.returningVisitorCount) || 0)}</strong><small>当日访问过的回访用户</small></article>
+          <article class="fresh-card operations-metric"><span>累计停留</span><strong>${formatOperationDuration(analytics.totalDwellSeconds)}</strong><small>当日已记录时长</small></article>
           <article class="fresh-card operations-metric"><span>平均停留</span><strong>${formatOperationDuration(analytics.averageDwellSeconds)}</strong><small>每次进入平均时长</small></article>
         </section>
+        <section class="section-title"><span>月度汇总</span><small>按月查看累计数据</small></section>
+        ${operationMonthSelector("growth", growthMonthly, growthMonth)}
+        <section class="operations-metric-grid"><article class="fresh-card operations-metric"><span>月进入次数</span><strong>${growthSelected.visitCount || 0}</strong><small>${operationMonthLabel(growthMonth)}</small></article><article class="fresh-card operations-metric"><span>月独立用户</span><strong>${growthSelected.uniqueVisitorCount || 0}</strong><small>按访客去重</small></article><article class="fresh-card operations-metric"><span>月新增注册</span><strong>${growthSelected.registeredCount || 0}</strong><small>注册用户数</small></article><article class="fresh-card operations-metric"><span>月登录活跃</span><strong>${growthSelected.activeAccountCount || 0}</strong><small>按账号去重</small></article><article class="fresh-card operations-metric"><span>月累计停留</span><strong>${formatOperationDuration(growthSelected.totalDwellSeconds)}</strong><small>当月已记录时长</small></article><article class="fresh-card operations-metric"><span>月平均停留</span><strong>${formatOperationDuration(growthSelected.averageDwellSeconds)}</strong><small>每次进入平均时长</small></article></section>
         <section class="fresh-card operations-note"><strong>推广来源</strong><p>${Object.entries(analytics.sources || {}).map(([source, count]) => `${escapeHtml(source)}：${count} 次`).join("　") || "新版部署后开始采集来源数据。"}</p></section>
-        <section class="section-title"><span>用户模块停留</span><small>今日各用户在六个主模块的已记录时长</small></section>
+        <section class="section-title"><span>用户模块停留</span><small>所选日期各用户在六个主模块的已记录时长</small></section>
         <section class="operations-simple-list">${userUsage.map(item => `<article class="fresh-card operations-usage-row"><header><div><strong>${escapeHtml(item.name || "匿名访客")}</strong><small>${escapeHtml(item.identity || "匿名访问")} · 进入 ${Math.max(0, Number(item.visitCount) || 0)} 次</small></div><b>${formatOperationDuration(item.totalDwellSeconds)}</b></header><div class="operations-module-chips">${Object.entries(item.modules || {}).map(([name, seconds]) => `<span>${escapeHtml(name)} ${formatOperationDuration(seconds)}</span>`).join("")}</div></article>`).join("") || `<div class="fresh-card operations-note"><p>暂无用户停留数据。新版开始采集后会显示在这里。</p></div>`}</section>
         <section class="fresh-card operations-note"><strong>统计口径</strong><p>用户每次打开 App 记为一次进入；独立用户按匿名标识去重。页面切换、每分钟心跳、进入后台和回到前台都会结算模块时长。管理员账号不计入运营中心的使用、互动与内容统计。</p></section>
       ` : tab === "market" ? `
-        <section class="section-title"><span>今日集市</span><small>${escapeHtml(analytics.date || "今日")} 实时数据</small></section>
-        <section class="operations-metric-grid"><article class="fresh-card operations-metric"><span>今日发布</span><strong>${marketToday.publishedCount || 0}</strong><small>当前在售 ${market.activeCount || 0}</small></article><article class="fresh-card operations-metric"><span>今日曝光</span><strong>${marketToday.impressions || 0}</strong><small>商品卡进入可视区域</small></article><article class="fresh-card operations-metric"><span>今日浏览</span><strong>${marketToday.views || 0}</strong><small>用户点击进入详情</small></article><article class="fresh-card operations-metric"><span>今日想要</span><strong>${marketToday.wants || 0}</strong><small>新增收藏意向</small></article><article class="fresh-card operations-metric"><span>今日咨询</span><strong>${marketToday.chats || 0}</strong><small>按商品与双方去重</small></article></section>
+        <section class="section-title"><span>单日集市</span><small>${escapeHtml(analytics.date || "所选日期")} 数据</small></section>
+        <section class="operations-metric-grid"><article class="fresh-card operations-metric"><span>当日发布</span><strong>${marketToday.publishedCount || 0}</strong><small>当前在售 ${market.activeCount || 0}</small></article><article class="fresh-card operations-metric"><span>当日曝光</span><strong>${marketToday.impressions || 0}</strong><small>商品卡进入可视区域</small></article><article class="fresh-card operations-metric"><span>当日浏览</span><strong>${marketToday.views || 0}</strong><small>用户点击进入详情</small></article><article class="fresh-card operations-metric"><span>当日想要</span><strong>${marketToday.wants || 0}</strong><small>新增收藏意向</small></article><article class="fresh-card operations-metric"><span>当日咨询</span><strong>${marketToday.chats || 0}</strong><small>按商品与双方去重</small></article></section>
         ${operationMonthSelector("market", marketMonthly, marketMonth)}
-        <section class="operations-metric-grid"><article class="fresh-card operations-metric"><span>月发布</span>${operationCompare(marketSelected.publishedCount, marketPrevious.publishedCount)}</article><article class="fresh-card operations-metric"><span>月曝光</span>${operationCompare(marketSelected.impressions, marketPrevious.impressions)}</article><article class="fresh-card operations-metric"><span>月浏览</span>${operationCompare(marketSelected.views, marketPrevious.views)}</article><article class="fresh-card operations-metric"><span>月想要</span>${operationCompare(marketSelected.wants, marketPrevious.wants)}</article><article class="fresh-card operations-metric"><span>月咨询</span>${operationCompare(marketSelected.chats, marketPrevious.chats)}</article></section>
+        <section class="operations-metric-grid"><article class="fresh-card operations-metric"><span>月发布</span><strong>${marketSelected.publishedCount || 0}</strong><small>${operationMonthLabel(marketMonth)}</small></article><article class="fresh-card operations-metric"><span>月曝光</span><strong>${marketSelected.impressions || 0}</strong><small>当月累计</small></article><article class="fresh-card operations-metric"><span>月浏览</span><strong>${marketSelected.views || 0}</strong><small>当月累计</small></article><article class="fresh-card operations-metric"><span>月想要</span><strong>${marketSelected.wants || 0}</strong><small>当月新增</small></article><article class="fresh-card operations-metric"><span>月咨询</span><strong>${marketSelected.chats || 0}</strong><small>按商品与双方去重</small></article></section>
         <section class="section-title"><span>热度商品</span><small>曝光、浏览、意向和咨询综合排序</small></section><section class="operations-simple-list">${(market.topListings || []).map(item => `<article class="fresh-card operations-simple-row"><strong>${escapeHtml(item.title || item.speciesName || "龟集市商品")}</strong><span>曝光 ${item.impressionCount || 0} · 浏览 ${item.viewCount || 0} · 想要 ${item.wantCount || 0} · 咨询 ${item.chatCount || 0}</span></article>`).join("") || `<div class="empty small-empty"><div><strong>暂无商品数据</strong></div></div>`}</section>
         <section class="section-title"><span>低关注提醒</span><small>发布满 3 天且没有曝光、浏览、意向或咨询</small></section><section class="operations-simple-list">${(market.lowInterestListings || []).map(item => `<article class="fresh-card operations-simple-row"><strong>${escapeHtml(item.title || item.speciesName || "龟集市商品")}</strong><span>${escapeHtml(item.sellerName || "卖家")} · ${item.createdAt ? formatTime(item.createdAt) : ""}</span></article>`).join("") || `<div class="fresh-card operations-note"><p>暂无需要关注的商品。</p></div>`}</section>
       ` : tab === "feedback" ? `
@@ -6746,6 +6898,34 @@ function bindEvents() {
     communityVisibilitySheetOpen = false;
     render();
   }));
+  const communitySearchInput = document.querySelector("[data-community-search]");
+  const communitySearchClear = document.querySelector("[data-community-search-clear]");
+  bindCommunitySearchResults();
+  communitySearchInput?.addEventListener("input", event => {
+    communitySearchQuery = event.target.value.slice(0, 60);
+    communitySearchClear?.toggleAttribute("hidden", !communitySearchQuery);
+    window.clearTimeout(communitySearchTimer);
+    if (!communitySearchQuery.trim()) {
+      communitySearchRequestId += 1;
+      communitySearchLoading = false;
+      communitySearchResults = [];
+      const results = document.querySelector("[data-community-search-results]");
+      if (results) results.innerHTML = "";
+      return;
+    }
+    communitySearchTimer = window.setTimeout(() => searchCommunityPosts(communitySearchQuery.trim()), 180);
+  });
+  communitySearchClear?.addEventListener("click", () => {
+    communitySearchQuery = "";
+    communitySearchResults = [];
+    communitySearchLoading = false;
+    communitySearchRequestId += 1;
+    window.clearTimeout(communitySearchTimer);
+    if (communitySearchInput) { communitySearchInput.value = ""; communitySearchInput.focus(); }
+    communitySearchClear.hidden = true;
+    const results = document.querySelector("[data-community-search-results]");
+    if (results) results.innerHTML = "";
+  });
   document.querySelectorAll("[data-community-draft-turtle]").forEach(button => button.addEventListener("click", () => {
     communityDraftTurtleId = button.dataset.communityDraftTurtle || "";
     communityDraftText = communityGrowthTemplate((state.turtles || []).find(item => item.id === communityDraftTurtleId));
@@ -7267,6 +7447,12 @@ function bindEvents() {
     const key = select.dataset.operationsMonth === "market" ? "operationsMarketMonth" : "operationsGrowthMonth";
     setState({ [key]: select.value }, { skipCloud: true, pageScroll: "preserve" });
   }));
+  document.querySelector("[data-operations-date]")?.addEventListener("change", event => {
+    if (!event.target.value || event.target.value === state.operationsDate) return;
+    setState({ operationsDate: event.target.value }, { skipCloud: true, pageScroll: "preserve" });
+    operationsOverviewLastLoadedAt = 0;
+    void refreshOperationsOverview(true);
+  });
   document.querySelectorAll("[data-admin-feedback-form]").forEach(form => form.addEventListener("submit", submitAdminFeedbackAction));
   document.querySelectorAll("[data-dismiss-system-announcement]").forEach(button => button.addEventListener("click", () => dismissSystemAnnouncement(button.dataset.dismissSystemAnnouncement)));
   document.querySelectorAll("[data-view-feedback]").forEach(el => el.addEventListener("click", event => {
@@ -7322,6 +7508,8 @@ function bindEvents() {
   }));
   document.querySelector("#profileForm")?.addEventListener("submit", submitProfile);
   document.querySelectorAll("[data-logout-account]").forEach(btn => btn.addEventListener("click", logoutAccount));
+  document.querySelector("[data-clear-video-cache]")?.addEventListener("click", clearVideoCache);
+  void refreshVideoCacheStats();
   document.querySelector("[data-open-account-delete]")?.addEventListener("click", openAccountDeleteDialog);
   document.querySelector("[data-refresh-blocked-users]")?.addEventListener("click", () => refreshBlockedUsers(true));
   document.querySelectorAll("[data-unblock-user]").forEach(button => button.addEventListener("click", () => unblockUser(button.dataset.unblockUser)));
@@ -9582,7 +9770,7 @@ async function refreshOperationsOverview(force = false) {
   if (!force && Date.now() - operationsOverviewLastLoadedAt < 15000) return;
   operationsOverviewLoading = true;
   try {
-    const result = await apiPost("/api/admin/operations/overview", communityAuthPayload());
+    const result = await apiPost("/api/admin/operations/overview", communityAuthPayload({ date: state.operationsDate || "" }));
     operationsOverviewLastLoadedAt = Date.now();
     setState({ operationsOverview: { analytics: result.analytics || null, growthMonthly: Array.isArray(result.growthMonthly) ? result.growthMonthly : [], userUsage: Array.isArray(result.userUsage) ? result.userUsage : [], market: result.market || {}, feedback: result.feedback || {}, safety: result.safety || {}, health: result.health || {}, conversations: Array.isArray(result.conversations) ? result.conversations : [] } }, { skipCloud: true, pageScroll: "preserve" });
   } catch (error) {
@@ -9886,6 +10074,7 @@ function createVideoPoster(file) {
 
 function hydrateVideoFirstFrames() {
   document.querySelectorAll("video[data-video-first-frame]").forEach(video => {
+    bindNativeVideoCache(video);
     if (video.dataset.firstFrameReady === "true" || video.getAttribute("poster")) return;
     const capture = () => {
       if (video.dataset.firstFrameReady === "true" || video.getAttribute("poster") || !video.videoWidth || !video.videoHeight) return;
@@ -12798,8 +12987,10 @@ function submitTurtleDetail(event) {
   if (Number.isNaN(carapaceLength) || carapaceLength <= 0) return toast("背甲长度需要填写大于 0 的数字");
   const sameWeight = Math.abs(weight - Number(turtle.weight || 0)) < 0.000001;
   const sameCarapaceLength = Math.abs(carapaceLength - Number(turtle.carapaceLength || 0)) < 0.000001;
-  if (sameWeight && sameCarapaceLength) {
-    return toast("体重和背甲长度均未变化，本次不新增成长更新");
+  const health = ["健康", "生病"].includes(String(form.get("health") || "")) ? String(form.get("health")) : (turtle.health || "健康");
+  const sameHealth = health === (turtle.health || "健康");
+  if (sameWeight && sameCarapaceLength && sameHealth) {
+    return toast("体重、背甲长度和健康状态均未变化");
   }
   const updated = {
     ...turtle,
@@ -12814,8 +13005,7 @@ function submitTurtleDetail(event) {
     shellHeight: String(form.get("shellHeight") || ""),
     plastronLength: String(form.get("plastronLength") || ""),
     status: turtle.status || "正常饲养",
-    // 以下字段是建档基础资料，不应在成长记录中被重置。
-    health: turtle.health || "健康",
+    health,
     acquiredDate: turtle.acquiredDate || "",
     source: turtle.source || "购买",
     price: turtle.price || "",
@@ -12879,7 +13069,7 @@ function submitTurtleDetail(event) {
     turtleDetailDraft: null,
     updateDraftPhoto: "",
     page: "turtleReward",
-    activityLogs: logActivity(`更新档案：${turtleLabel(updated)}，背甲 ${historyItem.oldLength}cm → ${carapaceLength}cm${state.updateDraftPhoto ? "，并更换照片" : ""}`, "档案")
+    activityLogs: logActivity(`更新档案：${turtleLabel(updated)}，背甲 ${historyItem.oldLength}cm → ${carapaceLength}cm${sameHealth ? "" : `，健康 ${turtle.health || "健康"} → ${health}`}${state.updateDraftPhoto ? "，并更换照片" : ""}`, "档案")
   }, [updated.photo, historyItem.newPhoto]);
   activateCareReminder(growthMemo);
   toast("档案已更新，旧记录已经留存");

@@ -2499,6 +2499,11 @@ function analyticsDateKey(date = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+function analyticsRecordDateKey(value) {
+  const date = new Date(value || 0);
+  return Number.isFinite(date.getTime()) ? analyticsDateKey(date) : "";
+}
+
 function analyticsDay(db, key = analyticsDateKey()) {
   db.appAnalytics = db.appAnalytics && typeof db.appAnalytics === "object" ? db.appAnalytics : { days: {} };
   db.appAnalytics.days = db.appAnalytics.days && typeof db.appAnalytics.days === "object" ? db.appAnalytics.days : {};
@@ -2582,20 +2587,22 @@ function operationsUserUsage(db, sessions) {
   })).sort((left, right) => right.totalDwellSeconds - left.totalDwellSeconds || right.visitCount - left.visitCount).slice(0, 200);
 }
 
-function publicTodayAnalytics(db) {
-  const day = analyticsDay(db);
+function publicTodayAnalytics(db, selectedDate = analyticsDateKey()) {
+  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(String(selectedDate || "")) ? String(selectedDate) : analyticsDateKey();
+  const day = analyticsDay(db, safeDate);
   const sessions = publicAnalyticsSessions(day);
   const dwellMs = sessions.reduce((total, session) => total + sessionDwellMs(session), 0);
   const visitors = new Set(sessions.map(session => session.visitorHash).filter(Boolean));
   const priorVisitorHashes = new Set();
+  const selectedTime = new Date(`${safeDate}T12:00:00+08:00`).getTime();
   for (let offset = 1; offset <= 7; offset += 1) {
-    const priorDay = db.appAnalytics?.days?.[analyticsDateKey(new Date(Date.now() - offset * 24 * 60 * 60 * 1000))];
+    const priorDay = db.appAnalytics?.days?.[analyticsDateKey(new Date(selectedTime - offset * 24 * 60 * 60 * 1000))];
     publicAnalyticsSessions(priorDay).forEach(session => { if (session.visitorHash) priorVisitorHashes.add(session.visitorHash); });
   }
   const sources = {};
   sessions.forEach(session => { const source = session.source || "直接打开"; sources[source] = (sources[source] || 0) + 1; });
   return {
-    date: analyticsDateKey(),
+    date: safeDate,
     visitCount: sessions.length,
     uniqueVisitorCount: visitors.size,
     returningVisitorCount: [...visitors].filter(hash => priorVisitorHashes.has(hash)).length,
@@ -2632,7 +2639,7 @@ function operationsMonthlyGrowth(db, users) {
   return recentAnalyticsMonths().map(month => {
     const sessions = Object.entries(db.appAnalytics?.days || {}).filter(([key]) => key.startsWith(`${month}-`)).flatMap(([, day]) => publicAnalyticsSessions(day));
     const dwellMs = sessions.reduce((total, session) => total + sessionDwellMs(session), 0);
-    return { month, visitCount: sessions.length, uniqueVisitorCount: new Set(sessions.map(item => item.visitorHash).filter(Boolean)).size, activeAccountCount: new Set(sessions.map(item => item.accountHash).filter(Boolean)).size, registeredCount: users.filter(user => String(user.createdAt || "").startsWith(month)).length, totalDwellSeconds: Math.round(dwellMs / 1000), averageDwellSeconds: sessions.length ? Math.round(dwellMs / sessions.length / 1000) : 0 };
+    return { month, visitCount: sessions.length, uniqueVisitorCount: new Set(sessions.map(item => item.visitorHash).filter(Boolean)).size, activeAccountCount: new Set(sessions.map(item => item.accountHash).filter(Boolean)).size, registeredCount: users.filter(user => analyticsRecordDateKey(user.createdAt).startsWith(month)).length, totalDwellSeconds: Math.round(dwellMs / 1000), averageDwellSeconds: sessions.length ? Math.round(dwellMs / sessions.length / 1000) : 0 };
   });
 }
 
@@ -2642,11 +2649,11 @@ function operationsMonthlyMarket(db, listings) {
     const daily = Object.entries(db.appAnalytics?.days || {}).filter(([key]) => key.startsWith(`${month}-`));
     const chats = new Set();
     messages.forEach(message => {
-      if (!String(message.createdAt || "").startsWith(month) || !message.marketListing?.id || !message.fromPhone || !message.toPhone) return;
+      if (!analyticsRecordDateKey(message.createdAt).startsWith(month) || !message.marketListing?.id || !message.fromPhone || !message.toPhone) return;
       if (String(message.fromPhone) === REVIEW_ADMIN_PHONE || String(message.toPhone) === REVIEW_ADMIN_PHONE) return;
       chats.add(`${message.marketListing.id}:${[message.fromPhone, message.toPhone].sort().join(":")}`);
     });
-    return { month, publishedCount: listings.filter(item => String(item.createdAt || "").startsWith(month)).length, impressions: daily.reduce((sum, [, day]) => sum + Math.max(0, Number(day.market?.impressions) || 0), 0), views: daily.reduce((sum, [, day]) => sum + Math.max(0, Number(day.market?.views) || 0), 0), wants: daily.reduce((sum, [, day]) => sum + Math.max(0, Number(day.market?.wants) || 0), 0), chats: chats.size };
+    return { month, publishedCount: listings.filter(item => analyticsRecordDateKey(item.createdAt).startsWith(month)).length, impressions: daily.reduce((sum, [, day]) => sum + Math.max(0, Number(day.market?.impressions) || 0), 0), views: daily.reduce((sum, [, day]) => sum + Math.max(0, Number(day.market?.views) || 0), 0), wants: daily.reduce((sum, [, day]) => sum + Math.max(0, Number(day.market?.wants) || 0), 0), chats: chats.size };
   });
 }
 
@@ -2656,11 +2663,15 @@ function recordAdminAudit(db, user, action, detail = "") {
   db.adminAuditLogs = db.adminAuditLogs.slice(0, 1000);
 }
 
-function operationsSummary(db) {
-  const analytics = publicTodayAnalytics(db);
+function operationsSummary(db, selectedDate = analyticsDateKey()) {
+  const earliest = analyticsDateKey(new Date(Date.now() - 399 * 24 * 60 * 60 * 1000));
+  const todayKey = analyticsDateKey();
+  const requestedDate = /^\d{4}-\d{2}-\d{2}$/.test(String(selectedDate || "")) ? String(selectedDate) : todayKey;
+  const dateKey = requestedDate < earliest || requestedDate > todayKey ? todayKey : requestedDate;
+  const analytics = publicTodayAnalytics(db, dateKey);
   const users = Object.values(db.users || {}).filter(user => !isAdminUser(user));
-  const sessions = publicAnalyticsSessions(analyticsDay(db));
-  const today = analyticsDateKey();
+  const sessions = publicAnalyticsSessions(analyticsDay(db, dateKey));
+  const today = dateKey;
   const registeredToday = users.filter(user => {
     const createdAt = new Date(user.createdAt || 0);
     return Number.isFinite(createdAt.getTime()) && analyticsDateKey(createdAt) === today;
@@ -2706,7 +2717,7 @@ function operationsSummary(db) {
     growthMonthly: operationsMonthlyGrowth(db, users),
     market: {
       activeCount: activeListings.length, soldCount: soldListings.length, inactiveCount: inactiveListings.length,
-      today: { publishedCount: listings.filter(item => String(item.createdAt || "").startsWith(today)).length, impressions: todayMarket.impressions, views: todayMarket.views, wants: todayMarket.wants, chats: new Set((Array.isArray(db.messages) ? db.messages : []).filter(message => String(message.createdAt || "").startsWith(today) && message.marketListing?.id && message.fromPhone && message.toPhone && String(message.fromPhone) !== REVIEW_ADMIN_PHONE && String(message.toPhone) !== REVIEW_ADMIN_PHONE).map(message => `${message.marketListing.id}:${[message.fromPhone, message.toPhone].sort().join(":")}`)).size },
+      today: { publishedCount: listings.filter(item => analyticsRecordDateKey(item.createdAt) === today).length, impressions: todayMarket.impressions, views: todayMarket.views, wants: todayMarket.wants, chats: new Set((Array.isArray(db.messages) ? db.messages : []).filter(message => analyticsRecordDateKey(message.createdAt) === today && message.marketListing?.id && message.fromPhone && message.toPhone && String(message.fromPhone) !== REVIEW_ADMIN_PHONE && String(message.toPhone) !== REVIEW_ADMIN_PHONE).map(message => `${message.marketListing.id}:${[message.fromPhone, message.toPhone].sort().join(":")}`)).size },
       monthly: operationsMonthlyMarket(db, listings),
       totalImpressions: listingRows.reduce((total, item) => total + Number(item.impressionCount || 0), 0),
       totalViews: listingRows.reduce((total, item) => total + Number(item.viewCount || 0), 0),
@@ -2777,7 +2788,7 @@ async function handleAdminOperationsOverview(req, res) {
   if (!user) return;
   if (!isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "仅平台管理员可查看运营数据" });
   recordAdminAudit(db, user, "查看运营中心", "读取聊天、统计与服务状态");
-  const overview = operationsSummary(db);
+  const overview = operationsSummary(db, body.date);
   const conversations = adminCommunityChatConversations(db);
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, ...overview, conversations });
@@ -2993,6 +3004,42 @@ async function handleCommunityList(req, res) {
     followedCircleIds: user && Array.isArray(user.communityCircleIds) ? user.communityCircleIds : [],
     isAdmin: isAdminUser(user)
   });
+}
+
+function communitySearchScore(post, query) {
+  const needle = String(query || "").toLocaleLowerCase().replace(/\s+/g, "");
+  if (!needle) return 0;
+  const title = String(post.title || "").toLocaleLowerCase().replace(/\s+/g, "");
+  const body = [post.content, post.question, post.speciesName, post.authorName].filter(Boolean).join(" ").toLocaleLowerCase().replace(/\s+/g, "");
+  const haystack = `${title}|${body}`;
+  if (title === needle) return 1000;
+  if (title.startsWith(needle)) return 800 - Math.min(100, title.length - needle.length);
+  if (title.includes(needle)) return 650 - title.indexOf(needle);
+  if (body.includes(needle)) return 500 - Math.min(200, body.indexOf(needle));
+  let position = -1;
+  let spread = 0;
+  for (const character of needle) {
+    const next = haystack.indexOf(character, position + 1);
+    if (next < 0) return 0;
+    if (position >= 0) spread += next - position - 1;
+    position = next;
+  }
+  return Math.max(1, 300 - spread);
+}
+
+async function handleCommunitySearch(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = optionalReviewUser(db, body);
+  const query = trimPublicText(body.query, 60);
+  if (!query) return sendJson(res, 200, { ok: true, posts: [] });
+  const posts = publicCommunityPosts(db, user)
+    .map(post => ({ post, score: communitySearchScore(post, query) }))
+    .filter(item => item.score > 0)
+    .sort((left, right) => right.score - left.score || new Date(right.post.createdAt || 0) - new Date(left.post.createdAt || 0))
+    .slice(0, 5)
+    .map(item => item.post);
+  return sendJson(res, 200, { ok: true, posts });
 }
 
 async function handleCommunityCreate(req, res) {
@@ -4450,6 +4497,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/feedback/delete") return await handleDeleteFeedback(req, res);
     if (req.method === "POST" && url.pathname === "/api/feedback/comment/delete") return await handleDeleteFeedbackComment(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/list") return await handleCommunityList(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/search") return await handleCommunitySearch(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/create") return await handleCommunityCreate(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/like") return await handleCommunityLike(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/comment") return await handleCommunityComment(req, res);

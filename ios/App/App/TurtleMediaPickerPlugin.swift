@@ -271,11 +271,14 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePicker
     }
 
     private func exportVideoAsset(_ asset: AVAsset, duration: TimeInterval, completion: @escaping (Result<[String: Any], Error>) -> Void) {
-        // Keep the highest available quality.  The previous medium-quality
-        // preset made full-screen chat videos visibly blurry.  We deliberately
-        // keep the known-compatible MP4 export path here: its API shape works
-        // across all iOS/Xcode versions supported by this project.
-        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+        // Phone originals are often 4K/high-bitrate files. Export a
+        // network-optimised 720p MP4 so a short market/chat clip starts quickly
+        // on mobile data while remaining sharp on an iPhone screen.
+        let compatiblePresets = AVAssetExportSession.exportPresets(compatibleWith: asset)
+        let preset = compatiblePresets.contains(AVAssetExportPreset1280x720)
+            ? AVAssetExportPreset1280x720
+            : AVAssetExportPresetMediumQuality
+        guard let session = AVAssetExportSession(asset: asset, presetName: preset) else {
             completion(.failure(TurtleMediaPickerError.unavailableMedia))
             return
         }

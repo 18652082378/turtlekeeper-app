@@ -114,7 +114,7 @@ async function main() {
       const posterRelative = path.join(path.dirname(relative), posterName).split(path.sep).join("/");
       console.log(`${relative} -> ${outputRelative}`);
       if (apply) {
-        if (!fs.existsSync(output)) await run(ffmpeg, ["-y", "-i", input, "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.0", "-vf", "scale='min(1080,iw)':-2", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", output]);
+        if (!fs.existsSync(output)) await run(ffmpeg, ["-y", "-i", input, "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "fast", "-crf", "25", "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.0", "-vf", "scale='min(720,iw)':-2", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", output]);
         if (!fs.existsSync(poster)) await run(ffmpeg, ["-y", "-ss", "0.1", "-i", output, "-frames:v", "1", "-q:v", "3", poster]);
       }
       converted.set(relative, { videoUrl: `/uploads/${outputRelative}`, posterUrl: `/uploads/${posterRelative}` });

@@ -7,7 +7,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // Keep reusable media responses on disk. This benefits byte-range
+        // playback immediately and is capped so the app cannot grow forever.
+        URLCache.shared = URLCache(memoryCapacity: 64 * 1024 * 1024,
+                                   diskCapacity: 500 * 1024 * 1024,
+                                   diskPath: "turtlekeeper-video-url-cache")
         return true
     }
 
