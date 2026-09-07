@@ -14,7 +14,9 @@ const DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/asset
 const POLICY_VERSION = "2026-09-01";
 const APP_BUILD = Math.max(0, Number.parseInt(String(window.TURTLE_APP_BUILD || "0"), 10) || 0);
 const APP_STORE_URL = String(window.TURTLE_APP_STORE_URL || "https://apps.apple.com/app/id6783481335");
-const APP_REVIEW_INVITE_STORAGE = "turtlekeeper-app-review-invite-v1";
+// v2 is account-scoped and is only written after the user chooses to rate.
+// v1 could be written even when StoreKit silently suppressed its system sheet.
+const APP_REVIEW_INVITE_STORAGE = "turtlekeeper-app-review-invite-v2";
 let forceUpdateState = { required: false, checking: false, minimumBuild: 0, latestBuild: 0, message: "", appStoreUrl: "" };
 // 龟集市的购买咨询统一由平台客服承接；修改此处即可同步更新商品页和“关于”页。
 const PLATFORM_SERVICE_WECHAT = "keyousz001";
@@ -208,6 +210,8 @@ const initialState = {
   authCodeExpiresAt: "",
   accountCodeCooldownUntil: "",
   policyConsentRequired: false,
+  appReviewInviteOpen: false,
+  appReviewInviteArchiveCount: 0,
   syncEnabled: false,
   professionalOutput: "",
   activityLogs: []
@@ -6301,7 +6305,7 @@ function render() {
   // safe-area geometry and compositor layer therefore remain stable while only
   // the middle content is replaced.
   const persistentBottomNav = $app.querySelector(".bottom-nav");
-  $app.innerHTML = (pages[state.page] || pageHome)() + policyConsentGate() + systemAnnouncementOverlay();
+  $app.innerHTML = (pages[state.page] || pageHome)() + policyConsentGate() + systemAnnouncementOverlay() + appReviewInviteOverlay();
   const incomingBottomNav = $app.querySelector(".bottom-nav");
   if (persistentBottomNav && incomingBottomNav) {
     incomingBottomNav.replaceWith(persistentBottomNav);
@@ -6499,6 +6503,8 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-open-platform-wechat]").forEach(button => button.addEventListener("click", openPlatformWeChat));
   document.querySelectorAll("[data-open-platform-service-dialog]").forEach(button => button.addEventListener("click", openGeneralServiceDialog));
+  document.querySelector("[data-app-review-later]")?.addEventListener("click", dismissAppReviewInvite);
+  document.querySelector("[data-app-review-now]")?.addEventListener("click", submitAppReviewInvite);
   document.querySelectorAll("[data-back]").forEach(el => el.addEventListener("click", navigateBack));
   document.querySelectorAll("[data-view-turtle]").forEach(el => el.addEventListener("click", () => setState({ page: "turtleDetail", selectedTurtleId: el.dataset.viewTurtle, openTurtleMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" })));
   // The product gallery's legacy drag path writes the exact finger position
@@ -13161,26 +13167,59 @@ function submitTurtle(event) {
   }, [turtle.photo]);
   activateCareReminder(growthMemo);
   toast(turtle.source === "购买" ? "档案已保存，并已同步到收购账本" : "档案已保存");
-  if (shouldInviteAppReview) window.setTimeout(requestAppReviewAfterEligibleArchive, 900);
+  if (shouldInviteAppReview) window.setTimeout(() => showAppReviewInvite(state.turtles.length), 900);
 }
 
-async function requestAppReviewAfterEligibleArchive() {
+function appReviewStorageKey() {
+  return `${APP_REVIEW_INVITE_STORAGE}:${state.loggedInPhone || "device"}`;
+}
+
+function appReviewInviteOverlay() {
+  if (!state.appReviewInviteOpen) return "";
+  const count = Math.max(5, Number(state.appReviewInviteArchiveCount || state.turtles.length || 5));
+  return `
+    <div class="app-review-invite-overlay" role="dialog" aria-modal="true" aria-labelledby="appReviewInviteTitle">
+      <section class="app-review-invite-dialog">
+        <div class="app-review-invite-icon" aria-hidden="true">🐢</div>
+        <p>已经建立 ${count} 份龟档案</p>
+        <h2 id="appReviewInviteTitle">喜欢壳友手账吗？</h2>
+        <span>如果它帮你更轻松地记录陪伴，愿意在 App Store 给我们一个评分吗？</span>
+        <div class="app-review-invite-actions">
+          <button type="button" data-app-review-later>以后再说</button>
+          <button type="button" class="primary" data-app-review-now>去评分</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function showAppReviewInvite(archiveCount) {
+  const capacitor = window.Capacitor;
+  if (!capacitor || capacitor.getPlatform?.() !== "ios") return;
+  try {
+    if (localStorage.getItem(appReviewStorageKey())) return;
+    if (sessionStorage.getItem(`${appReviewStorageKey()}:later`)) return;
+  } catch {}
+  setState({ appReviewInviteOpen: true, appReviewInviteArchiveCount: archiveCount }, { skipCloud: true, pageScroll: "preserve" });
+}
+
+function dismissAppReviewInvite() {
+  try { sessionStorage.setItem(`${appReviewStorageKey()}:later`, new Date().toISOString()); } catch {}
+  setState({ appReviewInviteOpen: false }, { skipCloud: true, pageScroll: "preserve" });
+}
+
+async function submitAppReviewInvite() {
+  const storageKey = appReviewStorageKey();
+  setState({ appReviewInviteOpen: false }, { skipCloud: true, pageScroll: "preserve" });
   const capacitor = window.Capacitor;
   if (!capacitor || capacitor.getPlatform?.() !== "ios") return;
   const plugin = capacitor.Plugins?.TurtleAppReview || capacitor.registerPlugin?.("TurtleAppReview");
-  if (!plugin?.requestReview) return;
-  const accountKey = state.loggedInPhone || "device";
-  const storageKey = `${APP_REVIEW_INVITE_STORAGE}:${accountKey}`;
   try {
-    if (localStorage.getItem(storageKey)) return;
+    if (plugin?.requestReview) await plugin.requestReview();
+    else window.location.href = `${APP_STORE_URL}?action=write-review`;
     localStorage.setItem(storageKey, new Date().toISOString());
   } catch (error) {
-    console.warn("无法记录评分邀请状态", error);
-  }
-  try {
-    await plugin.requestReview();
-  } catch (error) {
     console.warn("系统评分邀请暂时不可用", error);
+    window.location.href = `${APP_STORE_URL}?action=write-review`;
   }
 }
 
