@@ -116,6 +116,7 @@ const initialState = {
   breedingEditPhoto: "",
   formPhoto: "",
   formGender: "未知",
+  archivePurchaseMode: "single",
   formDraft: {},
   themeColor: "teal",
   turtles: [],
@@ -231,7 +232,11 @@ const TURTLE_FORM_DRAFT_FIELDS = [
   "acquiredDate",
   "source",
   "price",
-  "note"
+  "note",
+  "batchMaleCount",
+  "batchFemaleCount",
+  "batchTotalPrice",
+  "batchCodePrefix"
 ];
 
 const LEDGER_FORM_DRAFT_FIELDS = [
@@ -4536,10 +4541,19 @@ function pageAdd() {
   const draftSource = turtleFormValue("source", "购买");
   const draftPoolId = turtleFormValue("poolId");
   const turtlePools = state.turtlePools || [];
+  const isBatch = state.archivePurchaseMode === "batch";
   return `
     ${topbar("新建档案", true)}
     <main class="content page-fresh">
-      <form id="turtleForm">
+      <form id="turtleForm" class="${isBatch ? "batch-mode" : "single-mode"}">
+        <section class="form-block fresh-card archive-mode-card">
+          <h3>购入方式</h3>
+          <div class="archive-mode-switch" role="group" aria-label="选择购入方式">
+            <button type="button" class="${!isBatch ? "active" : ""}" data-archive-purchase-mode="single" aria-pressed="${!isBatch}">单只购入</button>
+            <button type="button" class="${isBatch ? "active" : ""}" data-archive-purchase-mode="batch" aria-pressed="${isBatch}">批量购入</button>
+          </div>
+          <p class="archive-mode-tip">${isBatch ? "同一品种一次建立多份档案，并合并记录一笔收购金额。" : "为一只龟建立完整档案，默认使用此方式。"}</p>
+        </section>
         <section class="form-block fresh-card">
           <h3>基础信息</h3>
           <div class="photo-uploader">
@@ -4558,19 +4572,19 @@ function pageAdd() {
             <option value="">暂不关联龟池</option>
             ${turtlePools.map(pool => `<option value="${pool.id}" ${draftPoolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}
           </select>
-          <div class="label">龟龟昵称</div>
-          <input class="field" name="code" placeholder="例如：小核桃、黑豆、将军" value="${escapeHtml(turtleFormValue("code"))}">
-          <div class="label">性别 <span class="required">*</span></div>
-          <div class="radio-row">
+          <div class="label single-only">龟龟昵称</div>
+          <input class="field single-only" name="code" placeholder="例如：小核桃、黑豆、将军" value="${escapeHtml(turtleFormValue("code"))}">
+          <div class="label single-only">性别 <span class="required">*</span></div>
+          <div class="radio-row single-only">
             ${["公", "母", "未知"].map(g => `<button class="choice ${state.formGender === g ? "active" : ""}" type="button" data-gender="${g}">${g}</button>`).join("")}
           </div>
         </section>
-        <section class="form-block fresh-card">
+        <section class="form-block fresh-card single-only">
           <h3>体测数据</h3>
           <div class="label">当前体重(g) <span class="required">*</span></div>
-          <input class="field" name="weight" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("weight"))}" required>
+          <input class="field" name="weight" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("weight"))}" ${isBatch ? "disabled" : "required"}>
           <div class="label">背甲长度(cm) <span class="required">*</span></div>
-          <input class="field" name="carapaceLength" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("carapaceLength"))}" required>
+          <input class="field" name="carapaceLength" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("carapaceLength"))}" ${isBatch ? "disabled" : "required"}>
           <details class="measure-extra">
             <summary><span>更多体测数据</span><small>背甲宽度、背高、腹甲长度</small></summary>
             <label><span>背甲宽度(cm)</span><input class="field" name="carapaceWidth" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("carapaceWidth"))}"></label>
@@ -4578,7 +4592,7 @@ function pageAdd() {
             <label><span>腹甲长度(cm)</span><input class="field" name="plastronLength" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("plastronLength"))}"></label>
           </details>
         </section>
-        <section class="form-block fresh-card">
+        <section class="form-block fresh-card single-only">
           <h3>当前状态</h3>
           <input type="hidden" name="status" value="正常饲养">
           <div class="label">健康状态</div>
@@ -4587,7 +4601,7 @@ function pageAdd() {
             ${["健康", "生病"].map(value => `<button class="choice ${draftHealth === value ? "active" : ""}" type="button" data-turtle-choice="health" data-choice-value="${value}">${value}</button>`).join("")}
           </div>
         </section>
-        <section class="form-block fresh-card">
+        <section class="form-block fresh-card single-only">
           <h3>入手记录</h3>
           <div class="label">入手日期</div><input class="field" name="acquiredDate" type="date" value="${escapeHtml(turtleFormValue("acquiredDate", today))}">
           <div class="label">来到你家的方式</div>
@@ -4598,7 +4612,24 @@ function pageAdd() {
           <div class="label">花费(元)</div><input class="field" name="price" type="number" min="0" step="0.01" value="${escapeHtml(turtleFormValue("price"))}">
           <div class="label">备注</div><textarea name="note" placeholder="性格、食欲、卖家、到家表现等都可以写在这里">${escapeHtml(turtleFormValue("note"))}</textarea>
         </section>
-        <button class="primary" type="submit">保存档案</button>
+        ${isBatch ? `
+          <section class="form-block fresh-card batch-purchase-block">
+            <h3>批量信息</h3>
+            <div class="label">公龟数量 <span class="required">*</span></div>
+            <input class="field" name="batchMaleCount" type="number" min="0" max="50" step="1" inputmode="numeric" value="${escapeHtml(turtleFormValue("batchMaleCount", "0"))}" required>
+            <div class="label">母龟数量 <span class="required">*</span></div>
+            <input class="field" name="batchFemaleCount" type="number" min="0" max="50" step="1" inputmode="numeric" value="${escapeHtml(turtleFormValue("batchFemaleCount", "0"))}" required>
+            <div class="label">收购总金额(元) <span class="required">*</span></div>
+            <input class="field" name="batchTotalPrice" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(turtleFormValue("batchTotalPrice"))}" required>
+            <div class="label">档案编号前缀</div>
+            <input class="field" name="batchCodePrefix" maxlength="20" placeholder="默认使用品种代码" value="${escapeHtml(turtleFormValue("batchCodePrefix"))}">
+            <div class="label">入手日期</div>
+            <input class="field" name="acquiredDate" type="date" value="${escapeHtml(turtleFormValue("acquiredDate", today))}">
+            <div class="label">备注</div>
+            <textarea name="note" placeholder="卖家、批次、到家状态等信息">${escapeHtml(turtleFormValue("note"))}</textarea>
+          </section>
+        ` : ""}
+        <button class="primary" type="submit">${isBatch ? "批量建立档案" : "保存档案"}</button>
       </form>
     </main>
   `;
@@ -6864,6 +6895,9 @@ function bindEvents() {
   document.querySelectorAll("[data-community-topic-filter]").forEach(button => button.addEventListener("click", () => {
     communityTopicFilter = button.dataset.communityTopicFilter || "all";
     render();
+  }));
+  document.querySelectorAll("[data-archive-purchase-mode]").forEach(btn => btn.addEventListener("click", () => {
+    preserveTurtleForm({ archivePurchaseMode: btn.dataset.archivePurchaseMode || "single" });
   }));
   document.querySelectorAll("[data-community-forum-sort]").forEach(button => button.addEventListener("click", () => {
     communityForumSort = button.dataset.communityForumSort || "hot";
@@ -13087,6 +13121,7 @@ function submitTurtle(event) {
   const form = new FormData(event.currentTarget);
   const species = speciesByCode(form.get("speciesCode"));
   if (!species) return toast("先选择一个品种，再保存档案");
+  if (state.archivePurchaseMode === "batch") return submitBatchTurtles(form, species);
   // Invite after any successful new archive once the account has reached the
   // fifth archive. This also covers existing users who already have 5+ turtles.
   const shouldInviteAppReview = state.turtles.length >= 4;
@@ -13167,6 +13202,114 @@ function submitTurtle(event) {
   }, [turtle.photo]);
   activateCareReminder(growthMemo);
   toast(turtle.source === "购买" ? "档案已保存，并已同步到收购账本" : "档案已保存");
+  if (shouldInviteAppReview) window.setTimeout(() => showAppReviewInvite(state.turtles.length), 900);
+}
+
+function submitBatchTurtles(form, species) {
+  const maleCount = Number.parseInt(String(form.get("batchMaleCount") || "0"), 10);
+  const femaleCount = Number.parseInt(String(form.get("batchFemaleCount") || "0"), 10);
+  if (!Number.isInteger(maleCount) || maleCount < 0 || !Number.isInteger(femaleCount) || femaleCount < 0) {
+    return toast("公龟和母龟数量需要填写非负整数");
+  }
+  const totalCount = maleCount + femaleCount;
+  if (totalCount < 1) return toast("批量购入至少需要填写 1 只龟");
+  if (totalCount > 50) return toast("单次最多批量建立 50 份档案");
+  if (!requireArchiveCapacity(totalCount)) return;
+  const totalPriceText = String(form.get("batchTotalPrice") || "").trim();
+  const totalPrice = Number(totalPriceText);
+  if (!totalPriceText || !Number.isFinite(totalPrice) || totalPrice < 0) return toast("请填写正确的收购总金额");
+
+  const validPoolId = (state.turtlePools || []).some(pool => pool.id === String(form.get("poolId") || ""))
+    ? String(form.get("poolId"))
+    : "";
+  const acquiredDate = String(form.get("acquiredDate") || formatDate(new Date()));
+  const note = String(form.get("note") || "").trim();
+  const prefix = String(form.get("batchCodePrefix") || "").trim() || species.code;
+  const batchId = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  const nextGrowth = new Date();
+  nextGrowth.setDate(nextGrowth.getDate() + 30);
+  const nextGrowthAt = formatDate(nextGrowth);
+  const existingSpeciesCount = state.turtles.filter(turtle => turtle.speciesCode === species.code).length;
+  const genders = [...Array(maleCount).fill("公"), ...Array(femaleCount).fill("母")];
+  const unitPrice = totalCount ? Number((totalPrice / totalCount).toFixed(2)) : 0;
+  const photo = state.formPhoto || speciesPhoto(species);
+
+  const turtles = genders.map((gender, index) => ({
+    id: crypto.randomUUID(),
+    code: `${prefix}-${existingSpeciesCount + index + 1}`,
+    speciesCode: species.code,
+    speciesName: species.name,
+    poolId: validPoolId,
+    gender,
+    weight: 0,
+    carapaceLength: 0,
+    carapaceWidth: "",
+    shellHeight: "",
+    plastronLength: "",
+    status: "正常饲养",
+    health: "健康",
+    acquiredDate,
+    source: "购买",
+    price: unitPrice,
+    batchId,
+    batchTotalPrice: totalPrice,
+    note,
+    photo,
+    createdAt,
+    nextGrowthAt,
+    measureHistory: []
+  }));
+  const growthMemos = turtles.map(turtle => ({
+    id: crypto.randomUUID(),
+    turtleId: turtle.id,
+    growthReminder: true,
+    reminderEnabled: true,
+    title: `该给${turtle.code}记录成长啦`,
+    content: "补录体重和背甲、拍一张新照片，回来领取成长曲线和照片对比。",
+    dueDate: nextGrowthAt,
+    remindTime: "09:00",
+    repeat: false,
+    weekdays: [],
+    updatedAt: createdAt
+  }));
+  const ledgerRecord = {
+    id: crypto.randomUUID(),
+    type: "purchase",
+    turtleId: turtles[0].id,
+    turtleIds: turtles.map(turtle => turtle.id),
+    batchId,
+    batchPurchase: true,
+    title: `${species.name}批量购入 ${totalCount} 只（${maleCount} 公 ${femaleCount} 母）`,
+    amount: totalPrice,
+    recordDate: acquiredDate,
+    note,
+    photo,
+    turtleSnapshot: { ...turtles[0], batchCount: totalCount, maleCount, femaleCount },
+    createdAt
+  };
+  const keptSpecies = state.keptSpecies.includes(species.code) ? state.keptSpecies : [...state.keptSpecies, species.code];
+  const shouldInviteAppReview = state.turtles.length + totalCount >= 5;
+  saveWithDeferredImages({
+    turtles: [...turtles, ...state.turtles],
+    keptSpecies,
+    ledgerRecords: [ledgerRecord, ...(state.ledgerRecords || [])],
+    memos: [...growthMemos, ...(state.memos || [])],
+    formPhoto: "",
+    formGender: "未知",
+    archivePurchaseMode: "single",
+    formDraft: {},
+    selectedSpeciesCode: "",
+    page: "turtleReward",
+    selectedTurtleId: turtles[0].id,
+    activityLogs: [
+      makeActivity(`批量新增档案：${species.name} ${totalCount} 只（${maleCount} 公 ${femaleCount} 母）`, "档案"),
+      makeActivity(`批量购买入账：${species.name} ${totalCount} 只，金额 ${money(totalPrice)} 元`, "账本"),
+      ...(state.activityLogs || [])
+    ]
+  }, [photo]);
+  growthMemos.forEach(activateCareReminder);
+  toast(`已建立 ${totalCount} 份档案，并记入一笔收购总额`);
   if (shouldInviteAppReview) window.setTimeout(() => showAppReviewInvite(state.turtles.length), 900);
 }
 

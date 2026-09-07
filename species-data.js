@@ -97,6 +97,7 @@ window.TURTLE_SPECIES = [
   { code: "MSG", name: "麝香龟", letter: "M", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Sternotherus%20odoratus.jpg" },
   { code: "MXD", name: "麝香蛋龟", letter: "M", scientific: "Sternotherus odoratus", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Sternotherus%20odoratus.jpg" },
   { code: "MXJ", name: "墨西哥巨蛋龟", letter: "M", scientific: "Staurotypus triporcatus", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Staurotypus%20triporcatus.jpg" },
+  { code: "MXX", name: "墨西哥箱龟", letter: "M", scientific: "Terrapene mexicana", image: "assets/species/MXX.png" },
   { code: "MUG", name: "木雕水龟", letter: "M", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Glyptemys%20insculpta.jpg" },
 
   { code: "NBG", name: "南部锦龟", letter: "N", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Chrysemys%20picta%20dorsalis.jpg" },
