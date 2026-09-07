@@ -61,6 +61,7 @@ window.TURTLE_SPECIES = [
   { code: "HJG", name: "黑颈乌龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Mauremys%20nigricans.jpg" },
   { code: "HNT", name: "红腿陆龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Chelonoidis%20carbonarius.jpg" },
   { code: "HSG", name: "黄头庙龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Heosemys%20annandalii.jpg" },
+  { code: "HYG-F", name: "火焰龟", letter: "H", image: "assets/species/HYG-F.png" },
   { code: "HYG", name: "黄缘闭壳龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Cuora%20flavomarginata.jpg" },
   { code: "HZG", name: "黄泽龟", letter: "H", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Mauremys%20mutica.jpg" },
 

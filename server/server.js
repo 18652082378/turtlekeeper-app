@@ -499,7 +499,7 @@ function isSuspiciousAccountDataLoss(before = {}, after = {}) {
 }
 
 function emptyDatabase() {
-  return { users: {}, reviews: [], feedbacks: [], communityPosts: [], marketListings: [], friendships: [], messages: [], follows: [], reports: [], systemAnnouncements: [], careReminderDeliveries: {}, appAnalytics: { days: {} }, adminAuditLogs: [] };
+  return { users: {}, reviews: [], feedbacks: [], communityPosts: [], communityNotifications: [], marketListings: [], friendships: [], messages: [], follows: [], reports: [], systemAnnouncements: [], careReminderDeliveries: {}, appAnalytics: { days: {} }, adminAuditLogs: [] };
 }
 
 class DatabaseIntegrityError extends Error {
@@ -520,7 +520,7 @@ function normalizeDatabase(data = {}) {
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("数据库根节点无效");
   return {
     users: data.users || {}, reviews: Array.isArray(data.reviews) ? data.reviews : [], feedbacks: Array.isArray(data.feedbacks) ? data.feedbacks : [],
-    communityPosts: Array.isArray(data.communityPosts) ? data.communityPosts : [], marketListings: Array.isArray(data.marketListings) ? data.marketListings : [],
+    communityPosts: Array.isArray(data.communityPosts) ? data.communityPosts : [], communityNotifications: Array.isArray(data.communityNotifications) ? data.communityNotifications : [], marketListings: Array.isArray(data.marketListings) ? data.marketListings : [],
     friendships: Array.isArray(data.friendships) ? data.friendships : [], messages: Array.isArray(data.messages) ? data.messages : [],
     follows: Array.isArray(data.follows) ? data.follows : [], reports: Array.isArray(data.reports) ? data.reports : [],
     systemAnnouncements: Array.isArray(data.systemAnnouncements) ? data.systemAnnouncements : [],
@@ -1002,6 +1002,62 @@ function communityUnreadMessageCount(db, user) {
     .length;
 }
 
+function communityUnreadActivityCount(db, user) {
+  if (!user?.phone) return 0;
+  return (Array.isArray(db.communityNotifications) ? db.communityNotifications : [])
+    .filter(item => item.recipientPhone === user.phone && !item.readAt)
+    .length;
+}
+
+function communityTotalUnreadCount(db, user) {
+  return communityUnreadMessageCount(db, user) + communityUnreadActivityCount(db, user);
+}
+
+function addCommunityNotification(db, { type, recipientPhone, actorPhone, postId = "", postTitle = "", preview = "", uniqueKey = "" }) {
+  if (!recipientPhone || !actorPhone || recipientPhone === actorPhone) return null;
+  db.communityNotifications = Array.isArray(db.communityNotifications) ? db.communityNotifications : [];
+  if (uniqueKey && db.communityNotifications.some(item => item.recipientPhone === recipientPhone && item.uniqueKey === uniqueKey)) return null;
+  const notification = {
+    id: crypto.randomUUID(),
+    type: ["like", "comment", "follow"].includes(type) ? type : "comment",
+    recipientPhone,
+    actorPhone,
+    postId: trimPublicText(postId, 100),
+    postTitle: trimPublicText(postTitle, 80),
+    preview: trimPublicText(preview, 160),
+    uniqueKey: trimPublicText(uniqueKey, 180),
+    createdAt: new Date().toISOString(),
+    readAt: ""
+  };
+  db.communityNotifications.unshift(notification);
+  db.communityNotifications = db.communityNotifications.slice(0, 5000);
+  return notification;
+}
+
+function publicCommunityNotifications(db, user) {
+  if (!user?.phone) return [];
+  return (Array.isArray(db.communityNotifications) ? db.communityNotifications : [])
+    .filter(item => item.recipientPhone === user.phone)
+    .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))
+    .slice(0, 100)
+    .map(item => {
+      const actor = db.users?.[item.actorPhone];
+      return {
+        id: item.id,
+        type: item.type,
+        actorId: communityUserId(item.actorPhone),
+        actorName: actor?.accountName || maskPhone(item.actorPhone),
+        actorAvatar: actor?.accountAvatar || "",
+        actorIsAdmin: isAdminUser(actor),
+        postId: item.postId || "",
+        postTitle: item.postTitle || "",
+        preview: item.preview || "",
+        createdAt: item.createdAt || "",
+        read: Boolean(item.readAt)
+      };
+    });
+}
+
 // A badge-only APNs payload updates the app-icon number without displaying a
 // banner.  It keeps the system badge in step with messages that were marked
 // read from another device or inside the app.
@@ -1009,7 +1065,7 @@ async function syncCommunityUnreadBadge(db, user) {
   if (!apnsConfigured() || !user) return;
   const devices = normalizedPushDevices(user.pushDevices);
   if (!devices.length) return;
-  const badge = Math.min(99, Math.max(0, communityUnreadMessageCount(db, user)));
+  const badge = Math.min(99, Math.max(0, communityTotalUnreadCount(db, user)));
   const payload = { aps: { badge } };
   const results = await Promise.all(devices.map(item => sendApnsNotification(item.token, payload)));
   results.forEach((result, index) => {
@@ -1040,6 +1096,34 @@ async function notifyCommunityMessage(db, message, sender, recipient) {
   results.forEach((result, index) => {
     if (result.invalid) removeInvalidPushDevice(recipient.phone, devices[index].token);
     else if (!result.ok && !result.skipped) console.warn("APNs push failed:", result.reason || result.status || "unknown");
+  });
+}
+
+async function notifyCommunityActivity(db, notification) {
+  const recipient = db.users?.[notification?.recipientPhone];
+  const actor = db.users?.[notification?.actorPhone];
+  if (!apnsConfigured() || !recipient || !actor) return;
+  const devices = normalizedPushDevices(recipient.pushDevices);
+  if (!devices.length) return;
+  const actorName = actor.accountName || maskPhone(actor.phone) || "壳友";
+  const body = notification.type === "like"
+    ? `${actorName}赞了你的帖子《${notification.postTitle || "壳友交流帖"}》`
+    : notification.type === "follow"
+      ? `${actorName}关注了你`
+      : `${actorName}评论了你的帖子：${notification.preview || "查看新评论"}`;
+  const payload = {
+    aps: {
+      alert: { title: "壳友圈新互动", body: body.slice(0, 120) },
+      badge: Math.min(99, Math.max(1, communityTotalUnreadCount(db, recipient))),
+      sound: "default"
+    },
+    route: "messages",
+    postId: notification.postId || ""
+  };
+  const results = await Promise.all(devices.map(item => sendApnsNotification(item.token, payload)));
+  results.forEach((result, index) => {
+    if (result.invalid) removeInvalidPushDevice(recipient.phone, devices[index].token);
+    else if (!result.ok && !result.skipped) console.warn("APNs activity push failed:", result.reason || result.status || "unknown");
   });
 }
 
@@ -1517,6 +1601,8 @@ async function handleDeleteAccount(req, res) {
   db.marketListings = (Array.isArray(db.marketListings) ? db.marketListings : []).filter(item => item.sellerPhoneRaw !== phone);
   db.friendships = (Array.isArray(db.friendships) ? db.friendships : []).filter(item => !item.phones?.includes(phone));
   db.messages = (Array.isArray(db.messages) ? db.messages : []).filter(item => item.fromPhone !== phone && item.toPhone !== phone);
+  db.communityNotifications = (Array.isArray(db.communityNotifications) ? db.communityNotifications : [])
+    .filter(item => item.recipientPhone !== phone && item.actorPhone !== phone);
   db.follows = (Array.isArray(db.follows) ? db.follows : []).filter(item => item.followerPhone !== phone && item.targetPhone !== phone);
   db.reviews = (Array.isArray(db.reviews) ? db.reviews : []).filter(item => item.authorPhoneRaw !== phone).map(item => ({
     ...item,
@@ -2418,7 +2504,7 @@ function analyticsDay(db, key = analyticsDateKey()) {
   db.appAnalytics.days = db.appAnalytics.days && typeof db.appAnalytics.days === "object" ? db.appAnalytics.days : {};
   const days = db.appAnalytics.days;
   Object.keys(days).forEach(dateKey => {
-    if (dateKey < analyticsDateKey(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000))) delete days[dateKey];
+    if (dateKey < analyticsDateKey(new Date(Date.now() - 400 * 24 * 60 * 60 * 1000))) delete days[dateKey];
   });
   if (!days[key] || typeof days[key] !== "object") days[key] = { sessions: {} };
   days[key].sessions = days[key].sessions && typeof days[key].sessions === "object" ? days[key].sessions : {};
@@ -2434,7 +2520,7 @@ function publicAnalyticsSessions(day) {
   return Object.values(day?.sessions || {}).filter(session => !isAdministratorAnalyticsSession(session));
 }
 
-const ANALYTICS_MODULES = ["看板", "账本", "龟集市", "消息", "空间"];
+const ANALYTICS_MODULES = ["看板", "账本", "龟集市", "壳友圈", "消息", "空间"];
 const ANALYTICS_MAX_INTERVAL_MS = 70 * 1000;
 
 function analyticsModule(value) {
@@ -2520,6 +2606,50 @@ function publicTodayAnalytics(db) {
   };
 }
 
+function analyticsMarketMetrics(db, key = analyticsDateKey()) {
+  const day = analyticsDay(db, key);
+  day.market = day.market && typeof day.market === "object" ? day.market : {};
+  ["impressions", "views", "wants"].forEach(name => { day.market[name] = Math.max(0, Number(day.market[name]) || 0); });
+  return day.market;
+}
+
+function incrementAnalyticsMarketMetric(db, name) {
+  const metrics = analyticsMarketMetrics(db);
+  if (Object.prototype.hasOwnProperty.call(metrics, name)) metrics[name] += 1;
+}
+
+function recentAnalyticsMonths(count = 13) {
+  const result = [];
+  const now = new Date();
+  for (let offset = count - 1; offset >= 0; offset -= 1) {
+    const date = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+    result.push(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`);
+  }
+  return result;
+}
+
+function operationsMonthlyGrowth(db, users) {
+  return recentAnalyticsMonths().map(month => {
+    const sessions = Object.entries(db.appAnalytics?.days || {}).filter(([key]) => key.startsWith(`${month}-`)).flatMap(([, day]) => publicAnalyticsSessions(day));
+    const dwellMs = sessions.reduce((total, session) => total + sessionDwellMs(session), 0);
+    return { month, visitCount: sessions.length, uniqueVisitorCount: new Set(sessions.map(item => item.visitorHash).filter(Boolean)).size, activeAccountCount: new Set(sessions.map(item => item.accountHash).filter(Boolean)).size, registeredCount: users.filter(user => String(user.createdAt || "").startsWith(month)).length, totalDwellSeconds: Math.round(dwellMs / 1000), averageDwellSeconds: sessions.length ? Math.round(dwellMs / sessions.length / 1000) : 0 };
+  });
+}
+
+function operationsMonthlyMarket(db, listings) {
+  const messages = Array.isArray(db.messages) ? db.messages : [];
+  return recentAnalyticsMonths().map(month => {
+    const daily = Object.entries(db.appAnalytics?.days || {}).filter(([key]) => key.startsWith(`${month}-`));
+    const chats = new Set();
+    messages.forEach(message => {
+      if (!String(message.createdAt || "").startsWith(month) || !message.marketListing?.id || !message.fromPhone || !message.toPhone) return;
+      if (String(message.fromPhone) === REVIEW_ADMIN_PHONE || String(message.toPhone) === REVIEW_ADMIN_PHONE) return;
+      chats.add(`${message.marketListing.id}:${[message.fromPhone, message.toPhone].sort().join(":")}`);
+    });
+    return { month, publishedCount: listings.filter(item => String(item.createdAt || "").startsWith(month)).length, impressions: daily.reduce((sum, [, day]) => sum + Math.max(0, Number(day.market?.impressions) || 0), 0), views: daily.reduce((sum, [, day]) => sum + Math.max(0, Number(day.market?.views) || 0), 0), wants: daily.reduce((sum, [, day]) => sum + Math.max(0, Number(day.market?.wants) || 0), 0), chats: chats.size };
+  });
+}
+
 function recordAdminAudit(db, user, action, detail = "") {
   db.adminAuditLogs = Array.isArray(db.adminAuditLogs) ? db.adminAuditLogs : [];
   db.adminAuditLogs.unshift({ id: crypto.randomUUID(), adminPhone: user.phone, action, detail: trimPublicText(detail, 160), createdAt: new Date().toISOString() });
@@ -2537,6 +2667,7 @@ function operationsSummary(db) {
   }).length;
   const activeAccounts = new Set(sessions.map(session => session.accountHash).filter(Boolean));
   const listings = (Array.isArray(db.marketListings) ? db.marketListings : []).filter(item => String(item?.sellerPhoneRaw || "") !== REVIEW_ADMIN_PHONE);
+  const todayMarket = analyticsMarketMetrics(db, today);
   const chatPairsByListing = new Map();
   (Array.isArray(db.messages) ? db.messages : []).forEach(message => {
     const listingId = message.marketListing?.id;
@@ -2572,8 +2703,11 @@ function operationsSummary(db) {
   return {
     analytics: { ...analytics, registeredToday, totalUserCount: users.length, activeAccountCount: activeAccounts.size },
     userUsage: operationsUserUsage(db, sessions),
+    growthMonthly: operationsMonthlyGrowth(db, users),
     market: {
       activeCount: activeListings.length, soldCount: soldListings.length, inactiveCount: inactiveListings.length,
+      today: { publishedCount: listings.filter(item => String(item.createdAt || "").startsWith(today)).length, impressions: todayMarket.impressions, views: todayMarket.views, wants: todayMarket.wants, chats: new Set((Array.isArray(db.messages) ? db.messages : []).filter(message => String(message.createdAt || "").startsWith(today) && message.marketListing?.id && message.fromPhone && message.toPhone && String(message.fromPhone) !== REVIEW_ADMIN_PHONE && String(message.toPhone) !== REVIEW_ADMIN_PHONE).map(message => `${message.marketListing.id}:${[message.fromPhone, message.toPhone].sort().join(":")}`)).size },
+      monthly: operationsMonthlyMarket(db, listings),
       totalImpressions: listingRows.reduce((total, item) => total + Number(item.impressionCount || 0), 0),
       totalViews: listingRows.reduce((total, item) => total + Number(item.viewCount || 0), 0),
       totalWants: listingRows.reduce((total, item) => total + Number(item.wantCount || 0), 0),
@@ -2866,6 +3000,22 @@ async function handleCommunityCreate(req, res) {
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
+  // A slow upload can finish on the server after the client has lost its
+  // response. Reusing the same submission id makes retries return the original
+  // result instead of creating the same post more than once.
+  const submissionId = trimPublicText(body.submissionId, 96);
+  if (submissionId) {
+    const existing = (Array.isArray(db.communityPosts) ? db.communityPosts : [])
+      .find(item => item.authorPhoneRaw === user.phone && item.submissionId === submissionId);
+    if (existing) {
+      return sendJson(res, 200, {
+        ok: true,
+        duplicate: true,
+        posts: publicCommunityPosts(db, user),
+        friends: communityFriends(db, user)
+      });
+    }
+  }
   const content = trimPublicText(body.content, 2000);
   const submittedTitle = trimPublicText(body.title, 31);
   const title = submittedTitle || trimPublicText(body.question || body.content || "壳友交流帖", 31);
@@ -2894,6 +3044,7 @@ async function handleCommunityCreate(req, res) {
   if (rejectObjectionableContent(res, title, content, question, location, mentions)) return;
   const post = {
     id: crypto.randomUUID(),
+    submissionId,
     title,
     circleId,
     isPinned: false,
@@ -2931,8 +3082,18 @@ async function handleCommunityLike(req, res) {
   if (!post) return sendJson(res, 404, { ok: false, message: "动态不存在" });
   if (!canViewCommunityPost(db, post, user)) return sendJson(res, 403, { ok: false, message: "你无权查看这篇帖子" });
   const likes = Array.isArray(post.likes) ? post.likes : [];
-  post.likes = likes.includes(user.phone) ? likes.filter(phone => phone !== user.phone) : [...likes, user.phone];
+  const wasLiked = likes.includes(user.phone);
+  post.likes = wasLiked ? likes.filter(phone => phone !== user.phone) : [...likes, user.phone];
+  const notification = !wasLiked ? addCommunityNotification(db, {
+    type: "like",
+    recipientPhone: post.authorPhoneRaw,
+    actorPhone: user.phone,
+    postId: post.id,
+    postTitle: post.title || "壳友交流帖",
+    uniqueKey: `like:${post.id}:${user.phone}`
+  }) : null;
   writeDatabase(db);
+  if (notification) void notifyCommunityActivity(db, notification);
   return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
 }
 
@@ -2949,7 +3110,7 @@ async function handleCommunityComment(req, res) {
   if (!canViewCommunityPost(db, post, user)) return sendJson(res, 403, { ok: false, message: "你无权查看这篇帖子" });
   if (!content) return sendJson(res, 400, { ok: false, message: "请输入评论" });
   if (rejectObjectionableContent(res, content)) return;
-  post.comments = [...(Array.isArray(post.comments) ? post.comments : []), {
+  const comment = {
     id: crypto.randomUUID(),
     content,
     authorPhoneRaw: user.phone,
@@ -2958,8 +3119,19 @@ async function handleCommunityComment(req, res) {
     replyToCommentId: replyTarget?.id || "",
     replyToName: replyTarget ? (db.users?.[replyTarget.authorPhoneRaw]?.accountName || replyTarget.authorName || "壳友") : "",
     createdAt: new Date().toISOString()
-  }];
+  };
+  post.comments = [...(Array.isArray(post.comments) ? post.comments : []), comment];
+  const notification = addCommunityNotification(db, {
+    type: "comment",
+    recipientPhone: post.authorPhoneRaw,
+    actorPhone: user.phone,
+    postId: post.id,
+    postTitle: post.title || "壳友交流帖",
+    preview: content,
+    uniqueKey: `comment:${comment.id}`
+  });
   writeDatabase(db);
+  if (notification) void notifyCommunityActivity(db, notification);
   return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
 }
 
@@ -3246,7 +3418,14 @@ async function handleCommunityFollowToggle(req, res) {
   db.follows = followed
     ? db.follows.filter(item => !(item.followerPhone === user.phone && item.targetPhone === target.phone))
     : [...db.follows, { followerPhone: user.phone, targetPhone: target.phone, createdAt: new Date().toISOString() }];
+  const notification = !followed ? addCommunityNotification(db, {
+    type: "follow",
+    recipientPhone: target.phone,
+    actorPhone: user.phone,
+    uniqueKey: `follow:${target.phone}:${user.phone}`
+  }) : null;
   writeDatabase(db);
+  if (notification) void notifyCommunityActivity(db, notification);
   return sendJson(res, 200, {
     ok: true,
     followed: !followed,
@@ -3451,8 +3630,32 @@ async function handleCommunityUnread(req, res) {
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
-  const unreadCount = communityUnreadMessageCount(db, user);
-  return sendJson(res, 200, { ok: true, unreadCount, friends: communityFriends(db, user) });
+  if (body.markNotificationsRead) {
+    const readAt = new Date().toISOString();
+    let changed = false;
+    (Array.isArray(db.communityNotifications) ? db.communityNotifications : []).forEach(item => {
+      if (item.recipientPhone === user.phone && !item.readAt) {
+        item.readAt = readAt;
+        changed = true;
+      }
+    });
+    if (changed) {
+      writeDatabase(db);
+      void syncCommunityUnreadBadge(db, user);
+    }
+  }
+  const notificationUnreadCount = communityUnreadActivityCount(db, user);
+  const chatUnreadCount = communityUnreadMessageCount(db, user);
+  return sendJson(res, 200, {
+    ok: true,
+    // Keep unreadCount backward-compatible for existing chat clients.
+    unreadCount: chatUnreadCount,
+    totalUnreadCount: chatUnreadCount + notificationUnreadCount,
+    chatUnreadCount,
+    notificationUnreadCount,
+    notifications: publicCommunityNotifications(db, user),
+    friends: communityFriends(db, user)
+  });
 }
 
 const MARKET_REFRESH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -3964,6 +4167,7 @@ async function handleMarketView(req, res) {
   const viewer = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
   if (!isAdminUser(viewer)) {
     listing.viewCount = Math.max(0, Number(listing.viewCount || 0)) + 1;
+    incrementAnalyticsMarketMetric(db, "views");
     writeDatabase(db);
   }
   return sendJson(res, 200, {
@@ -3984,6 +4188,7 @@ async function handleMarketImpression(req, res) {
   const viewer = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
   if (!isAdminUser(viewer)) {
     listing.impressionCount = Math.max(0, Number(listing.impressionCount || 0)) + 1;
+    incrementAnalyticsMarketMetric(db, "impressions");
     writeDatabase(db);
   }
   return sendJson(res, 200, {
@@ -4006,6 +4211,7 @@ async function handleMarketWant(req, res) {
   listing.wantedPhones = Array.isArray(listing.wantedPhones) ? listing.wantedPhones : [];
   if (!isAdminUser(user) && listing.sellerPhoneRaw !== user.phone && !listing.wantedPhones.includes(user.phone)) {
     listing.wantedPhones.push(user.phone);
+    incrementAnalyticsMarketMetric(db, "wants");
     writeDatabase(db);
   }
   return sendJson(res, 200, {

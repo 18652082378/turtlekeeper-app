@@ -9662,6 +9662,78 @@ html[data-theme-color="dark"] .market-seller-card strong {
   padding-right: 0 !important;
 }
 
+.message-notification-section {
+  margin: 12px 0 10px;
+  border-top: 1px solid var(--divider);
+  border-bottom: 1px solid var(--divider);
+  background: var(--section-bg);
+}
+.message-notification-section > header,
+.message-list-heading {
+  min-height: 42px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--divider);
+}
+.message-notification-section > header strong,
+.message-list-heading strong { color: var(--text); font-size: 14px; }
+.message-notification-section > header small { color: var(--muted); font-size: 12px; }
+.message-notification-row {
+  position: relative;
+  width: 100%;
+  min-height: 72px;
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: 48px minmax(0,1fr) auto 12px;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--divider);
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+}
+.message-notification-row:last-child { border-bottom: 0; }
+.message-notification-row:active { background: var(--raised-bg); }
+.message-notification-row.is-unread::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 15px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fa5151;
+}
+.message-notification-avatar { position: relative; width: 44px; height: 44px; }
+.message-notification-avatar > .community-avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; }
+.message-notification-type {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 19px;
+  height: 19px;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--section-bg);
+  border-radius: 50%;
+  color: #fff;
+  background: #ff3b30;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+}
+.message-notification-type.comment { background: #2f80ed; }
+.message-notification-type.follow { background: var(--primary); }
+.message-notification-copy { min-width: 0; display: grid; gap: 5px; }
+.message-notification-copy strong { overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.message-notification-copy strong > b { color: var(--muted); font-weight: 500; }
+.message-notification-copy small { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.message-notification-row > time { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.message-notification-row > em { color: var(--muted); font-size: 22px; font-style: normal; }
+.message-list-heading { margin-top: 10px; background: var(--section-bg); }
+
 .message-discover-list {
   margin: 12px 0 20px;
   border-top: 1px solid var(--divider);
@@ -13827,7 +13899,9 @@ body.image-preview-open {
   display: block;
   overflow-x: auto;
   overflow-y: hidden;
-  touch-action: pan-x pan-y;
+  /* Keep horizontal paging native while reserving vertical movement for the
+     iOS-style pull-down-to-dismiss gesture. */
+  touch-action: pan-x;
   scroll-snap-type: x mandatory;
   scroll-snap-stop: always;
   /* Native user paging must not inherit a CSS animation. Programmatic page
@@ -13879,6 +13953,7 @@ body.image-preview-open {
   will-change: transform, opacity;
   user-select: none;
   -webkit-user-drag: none;
+  -webkit-touch-callout: default;
 }
 
 .image-preview-slide {
@@ -17978,6 +18053,23 @@ html[data-theme-color="dark"] .turtle-row-drag-preview {
 /* Admin-only operations centre. */
 .operations-tabs { margin-bottom: 14px; }
 
+.operations-month-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+  padding: 13px 15px;
+}
+
+.operations-month-picker span,
+.operations-month-picker strong { display: block; }
+.operations-month-picker span { margin-bottom: 3px; color: var(--muted); font-size: 11px; }
+.operations-month-picker .select { width: auto; min-width: 136px; margin: 0; }
+.operations-compare.up { color: #07884a; }
+.operations-compare.down { color: #d45858; }
+.operations-compare.flat { color: var(--muted); }
+
 .operations-metric-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -18883,7 +18975,8 @@ html[data-theme-color="dark"] .community-detail-card.is-single-image .community-
   width: auto !important;
   height: auto !important;
   max-width: 100% !important;
-  max-height: min(48dvh, 460px) !important;
+  /* 信息流只展示完整缩略图；进入详情后再使用更大的图片尺寸。 */
+  max-height: min(38dvh, 360px) !important;
   margin: 0;
   object-fit: contain !important;
 }
