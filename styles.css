@@ -10285,7 +10285,8 @@ html[data-theme-color="dark"] .market-top-service-note {
 .forum-reply-heading { min-height: 52px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--divider); }
 .forum-reply-heading strong { font-size: 16px; }
 .forum-reply-heading span { color: var(--muted); font-size: 13px; }
-.forum-floor { padding: 15px 14px; display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 10px; border-bottom: 1px solid var(--divider); }
+.forum-floor { padding: 15px 14px; display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 10px; border-bottom: 1px solid var(--divider); cursor: pointer; transition: background-color 110ms ease, box-shadow 110ms ease, transform 110ms ease; -webkit-tap-highlight-color: transparent; }
+.forum-floor:active { background: color-mix(in srgb, var(--primary) 7%, var(--card-bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent), 0 4px 14px rgba(18, 42, 34, .1); transform: scale(.995); }
 .forum-reply-avatar { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; object-fit: cover; }
 .forum-floor header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .forum-floor header strong { color: var(--text); font-size: 14px; }
@@ -10293,6 +10294,26 @@ html[data-theme-color="dark"] .market-top-service-note {
 .forum-floor small { display: block; margin-top: 4px; color: var(--primary); font-size: 12px; }
 .forum-floor p { margin: 6px 0; color: var(--text); font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
 .forum-floor button { min-height: 30px; padding: 0 8px; color: var(--muted); background: transparent; font-size: 12px; }
+.forum-comment-thread { border-bottom: 1px solid var(--divider); }
+.forum-comment-thread > .forum-floor { border-bottom: 0; }
+.forum-floor-content { min-width: 0; }
+.forum-comment-actions { min-height: 32px; display: flex; align-items: center; gap: 8px; }
+.forum-comment-actions > button:first-child { padding-left: 0; }
+.forum-comment-actions .forum-comment-like { min-width: 52px; margin-left: auto; display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; font-size: 14px; }
+.forum-comment-like span { font-size: 23px; font-weight: 400; line-height: 1; }
+.forum-comment-like b { min-width: 10px; font-size: 12px; font-weight: 500; }
+.forum-comment-like.active,
+.forum-comment-like.active span { color: #ef3f46 !important; }
+.forum-nested-replies { margin: 0 14px 2px 62px; overflow: hidden; border-left: 2px solid color-mix(in srgb, var(--primary) 12%, var(--divider)); border-radius: 0 12px 12px 0; background: color-mix(in srgb, var(--raised-bg) 72%, transparent); }
+.forum-nested-replies .forum-floor { grid-template-columns: 30px minmax(0,1fr); padding: 10px 10px; gap: 8px; border-bottom-color: color-mix(in srgb, var(--divider) 65%, transparent); }
+.forum-nested-replies .forum-floor:last-child { border-bottom: 0; }
+.forum-nested-replies .forum-reply-avatar { width: 30px; height: 30px; }
+.forum-expand-replies,
+.forum-expand-comments { width: auto; min-height: 40px; padding: 0 14px; color: var(--muted); background: transparent; font-size: 13px; font-weight: 600; text-align: left; }
+.forum-expand-replies { margin: 0 14px 5px 62px; }
+.forum-expand-comments { width: 100%; min-height: 48px; text-align: center; border-bottom: 1px solid var(--divider); }
+.forum-expand-replies span,
+.forum-expand-comments span { margin-left: 3px; color: var(--primary); }
 .forum-reply-composer { position: fixed; left: max(0px, calc((100vw - 430px) / 2)); right: max(0px, calc((100vw - 430px) / 2)); bottom: calc(58px + env(safe-area-inset-bottom)); z-index: 1000; min-height: 60px; margin: 0; padding: 8px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; border-top: 1px solid var(--divider); background: color-mix(in srgb, var(--topbar-bg) 94%, transparent); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
 .forum-reply-composer input { min-width: 0; min-height: 42px; padding: 0 13px; border: 1px solid var(--divider); border-radius: 21px; color: var(--text); background: var(--raised-bg); font-size: 14px; }
 .forum-reply-composer button { min-width: 58px; min-height: 42px; border-radius: 21px; color: #fff; background: var(--primary); font-size: 14px; font-weight: 700; }
@@ -15880,8 +15901,36 @@ html[data-theme-color="dark"] .profile-content-tabs button.active {
   object-fit: cover;
 }
 
+.market-card-photo > .market-card-video-cover {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  opacity: 1;
+  transform: translateZ(0);
+  transition: opacity 120ms linear;
+  pointer-events: none;
+}
+
+.market-card-photo.is-video-playing > .market-card-video-cover {
+  opacity: 0;
+}
+
+.market-card-photo.is-video-playing > .market-video-mark {
+  opacity: 0;
+}
+
+.market-card-photo > video {
+  transform: translateZ(0);
+  background: #e9eeeb;
+}
+
 .market-video-mark {
   position: absolute;
+  z-index: 3;
   left: 50%;
   top: 50%;
   width: 34px;
@@ -18437,8 +18486,8 @@ html[data-theme-color="dark"] .shared-turtle-badge { color: #85d1bc; background:
 }
 
 .community-page .forum-thread-author {
-  min-height: 66px;
-  padding: 13px 14px 7px;
+  min-height: 0;
+  padding: 10px 14px 0;
   display: grid;
   grid-template-columns: 40px minmax(0,1fr) auto auto;
   align-items: center;
@@ -18480,10 +18529,10 @@ html[data-theme-color="dark"] .shared-turtle-badge { color: #85d1bc; background:
 .community-page .forum-thread-more { width: 30px; height: 30px; padding: 0; color: var(--muted); background: transparent; font-size: 13px; letter-spacing: 1px; }
 .community-page .forum-thread-more-wrap { position: relative; width: 30px; height: 30px; }
 
-.community-page .forum-thread-main { padding: 3px 14px 13px; }
+.community-page .forum-thread-main { padding: 0 14px 13px; }
 .community-page .forum-thread-badges:empty { display: none; }
 .community-page .forum-thread-card h3 {
-  margin: 5px 0 7px;
+  margin: 0 0 7px;
   color: var(--text);
   font-size: 18px;
   font-weight: 780;

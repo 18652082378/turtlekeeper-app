@@ -392,6 +392,7 @@ let systemAnnouncementsLoading = false;
 let systemAnnouncementsLastLoadedAt = 0;
 let marketNetworkType = "unknown";
 let marketNetworkMonitoringStarted = false;
+let marketVideoObserver = null;
 let messageUnreadTimer = null;
 let communityDraftMedia = "";
 let communityDraftMediaType = "";
@@ -415,6 +416,9 @@ let communitySearchTimer = 0;
 let communitySearchRequestId = 0;
 let communitySearchLoading = false;
 let communityReplyTarget = null;
+let communityCommentsPostId = "";
+let communityCommentsExpanded = false;
+const communityExpandedReplyRoots = new Set();
 // Match the market publish flow: lock repeated taps and retain one stable
 // submission id until the server confirms the result.
 let communityPublishInFlight = false;
@@ -2215,6 +2219,49 @@ function communityDetailMedia(item) {
   `;
 }
 
+function communityCommentRowMarkup(comment, postId, floorNumber = 0, nested = false) {
+  const author = escapeHtml(comment.authorName || "壳友");
+  const replyLabel = comment.replyToName ? `<small>回复 ${escapeHtml(comment.replyToName)}</small>` : "";
+  return `<article class="forum-floor ${nested ? "is-nested-reply" : ""}" data-community-comment-row data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${author}" data-post-id="${escapeHtml(postId)}" tabindex="0" aria-label="回复${author}"><div class="forum-floor-avatar">${communityAvatar(comment, "forum-reply-avatar")}</div><div class="forum-floor-content"><header><strong>${author}${platformAdminBadge(comment)}</strong><span>${nested ? "" : `${floorNumber} 楼 · `}${formatTime(comment.createdAt)}</span></header>${replyLabel}<p>${escapeHtml(comment.content)}</p><div class="forum-comment-actions"><button type="button" data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${author}" data-post-id="${escapeHtml(postId)}">回复</button><button class="forum-comment-like ${comment.liked ? "active" : ""}" type="button" data-like-community-comment="${escapeHtml(comment.id)}" data-comment-post-id="${escapeHtml(postId)}" aria-label="${comment.liked ? "取消评论点赞" : "给评论点赞"}" aria-pressed="${comment.liked ? "true" : "false"}"><span>${comment.liked ? "♥" : "♡"}</span><b>${Number(comment.likeCount || 0) || ""}</b></button></div></div></article>`;
+}
+
+function communityCommentsMarkup(item) {
+  const comments = Array.isArray(item.comments) ? item.comments : [];
+  if (communityCommentsPostId !== String(item.id)) {
+    communityCommentsPostId = String(item.id);
+    communityCommentsExpanded = false;
+    communityExpandedReplyRoots.clear();
+  }
+  if (!comments.length) return `<div class="empty small-empty"><div><strong>还没有回复</strong><br>来坐第一个沙发</div></div>`;
+  const byId = new Map(comments.map(comment => [String(comment.id), comment]));
+  const rootIdFor = comment => {
+    let current = comment;
+    const visited = new Set([String(comment.id)]);
+    while (current?.replyToCommentId && byId.has(String(current.replyToCommentId)) && !visited.has(String(current.replyToCommentId))) {
+      visited.add(String(current.replyToCommentId));
+      current = byId.get(String(current.replyToCommentId));
+    }
+    return String(current?.id || comment.id);
+  };
+  const roots = comments.filter(comment => !comment.replyToCommentId || !byId.has(String(comment.replyToCommentId)))
+    .sort((left, right) => Number(right.likeCount || 0) - Number(left.likeCount || 0) || new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
+  const repliesByRoot = new Map(roots.map(root => [String(root.id), []]));
+  comments.forEach(comment => {
+    const rootId = rootIdFor(comment);
+    if (rootId !== String(comment.id)) repliesByRoot.get(rootId)?.push(comment);
+  });
+  repliesByRoot.forEach(replies => replies.sort((left, right) => new Date(left.createdAt || 0) - new Date(right.createdAt || 0)));
+  const visibleRoots = communityCommentsExpanded ? roots : roots.slice(0, 3);
+  const rows = visibleRoots.map((root, index) => {
+    const replies = repliesByRoot.get(String(root.id)) || [];
+    const expanded = communityExpandedReplyRoots.has(String(root.id));
+    const visibleReplies = expanded ? replies : replies.slice(0, 2);
+    return `<div class="forum-comment-thread">${communityCommentRowMarkup(root, item.id, index + 1)}${visibleReplies.length ? `<div class="forum-nested-replies">${visibleReplies.map(reply => communityCommentRowMarkup(reply, item.id, 0, true)).join("")}</div>` : ""}${replies.length > 2 ? `<button class="forum-expand-replies" type="button" data-expand-comment-replies="${escapeHtml(root.id)}">${expanded ? "收起回复" : `展开 ${replies.length - 2} 条回复`} <span>${expanded ? "⌃" : "⌄"}</span></button>` : ""}</div>`;
+  }).join("");
+  const remaining = roots.length - 3;
+  return `${rows}${remaining > 0 ? `<button class="forum-expand-comments" type="button" data-expand-community-comments>${communityCommentsExpanded ? "收起其余评论" : `展开其余 ${remaining} 条评论`} <span>${communityCommentsExpanded ? "⌃" : "⌄"}</span></button>` : ""}`;
+}
+
 function pageCommunityPostDetail() {
   const item = findCommunityPost(state.selectedCommunityPostId);
   if (!item) return `${topbar("帖子详情", true)}<main class="content page-fresh"><div class="empty small-empty"><div><strong>这篇帖子不存在</strong></div></div></main>`;
@@ -2254,14 +2301,16 @@ function pageCommunityPostDetail() {
         ${singleImage ? circleContext : ""}
         ${state.isCommunityAdmin ? `<div class="forum-admin-actions"><button class="${item.isPinned ? "active" : ""}" type="button" data-community-admin-action="pin" data-post-id="${item.id}">${item.isPinned ? "取消置顶" : "置顶帖子"}</button><button class="${item.isFeatured ? "active" : ""}" type="button" data-community-admin-action="feature" data-post-id="${item.id}">${item.isFeatured ? "取消精华" : "设为精华"}</button></div>` : ""}
       </article>
-      <section class="forum-reply-section"><div class="forum-reply-heading"><strong>全部回复</strong><span>${comments.length} 楼</span></div>${comments.map((comment, index) => `<article class="forum-floor"><div class="forum-floor-avatar">${communityAvatar(comment, "forum-reply-avatar")}</div><div><header><strong>${escapeHtml(comment.authorName || "壳友")}${platformAdminBadge(comment)}</strong><span>${index + 1} 楼 · ${formatTime(comment.createdAt)}</span></header>${comment.replyToName ? `<small>回复 ${escapeHtml(comment.replyToName)}</small>` : ""}<p>${escapeHtml(comment.content)}</p><button type="button" data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${escapeHtml(comment.authorName || "壳友")}" data-post-id="${escapeHtml(item.id)}">回复</button></div></article>`).join("") || `<div class="empty small-empty"><div><strong>还没有回复</strong><br>来坐第一个沙发</div></div>`}</section>
+      <section class="forum-reply-section"><div class="forum-reply-heading"><strong>全部回复</strong><span>${comments.length} 条</span></div>${communityCommentsMarkup(item)}</section>
       <form class="community-comment-form forum-reply-composer" data-community-comment-form="${item.id}"><input name="content" placeholder="${replyTarget ? `回复 ${escapeHtml(replyTarget.name)}` : "友善交流，说说你的经验"}" maxlength="500"><button type="submit">发送</button></form>
     </main>
   `;
 }
 
 function communityNotificationCopy(item = {}) {
-  if (item.type === "like") return { action: "赞了你的帖子", detail: item.postTitle || "查看帖子" };
+  if (item.type === "like") return String(item.preview || "").startsWith("赞了你的评论")
+    ? { action: "赞了你的评论", detail: String(item.preview).replace(/^赞了你的评论：?/, "") || item.postTitle || "查看评论" }
+    : { action: "赞了你的帖子", detail: item.postTitle || "查看帖子" };
   if (item.type === "follow") return { action: "关注了你", detail: "去看看这位壳友" };
   return { action: "评论了你的帖子", detail: item.preview || item.postTitle || "查看新评论" };
 }
@@ -3411,20 +3460,65 @@ function shouldAutoplayMarketVideo() {
 }
 
 function syncMarketWifiVideos() {
-  if (!shouldAutoplayMarketVideo()) return;
-  document.querySelectorAll("[data-market-wifi-video]").forEach(video => {
+  marketVideoObserver?.disconnect();
+  marketVideoObserver = null;
+  const videos = [...document.querySelectorAll("[data-market-wifi-video]")];
+  const shellFor = video => video.closest(".market-card-photo");
+  const stop = video => {
+    video.pause();
+    shellFor(video)?.classList.remove("is-video-playing");
+  };
+  if (!shouldAutoplayMarketVideo() || !videos.length) {
+    videos.forEach(stop);
+    return;
+  }
+  const prepare = video => {
+    if (video.dataset.marketPrepared === "true") return;
+    video.dataset.marketPrepared = "true";
     video.muted = true;
     video.defaultMuted = true;
-    video.play().catch(() => {});
-  });
-  prefetchNextMarketVideo();
+    video.playsInline = true;
+    video.loop = true;
+    video.preload = "metadata";
+    video.addEventListener("playing", () => shellFor(video)?.classList.add("is-video-playing"));
+    ["pause", "waiting", "stalled", "ended", "error"].forEach(type => {
+      video.addEventListener(type, () => shellFor(video)?.classList.remove("is-video-playing"));
+    });
+  };
+  const selectCentered = () => {
+    const visible = videos.filter(video => video.dataset.marketVideoVisible === "true");
+    const viewportCenter = window.innerHeight / 2;
+    const selected = visible.reduce((best, video) => {
+      const rect = video.getBoundingClientRect();
+      const distance = Math.abs(rect.top + rect.height / 2 - viewportCenter);
+      return !best || distance < best.distance ? { video, distance } : best;
+    }, null)?.video;
+    videos.forEach(video => {
+      if (video !== selected) return stop(video);
+      prepare(video);
+      if (video.readyState < HTMLMediaElement.HAVE_METADATA) video.load();
+      video.play().then(prefetchNextMarketVideo).catch(() => stop(video));
+    });
+  };
+  videos.forEach(prepare);
+  if (!("IntersectionObserver" in window)) {
+    videos[0].dataset.marketVideoVisible = "true";
+    selectCentered();
+    return;
+  }
+  marketVideoObserver = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      entry.target.dataset.marketVideoVisible = entry.isIntersecting && entry.intersectionRatio >= .35 ? "true" : "false";
+    });
+    selectCentered();
+  }, { root: null, rootMargin: "-10% 0px -10%", threshold: [0, .35, .6, 1] });
+  videos.forEach(video => marketVideoObserver.observe(video));
 }
 
 function updateMarketNetworkType(status) {
   const nextType = String(status?.connectionType || "unknown").toLowerCase();
   if (nextType === marketNetworkType) return;
   marketNetworkType = nextType;
-  if (state.page === "market") render();
 }
 
 function startMarketNetworkMonitoring() {
@@ -3449,12 +3543,11 @@ function startMarketNetworkMonitoring() {
 function marketListingCard(item) {
   const unavailable = item.status !== "active";
   const firstMedia = marketListingMediaItems(item)[0];
-  const wifiAutoplay = firstMedia?.type === "video" && shouldAutoplayMarketVideo();
   return `
     <article class="market-card-wrap" data-market-impression="${item.id}">
     <button class="market-card ${unavailable ? "is-sold" : ""}" type="button" data-view-market="${item.id}">
-      <span class="market-card-photo ${wifiAutoplay ? "wifi-video-autoplay" : ""}">
-        ${firstMedia?.type === "video" ? `<video src="${firstMedia.url}"${videoPosterAttribute(firstMedia)} muted playsinline crossorigin="anonymous" data-video-first-frame ${wifiAutoplay ? "autoplay loop preload=\"metadata\" data-market-wifi-video" : "preload=\"none\""}></video>${wifiAutoplay ? "" : `<b class="market-video-mark">▶</b>`}` : `<img src="${marketListingPhoto(item)}" alt="${escapeHtml(item.title || item.speciesName || "在售乌龟")}" loading="lazy">`}
+      <span class="market-card-photo">
+        ${firstMedia?.type === "video" ? `<img class="market-card-video-cover" src="${escapeHtml(marketVideoPosterUrl(firstMedia))}" alt="${escapeHtml(item.title || item.speciesName || "商品视频")}" loading="lazy" decoding="async"><b class="market-video-mark" aria-hidden="true">▶</b>` : `<img src="${marketListingPhoto(item)}" alt="${escapeHtml(item.title || item.speciesName || "在售乌龟")}" loading="lazy" decoding="async">`}
         ${unavailable ? `<i>已售出</i>` : item.negotiable ? `<i class="negotiable">可议价</i>` : ""}
       </span>
       <span class="market-card-body">
@@ -3661,7 +3754,7 @@ function bindNativeVideoCache(video) {
   video.addEventListener("play", async () => {
     const plugin = nativeVideoCachePlugin();
     const remoteUrl = video.dataset.remoteVideoUrl || video.currentSrc || video.src;
-    if (!plugin || !/^https?:/i.test(remoteUrl) || video.dataset.cacheResolving === "true") return;
+    if (!plugin || !/^https?:/i.test(remoteUrl) || video.dataset.cacheResolving === "true" || video.dataset.cacheApplied === "true") return;
     video.dataset.remoteVideoUrl = remoteUrl;
     video.dataset.cacheResolving = "true";
     try {
@@ -3669,7 +3762,12 @@ function bindNativeVideoCache(video) {
       if (!result?.cached || !result.url || result.url === video.src) return;
       const currentTime = Number(video.currentTime || 0);
       const localUrl = typeof window.Capacitor?.convertFileSrc === "function" ? window.Capacitor.convertFileSrc(result.url) : result.url;
+      if (localUrl === video.currentSrc || localUrl === video.src) {
+        video.dataset.cacheApplied = "true";
+        return;
+      }
       video.pause();
+      video.dataset.cacheApplied = "true";
       video.src = localUrl;
       video.load();
       video.addEventListener("loadedmetadata", () => {
@@ -3706,6 +3804,23 @@ function communityPublishProgressMarkup() {
       ${total ? `<b data-community-publish-progress-count>${current}/${total}</b>` : ""}
     </aside>
   `;
+}
+
+function bindMarketListingCardActions(root = document) {
+  root.querySelectorAll?.("[data-view-market]").forEach(button => {
+    if (button.dataset.marketOpenBound === "true") return;
+    button.dataset.marketOpenBound = "true";
+    button.addEventListener("click", () => openMarketDetail(button.dataset.viewMarket));
+  });
+  root.querySelectorAll?.("[data-market-favorite]").forEach(button => {
+    if (button.dataset.marketFavoriteBound === "true") return;
+    button.dataset.marketFavoriteBound = "true";
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleMarketFavorite(button.dataset.marketFavorite);
+    });
+  });
 }
 
 function updateCommunityPublishProgress(patch = {}) {
@@ -7042,10 +7157,43 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-show-community-comment]").forEach(btn => btn.addEventListener("click", () => setState({ communityCommentPostId: btn.dataset.showCommunityComment, openCommunityActionId: "" }, { skipCloud: true })));
   document.querySelectorAll("[data-community-comment-form]").forEach(form => form.addEventListener("submit", submitCommunityComment));
-  document.querySelectorAll("[data-reply-community-comment]").forEach(button => button.addEventListener("click", () => {
-    communityReplyTarget = { postId: button.dataset.postId, commentId: button.dataset.replyCommunityComment, name: button.dataset.replyAuthor || "壳友" };
+  const beginCommunityReply = target => {
+    communityReplyTarget = { postId: target.dataset.postId, commentId: target.dataset.replyCommunityComment, name: target.dataset.replyAuthor || "壳友" };
     render();
-    document.querySelector(".forum-reply-composer input")?.focus();
+    const input = document.querySelector(".forum-reply-composer input");
+    input?.focus({ preventScroll: true });
+    input?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+  document.querySelectorAll("button[data-reply-community-comment]").forEach(button => button.addEventListener("click", event => {
+    event.stopPropagation();
+    beginCommunityReply(button);
+  }));
+  document.querySelectorAll("[data-community-comment-row]").forEach(row => {
+    row.addEventListener("click", event => {
+      if (event.target.closest("button, a, input, textarea, select")) return;
+      beginCommunityReply(row);
+    });
+    row.addEventListener("keydown", event => {
+      if (!['Enter', ' '].includes(event.key) || event.target !== row) return;
+      event.preventDefault();
+      beginCommunityReply(row);
+    });
+  });
+  document.querySelector("[data-expand-community-comments]")?.addEventListener("click", event => {
+    event.stopPropagation();
+    communityCommentsExpanded = !communityCommentsExpanded;
+    render();
+  });
+  document.querySelectorAll("[data-expand-comment-replies]").forEach(button => button.addEventListener("click", event => {
+    event.stopPropagation();
+    const rootId = String(button.dataset.expandCommentReplies || "");
+    if (communityExpandedReplyRoots.has(rootId)) communityExpandedReplyRoots.delete(rootId);
+    else communityExpandedReplyRoots.add(rootId);
+    render();
+  }));
+  document.querySelectorAll("[data-like-community-comment]").forEach(button => button.addEventListener("click", event => {
+    event.stopPropagation();
+    toggleCommunityCommentLike(button.dataset.commentPostId, button.dataset.likeCommunityComment);
   }));
   document.querySelectorAll("[data-community-admin-action]").forEach(button => button.addEventListener("click", () => communityAdminPostAction(button.dataset.postId, button.dataset.communityAdminAction)));
   document.querySelectorAll("[data-toggle-community-follow]").forEach(btn => btn.addEventListener("click", event => {
@@ -7135,7 +7283,7 @@ function bindEvents() {
   document.querySelectorAll("[data-market-delivery]").forEach(btn => btn.addEventListener("click", () => setState({ marketDelivery: btn.dataset.marketDelivery || "" }, { skipCloud: true })));
   document.querySelector("[data-market-filter-reset]")?.addEventListener("click", () => resetMarketFeed({ marketPriceOrder: "", marketFreshOnly: false, marketRegion: "", marketDelivery: "", marketAssistMenu: "" }));
   document.querySelectorAll("[data-my-market-tab]").forEach(btn => btn.addEventListener("click", () => setState({ marketMyTab: btn.dataset.myMarketTab }, { skipCloud: true })));
-  document.querySelectorAll("[data-view-market]").forEach(btn => btn.addEventListener("click", () => openMarketDetail(btn.dataset.viewMarket)));
+  bindMarketListingCardActions();
   document.querySelectorAll("[data-view-market-seller]").forEach(btn => btn.addEventListener("click", () => openMarketSeller(btn.dataset.viewMarketSeller)));
   const marketDetailGallery = document.querySelector("[data-market-detail-gallery]");
   const useNativeDetailGallery = Boolean(marketDetailGallery && window.CSS?.supports?.("scroll-snap-type", "x mandatory"));
@@ -7435,11 +7583,6 @@ function bindEvents() {
       requestAnimationFrame(() => applyIndex(0, { smooth: false }));
     }
   }
-  document.querySelectorAll("[data-market-favorite]").forEach(btn => btn.addEventListener("click", event => {
-    event.preventDefault();
-    event.stopPropagation();
-    toggleMarketFavorite(btn.dataset.marketFavorite);
-  }));
   document.querySelector("[data-market-turtle-source]")?.addEventListener("change", event => {
     const turtle = (state.turtles || []).find(item => item.id === event.target.value);
     const description = document.querySelector("[data-market-description]");
@@ -7820,7 +7963,9 @@ function resetMarketFeed(patch = {}) {
 async function loadMoreMarketListings() {
   if (!hasCloudSession() || state.page !== "market" || marketLoading || state.marketFeedLoadingMore || !state.marketFeedHasMore) return;
   marketLoading = true;
-  setState({ marketFeedLoadingMore: true }, { skipCloud: true });
+  state.marketFeedLoadingMore = true;
+  const loadingStatus = document.querySelector("[data-market-load-sentinel]");
+  if (loadingStatus) loadingStatus.textContent = "正在加载更多商品…";
   try {
     const result = await apiPost("/api/market/list", marketAuthPayload({
       offset: Math.max(0, Number(state.marketFeedNextOffset || 0)),
@@ -7833,16 +7978,41 @@ async function loadMoreMarketListings() {
     const existingIds = new Set((state.marketListings || []).map(item => item.id));
     const appended = incoming.filter(item => !existingIds.has(item.id));
     marketLastLoadedAt = Date.now();
-    setState({
+    const nextPatch = {
       marketListings: [...(state.marketListings || []), ...appended],
       myMarketListings: normalizeMarketListings(result.myListings || state.myMarketListings || []),
       marketFeedInitialized: true,
       marketFeedNextOffset: Math.max(0, Number(result.nextOffset ?? (Number(state.marketFeedNextOffset || 0) + incoming.length))),
       marketFeedHasMore: Boolean(result.hasMore),
       marketFeedLoadingMore: false
-    }, { skipCloud: true });
+    };
+    Object.assign(state, nextPatch);
+    saveState({ skipCloud: true });
+
+    // Append without replacing the existing grid. Rebuilding every card while
+    // scrolling makes WKWebView discard image textures and video layers for a
+    // frame, which is perceived as flashing or a white video surface.
+    const grid = document.querySelector(".market-page .market-grid");
+    if (grid && appended.length && !state.marketPriceOrder && !state.marketFreshOnly && !state.marketRegion && !state.marketDelivery) {
+      const template = document.createElement("template");
+      template.innerHTML = appended.map(marketListingCard).join("");
+      bindMarketListingCardActions(template.content);
+      grid.appendChild(template.content);
+    } else if (appended.length) {
+      render();
+      return;
+    }
+    const status = document.querySelector("[data-market-load-sentinel]");
+    if (status) status.textContent = state.marketFeedHasMore ? "继续上滑，加载更多" : "已经到底了";
+    setupMarketInfiniteScroll();
+    requestAnimationFrame(() => {
+      hydrateVideoFirstFrames();
+      syncMarketWifiVideos();
+    });
   } catch (error) {
-    setState({ marketFeedLoadingMore: false }, { skipCloud: true });
+    state.marketFeedLoadingMore = false;
+    const status = document.querySelector("[data-market-load-sentinel]");
+    if (status) status.textContent = "加载失败，上滑重试";
     console.warn(error.message || "加载更多龟集市商品失败");
   } finally {
     marketLoading = false;
@@ -10539,6 +10709,28 @@ async function toggleCommunityLike(postId) {
   }
 }
 
+async function toggleCommunityCommentLike(postId, commentId) {
+  if (!canUseCommunity()) return;
+  const before = state.communityPosts;
+  const optimistic = (state.communityPosts || []).map(post => String(post.id) !== String(postId) ? post : {
+    ...post,
+    comments: (post.comments || []).map(comment => String(comment.id) !== String(commentId) ? comment : {
+      ...comment,
+      liked: !comment.liked,
+      likeCount: Math.max(0, Number(comment.likeCount || 0) + (comment.liked ? -1 : 1))
+    })
+  });
+  setState({ communityPosts: optimistic }, { skipCloud: true, pageScroll: "preserve" });
+  try {
+    const result = await apiPost("/api/community/comment/like", communityAuthPayload({ postId, commentId }));
+    setState({ communityPosts: normalizeCommunityPosts(result.posts || []) }, { skipCloud: true, pageScroll: "preserve" });
+  } catch (error) {
+    if (error.status === 405 || error.message === "方法不支持") return;
+    setState({ communityPosts: before }, { skipCloud: true, pageScroll: "preserve" });
+    toast(error.message || "评论点赞失败");
+  }
+}
+
 async function submitCommunityComment(event) {
   event.preventDefault();
   if (!canUseCommunity()) return;
@@ -10557,6 +10749,8 @@ async function submitCommunityComment(event) {
         content,
         authorName: state.accountName || "壳友",
         authorAvatar: state.accountAvatar || "",
+        likeCount: 0,
+        liked: false,
         createdAt: new Date().toISOString()
       };
       if (communityReplyTarget?.postId === postId) {

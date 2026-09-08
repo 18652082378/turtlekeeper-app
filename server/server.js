@@ -86,7 +86,7 @@ function publicUserForPolicyClient(user, token, db, body = {}) {
 // 1.0.5 使用 build 89 及以下；1.0.6 从 build 90 开始。
 // 环境变量仍可在不改代码的情况下提高最低版本和最新构建号。
 const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 90)));
-const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || 94)));
+const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || 95)));
 const IOS_APP_STORE_URL = process.env.IOS_APP_STORE_URL || "https://apps.apple.com/app/id6783481335";
 // Apple Push Notification service (APNs) credentials are configured only on the server.
 const APNS_TEAM_ID = String(process.env.APNS_TEAM_ID || "").trim();
@@ -2968,6 +2968,8 @@ function publicCommunityPosts(db, viewer = null) {
           authorIsAdmin: isAdminUser(db.users?.[comment.authorPhoneRaw]),
           replyToCommentId: comment.replyToCommentId || "",
           replyToName: comment.replyToName || "",
+          likeCount: (Array.isArray(comment.likes) ? comment.likes : []).length,
+          liked: Boolean(viewerPhone && (Array.isArray(comment.likes) ? comment.likes : []).includes(viewerPhone)),
           createdAt: comment.createdAt
         }))
       };
@@ -3166,6 +3168,7 @@ async function handleCommunityComment(req, res) {
     authorAvatar: user.accountAvatar || "",
     replyToCommentId: replyTarget?.id || "",
     replyToName: replyTarget ? (db.users?.[replyTarget.authorPhoneRaw]?.accountName || replyTarget.authorName || "壳友") : "",
+    likes: [],
     createdAt: new Date().toISOString()
   };
   post.comments = [...(Array.isArray(post.comments) ? post.comments : []), comment];
@@ -3178,6 +3181,33 @@ async function handleCommunityComment(req, res) {
     preview: content,
     uniqueKey: `comment:${comment.id}`
   });
+  writeDatabase(db);
+  if (notification) void notifyCommunityActivity(db, notification);
+  return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
+}
+
+async function handleCommunityCommentLike(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const post = (Array.isArray(db.communityPosts) ? db.communityPosts : []).find(item => item.id === String(body.postId || ""));
+  if (!post) return sendJson(res, 404, { ok: false, message: "帖子不存在" });
+  if (!canViewCommunityPost(db, post, user)) return sendJson(res, 403, { ok: false, message: "你无权查看这篇帖子" });
+  const comment = (Array.isArray(post.comments) ? post.comments : []).find(item => item.id === String(body.commentId || ""));
+  if (!comment) return sendJson(res, 404, { ok: false, message: "评论不存在" });
+  const likes = Array.isArray(comment.likes) ? comment.likes : [];
+  const wasLiked = likes.includes(user.phone);
+  comment.likes = wasLiked ? likes.filter(phone => phone !== user.phone) : [...likes, user.phone];
+  const notification = !wasLiked ? addCommunityNotification(db, {
+    type: "like",
+    recipientPhone: comment.authorPhoneRaw,
+    actorPhone: user.phone,
+    postId: post.id,
+    postTitle: post.title || "壳友交流帖",
+    preview: `赞了你的评论：${trimPublicText(comment.content || "", 80)}`,
+    uniqueKey: `comment-like:${comment.id}:${user.phone}`
+  }) : null;
   writeDatabase(db);
   if (notification) void notifyCommunityActivity(db, notification);
   return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
@@ -4502,6 +4532,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/create") return await handleCommunityCreate(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/like") return await handleCommunityLike(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/comment") return await handleCommunityComment(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/comment/like") return await handleCommunityCommentLike(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/circle/follow") return await handleCommunityCircleFollow(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/admin/action") return await handleCommunityAdminAction(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/delete") return await handleCommunityDelete(req, res);

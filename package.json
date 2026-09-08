@@ -1,11 +1,13 @@
 {
   "name": "turtlekeeper-ios-app",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "description": "ShellNote iOS cloud build package",
   "scripts": {
     "start": "node server/server.js",
     "build": "node scripts/build-web.js",
+    "cap:sync:android": "npm run build && npx cap sync android",
+    "cap:open:android": "npm run cap:sync:android && npx cap open android",
     "test:backup-restore": "node scripts/test-backup-restore.js",
     "test:api-workflows": "node scripts/test-api-workflows.js",
     "migrate:mysql": "node scripts/migrate-json-to-mysql.js",
@@ -18,6 +20,7 @@
     "cap:open:ios": "npm run build && npx cap open ios"
   },
   "dependencies": {
+    "@capacitor/android": "8.4.0",
     "@capacitor/app": "^8.1.1",
     "@capacitor/core": "8.4.0",
     "@capacitor/geolocation": "^8.2.0",
