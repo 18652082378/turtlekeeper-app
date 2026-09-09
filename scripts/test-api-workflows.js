@@ -122,7 +122,7 @@ async function main() {
     const health = await fetch(`${base}/api/app/version?build=1`).then(response => response.json());
     assert.equal(health.ok, true);
     assert.equal(health.minimumBuild, 90, "1.0.6 must remain supported when building 1.0.7");
-    assert.equal(health.latestBuild, 94, "unreleased build 96 must not replace the public release in update checks");
+    assert.equal(health.latestBuild, 94, "unreleased builds must not replace the public release in update checks");
     assert.ok(90 >= health.minimumBuild, "1.0.6 build 90 must not require a forced update");
 
     await request("/api/upload/image", { image: "data:image/png;base64,AAAA" }, { status: 401 });
@@ -230,6 +230,8 @@ async function main() {
     assert.equal(community.json.posts[0].likeCount, 1);
     assert.equal(community.json.posts[0].comments[0].content, "Regression comment");
     const commentId = community.json.posts[0].comments[0].id;
+    assert.equal(community.json.posts[0].comments[0].authorId, communityId(buyer.phone), "comment avatar must link to the actual author's public profile");
+    assert.equal(community.json.posts[0].comments[0].authorPhoneRaw, undefined, "profile navigation must not expose private phone numbers");
     assert.equal(community.json.posts[0].comments[0].canDelete, false, "post owner cannot delete another user's comment");
     const ownComments = await request("/api/community/list", auth(buyer));
     assert.equal(ownComments.json.posts[0].comments[0].canDelete, true);

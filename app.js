@@ -235,6 +235,8 @@ const TURTLE_FORM_DRAFT_FIELDS = [
   "note",
   "batchMaleCount",
   "batchFemaleCount",
+  "batchStage",
+  "batchCount",
   "batchTotalPrice",
   "batchCodePrefix"
 ];
@@ -435,7 +437,6 @@ let communitySearchRequestId = 0;
 let communitySearchLoading = false;
 let communityReplyTarget = null;
 let communityCommentsPostId = "";
-let communityCommentsExpanded = false;
 const communityExpandedReplyRoots = new Set();
 // Match the market publish flow: lock repeated taps and retain one stable
 // submission id until the server confirms the result.
@@ -858,6 +859,9 @@ function setState(patch, options = {}) {
     $app.style.transform = "";
     $app.classList.remove("edge-back-dragging");
     if (!options.skipEdgeSnapshot && !BOTTOM_NAV_ROOT_PAGES.has(patch.page) && $app?.innerHTML) {
+      // Removing a tall list clamps the document scroll position immediately.
+      // Capture it while that page is still mounted, for both back mechanisms.
+      const sourceScrollY = window.scrollY || 0;
       // Keep the actual page nodes for a real back-navigation hand-off. An
       // HTML string remains only as a recovery fallback; replacing innerHTML
       // after an edge swipe was the source of the visible previous-page jump.
@@ -870,7 +874,7 @@ function setState(patch, options = {}) {
         previewHtml: buildEdgeBackPreviewHtml(pageHtml),
         liveDom: liveSnapshot.dom,
         bottomNavHtml: liveSnapshot.bottomNavHtml,
-        scrollY: window.scrollY || 0
+        scrollY: sourceScrollY
       });
       // A user only needs the most recent navigation levels. Keeping a long
       // chain of media-heavy pages is wasteful on an iPhone WebView.
@@ -1394,7 +1398,8 @@ function captureTurtleFormDraft(form = document.querySelector("#turtleForm")) {
   if (!form) return { ...turtleFormDraft() };
   const data = new FormData(form);
   return TURTLE_FORM_DRAFT_FIELDS.reduce((draft, key) => {
-    draft[key] = String(data.get(key) || "");
+    draft[key] = key.startsWith("batch") && !data.has(key)
+      ? String(turtleFormDraft()[key] || "") : String(data.get(key) || "");
     return draft;
   }, {});
 }
@@ -2305,17 +2310,59 @@ function bindCommunityCommentDeletes(root = document) {
   });
 }
 
+function bindCommunityCommentInteractions() {
+  const beginCommunityReply = target => {
+    communityReplyTarget = { postId: target.dataset.postId, commentId: target.dataset.replyCommunityComment, name: target.dataset.replyAuthor || "壳友" };
+    render();
+    const input = document.querySelector(".forum-reply-composer input");
+    input?.focus({ preventScroll: true });
+    input?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+  document.querySelectorAll("button[data-reply-community-comment]").forEach(button => button.addEventListener("click", event => {
+    event.stopPropagation();
+    beginCommunityReply(button);
+  }));
+  document.querySelectorAll("[data-community-comment-row]").forEach(row => {
+    row.addEventListener("click", event => {
+      if (event.target.closest("button, a, input, textarea, select")) return;
+      beginCommunityReply(row);
+    });
+    row.addEventListener("keydown", event => {
+      if (!['Enter', ' '].includes(event.key) || event.target !== row) return;
+      event.preventDefault();
+      beginCommunityReply(row);
+    });
+  });
+  document.querySelectorAll("[data-expand-comment-replies]").forEach(button => button.addEventListener("click", event => {
+    event.stopPropagation();
+    const rootId = String(button.dataset.expandCommentReplies || "");
+    if (communityExpandedReplyRoots.has(rootId)) communityExpandedReplyRoots.delete(rootId);
+    else communityExpandedReplyRoots.add(rootId);
+    render();
+  }));
+  document.querySelectorAll("[data-like-community-comment]").forEach(button => button.addEventListener("click", event => {
+    event.stopPropagation();
+    toggleCommunityCommentLike(button.dataset.commentPostId, button.dataset.likeCommunityComment);
+  }));
+}
+
 function communityCommentRowMarkup(comment, postId, floorNumber = 0, nested = false) {
   const author = escapeHtml(comment.authorName || "壳友");
+  const profileLink = comment.authorId ? `data-view-community-user="${escapeHtml(comment.authorId)}"` : "";
+  const avatar = profileLink
+    ? `<button class="forum-comment-avatar-link" type="button" ${profileLink} aria-label="查看${author}的主页">${communityAvatar(comment, "forum-reply-avatar")}</button>`
+    : communityAvatar(comment, "forum-reply-avatar");
+  const authorName = profileLink
+    ? `<button class="forum-comment-author-link" type="button" ${profileLink} aria-label="查看${author}的主页"><strong>${author}</strong>${platformAdminBadge(comment)}</button>`
+    : `<strong>${author}${platformAdminBadge(comment)}</strong>`;
   const replyLabel = comment.replyToName ? `<small>回复 ${escapeHtml(comment.replyToName)}</small>` : "";
-  return `<article class="forum-floor ${nested ? "is-nested-reply" : ""}" data-community-comment-row data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${author}" data-post-id="${escapeHtml(postId)}" tabindex="0" aria-label="回复${author}"><div class="forum-floor-avatar">${communityAvatar(comment, "forum-reply-avatar")}</div><div class="forum-floor-content"><header><strong>${author}${platformAdminBadge(comment)}</strong></header>${replyLabel}<p>${escapeHtml(comment.content)}</p><div class="forum-comment-actions"><time datetime="${escapeHtml(comment.createdAt || "")}">${formatCommunityCommentTime(comment.createdAt)}</time><button type="button" data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${author}" data-post-id="${escapeHtml(postId)}">回复</button>${communityCommentDeleteMarkup(comment, postId)}<button class="forum-comment-like ${comment.liked ? "active" : ""}" type="button" data-like-community-comment="${escapeHtml(comment.id)}" data-comment-post-id="${escapeHtml(postId)}" aria-label="${comment.liked ? "取消评论点赞" : "给评论点赞"}" aria-pressed="${comment.liked ? "true" : "false"}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="${comment.liked ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg><b>${Number(comment.likeCount || 0) || ""}</b></button></div></div></article>`;
+  return `<article class="forum-floor ${nested ? "is-nested-reply" : ""}" data-community-comment-row data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${author}" data-post-id="${escapeHtml(postId)}" tabindex="0" aria-label="回复${author}"><div class="forum-floor-avatar">${avatar}</div><div class="forum-floor-content"><header>${authorName}</header>${replyLabel}<p>${escapeHtml(comment.content)}</p><div class="forum-comment-actions"><time datetime="${escapeHtml(comment.createdAt || "")}">${formatCommunityCommentTime(comment.createdAt)}</time><button type="button" data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${author}" data-post-id="${escapeHtml(postId)}">回复</button>${communityCommentDeleteMarkup(comment, postId)}<button class="forum-comment-like ${comment.liked ? "active" : ""}" type="button" data-like-community-comment="${escapeHtml(comment.id)}" data-comment-post-id="${escapeHtml(postId)}" aria-label="${comment.liked ? "取消评论点赞" : "给评论点赞"}" aria-pressed="${comment.liked ? "true" : "false"}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="${comment.liked ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg><b>${Number(comment.likeCount || 0) || ""}</b></button></div></div></article>`;
 }
 
 function communityCommentsMarkup(item) {
   const comments = Array.isArray(item.comments) ? item.comments : [];
   if (communityCommentsPostId !== String(item.id)) {
     communityCommentsPostId = String(item.id);
-    communityCommentsExpanded = false;
     communityExpandedReplyRoots.clear();
   }
   if (!comments.length) return `<div class="empty small-empty"><div><strong>还没有回复</strong><br>来坐第一个沙发</div></div>`;
@@ -2337,15 +2384,13 @@ function communityCommentsMarkup(item) {
     if (rootId !== String(comment.id)) repliesByRoot.get(rootId)?.push(comment);
   });
   repliesByRoot.forEach(replies => replies.sort((left, right) => new Date(left.createdAt || 0) - new Date(right.createdAt || 0)));
-  const visibleRoots = communityCommentsExpanded ? roots : roots.slice(0, 3);
-  const rows = visibleRoots.map((root, index) => {
+  const rows = roots.map((root, index) => {
     const replies = repliesByRoot.get(String(root.id)) || [];
     const expanded = communityExpandedReplyRoots.has(String(root.id));
-    const visibleReplies = expanded ? replies : replies.slice(0, 2);
-    return `<div class="forum-comment-thread">${communityCommentRowMarkup(root, item.id, index + 1)}${visibleReplies.length ? `<div class="forum-nested-replies">${visibleReplies.map(reply => communityCommentRowMarkup(reply, item.id, 0, true)).join("")}</div>` : ""}${replies.length > 2 ? `<button class="forum-expand-replies" type="button" data-expand-comment-replies="${escapeHtml(root.id)}">${expanded ? "收起回复" : `展开 ${replies.length - 2} 条回复`} <span>${expanded ? "⌃" : "⌄"}</span></button>` : ""}</div>`;
+    const visibleReplies = expanded ? replies : replies.slice(0, 3);
+    return `<div class="forum-comment-thread">${communityCommentRowMarkup(root, item.id, index + 1)}${visibleReplies.length ? `<div class="forum-nested-replies">${visibleReplies.map(reply => communityCommentRowMarkup(reply, item.id, 0, true)).join("")}</div>` : ""}${replies.length > 3 ? `<button class="forum-expand-replies" type="button" data-expand-comment-replies="${escapeHtml(root.id)}" aria-expanded="${expanded ? "true" : "false"}">${expanded ? "收起回复" : `展开 ${replies.length - 3} 条回复`} <span>${expanded ? "⌃" : "⌄"}</span></button>` : ""}</div>`;
   }).join("");
-  const remaining = roots.length - 3;
-  return `${rows}${remaining > 0 ? `<button class="forum-expand-comments" type="button" data-expand-community-comments>${communityCommentsExpanded ? "收起其余评论" : `展开其余 ${remaining} 条评论`} <span>${communityCommentsExpanded ? "⌃" : "⌄"}</span></button>` : ""}`;
+  return rows;
 }
 
 function pageCommunityPostDetail() {
@@ -2543,25 +2588,24 @@ function openCommunityComposer(topic = "daily") {
 }
 
 function communityCreateHub() {
-  return `<section class="community-create-hub" aria-label="发布帖子">
-    <div class="community-create-head"><div><small>壳友圈</small><strong>今天，想分享哪件养龟小事？</strong><span>晒成长、问经验，也可以只记录一个可爱瞬间</span></div><button type="button" data-community-compose="daily"><i>＋</i><span>发帖</span></button></div>
-    <div class="community-create-strip">
-      <button type="button" data-community-compose="daily"><i>晒</i><span><b>晒龟龟</b><small>分享日常</small></span></button>
-      <button type="button" data-community-compose="growth"><i>长</i><span><b>晒成长</b><small>带入档案</small></span></button>
-      <button type="button" data-community-compose="identify"><i>鉴</i><span><b>求鉴定</b><small>龟友掌眼</small></span></button>
-      <button type="button" data-community-compose="question"><i>问</i><span><b>问问题</b><small>交流经验</small></span></button>
+  return `<section class="community-invite" aria-label="发布帖子">
+    <div class="community-invite-copy"><span class="community-invite-eyebrow"><i></i>每个养龟日常，都值得分享</span><h2>今天，你的龟龟<br>又有什么新鲜事？</h2><p>晒张照片，聊聊成长，遇见懂你的壳友。</p></div>
+    <button class="community-invite-publish" type="button" data-community-compose="daily"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="15" rx="3"/><path d="m8 5 1.5-2h5L16 5"/><circle cx="12" cy="12.5" r="3.5"/></svg>分享这一刻<span aria-hidden="true">↗</span></button>
+    <div class="community-invite-shortcuts">
+      <button type="button" data-community-compose="growth"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16M5 15l5-5 4 3 5-8M15 5h4v4"/></svg>记录成长</button>
+      <button type="button" data-community-compose="identify"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4M8 10.5h5M10.5 8v5"/></svg>请教品种</button>
+      <button type="button" data-community-compose="question"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 3V6a2 2 0 0 1 1-2Z"/><path d="M9.5 8a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4M12 15h.01"/></svg>聊聊难题</button>
     </div>
   </section>`;
 }
 
 function communityTopicTabs() {
   const tabs = [["hot", "热门"], ["latest", "最新"], ["featured", "精华"], ["followed", "关注"]];
-  return `<nav class="community-topic-tabs forum-sort-tabs" aria-label="帖子排序">${tabs.map(([value, label]) => `<button class="${communityForumSort === value ? "active" : ""}" type="button" data-community-forum-sort="${value}" aria-pressed="${communityForumSort === value}">${label}</button>`).join("")}</nav>`;
+  return `<div class="community-feed-toolbar"><nav class="community-topic-tabs forum-sort-tabs" aria-label="帖子排序">${tabs.map(([value, label]) => `<button class="${communityForumSort === value ? "active" : ""}" type="button" data-community-forum-sort="${value}" aria-pressed="${communityForumSort === value}">${label}</button>`).join("")}</nav><button class="community-toolbar-publish" type="button" data-community-compose="daily"><span aria-hidden="true">＋</span>写帖子</button></div>`;
 }
 
 function communityCircleStrip(posts = []) {
-  const followed = new Set(state.communityFollowedCircleIds || []);
-  return `<section class="forum-circle-section"><div class="forum-section-head"><div><small>DISCOVER</small><strong>逛圈子</strong></div><span>滑动查看更多</span></div><div class="forum-circle-strip"><button class="forum-circle-card ${communitySelectedCircleId === "all" ? "active" : ""}" type="button" data-community-circle="all"><i>全</i><span><b>全部帖子</b><small>${posts.length} 篇讨论</small></span></button>${COMMUNITY_CIRCLES.map(circle => { const count = posts.filter(post => communityPostCircleId(post) === circle.id).length; return `<button class="forum-circle-card ${communitySelectedCircleId === circle.id ? "active" : ""}" type="button" data-community-circle="${circle.id}"><i>${circle.icon}</i><span><b>${circle.name}</b><small>${count ? `${count} 篇讨论` : circle.note}</small></span>${followed.has(circle.id) ? `<em>已关注</em>` : ""}</button>`; }).join("")}</div></section>`;
+  return `<section class="forum-circle-section" aria-label="选择交流圈子"><div class="forum-circle-strip"><button class="forum-circle-card ${communitySelectedCircleId === "all" ? "active" : ""}" type="button" data-community-circle="all" aria-pressed="${communitySelectedCircleId === "all"}">全部圈子</button>${COMMUNITY_CIRCLES.map(circle => `<button class="forum-circle-card ${communitySelectedCircleId === circle.id ? "active" : ""}" type="button" data-community-circle="${circle.id}" aria-pressed="${communitySelectedCircleId === circle.id}">${circle.name}</button>`).join("")}</div></section>`;
 }
 
 function communityForumPosts(posts = []) {
@@ -2582,9 +2626,12 @@ function communityForumCard(item) {
   const circle = communityCircle(communityPostCircleId(item));
   const replies = Array.isArray(item.comments) ? item.comments.length : 0;
   const isOwn = Boolean(item.isOwn || item.pendingLocal);
+  const title = communityPostTitle(item);
+  const body = String(item.content || item.question || "").replace(/\s+/g, " ").trim();
+  const excerpt = body === String(title).trim() ? "" : body.slice(0, 180);
   return `<article class="forum-thread-card ${item.isPinned ? "is-pinned" : ""}" data-community-feed-card="${escapeHtml(item.id)}" data-view-community-post="${escapeHtml(item.id)}" tabindex="0" role="button" aria-label="查看帖子：${escapeHtml(communityPostTitle(item))}">
-    <header class="forum-thread-author"><button type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item, "forum-thread-avatar")}</button><div class="forum-thread-author-copy"><strong>${escapeHtml(item.authorName || "壳友")}${platformAdminBadge(item)}</strong><span>${formatTime(item.createdAt)} · ${circle.name}</span></div>${!isOwn ? `<button class="forum-thread-follow ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${escapeHtml(item.authorId || "")}">${item.followed ? "已关注" : "+ 关注"}</button>` : ""}<div class="community-moment-action-wrap forum-thread-more-wrap"><button class="forum-thread-more" type="button" data-community-more="${escapeHtml(item.id)}" aria-label="更多操作">•••</button></div></header>
-    <div class="forum-thread-main"><div class="forum-thread-badges">${item.isPinned ? "<b>置顶</b>" : ""}${item.isFeatured ? "<b class=\"featured\">精华</b>" : ""}${item.isOwn && item.visibility !== "public" ? `<span class="visibility">${communityVisibilityOption(item.visibility).label}</span>` : ""}${item.speciesName ? `<span>${escapeHtml(item.speciesName)}</span>` : ""}</div><h3>${escapeHtml(communityPostTitle(item))}</h3>${item.content || item.question ? `<p>${escapeHtml(String(item.content || item.question).replace(/\s+/g, " ").slice(0, 180))}</p>` : ""}${mediaItems.length ? `<div class="forum-thread-media ${mediaItems.length === 1 ? "is-single" : "is-grid"}">${communityFeedMedia(item)}</div>` : ""}</div>
+    <header class="forum-thread-author"><button type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item, "forum-thread-avatar")}</button><div class="forum-thread-author-copy"><button class="forum-thread-author-name" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}"><strong>${escapeHtml(item.authorName || "壳友")}</strong>${platformAdminBadge(item)}</button><span>${formatCommunityCommentTime(item.createdAt)} · ${circle.name}</span></div>${!isOwn ? `<button class="forum-thread-follow ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${escapeHtml(item.authorId || "")}">${item.followed ? "已关注" : "+ 关注"}</button>` : ""}<div class="community-moment-action-wrap forum-thread-more-wrap"><button class="forum-thread-more" type="button" data-community-more="${escapeHtml(item.id)}" aria-label="更多操作">•••</button></div></header>
+    <div class="forum-thread-main"><div class="forum-thread-badges">${item.isPinned ? "<b>置顶</b>" : ""}${item.isFeatured ? "<b class=\"featured\">精华</b>" : ""}${item.isOwn && item.visibility !== "public" ? `<span class="visibility">${communityVisibilityOption(item.visibility).label}</span>` : ""}${item.speciesName ? `<span>${escapeHtml(item.speciesName)}</span>` : ""}</div><h3>${escapeHtml(communityPostTitle(item))}</h3>${excerpt ? `<p>${escapeHtml(excerpt)}</p>` : ""}${mediaItems.length ? `<div class="forum-thread-media ${mediaItems.length === 1 ? "is-single" : "is-grid"}">${communityFeedMedia(item)}</div>` : ""}</div>
     <footer class="forum-thread-actions"><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${escapeHtml(item.id)}" aria-label="点赞"><span class="forum-action-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10H4V10h3Zm3 10V9l4-6c1.7.7 2 2.2 1.3 4.3L15 9h4.2c1.3 0 2 1.1 1.7 2.3l-1.6 6.5c-.3 1.3-1.2 2.2-2.6 2.2H10Z"></path></svg><span>${Number(item.likeCount || 0) || "赞"}</span></span></button><button type="button" data-open-community-comments="${escapeHtml(item.id)}" aria-label="查看回复"><span class="forum-action-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 4V5Z"></path></svg><span>${replies || "评论"}</span></span></button><button type="button" data-share-community-post="${escapeHtml(item.id)}" aria-label="分享帖子"><span class="forum-action-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 8l5-5 5 5M5 12v8h14v-8"></path></svg><span>分享</span></span></button></footer>
   </article>`;
 }
@@ -2679,7 +2726,7 @@ function pageCommunity() {
   return `
     ${communityPublishProgressMarkup()}
     ${topbar("壳友圈", false, `<button class="community-camera-button" type="button" data-community-camera-button aria-label="拍摄或从相册选择"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"></path><circle cx="12" cy="13.5" r="3.5"></circle></svg></button>`, platformServiceTopButton())}
-    <main class="content page-fresh community-page community-moments-page">
+    <main class="content page-fresh community-page community-moments-page community-refined-page">
       <input class="hidden-file" type="file" accept="image/jpeg,image/png,image/webp" multiple data-community-quick-media>
       ${communitySearchMarkup()}
       ${communityCreateHub()}
@@ -4779,8 +4826,8 @@ function pageTurtleDetail() {
             </div>
           </div>
           <div class="detail-measure-pair">
-          <label><span>当前体重(g)</span><input class="field" name="weight" type="number" min="0" step="0.1" required value="${turtleDraftValue(t, "weight")}"></label>
-          <label><span>背甲长度(cm)</span><input class="field" name="carapaceLength" type="number" min="0" step="0.1" required value="${turtleDraftValue(t, "carapaceLength")}"></label>
+          <label><span>当前体重(g)</span><input class="field" name="weight" type="number" min="0" step="0.01" inputmode="decimal" required value="${turtleDraftValue(t, "weight")}"></label>
+          <label><span>背甲长度(cm)</span><input class="field" name="carapaceLength" type="number" min="0" step="0.01" inputmode="decimal" required value="${turtleDraftValue(t, "carapaceLength")}"></label>
           </div>
           <label><span>购入价格(元)</span><input class="field" name="price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="填写购入价格" value="${escapeHtml(String(turtleDraftValue(t, "price")))}"></label>
           <label><span>治疗花费(元)</span><input class="field" name="medicalExpense" type="number" min="0" step="0.01" inputmode="decimal" placeholder="未填写则不记账" value="${escapeHtml(String(state.turtleDetailDraftId === t.id ? state.turtleDetailDraft?.medicalExpense || "" : ""))}"></label>
@@ -4831,6 +4878,7 @@ function turtleReadOnlyDetail(t, species, photo) {
     </section>
     <section class="detail-grid-card fresh-card">
       <div class="detail-grid-wide"><span>性别</span><strong>${t.gender || "-"}</strong></div>
+      ${["hatchling", "juvenile", "adult"].includes(t.stage) ? `<div class="detail-grid-wide"><span>阶段</span><strong>${({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[t.stage]}</strong></div>` : ""}
       <div><span>体重</span><strong>${t.weight || "-"}g</strong></div>
       <div><span>背甲长</span><strong>${t.carapaceLength || "-"}cm</strong></div>
       ${[["背甲宽", t.carapaceWidth], ["背高", t.shellHeight], ["腹甲长", t.plastronLength]]
@@ -5023,6 +5071,8 @@ function pageAdd() {
   const draftPoolId = turtleFormValue("poolId");
   const turtlePools = state.turtlePools || [];
   const isBatch = state.archivePurchaseMode === "batch";
+  const batchStage = turtleFormValue("batchStage") || "juvenile";
+  const isHatchlingBatch = batchStage === "hatchling";
   return `
     ${topbar("新建档案", true)}
     <main class="content page-fresh">
@@ -5063,9 +5113,9 @@ function pageAdd() {
         <section class="form-block fresh-card single-only">
           <h3>体测数据</h3>
           <div class="label">当前体重(g) <span class="required">*</span></div>
-          <input class="field" name="weight" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("weight"))}" ${isBatch ? "disabled" : "required"}>
+          <input class="field" name="weight" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(turtleFormValue("weight"))}" ${isBatch ? "disabled" : "required"}>
           <div class="label">背甲长度(cm) <span class="required">*</span></div>
-          <input class="field" name="carapaceLength" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("carapaceLength"))}" ${isBatch ? "disabled" : "required"}>
+          <input class="field" name="carapaceLength" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(turtleFormValue("carapaceLength"))}" ${isBatch ? "disabled" : "required"}>
           <details class="measure-extra">
             <summary><span>更多体测数据</span><small>背甲宽度、背高、腹甲长度</small></summary>
             <label><span>背甲宽度(cm)</span><input class="field" name="carapaceWidth" type="number" min="0" step="0.1" value="${escapeHtml(turtleFormValue("carapaceWidth"))}"></label>
@@ -5096,10 +5146,19 @@ function pageAdd() {
         ${isBatch ? `
           <section class="form-block fresh-card batch-purchase-block">
             <h3>批量信息</h3>
+            <div class="label">阶段 <span class="required">*</span></div>
+            <select class="select" name="batchStage" data-batch-stage required>
+              ${[["hatchling", "苗子"], ["juvenile", "压成"], ["adult", "种龟"]].map(([value, label]) => `<option value="${value}" ${batchStage === value ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+            ${isHatchlingBatch ? `
+            <div class="label">苗子数量 <span class="required">*</span></div>
+            <input class="field" name="batchCount" type="number" min="1" step="1" inputmode="numeric" value="${escapeHtml(turtleFormValue("batchCount"))}" required>
+            ` : `
             <div class="label">公龟数量 <span class="required">*</span></div>
-            <input class="field" name="batchMaleCount" type="number" min="0" max="50" step="1" inputmode="numeric" value="${escapeHtml(turtleFormValue("batchMaleCount", "0"))}" required>
+            <input class="field" name="batchMaleCount" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(turtleFormValue("batchMaleCount", "0"))}" required>
             <div class="label">母龟数量 <span class="required">*</span></div>
-            <input class="field" name="batchFemaleCount" type="number" min="0" max="50" step="1" inputmode="numeric" value="${escapeHtml(turtleFormValue("batchFemaleCount", "0"))}" required>
+            <input class="field" name="batchFemaleCount" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(turtleFormValue("batchFemaleCount", "0"))}" required>
+            `}
             <div class="label">收购总金额(元) <span class="required">*</span></div>
             <input class="field" name="batchTotalPrice" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(turtleFormValue("batchTotalPrice"))}" required>
             <div class="label">档案编号前缀</div>
@@ -5762,9 +5821,9 @@ function ledgerForm() {
       ${!isOther ? `<section class="form-block fresh-card">
         <h3>体测数据</h3>
         <div class="label">当前体重(g) ${isPurchase ? `<span class="required">*</span>` : ""}</div>
-        <input class="field" name="weight" type="number" min="0" step="0.1" value="${escapeHtml(ledgerFormValue("weight", turtle?.weight || ""))}" ${isPurchase ? "required" : ""}>
+        <input class="field" name="weight" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(ledgerFormValue("weight", turtle?.weight || ""))}" ${isPurchase ? "required" : ""}>
         <div class="label">背甲长度(cm) ${isPurchase ? `<span class="required">*</span>` : ""}</div>
-        <input class="field" name="carapaceLength" type="number" min="0" step="0.1" value="${escapeHtml(ledgerFormValue("carapaceLength", turtle?.carapaceLength || ""))}" ${isPurchase ? "required" : ""}>
+        <input class="field" name="carapaceLength" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(ledgerFormValue("carapaceLength", turtle?.carapaceLength || ""))}" ${isPurchase ? "required" : ""}>
         <details class="measure-extra">
           <summary><span>更多体测数据</span><small>背甲宽度、背高、腹甲长度</small></summary>
           <label><span>背甲宽度(cm)</span><input class="field" name="carapaceWidth" type="number" min="0" step="0.1" value="${escapeHtml(ledgerFormValue("carapaceWidth", turtle?.carapaceWidth || ""))}"></label>
@@ -6813,6 +6872,7 @@ function render() {
   };
   // Reset before replacing content. Resetting after a complete DOM replacement
   // makes iOS recompute fixed surfaces twice and causes the visible tab-bar hop.
+  const preservedScrollY = pendingPageScrollReset ? 0 : (window.scrollY || 0);
   if (pendingPageScrollReset) {
     pendingPageScrollReset = false;
     if (window.scrollY > 1) window.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -6827,6 +6887,7 @@ function render() {
     incomingBottomNav.replaceWith(persistentBottomNav);
     syncPersistentBottomNav(persistentBottomNav);
   }
+  if (preservedScrollY > 0) window.scrollTo({ top: preservedScrollY, left: 0, behavior: "auto" });
   if (pendingPageEnterMotion) {
     pendingPageEnterMotion = false;
     $app.classList.remove("page-enter-motion");
@@ -7401,6 +7462,7 @@ function bindEvents() {
   document.querySelectorAll("[data-archive-purchase-mode]").forEach(btn => btn.addEventListener("click", () => {
     preserveTurtleForm({ archivePurchaseMode: btn.dataset.archivePurchaseMode || "single" });
   }));
+  document.querySelector("[data-batch-stage]")?.addEventListener("change", () => preserveTurtleForm());
   document.querySelectorAll("[data-community-forum-sort]").forEach(button => button.addEventListener("click", () => {
     communityForumSort = button.dataset.communityForumSort || "hot";
     render();
@@ -7545,44 +7607,7 @@ function bindEvents() {
   document.querySelectorAll("[data-show-community-comment]").forEach(btn => btn.addEventListener("click", () => setState({ communityCommentPostId: btn.dataset.showCommunityComment, openCommunityActionId: "" }, { skipCloud: true })));
   bindCommunityCommentDeletes();
   document.querySelectorAll("[data-community-comment-form]").forEach(form => form.addEventListener("submit", submitCommunityComment));
-  const beginCommunityReply = target => {
-    communityReplyTarget = { postId: target.dataset.postId, commentId: target.dataset.replyCommunityComment, name: target.dataset.replyAuthor || "壳友" };
-    render();
-    const input = document.querySelector(".forum-reply-composer input");
-    input?.focus({ preventScroll: true });
-    input?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  };
-  document.querySelectorAll("button[data-reply-community-comment]").forEach(button => button.addEventListener("click", event => {
-    event.stopPropagation();
-    beginCommunityReply(button);
-  }));
-  document.querySelectorAll("[data-community-comment-row]").forEach(row => {
-    row.addEventListener("click", event => {
-      if (event.target.closest("button, a, input, textarea, select")) return;
-      beginCommunityReply(row);
-    });
-    row.addEventListener("keydown", event => {
-      if (!['Enter', ' '].includes(event.key) || event.target !== row) return;
-      event.preventDefault();
-      beginCommunityReply(row);
-    });
-  });
-  document.querySelector("[data-expand-community-comments]")?.addEventListener("click", event => {
-    event.stopPropagation();
-    communityCommentsExpanded = !communityCommentsExpanded;
-    render();
-  });
-  document.querySelectorAll("[data-expand-comment-replies]").forEach(button => button.addEventListener("click", event => {
-    event.stopPropagation();
-    const rootId = String(button.dataset.expandCommentReplies || "");
-    if (communityExpandedReplyRoots.has(rootId)) communityExpandedReplyRoots.delete(rootId);
-    else communityExpandedReplyRoots.add(rootId);
-    render();
-  }));
-  document.querySelectorAll("[data-like-community-comment]").forEach(button => button.addEventListener("click", event => {
-    event.stopPropagation();
-    toggleCommunityCommentLike(button.dataset.commentPostId, button.dataset.likeCommunityComment);
-  }));
+  bindCommunityCommentInteractions();
   document.querySelectorAll("[data-community-admin-action]").forEach(button => button.addEventListener("click", () => communityAdminPostAction(button.dataset.postId, button.dataset.communityAdminAction)));
   document.querySelectorAll("[data-toggle-community-follow]").forEach(btn => btn.addEventListener("click", event => {
     event.stopPropagation();
@@ -8309,6 +8334,11 @@ async function refreshMarket(force = false) {
     const chatReference = (state.marketListings || []).find(item => item.chatReference && item.id === state.selectedMarketListingId);
     const retainedReference = chatReference && !remoteListings.some(item => item.id === chatReference.id) ? [chatReference] : [];
     const mergedListings = new Map();
+    // A detail/seller refresh must not discard pages already loaded in the
+    // market feed. Keep their order and pagination until an explicit feed reset.
+    if (!isMarketFeed && state.marketFeedInitialized) {
+      (state.marketListings || []).forEach(item => mergedListings.set(item.id, item));
+    }
     [...pending, ...retainedReference, ...remoteListings, ...savedListings].forEach(item => mergedListings.set(item.id, item));
     const accountPatch = result.accountData ? normalizeAccountData(result.accountData) : {};
     marketLastLoadedAt = Date.now();
@@ -8364,6 +8394,12 @@ async function loadMoreMarketListings() {
       stage: state.marketStage || "all",
       regionCities: marketRegionCities()
     }));
+    // The saved list DOM has not received this page. Do not advance its cursor
+    // while a detail is open, or returning would skip these unseen items.
+    if (state.page !== "market") {
+      state.marketFeedLoadingMore = false;
+      return;
+    }
     const incoming = normalizeMarketListings(result.listings || []);
     const existingIds = new Set((state.marketListings || []).map(item => item.id));
     const appended = incoming.filter(item => !existingIds.has(item.id));
@@ -13876,6 +13912,13 @@ function submitTurtle(event) {
   const species = speciesByCode(form.get("speciesCode"));
   if (!species) return toast("先选择一个品种，再保存档案");
   if (state.archivePurchaseMode === "batch") return submitBatchTurtles(form, species);
+  const weight = Number(form.get("weight"));
+  const carapaceLength = Number(form.get("carapaceLength"));
+  for (const [key, value, label] of [["weight", weight, "克重"], ["carapaceLength", carapaceLength, "背甲长度"]]) {
+    if (!String(form.get(key) ?? "").trim() || !Number.isFinite(value) || value < 0 || Math.abs(value * 100 - Math.round(value * 100)) > 0.000001) {
+      return toast(`${label}需为非负数字，最多保留两位小数`);
+    }
+  }
   // Invite after any successful new archive once the account has reached the
   // fifth archive. This also covers existing users who already have 5+ turtles.
   const shouldInviteAppReview = state.turtles.length >= 4;
@@ -13887,8 +13930,8 @@ function submitTurtle(event) {
     speciesName: species.name,
     poolId: (state.turtlePools || []).some(pool => pool.id === String(form.get("poolId") || "")) ? String(form.get("poolId") || "") : "",
     gender: state.formGender,
-    weight: Number(form.get("weight")),
-    carapaceLength: Number(form.get("carapaceLength")),
+    weight,
+    carapaceLength,
     carapaceWidth: form.get("carapaceWidth"),
     shellHeight: form.get("shellHeight"),
     plastronLength: form.get("plastronLength"),
@@ -13960,14 +14003,19 @@ function submitTurtle(event) {
 }
 
 function submitBatchTurtles(form, species) {
-  const maleCount = Number.parseInt(String(form.get("batchMaleCount") || "0"), 10);
-  const femaleCount = Number.parseInt(String(form.get("batchFemaleCount") || "0"), 10);
-  if (!Number.isInteger(maleCount) || maleCount < 0 || !Number.isInteger(femaleCount) || femaleCount < 0) {
+  const stage = String(form.get("batchStage") || "juvenile");
+  if (!["hatchling", "juvenile", "adult"].includes(stage)) return toast("请选择苗子、压成或种龟阶段");
+  const isHatchling = stage === "hatchling";
+  const stageName = ({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[stage];
+  if (!isHatchling && (!String(form.get("batchMaleCount") ?? "").trim() || !String(form.get("batchFemaleCount") ?? "").trim())) return toast("请填写公龟和母龟数量，没有则填 0");
+  const maleCount = isHatchling ? 0 : Number(form.get("batchMaleCount"));
+  const femaleCount = isHatchling ? 0 : Number(form.get("batchFemaleCount"));
+  if (!Number.isSafeInteger(maleCount) || maleCount < 0 || !Number.isSafeInteger(femaleCount) || femaleCount < 0) {
     return toast("公龟和母龟数量需要填写非负整数");
   }
-  const totalCount = maleCount + femaleCount;
+  const totalCount = isHatchling ? Number(form.get("batchCount")) : maleCount + femaleCount;
+  if (!Number.isSafeInteger(totalCount)) return toast(isHatchling ? "苗子数量需要填写正整数" : "请填写有效的公龟和母龟数量");
   if (totalCount < 1) return toast("批量购入至少需要填写 1 只龟");
-  if (totalCount > 50) return toast("单次最多批量建立 50 份档案");
   if (!requireArchiveCapacity(totalCount)) return;
   const totalPriceText = String(form.get("batchTotalPrice") || "").trim();
   const totalPrice = Number(totalPriceText);
@@ -13985,7 +14033,7 @@ function submitBatchTurtles(form, species) {
   nextGrowth.setDate(nextGrowth.getDate() + 30);
   const nextGrowthAt = formatDate(nextGrowth);
   const existingSpeciesCount = state.turtles.filter(turtle => turtle.speciesCode === species.code).length;
-  const genders = [...Array(maleCount).fill("公"), ...Array(femaleCount).fill("母")];
+  const genders = isHatchling ? Array(totalCount).fill("未知") : [...Array(maleCount).fill("公"), ...Array(femaleCount).fill("母")];
   const unitPrice = totalCount ? Number((totalPrice / totalCount).toFixed(2)) : 0;
   const photo = state.formPhoto || speciesPhoto(species);
 
@@ -13995,6 +14043,7 @@ function submitBatchTurtles(form, species) {
     speciesCode: species.code,
     speciesName: species.name,
     poolId: validPoolId,
+    stage,
     gender,
     weight: 0,
     carapaceLength: 0,
@@ -14034,7 +14083,8 @@ function submitBatchTurtles(form, species) {
     turtleIds: turtles.map(turtle => turtle.id),
     batchId,
     batchPurchase: true,
-    title: `${species.name}批量购入 ${totalCount} 只（${maleCount} 公 ${femaleCount} 母）`,
+    stage,
+    title: `${species.name}批量购入 ${totalCount} 只（${stageName}${isHatchling ? "" : ` · ${maleCount} 公 ${femaleCount} 母`}）`,
     amount: totalPrice,
     recordDate: acquiredDate,
     note,
