@@ -15,15 +15,7 @@ public class TurtleVideoCachePlugin: CAPPlugin, CAPBridgedPlugin {
 
     private let byteLimit: Int64 = 500 * 1024 * 1024
     private let queue = DispatchQueue(label: "cn.turtleworld.video-cache")
-    private var downloading = Set<String>()
 
-    private lazy var wifiSession: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.allowsCellularAccess = false
-        config.requestCachePolicy = .returnCacheDataElseLoad
-        config.urlCache = URLCache.shared
-        return URLSession(configuration: config)
-    }()
 
     private var folder: URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -50,13 +42,13 @@ public class TurtleVideoCachePlugin: CAPPlugin, CAPBridgedPlugin {
             try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: local.path)
             call.resolve(["url": local.absoluteString, "cached": true]); return
         }
-        download(source: source, remote: remote, session: URLSession.shared)
+        // A cache miss returns the remote URL only. Do not download a second
+        // complete copy while WKWebView is already streaming this video.
         call.resolve(["url": source, "cached": false])
     }
 
     @objc public func prefetch(_ call: CAPPluginCall) {
-        guard let source = call.getString("url"), let remote = URL(string: source) else { call.resolve(); return }
-        if !FileManager.default.fileExists(atPath: fileURL(source).path) { download(source: source, remote: remote, session: wifiSession) }
+        // No speculative full-file downloads, including on Wi-Fi.
         call.resolve()
     }
 
@@ -71,20 +63,6 @@ public class TurtleVideoCachePlugin: CAPPlugin, CAPBridgedPlugin {
             try? FileManager.default.removeItem(at: self.folder)
             URLCache.shared.removeAllCachedResponses()
             call.resolve(["bytes": 0, "limitBytes": self.byteLimit])
-        }
-    }
-
-    private func download(source: String, remote: URL, session: URLSession) {
-        queue.async {
-            guard !self.downloading.contains(source) else { return }
-            self.downloading.insert(source)
-            session.downloadTask(with: remote) { temporary, response, _ in
-                defer { self.queue.async { self.downloading.remove(source) } }
-                guard let temporary, let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { return }
-                let destination = self.fileURL(source)
-                try? FileManager.default.removeItem(at: destination)
-                do { try FileManager.default.moveItem(at: temporary, to: destination); self.trim() } catch { }
-            }.resume()
         }
     }
 

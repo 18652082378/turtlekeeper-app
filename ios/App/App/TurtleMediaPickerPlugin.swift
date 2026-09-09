@@ -1,6 +1,7 @@
 import AVFoundation
 import AVKit
 import Capacitor
+import ImageIO
 import Photos
 import UIKit
 import UniformTypeIdentifiers
@@ -221,7 +222,7 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePicker
         options.isNetworkAccessAllowed = true
         options.deliveryMode = .highQualityFormat
         options.version = .current
-        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, dataUTI, _, info in
+        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, info in
             if let error = info?[PHImageErrorKey] as? Error {
                 completion(.failure(error))
                 return
@@ -230,10 +231,37 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePicker
                 completion(.failure(TurtleMediaPickerError.unavailableMedia))
                 return
             }
-            let contentType = dataUTI.flatMap { UTType($0) } ?? .jpeg
-            let extensionName = contentType.preferredFilenameExtension ?? "jpg"
-            let mimeType = contentType.preferredMIMEType ?? "image/jpeg"
-            self.exportImageData(data, extensionName: extensionName, mimeType: mimeType, completion: completion)
+            // Inspect the bytes instead of assuming missing metadata means JPEG.
+            guard let source = CGImageSourceCreateWithData(data as CFData, [
+                kCGImageSourceShouldCache: false
+            ] as CFDictionary), let sourceType = CGImageSourceGetType(source) else {
+                completion(.failure(TurtleMediaPickerError.unavailableMedia))
+                return
+            }
+            let contentType = UTType(sourceType as String)
+            if contentType == .jpeg || contentType == .png || contentType == .webP {
+                self.exportImageData(
+                    data,
+                    extensionName: contentType == .jpeg ? "jpg" : (contentType == .png ? "png" : "webp"),
+                    mimeType: contentType == .jpeg ? "image/jpeg" : (contentType == .png ? "image/png" : "image/webp"),
+                    completion: completion
+                )
+                return
+            }
+
+            // HEIC/HEIF (and other decodable photo formats) must become real JPEG
+            // bytes before the web upload validator sees them. Apply EXIF rotation
+            // while downsampling to bound memory use for large iPhone originals.
+            guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 3200,
+                kCGImageSourceShouldCacheImmediately: true
+            ] as CFDictionary), let jpegData = UIImage(cgImage: image).jpegData(compressionQuality: 0.9) else {
+                completion(.failure(TurtleMediaPickerError.unavailableMedia))
+                return
+            }
+            self.exportImageData(jpegData, extensionName: "jpg", mimeType: "image/jpeg", completion: completion)
         }
     }
 

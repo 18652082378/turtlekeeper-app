@@ -927,6 +927,7 @@ function setState(patch, options = {}) {
 }
 
 function cleanNavigationSnapshotDom(root) {
+  stopMarketDetailVideos(root, true);
   root?.querySelectorAll?.(".message-friend-swipe").forEach(row => {
     row.classList.remove("is-open", "is-dragging", "is-native-scrolling");
     row.scrollLeft = 0;
@@ -2155,7 +2156,7 @@ function communityFeedMedia(item) {
   const mediaButton = (media, index) => {
     const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
     if (media.type === "video") {
-      return `<div class="community-feed-media-button is-video" role="button" tabindex="0" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}"${videoPosterAttribute(media)} autoplay muted playsinline webkit-playsinline loop preload="none" crossorigin="anonymous" data-inline-video data-video-first-frame data-community-video-autoload data-community-video-autoplay></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
+      return `<div class="community-feed-media-button is-video" role="button" tabindex="0" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><div class="inline-video-shell"><img class="community-media" src="${escapeHtml(apiAssetUrl(media.thumbnailUrl || media.posterUrl || defaultPhoto))}" alt="视频封面" loading="lazy"><span class="community-video-play-mark" aria-hidden="true">▶</span>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
     }
     return `<button class="community-feed-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
   };
@@ -3170,17 +3171,10 @@ function marketCoverIsVisible(cover) {
   return rect.bottom > -100 && rect.top < window.innerHeight + 100;
 }
 
-function captureMarketVideoCover(url, isRelevant = () => true) {
-  // Only missing covers decode video, one at a time; normal covers remain images.
-  const task = marketPosterDecodeQueue.then(async () => {
-    if (!isRelevant()) return "";
-    const poster = await createVideoPoster(null, apiAssetUrl(url), isRelevant);
-    if (!poster) return "";
-    try { return await fileAsDataUrl(poster.file); }
-    finally { URL.revokeObjectURL(poster.previewUrl); }
-  }).catch(() => "");
-  marketPosterDecodeQueue = task.then(() => {});
-  return task;
+function captureMarketVideoCover() {
+  // Never fetch a remote video merely to draw a list cover. The server owns
+  // poster generation; a missing poster must not cost a video download per user.
+  return Promise.resolve("");
 }
 
 function repairMissingMarketPosters() {
@@ -3286,10 +3280,10 @@ function bindMarketImageRecovery() {
   }
 }
 
-function marketDetailVideoMarkup(media, fallbackPosterUrl, sold = false, autoPlay = false) {
-  // Use the video's own generated first-frame poster when available.  It
-  // makes the detail page immediate without substituting an unrelated image.
-  return `<div class="market-detail-photo market-detail-video-shell is-loading"><video src="${escapeHtml(media.url)}"${videoPosterAttribute(media)} controls playsinline preload="metadata"${autoPlay ? " autoplay muted" : ""} crossorigin="anonymous" data-inline-video data-video-first-frame data-market-detail-video${autoPlay ? " data-market-detail-autoplay" : ""}></video>${inlineVideoExpandButton(media, "商品视频")}<div class="market-detail-video-loading" aria-live="polite">视频加载中</div>${sold ? `<span>已售出</span>` : ""}</div>`;
+function marketDetailVideoMarkup(media, fallbackPosterUrl, sold = false) {
+  const source = apiAssetUrl(media.playbackUrl || media.url);
+  const poster = apiAssetUrl(media.posterUrl || media.thumbnailUrl || defaultPhoto);
+  return `<div class="market-detail-photo market-detail-video-shell is-idle"><video data-market-video-src="${escapeHtml(source)}" data-market-video-original="${escapeHtml(apiAssetUrl(media.url))}" poster="${escapeHtml(poster)}" playsinline preload="none" crossorigin="anonymous" data-inline-video data-video-first-frame data-market-detail-video></video><button type="button" class="market-video-play" data-market-video-play aria-label="播放商品视频"><span aria-hidden="true">▶</span><small>点击播放</small></button><div class="market-detail-video-loading" aria-live="polite">视频加载中</div>${sold ? '<span>已售出</span>' : ''}</div>`;
 }
 
 function communityMessageAspectRatio(message, mediaType) {
@@ -3508,7 +3502,9 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
   $app.classList.remove("edge-back-dragging", "page-enter-motion", "community-chat-enter-motion");
   const persistentBottomNav = $app.querySelector(":scope > .bottom-nav");
   persistentBottomNav?.remove();
+  stopMarketDetailVideos($app, true);
   $app.replaceChildren(liveDom);
+  if (state.page === "marketDetail") hydrateMarketDetailVideos();
   const bottomNav = persistentBottomNav || liveDom.__edgeBackBottomNav || bottomNavFromHtml(snapshot.bottomNavHtml);
   if (bottomNav) {
     $app.appendChild(bottomNav);
@@ -3551,6 +3547,7 @@ function navigateBack(options = {}) {
     $app.style.transition = "";
     if (!options.fromEdgeGesture) $app.style.transform = "";
     $app.classList.remove("edge-back-dragging", "page-enter-motion", "community-chat-enter-motion");
+    stopMarketDetailVideos($app, true);
     $app.innerHTML = snapshot.html;
     saveState({ skipCloud: true });
     bindEvents();
@@ -3688,7 +3685,7 @@ function marketDraftMediaMarkup() {
   const mediaItems = Array.isArray(state.marketDraftMedia) ? state.marketDraftMedia : [];
   return `${mediaItems.map((item, index) => `
     <div class="market-media-item" draggable="true" data-market-media-index="${index}">
-      ${item.type === "video" ? `<video src="${item.dataUrl || item.url}"${videoPosterAttribute(item)} muted playsinline preload="auto" crossorigin="anonymous" data-video-first-frame></video><i>▶</i>` : `<img src="${item.dataUrl || item.url}" alt="实拍图 ${index + 1}">`}
+      ${item.type === "video" ? `<video src="${item.dataUrl || item.url}"${videoPosterAttribute(item)} muted playsinline preload="none" crossorigin="anonymous" data-video-first-frame></video><i>▶</i>` : `<img src="${item.dataUrl || item.url}" alt="实拍图 ${index + 1}">`}
       <div class="market-media-order-controls" aria-label="调整媒体顺序">
         <button type="button" data-move-market-media="${index}" data-market-media-direction="-1" aria-label="向前移动第 ${index + 1} 个媒体"${index === 0 ? " disabled" : ""}>‹</button>
         <button type="button" data-move-market-media="${index}" data-market-media-direction="1" aria-label="向后移动第 ${index + 1} 个媒体"${index === mediaItems.length - 1 ? " disabled" : ""}>›</button>
@@ -4178,6 +4175,9 @@ function bindNativeVideoCache(video) {
     try {
       const result = await plugin.resolve({ url: remoteUrl });
       if (!result?.cached || !result.url || result.url === video.src) return;
+      // A cache lookup can finish after the user leaves or pauses the clip.
+      // It must not reattach a source and restart background playback.
+      if (!video.isConnected || document.hidden || video.paused || !video.getAttribute("src")) return;
       const currentTime = Number(video.currentTime || 0);
       const localUrl = typeof window.Capacitor?.convertFileSrc === "function" ? window.Capacitor.convertFileSrc(result.url) : result.url;
       if (localUrl === video.currentSrc || localUrl === video.src) {
@@ -4198,14 +4198,7 @@ function bindNativeVideoCache(video) {
 }
 
 function prefetchNextMarketVideo() {
-  if (!shouldAutoplayMarketVideo()) return;
-  const plugin = nativeVideoCachePlugin();
-  if (!plugin?.prefetch) return;
-  const videos = [...document.querySelectorAll(".market-card video")];
-  const playingIndex = videos.findIndex(video => !video.paused);
-  const candidates = playingIndex >= 0 ? videos.slice(playingIndex + 1) : videos;
-  const next = candidates.find(video => /^https?:/i.test(video.dataset.remoteVideoUrl || video.currentSrc || video.src));
-  if (next) plugin.prefetch({ url: next.dataset.remoteVideoUrl || next.currentSrc || next.src }).catch(() => {});
+  // Wi-Fi traffic is still billed by the CDN. Only download an explicitly played clip.
 }
 
 function communityPublishProgressMarkup() {
@@ -4314,7 +4307,7 @@ function myMarketListingRow(item) {
   const media = marketListingMediaItems(item)[0];
   const meta = marketRefreshMeta(item);
   const preview = media?.type === "video"
-    ? `<span class="my-market-media is-video"><video src="${media.url}" muted playsinline preload="metadata"></video><i>▶</i></span>`
+    ? `<span class="my-market-media is-video"><img src="${escapeHtml(apiAssetUrl(media.thumbnailUrl || media.posterUrl || defaultPhoto))}" alt="商品视频" loading="lazy"><i>▶</i></span>`
     : `<span class="my-market-media"><img src="${marketListingPhoto(item)}" alt="${escapeHtml(item.title || "出售乌龟")}"></span>`;
   return `
     <article class="my-market-listing fresh-card ${item.status === "inactive" ? "is-inactive" : ""}">
@@ -4449,7 +4442,7 @@ function pageMarketDetail() {
     ${topbar("商品详情", true, detailMoreAction)}
     <main class="content page-fresh market-detail-page">
       <section class="market-detail-gallery-wrap">
-      <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery><div class="market-detail-gallery-track" data-market-detail-gallery-track>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster, sold, index === 0) : `<div class="market-detail-photo"><img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button" draggable="false" decoding="async" fetchpriority="${index < 2 ? "high" : "auto"}">${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button" draggable="false" decoding="async">${sold ? `<span>已售出</span>` : ""}</div>`}</div></section>
+      <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery><div class="market-detail-gallery-track" data-market-detail-gallery-track>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster, sold, index === 0) : `<div class="market-detail-photo"><img src="${escapeHtml(apiAssetUrl(media.displayUrl || media.url))}" data-preview-original="${escapeHtml(apiAssetUrl(media.url))}" data-market-image-original="${escapeHtml(apiAssetUrl(media.url))}" loading="lazy" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button" draggable="false" decoding="async" fetchpriority="${index < 2 ? "high" : "auto"}">${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button" draggable="false" decoding="async">${sold ? `<span>已售出</span>` : ""}</div>`}</div></section>
         <span class="market-detail-edge-back-zone" aria-hidden="true"></span>
         <span class="market-detail-gallery-count" data-market-gallery-count aria-live="polite">1/${Math.max(1, primaryMediaItems.length)}</span>
         ${hasPrimaryGalleryControls ? `<button class="market-detail-gallery-arrow prev" type="button" data-market-gallery-prev aria-label="查看上一张图片" aria-controls="marketDetailGallery">‹</button><button class="market-detail-gallery-arrow next" type="button" data-market-gallery-next aria-label="查看下一张图片" aria-controls="marketDetailGallery">›</button>` : ""}
@@ -4466,7 +4459,7 @@ function pageMarketDetail() {
         <div><span>所在城市</span><strong>${escapeHtml(item.city || "未填写")}</strong></div>
         <div><span>交付方式</span><strong>${escapeHtml(item.delivery || "双方协商")}</strong></div>
       </section>
-      ${secondaryMediaItems.length ? `<section class="market-detail-secondary-media">${secondaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster) : `<div class="market-detail-secondary-photo"><img src="${media.url}" alt="${escapeHtml(item.title || "出售乌龟")} 实拍 ${index + 2}" data-preview-market-image tabindex="0" role="button"></div>`).join("")}</section>` : ""}
+      ${secondaryMediaItems.length ? `<section class="market-detail-secondary-media">${secondaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster) : `<div class="market-detail-secondary-photo"><img src="${escapeHtml(apiAssetUrl(media.displayUrl || media.url))}" data-preview-original="${escapeHtml(apiAssetUrl(media.url))}" data-market-image-original="${escapeHtml(apiAssetUrl(media.url))}" loading="lazy" alt="${escapeHtml(item.title || "出售乌龟")} 实拍 ${index + 2}" data-preview-market-image tabindex="0" role="button"></div>`).join("")}</section>` : ""}
       ${item.description ? `<section class="market-detail-description"><h3>卖家说明</h3><p>${escapeHtml(item.description)}</p></section>` : ""}
       ${detailVideosAfterDescription.length ? `<section class="market-detail-secondary-media market-detail-video-media">${detailVideosAfterDescription.map(media => marketDetailVideoMarkup(media, detailVideoFallbackPoster)).join("")}</section>` : ""}
       <section class="market-seller-card">
@@ -7009,6 +7002,7 @@ function render() {
   // safe-area geometry and compositor layer therefore remain stable while only
   // the middle content is replaced.
   const persistentBottomNav = $app.querySelector(".bottom-nav");
+  stopMarketDetailVideos($app, true);
   $app.innerHTML = (pages[state.page] || pageHome)() + policyConsentGate() + systemAnnouncementOverlay() + appReviewInviteOverlay();
   const incomingBottomNav = $app.querySelector(".bottom-nav");
   if (persistentBottomNav && incomingBottomNav) {
@@ -7382,12 +7376,12 @@ function bindEvents() {
     });
   });
   const marketPreviewImages = Array.from(document.querySelectorAll("[data-preview-market-image]"))
-    .map(img => ({ src: img.currentSrc || img.src, alt: img.alt || "商品实拍图" }))
+    .map(img => ({ src: img.dataset.previewOriginal || img.currentSrc || img.src, alt: img.alt || "商品实拍图" }))
     .filter(item => item.src);
   document.querySelectorAll("[data-preview-market-image]").forEach((img, index) => {
     const openPreview = () => {
       if (Date.now() < marketGalleryPreviewSuppressUntil) return;
-      openImagePreview(img.currentSrc || img.src, img.alt || "商品实拍图", {
+      openImagePreview(img.dataset.previewOriginal || img.currentSrc || img.src, img.alt || "商品实拍图", {
         gallery: marketPreviewImages,
         index
       });
@@ -8507,7 +8501,7 @@ async function refreshMarket(force = false) {
       ? incomingMarketShareListingId
       : "";
     if (sharedListingId) {
-      const result = await apiPost("/api/market/detail", marketAuthPayload({ listingId: sharedListingId }));
+      const result = await apiPost("/api/market/detail", marketAuthPayload({ listingId: sharedListingId, mediaVariantsVersion: 1 }));
       if (state.loggedInPhone !== requestPhone) return;
       const sharedListing = normalizeMarketListings([result.listing])[0];
       if (!sharedListing) throw new Error("商品已下架或不存在");
@@ -8521,8 +8515,9 @@ async function refreshMarket(force = false) {
       offset: 0,
       limit: 8,
       thumbnails: true,
+      mediaVariantsVersion: 1,
       ...marketFeedRequestOptions()
-    } : { all: true, savedListingIds }));
+    } : { all: true, savedListingIds, mediaVariantsVersion: 1, deliveryListingId: state.selectedMarketListingId }));
     if (state.loggedInPhone !== requestPhone || (isMarketFeed && (requestKey !== marketFeedRequestKey() || state.page !== "market"))) return;
     const pending = (state.marketListings || []).filter(item => item.pendingLocal);
     const remoteListings = normalizeMarketListings(result.listings || []);
@@ -8601,6 +8596,7 @@ async function loadMoreMarketListings() {
   try {
     const result = await apiPost("/api/market/list", marketAuthPayload({
       thumbnails: true,
+      mediaVariantsVersion: 1,
       rankingSession: state.marketFeedSessionId || "",
       offset: Math.max(0, Number(state.marketFeedNextOffset || 0)),
       limit: 8,
@@ -11008,138 +11004,66 @@ function hydrateVideoFirstFrames() {
 }
 
 function hydrateCommunityPostVideos() {
+  // Feed cards are poster images. Playback is started only by their click handler.
   communityVideoLoadObserver?.disconnect();
   communityVideoLoadObserver = null;
-  const videos = [...document.querySelectorAll("video[data-community-video-autoload]")];
-  if (!videos.length) return;
-
-  const loadVideo = video => {
-    if (!video || video.dataset.communityVideoLoaded === "true") return;
-    video.dataset.communityVideoLoaded = "true";
-    video.muted = true;
-    video.defaultMuted = true;
-    video.playsInline = true;
-    video.setAttribute("autoplay", "");
-    video.setAttribute("webkit-playsinline", "");
-    video.autoplay = true;
-    video.loop = true;
-    // Prepare only the selected card.  The other videos stay at `none`, which
-    // is how Moments avoids making several videos compete for the connection.
-    video.preload = "metadata";
-    if (video.readyState < HTMLMediaElement.HAVE_METADATA) video.load();
-  };
-
-  const shell = video => video.closest(".community-feed-media-button");
-  const stopVideo = video => {
-    video.pause();
-    shell(video)?.classList.remove("is-playing");
-  };
-  const startVideo = video => {
-    if (!video || video.dataset.communityVideoAutoplay !== "true") return;
-    loadVideo(video);
-    video.muted = true;
-    video.defaultMuted = true;
-    video.playsInline = true;
-    video.setAttribute("autoplay", "");
-    video.setAttribute("webkit-playsinline", "");
-    video.autoplay = true;
-    video.loop = true;
-    const play = () => {
-      const playback = video.play();
-      if (playback?.then) {
-        playback.then(() => shell(video)?.classList.add("is-playing"))
-          .catch(() => shell(video)?.classList.remove("is-playing"));
-      }
-    };
-    // For older posts without a stored poster, let the first-frame helper
-    // capture the decoded frame before playback begins.  The user sees that
-    // frame as the cover instead of a black native-player loading surface.
-    if (!video.getAttribute("poster") && video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-      video.addEventListener("loadeddata", play, { once: true });
-      return;
-    }
-    play();
-  };
-
-  const selectCenteredVideo = () => {
-    const visible = videos.filter(video => video.dataset.communityVideoVisible === "true");
-    if (!visible.length) {
-      videos.forEach(stopVideo);
-      return;
-    }
-    const viewportCenter = window.innerHeight / 2;
-    const selected = visible.reduce((best, video) => {
-      const rect = video.getBoundingClientRect();
-      const distance = Math.abs((rect.top + rect.height / 2) - viewportCenter);
-      if (!best || distance < best.distance) return { video, distance };
-      return best;
-    }, null)?.video;
-    videos.forEach(video => {
-      if (video === selected) startVideo(video);
-      else stopVideo(video);
-    });
-  };
-
-  videos.forEach(video => {
-    video.muted = true;
-    video.defaultMuted = true;
-    video.playsInline = true;
-    video.addEventListener("playing", () => shell(video)?.classList.add("is-playing"));
-    video.addEventListener("pause", () => shell(video)?.classList.remove("is-playing"));
-    // A tap mirrors Moments: pause the currently playing card, or resume the
-    // touched one while immediately pausing every other feed video.
-    video.addEventListener("click", () => {
-      if (video.paused) {
-        videos.forEach(other => { if (other !== video) stopVideo(other); });
-        startVideo(video);
-      } else {
-        stopVideo(video);
-      }
-    });
-  });
-
-  if (!("IntersectionObserver" in window)) {
-    return;
-  }
-
-  communityVideoLoadObserver = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      entry.target.dataset.communityVideoVisible = entry.isIntersecting ? "true" : "false";
-    });
-    selectCenteredVideo();
-  }, { rootMargin: "-18% 0px -18%", threshold: [0, 0.25, 0.5, 0.75, 1] });
-  videos.forEach(video => communityVideoLoadObserver.observe(video));
 }
 
+function releaseMarketDetailVideo(video) {
+  if (!video?.getAttribute?.("src")) return;
+  video.pause();
+  video.controls = false;
+  video.removeAttribute("src");
+  video.preload = "none";
+  video.load();
+  const shell = video.closest(".market-detail-video-shell");
+  shell?.classList.remove("is-loading", "is-ready", "has-error");
+  shell?.classList.add("is-idle");
+}
+
+function stopMarketDetailVideos(root = $app, disconnect = false) {
+  root?.querySelectorAll?.("video[data-market-video-src]").forEach(video => {
+    releaseMarketDetailVideo(video);
+    if (disconnect) { video.__trafficObserver?.disconnect(); video.__trafficObserver = null; }
+  });
+}
+
+let marketVideoVisibilityBound = false;
 function hydrateMarketDetailVideos() {
+  if (!marketVideoVisibilityBound) {
+    document.addEventListener("visibilitychange", () => { if (document.hidden) stopMarketDetailVideos(); });
+    marketVideoVisibilityBound = true;
+  }
   document.querySelectorAll("video[data-market-detail-video]").forEach(video => {
     const shell = video.closest(".market-detail-video-shell");
-    if (!shell || video.dataset.detailVideoHydrated === "true") return;
-    video.dataset.detailVideoHydrated = "true";
-    const ready = () => {
-      shell.classList.remove("is-loading");
-      shell.classList.add("is-ready");
-      if (!video.hasAttribute("data-market-detail-autoplay")) return;
-      // iOS only permits automatic media playback when it is muted and inline.
-      // Set both properties as well as attributes before explicitly starting it.
-      video.muted = true;
-      video.defaultMuted = true;
-      video.playsInline = true;
-      video.autoplay = true;
-      const playback = video.play();
-      if (playback?.catch) playback.catch(() => shell.classList.add("autoplay-blocked"));
+    if (!shell || video.__trafficObserver) return;
+    const button = shell.querySelector("[data-market-video-play]");
+    const ready = () => { shell.classList.remove("is-loading", "is-idle"); shell.classList.add("is-ready"); };
+    const failed = () => {
+      releaseMarketDetailVideo(video);
+      if (video.dataset.marketVideoOriginal) video.dataset.marketVideoSrc = video.dataset.marketVideoOriginal;
+      shell.classList.add("has-error");
+      if (button?.querySelector("small")) button.querySelector("small").textContent = "点击重试";
     };
-    const failed = () => shell.classList.add("has-error");
-    video.addEventListener("loadeddata", ready, { once: true });
-    video.addEventListener("canplay", ready, { once: true });
-    video.addEventListener("error", failed, { once: true });
-    // Keep secondary videos lightweight until the user plays them. Only the
-    // first visible detail video may preload enough data to autoplay.
-    const shouldAutoplay = video.hasAttribute("data-market-detail-autoplay");
-    video.preload = shouldAutoplay ? "auto" : "metadata";
-    const requiredState = shouldAutoplay ? HTMLMediaElement.HAVE_CURRENT_DATA : HTMLMediaElement.HAVE_METADATA;
-    if (video.readyState < requiredState) video.load();
-    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) ready();
+    button.onclick = () => {
+      stopMarketDetailVideos();
+      shell.classList.remove("is-idle", "is-ready", "has-error");
+      shell.classList.add("is-loading");
+      video.controls = true;
+      video.src = video.dataset.marketVideoSrc;
+      video.preload = "none";
+      video.play()?.catch(failed);
+    };
+    video.onloadeddata = ready;
+    video.onplaying = ready;
+    video.onerror = failed;
+    video.onended = () => releaseMarketDetailVideo(video);
+    if (typeof IntersectionObserver === "function") {
+      video.__trafficObserver = new IntersectionObserver(entries => {
+        if (entries.some(entry => !entry.isIntersecting)) releaseMarketDetailVideo(video);
+      }, { threshold: 0 });
+      video.__trafficObserver.observe(video);
+    }
   });
 }
 

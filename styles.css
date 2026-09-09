@@ -19451,3 +19451,21 @@ html .forum-publish-nav.community-compose-nav { background: var(--topbar-bg) !im
   .community-activity-list .message-notification-avatar, .community-activity-list .message-notification-avatar > .community-avatar { width: 42px; height: 42px; }
   .community-activity-list .message-notification-thumbnail { width: 44px; height: 54px; }
 }
+
+/* A market clip has no network source until the user presses play. */
+.market-detail-video-shell .market-video-play {
+  position: absolute; inset: 0; z-index: 4; width: 100%; height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  border: 0; border-radius: 0; color: #fff !important; background: transparent !important;
+}
+.market-video-play > span { display: grid; place-items: center; width: 52px; height: 52px; padding-left: 4px; border-radius: 50%; font-size: 22px; color: #fff !important; background: rgba(0,0,0,.55) !important; }
+.market-video-play > small { padding: 5px 12px; border-radius: 20px; color: #fff !important; background: rgba(0,0,0,.55) !important; }
+.market-detail-video-shell:not(.is-idle) .market-video-play { display: none; }
+.market-detail-video-shell:not(.is-loading) .market-detail-video-loading { display: none; }
+.community-feed-media-button .inline-video-shell { position: relative; }
+.community-feed-media-button .community-video-play-mark {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 42px; height: 42px; padding-left: 3px; display: grid; place-items: center;
+  border-radius: 50%; font-size: 17px; color: #fff !important; background: rgba(0,0,0,.55) !important;
+  pointer-events: none;
+}

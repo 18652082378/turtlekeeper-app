@@ -2061,6 +2061,7 @@ function parseMediaDataUrl(value) {
 
 const generateVideoPoster = require('./video-poster').createPosterService({ uploadRoot: UPLOAD_DIR, publish: publishUpload });
 const generateMarketThumbnail = require('./video-poster').createPosterService({ uploadRoot: UPLOAD_DIR, publish: publishUpload, thumbnail: true });
+const mediaVariants = require('./media-variants').createMediaVariantService({ uploadRoot: UPLOAD_DIR, publish: publishUpload });
 
 async function handleUploadMedia(req, res) {
   const requestType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
@@ -2081,6 +2082,7 @@ async function handleUploadMedia(req, res) {
   fs.writeFileSync(target, media.buffer);
   const url = await publishUpload(target, year, month, filename, media.mime);
   const posterUrl = media.mediaType === "video" ? await generateVideoPoster(url) : "";
+  void mediaVariants.ensure(url);
   return sendJson(res, 200, { ok: true, url, mediaType: media.mediaType, posterUrl });
 }
 
@@ -2152,6 +2154,7 @@ function handleUploadMediaStream(req, res, mime) {
       try {
         const url = await publishUpload(target, year, month, filename, mime);
         const posterUrl = media.mediaType === "video" ? await generateVideoPoster(url) : "";
+        void mediaVariants.ensure(url);
         if (!res.headersSent) sendJson(res, 200, { ok: true, url, mediaType: media.mediaType, posterUrl });
       } catch (error) {
         if (!res.headersSent) sendJson(res, 500, { ok: false, message: "视频上传失败，请重试" });
@@ -4034,6 +4037,11 @@ async function handleMarketList(req, res) {
       .filter(item => requestedSavedIds.includes(String(item.id || "")) && savedIds.has(String(item.id || "")))
       .map(item => marketListingView(db, item, user))
     : [];
+  // The open detail is prioritised so older pages in a long feed also get derivatives.
+  if (body.mediaVariantsVersion === 1) {
+    const deliveryListings = [...listings, ...savedListings].sort((a,b) => Number(b.id === body.deliveryListingId) - Number(a.id === body.deliveryListingId));
+    deliveryListings.forEach((listing,index) => attachMarketDeliveryMedia(listing, index < 40));
+  }
   // Only process the returned page, never the full catalogue. Two decoders max.
   // Originals remain available for product details and failed thumbnail builds.
   if (body.thumbnails === true) {
@@ -4043,7 +4051,7 @@ async function handleMarketList(req, res) {
         const listing = jobs.shift();
         const media = listing.mediaItems?.[0];
         const source = media?.type === "video" ? media.posterUrl : media?.url || listing.photoUrl;
-        if (!source) continue;
+        if (!source || media?.thumbnailUrl) continue;
         const thumbnailUrl = await generateMarketThumbnail(source);
         if (thumbnailUrl && media) media.thumbnailUrl = thumbnailUrl;
       }
@@ -4071,6 +4079,17 @@ async function handleMarketList(req, res) {
   });
 }
 
+function attachMarketDeliveryMedia(listing, queue = true) {
+  const mediaItems = listing.mediaItems?.length ? listing.mediaItems : (listing.photoUrl ? [{ url: listing.photoUrl, type: "image" }] : []);
+  for (const media of mediaItems) {
+    const variants = mediaVariants.get(media.url);
+    if (variants) Object.assign(media, variants);
+    else if (queue) void mediaVariants.ensure(media.url);
+  }
+  listing.mediaItems = mediaItems;
+  return listing;
+}
+
 async function handleMarketPublicDetail(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
@@ -4083,7 +4102,9 @@ async function handleMarketPublicDetail(req, res) {
   if (viewer && seller && usersBlockEachOther(viewer, seller)) {
     return sendJson(res, 403, { ok: false, message: "该商品当前不可查看" });
   }
-  return sendJson(res, 200, { ok: true, listing: marketListingView(db, listing, viewer) });
+  const result = marketListingView(db, listing, viewer);
+  if (body.mediaVariantsVersion === 1) attachMarketDeliveryMedia(result);
+  return sendJson(res, 200, { ok: true, listing: result });
 }
 
 async function handleMarketCreate(req, res) {

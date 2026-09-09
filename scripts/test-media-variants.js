@@ -1,0 +1,30 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto');
+const {execFileSync}=require('node:child_process');const {createMediaVariantService}=require('../server/media-variants');
+const bin=process.env.FFMPEG_PATH||'ffmpeg',root=fs.mkdtempSync(path.join(os.tmpdir(),'media-delivery-')),folder=path.join(root,'2026','09');fs.mkdirSync(folder,{recursive:true});
+const run=args=>execFileSync(bin,['-nostdin','-loglevel','error','-y',...args],{windowsHide:true});
+const hash=f=>crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+(async()=>{try{
+ const photo=path.join(folder,'photo.jpg'),video=path.join(folder,'video.mp4');
+ run(['-f','lavfi','-i','testsrc2=size=2400x1800','-frames:v','1',photo]);
+ run(['-f','lavfi','-i','testsrc2=size=1920x1080:rate=60:duration=2','-c:v','libx264','-preset','ultrafast','-crf','12',video]);
+ const originalHash=hash(video),originalPhotoHash=hash(photo);let publishes=0;
+ const options={uploadRoot:root,binary:bin,publish:async(file,y,m,name)=>{publishes++;return `/uploads/${y}/${m}/${name}`}};
+ const svc=createMediaVariantService(options);
+ const [a,b]=await Promise.all([svc.ensure('/uploads/2026/09/video.mp4'),svc.ensure('/uploads/2026/09/video.mp4')]);
+ assert.deepEqual(a,b);assert.equal(publishes,2);assert.ok(a.playbackUrl&&a.posterUrl);
+ const local=url=>path.join(root,url.slice('/uploads/'.length));
+ const size=fs.statSync(local(a.playbackUrl)).size;assert.ok(size<fs.statSync(video).size);
+ assert.ok(size<650000,'2 seconds stays within the intended bitrate envelope');
+ assert.equal(hash(video),originalHash);
+ const pic=await svc.ensure('/uploads/2026/09/photo.jpg');assert.ok(pic.thumbnailUrl&&pic.displayUrl);assert.equal(hash(photo),originalPhotoHash);
+ assert.ok(fs.statSync(local(pic.thumbnailUrl)).size<fs.statSync(local(pic.displayUrl)).size);
+ const restarted=createMediaVariantService(options);assert.deepEqual(restarted.get('/uploads/2026/09/video.mp4'),a);await restarted.ensure('/uploads/2026/09/video.mp4');assert.equal(publishes,4);
+ assert.equal(await svc.ensure('/uploads/2026/09/missing.mp4'),null);assert.equal(await svc.ensure('/uploads/%2e%2e/secret.mp4'),null);
+ assert.equal(await svc.ensure('https://external.invalid/not-local.mp4'),null);
+ assert.ok(!fs.readdirSync(folder).some(x=>x.includes('.tmp')));
+ const data=fs.readFileSync(local(a.playbackUrl));assert.ok(data.indexOf(Buffer.from('moov'))<data.indexOf(Buffer.from('mdat')),'MP4 metadata precedes media data');
+ // Smaller originals are retained instead of increasing their size.
+ const tiny=path.join(folder,'tiny.mp4');run(['-f','lavfi','-i','color=c=green:s=160x120:d=0.2','-c:v','libx264',tiny]);const t=await svc.ensure('/uploads/2026/09/tiny.mp4');if(t.playbackUrl)assert.ok(fs.statSync(local(t.playbackUrl)).size<fs.statSync(tiny).size);
+ console.log('Media variants passed: serial dedup, real encoding, bounded size, faststart, restart reuse, untouched originals, thumbnails and safe paths.');
+ console.log('Video bytes:',fs.statSync(video).size,'->',size);
+}finally{fs.rmSync(root,{recursive:true,force:true});}})().catch(e=>{console.error(e);process.exitCode=1});

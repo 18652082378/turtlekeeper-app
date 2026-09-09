@@ -33,6 +33,7 @@ async function main() {
           '<input value="'+state.marketSearch+'">'+state.marketListings.map(x=>'<div class="card" data-id="'+x.id+'">'+x.id+'</div>').join('');
         bindEvents();
       }
+      ${extract('function releaseMarketDetailVideo(', 'function syncCommunityPublishButton(')}
       ${extract('function setState(', 'function requireLogin(')}
       ${extract('function backNavigationState(', 'function pageFollowing(')}
       ${extract('function buildEdgeBackPreviewHtml(', 'function setupEdgeBackAndConversationSwipe(')}

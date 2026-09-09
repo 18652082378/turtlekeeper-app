@@ -104,6 +104,7 @@ async function main() {
         PORT: String(port),
         HOST: "127.0.0.1",
         TURTLE_RUNTIME_DIR: runtime,
+        FFMPEG_PATH: path.join(runtime, "disabled-ffmpeg"), // Encoding is covered by test-media-variants.js.
         SMS_PROVIDER: "mock",
         SMS_MOCK: "true",
         ADMIN_PHONE: "13900000001"
@@ -345,6 +346,21 @@ async function main() {
     const marketForBuyer = await request("/api/market/list", { ...auth(buyer), thumbnails: true });
     assert.equal(marketForBuyer.json.total, 1);
     assert.equal(marketForBuyer.json.rankingSession, undefined, "legacy clients retain their original list protocol");
+    // Seed a completed immutable derivative, then verify protocol opt-in without changing originals.
+    const originalMediaPath = new URL(uploadedImage.json.url, base).pathname;
+    const originalMediaFile = path.join(runtime, originalMediaPath);
+    const mediaStat = await fs.stat(originalMediaFile);
+    const derivativeHash = crypto.createHash("sha256").update(`delivery-v1:${originalMediaPath}:${mediaStat.size}:${mediaStat.mtimeMs}`).digest("hex").slice(0, 24);
+    const variants = { thumbnailUrl: "/uploads/2026/09/ready-thumb.jpg", displayUrl: "/uploads/2026/09/ready-detail.jpg" };
+    await fs.writeFile(path.join(path.dirname(originalMediaFile), `delivery-${derivativeHash}.json`), JSON.stringify({ hash: derivativeHash, variants }));
+    const optimizedFeed = await request("/api/market/list", { ...auth(buyer), mediaVariantsVersion: 1 });
+    assert.equal(new URL(optimizedFeed.json.listings[0].mediaItems[0].displayUrl, base).pathname, variants.displayUrl);
+    assert.equal(optimizedFeed.json.listings[0].mediaItems[0].url, uploadedImage.json.url, "original remains accessible for zoom and old clients");
+    const legacyFeed = await request("/api/market/list", auth(buyer));
+    assert.equal(legacyFeed.json.listings[0].mediaItems[0].displayUrl, undefined);
+    const optimizedDetail = await request("/api/market/detail", { ...auth(buyer), listingId, mediaVariantsVersion: 1 });
+    assert.equal(new URL(optimizedDetail.json.listing.mediaItems[0].displayUrl, base).pathname, variants.displayUrl);
+
     const cheap = await request("/api/market/create", {
       ...auth(seller), submissionId: "ranking-cheaper", title: "另一只果核蛋龟", speciesCode: "GHG",
       stage: "juvenile", gender: "未知", price: 50, city: "南京市", locationSource: "device",
