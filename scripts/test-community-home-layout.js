@@ -19,7 +19,8 @@ async function main() {
     const photo = 'data:image/jpeg;base64,' + fs.readFileSync(path.join(root, 'assets/species/ABQ.jpg')).toString('base64');
     await page.addScriptTag({ content: `
       var state={page:'community', turtles:[], communityFollowedCircleIds:['general']};
-      var communityForumSort='hot', communitySelectedCircleId='all', communitySearchQuery='',communitySearchResults=[];
+      ${source.match(/let communityForumSort = .*;/)[0]}
+      var communitySelectedCircleId='all', communitySearchQuery='',communitySearchResults=[];
       var communityDraftTopic='',communityDraftTurtleId='',communityDraftQuestion='',communityDraftTitle='',communityDraftCircleId='',communityDraftVisibility='',communityVisibilitySheetOpen=false,communityDraftText='';
       var CONFIGURED_SMS_BACKEND=false, canCompose=true;
       function canUseCommunity(){return canCompose} function setState(patch){Object.assign(state,patch)}
@@ -34,11 +35,16 @@ async function main() {
       ${extract('const COMMUNITY_TOPICS =', 'function communityShareUrl(')}
       ${extract('function communitySearchSuggestionsMarkup(', 'function bindCommunitySearchResults(')}
       ${extract('function pageCommunity()', 'function communityFeedSignature(')}
+      ${extract('function communityPostRenderSignature(', 'function bindPatchedCommunityFeed(')}
+      ${extract('function patchVisibleCommunityFeed(', 'function pageCommunityAdd(')}
+      var $app=document.querySelector('#app');
+      function bindPatchedCommunityFeed(){} function hydrateVideoFirstFrames(){} function hydrateCommunityPostVideos(){}
       var fixtures=[
         {id:'one',authorId:'u1',authorName:'小满的养龟日记',title:'阳光刚好，出来晒晒背',content:'吃饱后最喜欢的事，就是安静地趴在晒台上。你家的小家伙也这么爱晒太阳吗？',circleId:'general',speciesName:'安布闭壳龟',createdAt:new Date(Date.now()-3600000).toISOString(),likeCount:18,comments:[{},{}],mediaItems:[{url:${JSON.stringify(photo)},type:'image'}]},
         {id:'two',authorId:'u2',authorName:'昵称很长很长的养龟爱好者',title:'分享一下新布置的龟池',content:'终于布置好了，欢迎大家给点建议。',circleId:'habitat',isOwn:true,visibility:'public',createdAt:new Date().toISOString(),comments:[],mediaItems:Array.from({length:5},()=>({url:${JSON.stringify(photo)},type:'image'}))},
         {id:'three',authorId:'u3',authorName:'壳友',content:'今天也要好好养龟。',circleId:'general',isFeatured:true,createdAt:new Date().toISOString(),comments:[]}
       ];
+      fixtures[0].isPinned=true;
       state.communityPosts=fixtures;
       function render(){
         document.querySelector('#app').innerHTML=pageCommunity();
@@ -47,6 +53,17 @@ async function main() {
       }
       state.themeColor='dark';applyTheme();render();
     ` });
+    assert.equal(await page.locator('[data-community-forum-sort]').first().getAttribute('data-community-forum-sort'),'latest');
+    assert.equal(await page.locator('[data-community-forum-sort="latest"]').getAttribute('aria-pressed'),'true');
+    assert.equal(await page.locator('[data-community-feed-card]').last().getAttribute('data-community-feed-card'),'one','older pinned post follows new posts');
+    const patched = await page.evaluate(() => {
+      const oldCard=document.querySelector('[data-community-feed-card="one"]');
+      const fresh={...fixtures[0],id:'newest',isPinned:false,createdAt:new Date(Date.now()+1000).toISOString()};
+      patchVisibleCommunityFeed([...fixtures,fresh],fixtures);
+      const result={first:document.querySelector('[data-community-feed-card]').dataset.communityFeedCard,retained:oldCard===document.querySelector('[data-community-feed-card="one"]')};
+      render(); return result;
+    });
+    assert.deepEqual(patched,{first:'newest',retained:true},'new publication moves to top without rebuilding older cards');
     for (const topic of ['daily', 'growth', 'identify', 'question']) {
       await page.locator(`[data-community-compose="${topic}"]`).first().click();
       assert.deepEqual(await page.evaluate(() => [state.page,communityDraftTopic]), ['communityAdd',topic]);

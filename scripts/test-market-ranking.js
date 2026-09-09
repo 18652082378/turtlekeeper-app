@@ -1,0 +1,43 @@
+const assert = require('node:assert/strict');
+const { rankMarketListings: rank, createMarketRankPager } = require('../server/market-ranking');
+const now = Date.parse('2026-09-09T08:00:00Z'), day = 86400000;
+const listing = (id, patch = {}) => ({ id, status:'active', sellerId:id, speciesCode:'GHG', speciesName:'果核蛋龟', title:'果核蛋龟', description:'健康活泼，正常开食，欢迎交流饲养情况。', stage:'juvenile', price:100, city:'南京市', delivery:'可快递', createdAt:new Date(now-day).toISOString(), refreshedAt:new Date(now-day).toISOString(), mediaItems:[{url:'/uploads/test.jpg'}], ...patch });
+const ids = items => items.map(x=>x.id);
+
+const exact = listing('exact', {wantCount:0,createdAt:new Date(now-5*day).toISOString()});
+const noisy = listing('noisy', {title:'龟池设备',speciesCode:'OTHER',speciesName:'其他',description:'适合果核蛋龟使用',wantCount:999999,viewCount:999999,createdAt:new Date(now).toISOString()});
+assert.deepEqual(ids(rank([noisy,exact],{keyword:'果核蛋龟'},{},now)),['exact','noisy'],'relevance must outrank popularity');
+assert.equal(rank([listing('none')],{keyword:'不存在'},{},now).length,0);
+assert.equal(rank([listing('words')],{keyword:'果核 南京'},{},now).length,1);
+assert.equal(rank([listing('sold',{status:'sold'}),listing('off',{status:'inactive'})],{},{},now).length,0);
+assert.equal(rank([listing('old',{createdAt:new Date(now-10*day).toISOString(),refreshedAt:new Date(now).toISOString()})],{freshOnly:true},{},now).length,0,'refresh must not disguise old publication as new');
+const choice=[listing('a',{speciesCode:'A',speciesName:'甲'}),listing('b',{speciesCode:'B',speciesName:'乙'})];
+assert.equal(rank(choice,{}, {marketFavoriteIds:['b']},now)[0].id,'b','existing favorites influence comprehensive only');
+assert.equal(rank(choice,{sort:'latest'}, {marketFavoriteIds:['b']},now)[0].id,'a','explicit chronological mode ignores interests');
+const many=Array.from({length:35},(_,i)=>listing(String(i).padStart(2,'0'),{price:100-i,wantCount:i,sellerId:i<20?'bulk':String(i),speciesCode:i<20?'A':'B'}));
+assert.equal(rank(many,{priceOrder:'asc'},{},now)[0].id,'34','price sorting covers entire catalogue');
+assert.equal(rank(many,{sort:'popular'},{},now)[0].id,'34');
+const refreshed=listing('refresh',{createdAt:new Date(now-5*day).toISOString(),refreshedAt:new Date(now).toISOString()});
+assert.equal(rank([refreshed,listing('new')],{sort:'latest'},{},now)[0].id,'new');
+const mixed=rank([listing('s1',{sellerId:'bulk'}),listing('s2',{sellerId:'bulk'}),listing('s3',{sellerId:'bulk'}),listing('other')],{},{},now);
+assert.notEqual(mixed[0].sellerId,mixed[1].sellerId,'avoid consecutive same seller among comparable candidates');
+assert.deepEqual(ids(rank(many,{},{},now)),ids(rank(many,{},{},now)),'deterministic ordering');
+assert.equal(rank(many,{delivery:'仅自提'},{},now).length,0);
+assert.equal(rank(many,{stage:'adult'},{},now).length,0);
+assert.equal(rank(many,{regionCities:['上海市']},{},now).length,0);
+
+let clock=now;
+const pager=createMarketRankPager({now:()=>clock,ttl:60000,maxSessions:3});
+const request={rankingVersion:1,sort:'latest',limit:8};
+const first=pager({listings:many,body:request,owner:'buyer'});
+const token=first.rankingSession;
+const updated=[listing('newest',{createdAt:new Date(now+1000).toISOString()}),...many.filter(x=>x.id!=='09').map(x=>({...x,wantCount:999}))];
+const seen=[...first.listings];let offset=first.nextOffset;
+while(offset<first.total){const page=pager({listings:updated,body:{...request,offset,rankingSession:token},owner:'buyer'});seen.push(...page.listings);assert.ok(page.nextOffset>offset);offset=page.nextOffset;}
+assert.equal(new Set(ids(seen)).size,34);
+assert.deepEqual(ids(seen),ids(rank(many,{sort:'latest'},{},now)).filter(id=>id!=='09'),'pagination survives insertion, deletion, and metric changes');
+assert.ok(pager({listings:many,body:{...request,offset:8,rankingSession:token},owner:'other'}).rankingReset,'session bound to account');
+assert.ok(pager({listings:many,body:{...request,sort:'popular',offset:8,rankingSession:token},owner:'buyer'}).rankingReset,'session bound to filters');
+clock+=60001;
+assert.ok(pager({listings:many,body:{...request,offset:8,rankingSession:token},owner:'buyer'}).rankingReset,'expiry signals clean restart');
+console.log('Market ranking passed: relevance, interests, diversity, explicit modes, filters, bounded engagement, stable/authorized pagination.');

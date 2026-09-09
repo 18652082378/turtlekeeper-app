@@ -223,6 +223,18 @@ async function main() {
     }, { status: 400 });
     await request("/api/community/like", { ...auth(buyer), postId });
     await request("/api/community/comment", { ...auth(buyer), postId, content: "Regression comment" });
+    const activityInbox = await request("/api/community/unread", auth(seller));
+    assert.equal(activityInbox.json.notificationSummary.interactions.unread, 2, "like and comment share one unread badge");
+    const activityPage = await request("/api/community/notifications", { ...auth(seller), group: "interactions", limit: 1 });
+    assert.equal(activityPage.json.notifications.length, 1);
+    assert.equal(activityPage.json.hasMore, true);
+    const displayedId = activityPage.json.notifications[0].id;
+    await request("/api/community/notifications", {}, { status: 401 });
+    await request("/api/community/unread", { ...auth(buyer), readNotificationIds: [displayedId] });
+    const unchangedActivity = await request("/api/community/unread", auth(seller));
+    assert.equal(unchangedActivity.json.notificationSummary.interactions.unread, 2, "reading or a different account's acknowledgment cannot clear activity");
+    const activityAck = await request("/api/community/unread", { ...auth(seller), readNotificationIds: [displayedId] });
+    assert.equal(activityAck.json.notificationSummary.interactions.unread, 1, "only the displayed notification is acknowledged");
     await request("/api/community/comment", {
       ...auth(buyer), postId, content: "这是一个网赌 平台"
     }, { status: 400 });
@@ -277,6 +289,12 @@ async function main() {
     assert.ok(sent.json.messages.length >= 2, "price discussion should include the official safety notice");
     const unread = await request("/api/community/unread", auth(seller));
     assert.ok(unread.json.unreadCount >= 1);
+    const followsPage = await request("/api/community/notifications", { ...auth(seller), group: "follows" });
+    assert.ok(followsPage.json.notifications.every(item => item.type === "follow"));
+    assert.equal(unread.json.notificationSummary.follows.unread, 1);
+    const followAck = await request("/api/community/unread", { ...auth(seller), readNotificationIds: followsPage.json.notifications.map(item => item.id) });
+    assert.equal(followAck.json.notificationSummary.follows.unread, 0);
+    assert.equal(followAck.json.unreadCount, unread.json.unreadCount, "activity acknowledgments preserve private chat unread counts");
     const conversation = await request("/api/community/chat/list", { ...auth(seller), userId: buyerId });
     assert.ok(conversation.json.messages.some(message => message.content.includes("100")));
     const afterRead = await request("/api/community/unread", auth(seller));
@@ -326,6 +344,31 @@ async function main() {
     assert.equal(duplicate.json.duplicate, true, "retrying a publish request must not duplicate a product");
     const marketForBuyer = await request("/api/market/list", { ...auth(buyer), thumbnails: true });
     assert.equal(marketForBuyer.json.total, 1);
+    assert.equal(marketForBuyer.json.rankingSession, undefined, "legacy clients retain their original list protocol");
+    const cheap = await request("/api/market/create", {
+      ...auth(seller), submissionId: "ranking-cheaper", title: "另一只果核蛋龟", speciesCode: "GHG",
+      stage: "juvenile", gender: "未知", price: 50, city: "南京市", locationSource: "device",
+      latitude: 32.0603, longitude: 118.7969, delivery: "仅自提", description: "排序回归测试商品",
+      mediaItems: [{url: uploadedImage.json.url, type:"image"}]
+    });
+    const cheapId = cheap.json.myListings.find(item => item.id !== listingId)?.id;
+    assert.ok(cheapId);
+    const rankedQuery = {...auth(buyer), rankingVersion:1, priceOrder:"asc", limit:1};
+    const rankedFirst = (await request("/api/market/list", rankedQuery)).json;
+    assert.equal(rankedFirst.listings[0]?.id, cheapId);
+    assert.equal(rankedFirst.hasMore, true);
+    assert.ok(rankedFirst.rankingSession);
+    const rankedNext = (await request("/api/market/list", {...rankedQuery, offset:rankedFirst.nextOffset, rankingSession:rankedFirst.rankingSession})).json;
+    assert.equal(rankedNext.listings[0]?.id, listingId);
+    assert.equal(rankedNext.hasMore, false);
+    const otherOwner = (await request("/api/market/list", {...rankedQuery, ...auth(seller), offset:1, rankingSession:rankedFirst.rankingSession})).json;
+    assert.equal(otherOwner.rankingReset,true);
+    const deliveryOnly = (await request("/api/market/list", {...rankedQuery,delivery:"可快递"})).json;
+    assert.equal(deliveryOnly.listings[0]?.id,listingId);
+    assert.equal(deliveryOnly.total,1);
+    const descriptionMatch = (await request("/api/market/list", {...rankedQuery, keyword:"排序回归测试"})).json;
+    assert.equal(descriptionMatch.listings[0]?.id,cheapId);
+    await request("/api/market/offline", {...auth(seller),listingId:cheapId});
     await request("/api/market/detail", { ...auth(buyer), listingId });
     const wanted = await request("/api/market/want", { ...auth(buyer), listingId });
     assert.equal(wanted.json.wantCount, 1);
@@ -338,6 +381,8 @@ async function main() {
     });
     const marketAfterSale = await request("/api/market/list", auth(buyer));
     assert.equal(marketAfterSale.json.total, 0, "sold listings must be hidden from the public market");
+    const removedPage = (await request("/api/market/list", {...rankedQuery,offset:1,rankingSession:rankedFirst.rankingSession})).json;
+    assert.equal(removedPage.listings.length,0,"rank snapshots cannot reveal sold or offline listings");
     const sellerAfterSale = await request("/api/account/load", auth(seller));
     assert.ok(sellerAfterSale.json.user.data.ledgerRecords.some(record => record.marketListingId === listingId));
 

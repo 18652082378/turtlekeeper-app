@@ -22,6 +22,7 @@ async function main() {
       var marketLoading=false,marketLastLoadedAt=0,incomingMarketShareLoading=false,incomingMarketShareListingId='';
       function saveState(){} function refreshCareReminderTimers(){} function setupMarketInfiniteScroll(){}
       function syncPersistentBottomNav(){} function hydrateVideoFirstFrames(){} function hydrateCommunityPostVideos(){} function hydrateMarketDetailVideos(){}
+      function patchSystemAnnouncementOverlay(){}
       function savedMarketListingIds(){return []} function hasCloudSession(){return true} function marketAuthPayload(x){return x}
       function normalizeMarketListings(x){return x} function normalizeAccountData(x){return x} function marketRegionCities(){return []}
       async function apiPost(){return {listings:[{id:'0',title:'updated'}],myListings:[]}}
@@ -35,7 +36,7 @@ async function main() {
       ${extract('function setState(', 'function requireLogin(')}
       ${extract('function backNavigationState(', 'function pageFollowing(')}
       ${extract('function buildEdgeBackPreviewHtml(', 'function setupEdgeBackAndConversationSwipe(')}
-      ${extract('async function refreshMarket(', 'function resetMarketFeed(')}
+      ${extract('function patchMarketSnapshotDetails(', 'function resetMarketFeed(')}
       ${extract('async function loadMoreMarketListings(', 'function setupMarketInfiniteScroll(')}
       render();
     ` });
@@ -65,6 +66,23 @@ async function main() {
       assert.equal(after.keyword,'果核');
       assert.equal(after.offset,40);
     }
+    const delayedDetail = await page.evaluate(async () => {
+      let resolveDetail;
+      marketLoading=false;marketLastLoadedAt=0;
+      const originalCard=document.querySelector('[data-id="23"]');
+      const y=scrollY;
+      setState({page:'marketDetail',selectedMarketListingId:'23'});
+      apiPost=()=>new Promise(resolve=>{resolveDetail=resolve});
+      const pending=refreshMarket(true);
+      navigateBack();
+      // Simulate a slow response arriving after the old 520ms suppression window.
+      restoredSnapshotRenderHoldUntil=0;
+      resolveDetail({listings:[{id:'0',title:'delayed detail data'}],myListings:[]});
+      await pending;
+      return {sameCard:originalCard===document.querySelector('[data-id="23"]'),sameScroll:y===scrollY};
+    });
+    assert.equal(delayedDetail.sameCard,true,'late detail response must not rebuild restored market DOM');
+    assert.equal(delayedDetail.sameScroll,true);
     const latePage = await page.evaluate(async () => {
       let resolvePage;
       apiPost=()=>new Promise(resolve=>{resolvePage=resolve});

@@ -156,6 +156,9 @@ const initialState = {
   communityChatListing: null,
   communityChatToolsOpen: false,
   communityNotifications: [],
+  communityNotificationSummary: null,
+  communityActivityGroup: "interactions",
+  communityActivityItems: [],
   messageUnreadCount: 0,
   selectedCommunityFriendId: "",
   selectedCommunityFriend: null,
@@ -180,6 +183,9 @@ const initialState = {
   selectedMarketSeller: null,
   marketFeedInitialized: false,
   marketFeedNextOffset: 0,
+  marketFeedSessionId: "",
+  marketFeedOrderIds: [],
+  marketFeedGeneration: 0,
   marketFeedHasMore: true,
   marketFeedLoadingMore: false,
   marketDraftPhoto: "",
@@ -399,7 +405,9 @@ let communityUserProfileLoading = false;
 let communityUserProfileLoadedKey = "";
 let messageUnreadLoading = false;
 let messageUnreadLastLoadedAt = 0;
-let messageNotificationReadSyncPending = false;
+let communityNotificationReadRevision = 0;
+let communityNotificationReadQueue = Promise.resolve();
+let communityActivityRequestId = 0;
 let restoredSnapshotRenderHoldUntil = 0;
 // A messages page handed back by the interactive back gesture already owns
 // the exact DOM the user was looking at before opening a chat.  Background
@@ -428,7 +436,7 @@ let communityDraftTitle = "";
 let communityDraftCircleId = "general";
 let communityDraftVisibility = "public";
 let communityVisibilitySheetOpen = false;
-let communityForumSort = "hot";
+let communityForumSort = "latest";
 let communitySelectedCircleId = "all";
 let communitySearchQuery = "";
 let communitySearchResults = [];
@@ -823,6 +831,7 @@ function saveState(options = {}) {
       communityPosts: state.communityPosts || [],
       communityFriends: state.communityFriends || [],
       communityNotifications: state.communityNotifications || [],
+      communityNotificationSummary: state.communityNotificationSummary || null,
       communityFollowedCircleIds: state.communityFollowedCircleIds || [],
       communityFollowingUsers: state.communityFollowingUsers || [],
       messageUnreadCount: Number(state.messageUnreadCount || 0),
@@ -1967,7 +1976,7 @@ function bottomNav() {
   const ledgerPages = ["ledger", "ledgerDetail"];
   const marketPages = ["market", "marketAdd", "marketDetail", "marketSeller"];
   const communityPages = ["community", "communityAdd", "communityPostDetail", "communityProfile"];
-  const messagePages = ["messages", "communityFriends", "communityChat"];
+  const messagePages = ["messages", "communityActivity", "communityFriends", "communityChat"];
   const minePages = ["mine", "calendar", "satisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "about", "rules", "privacy", "moderation", "reports", "marketFavorites", "marketHistory", "following", "followingProfile"];
   const unreadCount = Math.max(0, Number(state.messageUnreadCount || 0));
   const unreadText = unreadCount > 99 ? "99+" : String(unreadCount);
@@ -2458,6 +2467,109 @@ function communityNotificationRow(item = {}) {
   </button>`;
 }
 
+function messageActivitySummary(group = "interactions") {
+  if (state.communityNotificationSummary?.[group]) return state.communityNotificationSummary[group];
+  const rows = (state.communityNotifications || [])
+    .filter(item => group === "follows" ? item.type === "follow" : item.type !== "follow")
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  return { total: rows.length, unread: rows.filter(item => !item.read).length,
+    likeCount: rows.filter(item => item.type === "like").length,
+    commentCount: rows.filter(item => item.type === "comment").length, latest: rows[0] };
+}
+
+function messageActivitySummaryRows() {
+  return ["interactions", "follows"].map(group => {
+    const summary = messageActivitySummary(group);
+    if (group === "follows" && !summary.total) return "";
+    const latest = summary.latest;
+    const preview = latest ? `${latest.actorName || "壳友"} ${communityNotificationCopy(latest).action}` : "收到的点赞和评论都会在这里";
+    const icon = group === "follows"
+      ? `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="currentColor"/><path d="M4 22v-3a8 8 0 0 1 16 0v3" fill="currentColor"/></svg>`
+      : `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="m3 21 11-13 6 6 9-5-11 14-6-6z" fill="currentColor"/></svg>`;
+    return `<button type="button" class="message-activity-row" data-open-community-activity="${group}">
+      <span class="message-activity-icon ${group}">${icon}</span>
+      <span class="message-activity-copy"><strong>${group === "follows" ? "新关注我的" : "互动消息"}</strong><span>${escapeHtml(preview)}</span>${group === "interactions" && summary.total ? `<small>${summary.likeCount} 条点赞 · ${summary.commentCount} 条评论</small>` : ""}</span>
+      <span class="message-activity-meta">${latest ? `<time datetime="${escapeHtml(latest.createdAt || "")}">${formatMessagePreviewTime(latest.createdAt)}</time>` : ""}${summary.unread ? `<i class="message-activity-badge" aria-label="${summary.unread} 条未读">${summary.unread > 99 ? "99+" : summary.unread}</i>` : ""}</span>
+    </button>`;
+  }).join("");
+}
+
+function bindMessageActivityEntries(root = $app) {
+  root.querySelectorAll("[data-open-community-activity]").forEach(button => {
+    button.onclick = () => openCommunityActivity(button.dataset.openCommunityActivity);
+  });
+}
+
+function patchMessageActivitySummary(root = $app) {
+  const section = root?.querySelector?.("[data-message-activity-summary]");
+  if (!section) return;
+  const html = messageActivitySummaryRows();
+  if (section.innerHTML !== html) section.innerHTML = html;
+  bindMessageActivityEntries(root);
+}
+
+function pageCommunityActivity() {
+  const group = state.communityActivityGroup || "interactions";
+  const items = state.communityActivityItems || [];
+  return `${topbar("互动消息", true)}
+    <main class="content community-activity-page">
+      <nav class="community-activity-tabs" aria-label="消息分类">${["interactions", "follows"].map(key => `<button type="button" data-open-community-activity="${key}" class="${key === group ? "active" : ""}" aria-pressed="${key === group}">${key === "follows" ? "新关注我的" : "互动消息"}</button>`).join("")}</nav>
+      <section class="community-activity-list">${items.map(communityNotificationRow).join("") || `<div class="message-notification-empty">${state.communityActivityLoading ? "正在加载…" : state.communityActivityError ? "消息加载失败，请重试" : group === "follows" ? "还没有新的关注" : "还没有互动，分享养龟日常和大家聊聊吧"}</div>`}</section>
+      ${state.communityActivityHasMore || state.communityActivityError ? `<button class="community-activity-more" type="button" data-community-activity-more ${state.communityActivityLoading ? "disabled" : ""}>${state.communityActivityLoading ? "正在加载…" : state.communityActivityError ? "重新加载" : "查看更多"}</button>` : ""}
+    </main>`;
+}
+
+function openCommunityActivity(group = "interactions") {
+  if (!requireLogin()) return;
+  setState({ page: "communityActivity", communityActivityGroup: group === "follows" ? "follows" : "interactions", communityActivityItems: [], communityActivityNextOffset: 0, communityActivityHasMore: false, communityActivityError: false, communityActivityLoading: true }, { skipCloud: true, forceRender: true });
+  void loadCommunityActivity();
+}
+
+async function loadCommunityActivity() {
+  const requestId = ++communityActivityRequestId;
+  const phone = state.loggedInPhone;
+  const token = currentCloudToken();
+  const group = state.communityActivityGroup;
+  const offset = state.communityActivityNextOffset || 0;
+  const isCurrent = () => phone === state.loggedInPhone && token === currentCloudToken();
+  const isVisible = () => isCurrent() && requestId === communityActivityRequestId && state.page === "communityActivity" && state.communityActivityGroup === group;
+  state = { ...state, communityActivityLoading: true };
+  try {
+    const result = await apiPost("/api/community/notifications", communityAuthPayload({ group, offset, limit: 50 }));
+    if (!isVisible()) return;
+    const items = result.notifications || [];
+    const byId = new Map([...(offset ? state.communityActivityItems || [] : []), ...items].map(item => [item.id, item]));
+    setState({ communityActivityItems: [...byId.values()], communityActivityNextOffset: result.nextOffset, communityActivityHasMore: result.hasMore, communityActivityLoading: false, communityActivityError: false }, { skipCloud: true, forceRender: true });
+    // Acknowledge only the displayed batch. New arrivals and the other tab stay unread.
+    const readNotificationIds = items.filter(item => !item.read).map(item => item.id);
+    if (!readNotificationIds.length) return;
+    try {
+      const acknowledge = async () => {
+        if (!isCurrent()) return null;
+        communityNotificationReadRevision++;
+        try { return await apiPost("/api/community/unread", communityAuthPayload({ readNotificationIds })); }
+        finally { communityNotificationReadRevision++; }
+      };
+      const readTask = communityNotificationReadQueue.then(acknowledge);
+      communityNotificationReadQueue = readTask.catch(() => {});
+      const ack = await readTask;
+      if (!isCurrent() || !ack) return;
+      state = { ...state, communityNotifications: ack.notifications || state.communityNotifications,
+        communityNotificationSummary: ack.notificationSummary || null,
+        messageUnreadCount: Number(ack.totalUnreadCount ?? state.messageUnreadCount),
+        communityActivityItems: (state.communityActivityItems || []).map(item => readNotificationIds.includes(item.id) ? { ...item, read: true } : item) };
+      saveState({ skipCloud: true });
+      patchMessageActivitySummary();
+      patchStoredMessageLists(state.communityFriends || []);
+      syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
+    } catch (error) {
+      if (isVisible()) toast("已读状态同步失败，重新进入可重试");
+    }
+  } catch (error) {
+    if (isVisible()) setState({ communityActivityLoading: false, communityActivityError: true }, { skipCloud: true, forceRender: true });
+  }
+}
+
 function pageMessages() {
   const chatPreview = latestCommunityMessagePreview(state.communityChatMessages || []);
   const friends = (() => {
@@ -2476,7 +2588,7 @@ function pageMessages() {
   return `
     ${topbar("消息", false, spaceAvatarTopButton(), platformServiceTopButton())}
     <main class="content page-fresh message-page">
-      <section class="message-notification-section"><header><strong>互动消息</strong><small>${(state.communityNotifications || []).filter(item => !item.read).length ? `${(state.communityNotifications || []).filter(item => !item.read).length} 条未读` : "最近互动"}</small></header>${(state.communityNotifications || []).length ? (state.communityNotifications || []).slice(0, 20).map(communityNotificationRow).join("") : `<div class="message-notification-empty">点赞、评论和关注会显示在这里</div>`}</section>
+      <section class="message-activity-summary" data-message-activity-summary>${messageActivitySummaryRows()}</section>
       <section class="message-list-heading"><strong>聊天消息</strong></section>
       <section class="message-friend-list">${friends.map(friend => `<article class="message-friend-swipe" data-conversation-id="${escapeHtml(friend.id)}"><button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div class="message-friend-copy"><strong>${escapeHtml(friend.name || "壳友")}${platformAdminBadge(friend)}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><span class="message-friend-meta">${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></span></button><div class="message-friend-actions"><button type="button" data-toggle-conversation-pin="${escapeHtml(friend.id)}">${friend.pinned ? "取消置顶" : "置顶"}</button><button class="delete" type="button" data-delete-conversation="${escapeHtml(friend.id)}">删除</button></div></article>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`}</section>
     </main>
@@ -2600,7 +2712,7 @@ function communityCreateHub() {
 }
 
 function communityTopicTabs() {
-  const tabs = [["hot", "热门"], ["latest", "最新"], ["featured", "精华"], ["followed", "关注"]];
+  const tabs = [["latest", "最新"], ["hot", "热门"], ["featured", "精华"], ["followed", "关注"]];
   return `<div class="community-feed-toolbar"><nav class="community-topic-tabs forum-sort-tabs" aria-label="帖子排序">${tabs.map(([value, label]) => `<button class="${communityForumSort === value ? "active" : ""}" type="button" data-community-forum-sort="${value}" aria-pressed="${communityForumSort === value}">${label}</button>`).join("")}</nav><button class="community-toolbar-publish" type="button" data-community-compose="daily"><span aria-hidden="true">＋</span>写帖子</button></div>`;
 }
 
@@ -2617,7 +2729,9 @@ function communityForumPosts(posts = []) {
     result = result.filter(item => followed.has(communityPostCircleId(item)));
   }
   const score = item => Number(item.likeCount || 0) * 2 + Number(item.comments?.length || 0) * 3 + Math.max(0, 72 - ((Date.now() - new Date(item.createdAt || 0).getTime()) / 3600000));
-  result.sort((a, b) => Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned)) || (communityForumSort === "hot" ? score(b) - score(a) : new Date(b.createdAt || 0) - new Date(a.createdAt || 0)));
+  const newestFirst = (a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0) || String(b.id || "").localeCompare(String(a.id || ""));
+  result.sort(communityForumSort === "latest" ? newestFirst : (a, b) =>
+    Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned)) || (communityForumSort === "hot" ? score(b) - score(a) : 0) || newestFirst(a, b));
   return result;
 }
 
@@ -2882,7 +2996,7 @@ function patchVisibleCommunityFeed(posts, previousPosts = []) {
   const feed = $app.querySelector(".community-feed");
   if (!feed) return false;
   const previousById = new Map((previousPosts || []).map(post => [String(post.id), post]));
-  const existingCards = [...feed.querySelectorAll(":scope > .community-moment")];
+  const existingCards = [...feed.querySelectorAll(":scope > [data-community-feed-card]")];
   const existingById = new Map(existingCards.map(card => [String(card.dataset.communityFeedCard || ""), card]));
 
   if (!posts.length) {
@@ -2906,8 +3020,8 @@ function patchVisibleCommunityFeed(posts, previousPosts = []) {
     // same, then update the surrounding text/actions normally.
     if (!canKeepExistingCard && existing && previous
       && communityPostMediaSignature(post) === communityPostMediaSignature(previous)) {
-      const existingMedia = existing.querySelector(".community-post-media");
-      const nextMedia = card.querySelector(".community-post-media");
+      const existingMedia = existing.querySelector(".forum-thread-media, .community-post-media");
+      const nextMedia = card.querySelector(".forum-thread-media, .community-post-media");
       if (existingMedia && nextMedia) nextMedia.replaceWith(existingMedia);
     }
     if (!canKeepExistingCard) changedCards.push(card);
@@ -3323,7 +3437,7 @@ function pageCommunityChat() {
 
 function backNavigationState() {
   return {
-    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" || state.page === "communityProfile" ? "community" : state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "mine" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
+    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" || state.page === "communityProfile" ? "community" : state.page === "communityActivity" || state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "mine" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "",
     editingTurtlePoolId: "", editingMarketListingId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: ""
   };
@@ -3401,6 +3515,10 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
     syncPersistentBottomNav(bottomNav);
   }
   saveState({ skipCloud: true });
+  if (state.page === "market") {
+    patchMarketSnapshotDetails();
+    patchSystemAnnouncementOverlay();
+  }
   setupMarketInfiniteScroll();
   window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
   restoredSnapshotRenderHoldUntil = Date.now() + 520;
@@ -3436,6 +3554,10 @@ function navigateBack(options = {}) {
     $app.innerHTML = snapshot.html;
     saveState({ skipCloud: true });
     bindEvents();
+    if (state.page === "market") {
+      patchMarketSnapshotDetails();
+      patchSystemAnnouncementOverlay();
+    }
     setupMarketInfiniteScroll();
     window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
     restoredSnapshotRenderHoldUntil = Date.now() + 520;
@@ -3916,6 +4038,10 @@ function marketListingTime(item = {}) {
 }
 
 function marketSearchResultListings() {
+  if (state.marketFeedInitialized && state.marketFeedSessionId) {
+    const byId = new Map((state.marketListings || []).map(item => [String(item.id), item]));
+    return (state.marketFeedOrderIds || []).map(id => byId.get(String(id))).filter(item => item?.status === "active");
+  }
   const keyword = String(state.marketSearch || "").trim().toLowerCase();
   const stage = state.marketStage || "all";
   const regionCities = marketRegionCities();
@@ -3939,6 +4065,7 @@ function marketSearchResultListings() {
     if (state.marketPriceOrder === "asc") return Number(left.price || 0) - Number(right.price || 0) || marketListingTime(right) - marketListingTime(left);
     if (state.marketPriceOrder === "desc") return Number(right.price || 0) - Number(left.price || 0) || marketListingTime(right) - marketListingTime(left);
     if (state.marketSort === "popular") return Number(right.wantCount || 0) - Number(left.wantCount || 0) || marketListingTime(right) - marketListingTime(left);
+    if (state.marketSort === "latest") return (Date.parse(right.createdAt) || 0) - (Date.parse(left.createdAt) || 0);
     return marketListingTime(right) - marketListingTime(left);
   });
 }
@@ -6825,6 +6952,7 @@ function render() {
   const pages = {
     home: pageHome,
     messages: pageMessages,
+    communityActivity: pageCommunityActivity,
     community: pageCommunity,
     communityPostDetail: pageCommunityPostDetail,
     communityAdd: pageCommunityAdd,
@@ -7464,7 +7592,7 @@ function bindEvents() {
   }));
   document.querySelector("[data-batch-stage]")?.addEventListener("change", () => preserveTurtleForm());
   document.querySelectorAll("[data-community-forum-sort]").forEach(button => button.addEventListener("click", () => {
-    communityForumSort = button.dataset.communityForumSort || "hot";
+    communityForumSort = button.dataset.communityForumSort || "latest";
     render();
   }));
   document.querySelectorAll("[data-community-circle]").forEach(button => button.addEventListener("click", () => {
@@ -7623,16 +7751,31 @@ function bindEvents() {
     event.stopPropagation();
     openCommunityUserProfile(btn.dataset.viewCommunityUser);
   }));
+  bindMessageActivityEntries();
+  document.querySelector("[data-community-activity-more]")?.addEventListener("click", event => {
+    event.currentTarget.disabled = true;
+    void loadCommunityActivity();
+  });
   document.querySelectorAll("[data-open-community-notification]").forEach(button => button.addEventListener("click", async () => {
+    if (!requireLogin()) return;
     if (button.dataset.notificationTarget === "user") {
       openCommunityUserProfile(button.dataset.notificationUserId);
       return;
     }
     const postId = button.dataset.notificationPostId || "";
-    if (!findCommunityPost(postId)) await refreshCommunity(true);
-    if (!findCommunityPost(postId)) return toast("这篇帖子已删除或暂时不可见");
-    communityReplyTarget = null;
-    setState({ page: "communityPostDetail", selectedCommunityPostId: postId, openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
+    const phone = state.loggedInPhone;
+    const token = currentCloudToken();
+    button.disabled = true;
+    try {
+      const result = await apiPost("/api/community/list", communityAuthPayload({ postId, offset: 0, limit: 1 }));
+      if (phone !== state.loggedInPhone || token !== currentCloudToken() || !button.isConnected) return;
+      const post = normalizeCommunityPosts(result.targetPost ? [result.targetPost] : [])[0];
+      if (!post || String(post.id) !== postId) return toast("这篇帖子已删除或暂时不可见");
+      communityReplyTarget = null;
+      setState({ page: "communityPostDetail", selectedCommunityPostId: postId, communityPosts: [...(state.communityPosts || []).filter(item => String(item.id) !== postId), post], openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
+    } catch (error) {
+      if (button.isConnected) toast("帖子暂时无法打开，请稍后重试");
+    } finally { button.disabled = false; }
   }));
   document.querySelectorAll("[data-open-community-chat]").forEach(btn => btn.addEventListener("click", () => openCommunityChat(btn.dataset.openCommunityChat)));
   document.querySelectorAll("[data-toggle-conversation-pin]").forEach(btn => btn.addEventListener("click", event => {
@@ -7686,14 +7829,14 @@ function bindEvents() {
     setState({ marketAssistMenu: nextMenu }, { skipCloud: true });
     if (nextMenu === "region") requestMarketSearchLocation({ showSettingsHint: true });
   }));
-  document.querySelectorAll("[data-market-sort]").forEach(btn => btn.addEventListener("click", () => setState({ marketSort: btn.dataset.marketSort, marketAssistMenu: "" }, { skipCloud: true })));
+  document.querySelectorAll("[data-market-sort]").forEach(btn => btn.addEventListener("click", () => resetMarketFeed({ marketSort: btn.dataset.marketSort, marketPriceOrder: "", marketAssistMenu: "" })));
   document.querySelector("[data-market-price-order]")?.addEventListener("click", () => {
     const next = state.marketPriceOrder === "" ? "asc" : state.marketPriceOrder === "asc" ? "desc" : "";
-    setState({ marketPriceOrder: next }, { skipCloud: true });
+    resetMarketFeed({ marketPriceOrder: next });
   });
-  document.querySelector("[data-market-fresh]")?.addEventListener("click", () => setState({ marketFreshOnly: !state.marketFreshOnly }, { skipCloud: true }));
+  document.querySelector("[data-market-fresh]")?.addEventListener("click", () => resetMarketFeed({ marketFreshOnly: !state.marketFreshOnly }));
   document.querySelectorAll("[data-market-region]").forEach(btn => btn.addEventListener("click", () => resetMarketFeed({ marketRegion: btn.dataset.marketRegion || "", marketAssistMenu: "" })));
-  document.querySelectorAll("[data-market-delivery]").forEach(btn => btn.addEventListener("click", () => setState({ marketDelivery: btn.dataset.marketDelivery || "" }, { skipCloud: true })));
+  document.querySelectorAll("[data-market-delivery]").forEach(btn => btn.addEventListener("click", () => resetMarketFeed({ marketDelivery: btn.dataset.marketDelivery || "" })));
   document.querySelector("[data-market-filter-reset]")?.addEventListener("click", () => resetMarketFeed({ marketPriceOrder: "", marketFreshOnly: false, marketRegion: "", marketDelivery: "", marketAssistMenu: "" }));
   document.querySelectorAll("[data-my-market-tab]").forEach(btn => btn.addEventListener("click", () => setState({ marketMyTab: btn.dataset.myMarketTab }, { skipCloud: true })));
   bindMarketListingCardActions();
@@ -8294,8 +8437,61 @@ function localMarketListing(payload) {
   };
 }
 
+function patchMarketSnapshotDetails(root = $app) {
+  const listings = new Map((state.marketListings || []).map(item => [String(item.id), item]));
+  const favorites = new Set((state.marketFavoriteIds || []).map(String));
+  root.querySelectorAll("[data-market-favorite]").forEach(button => {
+    const active = favorites.has(String(button.dataset.marketFavorite));
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+    button.setAttribute("aria-label", active ? "取消收藏" : "收藏商品");
+  });
+  root.querySelectorAll("[data-view-market]").forEach(button => {
+    const item = listings.get(String(button.dataset.viewMarket));
+    if (!item) return;
+    const count = button.querySelector("[data-market-want-count]");
+    const nextCount = Math.max(0, Number(item.wantCount || 0)) + "人想要";
+    if (count && count.textContent !== nextCount) count.textContent = nextCount;
+    // Update metadata without replacing the image or touching the card order.
+    const title = button.querySelector(".market-card-body > strong");
+    if (title && item.title && title.textContent !== item.title) title.textContent = item.title;
+    const price = button.querySelector(".market-card-price > b");
+    if (price && price.textContent !== "¥" + money(item.price)) price.innerHTML = "<i>¥</i>" + money(item.price);
+    const unavailable = item.status && item.status !== "active";
+    button.disabled = Boolean(unavailable);
+    button.classList.toggle("is-sold", Boolean(unavailable));
+    const photo = button.querySelector(".market-card-photo");
+    if (photo && unavailable) {
+      let badge = photo.querySelector(":scope > i");
+      if (!badge) { badge = document.createElement("i"); photo.appendChild(badge); }
+      badge.dataset.marketUnavailable = "true";
+      badge.className = "";
+      badge.textContent = item.status === "sold" ? "已售出" : "已下架";
+    } else if (photo) {
+      const badge = photo.querySelector("[data-market-unavailable]");
+      if (badge && item.negotiable) {
+        delete badge.dataset.marketUnavailable;
+        badge.className = "negotiable";
+        badge.textContent = "可议价";
+      } else badge?.remove();
+    }
+  });
+}
+
+function marketFeedRequestOptions() {
+  return { rankingVersion: 1, keyword: state.marketSearch || "", stage: state.marketStage || "all",
+    regionCities: marketRegionCities(), sort: state.marketSort || "comprehensive",
+    priceOrder: state.marketPriceOrder || "", freshOnly: Boolean(state.marketFreshOnly), delivery: state.marketDelivery || "" };
+}
+
+function marketFeedRequestKey() {
+  return JSON.stringify([state.loggedInPhone, state.marketFeedGeneration || 0, marketFeedRequestOptions()]);
+}
+
 async function refreshMarket(force = false) {
   const isMarketFeed = state.page === "market";
+  const requestKey = marketFeedRequestKey();
+  const requestPhone = state.loggedInPhone;
   const savedListingIds = savedMarketListingIds();
   // A stale saved login used to make every visible market render ask the
   // server again.  Once apiPost detects 401 it clears that login; this guard
@@ -8312,6 +8508,7 @@ async function refreshMarket(force = false) {
       : "";
     if (sharedListingId) {
       const result = await apiPost("/api/market/detail", marketAuthPayload({ listingId: sharedListingId }));
+      if (state.loggedInPhone !== requestPhone) return;
       const sharedListing = normalizeMarketListings([result.listing])[0];
       if (!sharedListing) throw new Error("商品已下架或不存在");
       const retainedListings = (state.marketListings || []).filter(item => item.id !== sharedListing.id);
@@ -8324,10 +8521,9 @@ async function refreshMarket(force = false) {
       offset: 0,
       limit: 8,
       thumbnails: true,
-      keyword: state.marketSearch || "",
-      stage: state.marketStage || "all",
-      regionCities: marketRegionCities()
+      ...marketFeedRequestOptions()
     } : { all: true, savedListingIds }));
+    if (state.loggedInPhone !== requestPhone || (isMarketFeed && (requestKey !== marketFeedRequestKey() || state.page !== "market"))) return;
     const pending = (state.marketListings || []).filter(item => item.pendingLocal);
     const remoteListings = normalizeMarketListings(result.listings || []);
     const savedListings = normalizeMarketListings(result.savedListings || []);
@@ -8345,17 +8541,29 @@ async function refreshMarket(force = false) {
     if (incomingMarketShareListingId && incomingMarketShareListingId === String(state.selectedMarketListingId || "")) {
       incomingMarketShareLoading = false;
     }
-    setState({
+    const nextMarketState = {
       ...accountPatch,
       marketListings: [...mergedListings.values()],
       myMarketListings: normalizeMarketListings(result.myListings || []),
       ...(isMarketFeed ? {
         marketFeedInitialized: true,
+        marketFeedSessionId: result.rankingSession || "",
+        marketFeedOrderIds: remoteListings.map(item => String(item.id)),
         marketFeedNextOffset: Math.max(0, Number(result.nextOffset ?? remoteListings.length)),
         marketFeedHasMore: Boolean(result.hasMore),
         marketFeedLoadingMore: false
       } : {})
-    }, { skipCloud: true });
+    };
+    if (!isMarketFeed && state.page === "market") {
+      // The detail request may complete long after back navigation. Preserve
+      // the restored list for its entire lifetime, not just a timed grace period.
+      state = { ...state, ...nextMarketState };
+      saveState({ skipCloud: true });
+      patchMarketSnapshotDetails();
+      syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
+    } else {
+      setState(nextMarketState, { skipCloud: true });
+    }
   } catch (error) {
     if (incomingMarketShareListingId && incomingMarketShareListingId === String(state.selectedMarketListingId || "")) {
       incomingMarketShareLoading = false;
@@ -8364,6 +8572,7 @@ async function refreshMarket(force = false) {
     if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "龟集市读取失败");
   } finally {
     marketLoading = false;
+    if (state.page === "market" && requestKey !== marketFeedRequestKey() && hasCloudSession()) void refreshMarket(true);
   }
 }
 
@@ -8372,6 +8581,9 @@ function resetMarketFeed(patch = {}) {
   setState({
     ...patch,
     marketListings: [],
+    marketFeedSessionId: "",
+    marketFeedOrderIds: [],
+    marketFeedGeneration: (state.marketFeedGeneration || 0) + 1,
     marketFeedInitialized: false,
     marketFeedNextOffset: 0,
     marketFeedHasMore: true,
@@ -8381,6 +8593,7 @@ function resetMarketFeed(patch = {}) {
 
 async function loadMoreMarketListings() {
   if (!hasCloudSession() || state.page !== "market" || marketLoading || state.marketFeedLoadingMore || !state.marketFeedHasMore) return;
+  const requestKey = marketFeedRequestKey();
   marketLoading = true;
   state.marketFeedLoadingMore = true;
   const loadingStatus = document.querySelector("[data-market-load-sentinel]");
@@ -8388,24 +8601,38 @@ async function loadMoreMarketListings() {
   try {
     const result = await apiPost("/api/market/list", marketAuthPayload({
       thumbnails: true,
+      rankingSession: state.marketFeedSessionId || "",
       offset: Math.max(0, Number(state.marketFeedNextOffset || 0)),
       limit: 8,
-      keyword: state.marketSearch || "",
-      stage: state.marketStage || "all",
-      regionCities: marketRegionCities()
+      ...marketFeedRequestOptions()
     }));
     // The saved list DOM has not received this page. Do not advance its cursor
     // while a detail is open, or returning would skip these unseen items.
-    if (state.page !== "market") {
+    if (state.page !== "market" || requestKey !== marketFeedRequestKey()) {
       state.marketFeedLoadingMore = false;
       return;
     }
+    if (result.rankingReset) {
+      state.marketFeedHasMore = false;
+      state.marketFeedLoadingMore = false;
+      const status = document.querySelector("[data-market-load-sentinel]");
+      if (status) status.textContent = "推荐已更新，下拉刷新查看新商品";
+      return;
+    }
     const incoming = normalizeMarketListings(result.listings || []);
-    const existingIds = new Set((state.marketListings || []).map(item => item.id));
-    const appended = incoming.filter(item => !existingIds.has(item.id));
+    // Detail refreshes may cache future pages. Cached data is not evidence
+    // that the corresponding cards have already been appended to the feed.
+    const existingIds = new Set(state.marketFeedSessionId
+      ? (state.marketFeedOrderIds || []).map(String)
+      : (state.marketListings || []).map(item => String(item.id)));
+    const appended = incoming.filter(item => !existingIds.has(String(item.id)));
+    const merged = new Map((state.marketListings || []).map(item => [String(item.id), item]));
+    incoming.forEach(item => merged.set(String(item.id), item));
     marketLastLoadedAt = Date.now();
     const nextPatch = {
-      marketListings: [...(state.marketListings || []), ...appended],
+      marketListings: [...merged.values()],
+      marketFeedSessionId: result.rankingSession || state.marketFeedSessionId || "",
+      marketFeedOrderIds: [...(state.marketFeedOrderIds || []), ...appended.map(item => String(item.id))],
       myMarketListings: normalizeMarketListings(result.myListings || state.myMarketListings || []),
       marketFeedInitialized: true,
       marketFeedNextOffset: Math.max(0, Number(result.nextOffset ?? (Number(state.marketFeedNextOffset || 0) + incoming.length))),
@@ -8419,7 +8646,7 @@ async function loadMoreMarketListings() {
     // scrolling makes WKWebView discard image textures and video layers for a
     // frame, which is perceived as flashing or a white video surface.
     const grid = document.querySelector(".market-page .market-grid");
-    if (grid && appended.length && !state.marketPriceOrder && !state.marketFreshOnly && !state.marketRegion && !state.marketDelivery) {
+    if (grid && appended.length && (state.marketFeedSessionId || (!state.marketPriceOrder && !state.marketFreshOnly && !state.marketRegion && !state.marketDelivery))) {
       const template = document.createElement("template");
       template.innerHTML = appended.map(marketListingCard).join("");
       bindMarketListingCardActions(template.content);
@@ -8442,6 +8669,7 @@ async function loadMoreMarketListings() {
     console.warn(error.message || "加载更多龟集市商品失败");
   } finally {
     marketLoading = false;
+    if (state.page === "market" && requestKey !== marketFeedRequestKey() && hasCloudSession()) void refreshMarket(true);
   }
 }
 
@@ -9288,11 +9516,10 @@ async function submitMarketListing(event) {
     marketPublishSubmissionId = "";
     marketLastLoadedAt = Date.now();
     clearMarketPublishProgress();
-    setState({
+    resetMarketFeed({
       page: "market",
-      marketListings: normalizeMarketListings(result.listings || []),
       myMarketListings: normalizeMarketListings(result.myListings || [])
-    }, { skipCloud: true });
+    });
     toast(editingListingId ? "商品已保存并刷新" : "商品已发布，7 天未刷新将自动下架");
   } catch (error) {
     clearMarketPublishProgress();
@@ -10175,7 +10402,7 @@ function openAccountDeleteDialog() {
         ...emptyAccountData(),
         registeredUsers: (state.registeredUsers || []).filter(user => user.phone !== phone),
         loggedInPhone: "", cloudToken: "", accountName: "未登录用户", accountAvatar: "",
-        blockedUsers: [], communityPosts: [], communityFriends: [], communityChatMessages: [], communityNotifications: [],
+        blockedUsers: [], communityPosts: [], communityFriends: [], communityChatMessages: [], communityNotifications: [], communityNotificationSummary: null, communityActivityItems: [],
         marketListings: [], messageUnreadCount: 0, isCommunityAdmin: false,
         policyConsentRequired: false, page: "account"
       }, { skipCloud: true });
@@ -10228,7 +10455,7 @@ async function refreshCommunity(force = false) {
   if (!force && Date.now() - communityLastLoadedAt < 10000) return;
   communityLoading = true;
   try {
-    const result = await apiPost("/api/community/list", communityAuthPayload({ offset: 0, limit: 10 }));
+    const result = await apiPost("/api/community/list", communityAuthPayload({ offset: 0, limit: 10, sort: "latest" }));
     communityLastLoadedAt = Date.now();
     const friends = mergeCommunityFriends(Array.isArray(result.friends) ? result.friends : []);
     const messageUnreadCount = friends.reduce((sum, friend) => sum + Math.max(0, Number(friend.unreadCount || 0)), 0);
@@ -10282,7 +10509,8 @@ async function loadMoreCommunityPosts() {
   try {
     const result = await apiPost("/api/community/list", communityAuthPayload({
       offset: Math.max(0, Number(state.communityFeedNextOffset || 0)),
-      limit: 10
+      limit: 10,
+      sort: "latest"
     }));
     const incoming = normalizeCommunityPosts(result.posts || []);
     const existingPosts = state.communityPosts || [];
@@ -10384,7 +10612,21 @@ function dismissSystemAnnouncement(id) {
   const ids = dismissedAnnouncementIds();
   ids.add(String(id));
   try { localStorage.setItem(announcementDismissalKey(), JSON.stringify([...ids].slice(-100))); } catch {}
-  render();
+  if (state.page === "market") patchSystemAnnouncementOverlay();
+  else render();
+}
+
+function patchSystemAnnouncementOverlay() {
+  const current = $app.querySelector(":scope > .system-announcement-overlay");
+  const html = systemAnnouncementOverlay().trim();
+  if (!html) { current?.remove(); return; }
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const next = template.content.firstElementChild;
+  if (current?.isEqualNode(next)) return;
+  next.querySelector("[data-dismiss-system-announcement]")?.addEventListener("click", event => dismissSystemAnnouncement(event.currentTarget.dataset.dismissSystemAnnouncement));
+  if (current) current.replaceWith(next);
+  else $app.appendChild(next);
 }
 
 function setupCommunityInfiniteScroll() {
@@ -10462,6 +10704,13 @@ async function refreshSystemAnnouncements(force = false) {
       systemAnnouncements: Array.isArray(result.announcements) ? result.announcements : []
     };
     if (state.isCommunityAdmin && Array.isArray(result.adminAnnouncements)) patch.adminSystemAnnouncements = result.adminAnnouncements;
+    if (state.page === "market") {
+      state = { ...state, ...patch };
+      saveState({ skipCloud: true });
+      patchSystemAnnouncementOverlay();
+      return;
+    }
+    if (Object.entries(patch).every(([key, value]) => JSON.stringify(state[key]) === JSON.stringify(value))) return;
     setState(patch, { skipCloud: true, pageScroll: "preserve" });
   } catch (error) {
     if (error.status !== 401) console.warn(error.message || "系统公告读取失败");
@@ -11533,24 +11782,20 @@ async function refreshMessageUnread(force = false, options = {}) {
   if (!force && Date.now() - messageUnreadLastLoadedAt < 10000) return;
   messageUnreadLoading = true;
   try {
-    // 先取回未读状态并渲染红点，不能在取得列表前就把全部互动设为已读。
+    const phone = state.loggedInPhone;
+    const token = currentCloudToken();
+    const readRevision = communityNotificationReadRevision;
     const result = await apiPost("/api/community/unread", communityAuthPayload());
+    if (phone !== state.loggedInPhone || token !== currentCloudToken()) return;
+    if (readRevision !== communityNotificationReadRevision) { messageUnreadRenderRequested = true; return; }
     const unreadCount = Math.max(0, Number(result.totalUnreadCount ?? result.unreadCount ?? 0));
     messageUnreadLastLoadedAt = Date.now();
     const friends = Array.isArray(result.friends) ? mergeCommunityFriends(result.friends) : state.communityFriends;
     const notifications = Array.isArray(result.notifications) ? result.notifications : (state.communityNotifications || []);
     const friendSignature = items => JSON.stringify((items || []).map(item => [item.id, item.name, item.avatar, item.lastMessage, item.lastMessageAt, Number(item.unreadCount || 0)]));
     const notificationSignature = items => JSON.stringify((items || []).map(item => [item.id, item.type, item.actorName, item.postId, item.preview, item.postThumbnail, item.createdAt, Boolean(item.read)]));
-    const notificationsChanged = notificationSignature(notifications) !== notificationSignature(state.communityNotifications);
-    if (state.page === "messages" && notifications.some(item => !item.read) && !messageNotificationReadSyncPending) {
-      messageNotificationReadSyncPending = true;
-      // 用户已经看到消息页后再静默回执；本次页面仍保留红点作为明确提示。
-      window.setTimeout(() => {
-        void apiPost("/api/community/unread", communityAuthPayload({ markNotificationsRead: true }))
-          .catch(() => {})
-          .finally(() => { messageNotificationReadSyncPending = false; });
-      }, 1200);
-    }
+    const notificationSummary = result.notificationSummary || null;
+    const notificationsChanged = notificationSignature(notifications) !== notificationSignature(state.communityNotifications) || JSON.stringify(notificationSummary) !== JSON.stringify(state.communityNotificationSummary);
     // Consume the current render request before comparing data. If a new push
     // lands during this request it will set the flag again and the finally
     // block will run one follow-up request instead of creating a refresh loop.
@@ -11558,33 +11803,16 @@ async function refreshMessageUnread(force = false, options = {}) {
     messageUnreadRenderRequested = false;
     if (unreadCount !== Number(state.messageUnreadCount || 0) || friendSignature(friends) !== friendSignature(state.communityFriends) || notificationsChanged) {
       if (deferMessageListRefreshWhileDragging()) return;
-      if (state.page === "messages" && notificationsChanged) {
-        setState({ messageUnreadCount: unreadCount, communityFriends: friends, communityNotifications: notifications }, { skipCloud: true, forceRender: true });
-      } else
-      if (state.page === "communityChat") {
-        // The badge is not visible in a conversation. Keep its data current
-        // without replacing the chat DOM while the user is reading it.
-        state = { ...state, messageUnreadCount: unreadCount, communityFriends: friends, communityNotifications: notifications };
+      const patch = { messageUnreadCount: unreadCount, communityFriends: friends, communityNotifications: notifications, communityNotificationSummary: notificationSummary };
+      if (["communityChat", "communityActivity", "community", "market"].includes(state.page) || (state.page === "messages" && patchVisibleMessageList(friends))) {
+        state = { ...state, ...patch };
         saveState({ skipCloud: true });
-        patchStoredMessageLists(friends);
-      } else if (state.page === "messages" && patchVisibleMessageList(friends)) {
-        // A chat can return to an exact preserved messages DOM. Patch its
-        // changed rows in place so a push never looks like the whole page was
-        // refreshed just to update one preview or unread badge.
-        state = { ...state, messageUnreadCount: unreadCount, communityFriends: friends, communityNotifications: notifications };
-        saveState({ skipCloud: true });
-        syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
-      } else if (["community", "market"].includes(state.page)) {
-        // Preserve visible feed media while unread polling updates navigation.
-        // 壳友圈 does not render the unread number. Updating it must not tear
-        // down the newly opened feed just because the unread request resolved
-        // after the community request.
-        state = { ...state, messageUnreadCount: unreadCount, communityFriends: friends, communityNotifications: notifications };
-        saveState({ skipCloud: true });
+        patchMessageActivitySummary();
         syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
       } else {
-        setState({ messageUnreadCount: unreadCount, communityFriends: friends, communityNotifications: notifications }, { skipCloud: true, forceRender: shouldRenderMessages || state.page === "messages" });
+        setState(patch, { skipCloud: true, forceRender: shouldRenderMessages || state.page === "messages" });
       }
+      patchStoredMessageLists(friends);
     }
   } catch (error) {
     // A 401 has already cleared the stale local credential in apiPost().  It
@@ -11618,11 +11846,12 @@ function patchStoredMessageLists(friends) {
   edgeBackSnapshots
     .filter(snapshot => snapshot?.page === "messages")
     .forEach(snapshot => {
-      if (snapshot.liveDom?.hasChildNodes?.()) patchMessageListInRoot(snapshot.liveDom, friends);
+      if (snapshot.liveDom?.hasChildNodes?.()) { patchMessageListInRoot(snapshot.liveDom, friends); patchMessageActivitySummary(snapshot.liveDom); }
       if (!snapshot.html) return;
       const template = document.createElement("template");
       template.innerHTML = snapshot.html;
-      if (!patchMessageListInRoot(template.content, friends)) return;
+      patchMessageListInRoot(template.content, friends);
+      patchMessageActivitySummary(template.content);
       snapshot.html = template.innerHTML;
       snapshot.previewHtml = buildEdgeBackPreviewHtml(snapshot.html);
     });

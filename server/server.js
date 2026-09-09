@@ -8,6 +8,8 @@ const https = require("https");
 const http2 = require("http2");
 const path = require("path");
 const { URL } = require("url");
+const { createMarketRankPager } = require("./market-ranking");
+const marketRankPage = createMarketRankPager();
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -1053,12 +1055,12 @@ function addCommunityNotification(db, { type, recipientPhone, actorPhone, postId
   return notification;
 }
 
-function publicCommunityNotifications(db, user) {
+function publicCommunityNotifications(db, user, { group, offset = 0, limit = 100 } = {}) {
   if (!user?.phone) return [];
   return (Array.isArray(db.communityNotifications) ? db.communityNotifications : [])
-    .filter(item => item.recipientPhone === user.phone)
-    .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))
-    .slice(0, 100)
+    .filter(item => item.recipientPhone === user.phone && (!group || (group === "follows" ? item.type === "follow" : item.type !== "follow")))
+    .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0) || String(right.id).localeCompare(String(left.id)))
+    .slice(offset, offset + limit)
     .map(item => {
       const actor = db.users?.[item.actorPhone];
       const post = item.postId
@@ -1080,6 +1082,36 @@ function publicCommunityNotifications(db, user) {
         read: Boolean(item.readAt)
       };
     });
+}
+
+function communityNotificationSummary(db, user) {
+  const items = (db.communityNotifications || []).filter(item => item.recipientPhone === user.phone);
+  const summary = {};
+  for (const group of ["interactions", "follows"]) {
+    const rows = items.filter(item => group === "follows" ? item.type === "follow" : item.type !== "follow");
+    summary[group] = {
+      total: rows.length,
+      unread: rows.filter(item => !item.readAt).length,
+      likeCount: rows.filter(item => item.type === "like").length,
+      commentCount: rows.filter(item => item.type === "comment").length,
+      latest: publicCommunityNotifications(db, user, { group, limit: 1 })[0] || null
+    };
+  }
+  return summary;
+}
+
+async function handleCommunityNotifications(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const group = body.group === "follows" ? "follows" : "interactions";
+  const offset = Math.max(0, Math.floor(Number(body.offset) || 0));
+  const limit = Math.min(100, Math.max(1, Math.floor(Number(body.limit) || 50)));
+  const total = communityNotificationSummary(db, user)[group].total;
+  const notifications = publicCommunityNotifications(db, user, { group, offset, limit });
+  const nextOffset = offset + notifications.length;
+  return sendJson(res, 200, { ok: true, notifications, total, nextOffset, hasMore: nextOffset < total });
 }
 
 // A badge-only APNs payload updates the app-icon number without displaying a
@@ -3063,6 +3095,12 @@ async function handleCommunityList(req, res) {
   const db = readDatabase();
   const user = optionalReviewUser(db, body);
   const allPosts = publicCommunityPosts(db, user);
+  if (body.sort === "latest") {
+    // Sort the full visible set before pagination; old pinned posts must not
+    // displace newly published posts from the chronological first page.
+    allPosts.sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
+      || String(b.id || "").localeCompare(String(a.id || "")));
+  }
   const offset = Math.max(0, Math.floor(Number(body.offset || 0)));
   const limit = Math.min(20, Math.max(1, Math.floor(Number(body.limit || 10))));
   const posts = allPosts.slice(offset, offset + limit);
@@ -3801,11 +3839,12 @@ async function handleCommunityUnread(req, res) {
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
-  if (body.markNotificationsRead) {
+  const readIds = new Set(Array.isArray(body.readNotificationIds) ? body.readNotificationIds.slice(0, 100).map(String) : []);
+  if (body.markNotificationsRead || readIds.size) {
     const readAt = new Date().toISOString();
     let changed = false;
     (Array.isArray(db.communityNotifications) ? db.communityNotifications : []).forEach(item => {
-      if (item.recipientPhone === user.phone && !item.readAt) {
+      if (item.recipientPhone === user.phone && !item.readAt && (body.markNotificationsRead || readIds.has(String(item.id)))) {
         item.readAt = readAt;
         changed = true;
       }
@@ -3825,6 +3864,7 @@ async function handleCommunityUnread(req, res) {
     chatUnreadCount,
     notificationUnreadCount,
     notifications: publicCommunityNotifications(db, user),
+    notificationSummary: communityNotificationSummary(db, user),
     friends: communityFriends(db, user)
   });
 }
@@ -3973,7 +4013,9 @@ async function handleMarketList(req, res) {
   const requestedSavedIds = [...new Set((Array.isArray(body.savedListingIds) ? body.savedListingIds : [])
     .map(id => trimPublicText(id, 100))
     .filter(Boolean))].slice(0, 500);
-  const allListings = publicMarketListings(db, user).filter(item => {
+  const visibleListings = publicMarketListings(db, user);
+  const ranked = body.rankingVersion === 1 ? marketRankPage({ listings: visibleListings, body, owner: user?.phone || "", account: user?.data || {} }) : null;
+  const allListings = visibleListings.filter(item => {
     if (stage !== "all" && item.stage !== stage) return false;
     if (regionCities.length && !regionCities.includes(String(item.city || "").trim())) return false;
     if (!keyword) return true;
@@ -3982,7 +4024,7 @@ async function handleMarketList(req, res) {
   const offset = Math.max(0, Math.floor(Number(body.offset || 0)));
   const requestedLimit = body.all === true ? Math.max(8, allListings.length) : Number(body.limit || 8);
   const limit = Math.min(200, Math.max(1, Math.floor(requestedLimit)));
-  const listings = allListings.slice(offset, offset + limit);
+  const listings = ranked ? ranked.listings : allListings.slice(offset, offset + limit);
   const savedIds = user ? new Set([
     ...(Array.isArray(user.data?.marketHistoryIds) ? user.data.marketHistoryIds : []),
     ...(Array.isArray(user.data?.marketFavoriteIds) ? user.data.marketFavoriteIds : [])
@@ -4023,6 +4065,7 @@ async function handleMarketList(req, res) {
     hasMore: nextOffset < allListings.length,
     nextOffset,
     total: allListings.length,
+    ...(ranked || {}),
     myListings: ownMarketListings(db, user),
     accountData
   });
@@ -4684,6 +4727,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/following/list") return await handleCommunityFollowingList(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/user/profile") return await handleCommunityUserProfile(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/unread") return await handleCommunityUnread(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/notifications") return await handleCommunityNotifications(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/list") return await handleCommunityChatList(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/send") return await handleCommunityChatSend(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/recall") return await handleCommunityChatRecall(req, res);
