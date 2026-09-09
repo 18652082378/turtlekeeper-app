@@ -2001,7 +2001,7 @@ function bottomNavActivePage(page = state.page) {
 }
 
 function platformServiceTopButton() {
-  return `<button class="market-top-service" type="button" data-market-top-service aria-label="联系平台客服"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.2v-1.1a7.5 7.5 0 0 1 15 0v1.1"></path><path d="M4.5 12.6H3.8a1.8 1.8 0 0 0-1.8 1.8v2.1a1.8 1.8 0 0 0 1.8 1.8h1.7v-5.7ZM19.5 12.6h.7a1.8 1.8 0 0 1 1.8 1.8v2.1a1.8 1.8 0 0 1-1.8 1.8h-1.7v-5.7ZM19.5 18.1c0 1.3-1.2 2.4-2.7 2.4h-1.5"></path><path d="M13.2 20.5h2.4"></path></svg></button>`;
+  return `<button class="market-top-service market-trade-guide-entry" type="button" data-market-top-service aria-label="交易指南">交易指南</button>`;
 }
 
 function spaceAvatarTopButton() {
@@ -4467,6 +4467,7 @@ function pageMarketDetail() {
         <button class="market-seller-profile-link market-seller-name" type="button" data-view-market-seller="${escapeHtml(item.sellerId || "")}"><strong>${escapeHtml(item.sellerName || "壳友卖家")}${platformAdminBadge(item)}</strong><span>${isOwn ? "这是我发布的商品" : "已通过账号认证"}</span></button>
         ${isOwn ? "" : `<div class="market-seller-actions"><button class="${item.sellerFollowed ? "active" : ""}" type="button" data-toggle-community-follow="${item.sellerId}">${item.sellerFollowed ? "已关注" : "关注"}</button><button type="button" data-market-contact="${item.id}">聊一聊</button></div>`}
       </section>
+      ${state.isCommunityAdmin ? `<section class="market-safe-note"><b>管理员查看</b><p><button type="button" data-admin-seller-phone="${escapeHtml(item.id)}">查看卖家手机号</button></p></section>` : ""}
       <section class="market-safe-note"><b>交易咨询</b><p>先看近期实拍或视频，再确认健康、尺寸与交付方式；如需购买，请联系平台客服并发送商品咨询码，活体运输责任以双方确认内容为准。</p></section>
     </main>
     <div class="market-detail-actions">
@@ -8166,8 +8167,19 @@ function bindEvents() {
   document.querySelectorAll("[data-market-contact]").forEach(btn => btn.addEventListener("click", () => contactMarketSeller(btn.dataset.marketContact)));
   document.querySelectorAll("[data-market-detail-more]").forEach(btn => btn.addEventListener("click", () => openMarketDetailMore(btn.dataset.marketDetailMore)));
   document.querySelectorAll("[data-view-chat-market]").forEach(btn => btn.addEventListener("click", () => openChatMarketListing(btn.dataset.viewChatMarket)));
-  document.querySelector("[data-market-top-service]")?.addEventListener("click", openMarketTopService);
+  document.querySelector("[data-market-top-service]")?.addEventListener("click", () => window.openTradeGuide());
   document.querySelectorAll("[data-market-platform-service]").forEach(btn => btn.addEventListener("click", () => openMarketPlatformService(btn.dataset.marketPlatformService)));
+  document.querySelectorAll("[data-admin-seller-phone]").forEach(btn => btn.addEventListener("click", async () => {
+    const phone = state.loggedInPhone;
+    const token = currentCloudToken();
+    btn.disabled = true;
+    try {
+      const result = await apiPost("/api/market/seller-phone", communityAuthPayload({ listingId: btn.dataset.adminSellerPhone }));
+      if (state.loggedInPhone !== phone || currentCloudToken() !== token || !state.isCommunityAdmin) return;
+      window.alert(result.sellerPhone ? `卖家手机号：${result.sellerPhone}` : "该卖家暂无手机号");
+    } catch (error) { toast(error.message || "暂时无法查看卖家手机号"); }
+    finally { btn.disabled = false; }
+  }));
   document.querySelectorAll("[data-process-content-report]").forEach(btn => btn.addEventListener("click", () => processContentReport(btn.dataset.processContentReport, btn.dataset.reportAction)));
   document.querySelector("[data-system-announcement-form]")?.addEventListener("submit", submitSystemAnnouncement);
   document.querySelectorAll("[data-system-announcement-action]").forEach(button => button.addEventListener("click", () => manageSystemAnnouncement(button.dataset.systemAnnouncementId, button.dataset.systemAnnouncementAction)));
@@ -9969,6 +9981,7 @@ function sharedMarketListingIdFromUrl(rawUrl) {
 }
 
 function openSharedMarketListing(rawUrl, options = {}) {
+  if (!options.initial) window.dismissTradeIntro?.();
   const listingId = sharedMarketListingIdFromUrl(rawUrl);
   if (!listingId) return false;
   incomingMarketShareListingId = listingId;
@@ -12869,6 +12882,7 @@ function nativePushData(notification) {
 }
 
 function queueNativePushAction(notification) {
+  window.dismissTradeIntro?.();
   const data = nativePushData(notification);
   const senderId = String(data.senderId || data.senderID || data.sender_id || "").trim();
   const route = String(data.route || "").trim();
@@ -13499,6 +13513,7 @@ async function shareTurtleProfile(turtleId) {
 }
 
 function openSharedTurtleFromLocation(rawUrl, options = {}) {
+  if (!options.initial) window.dismissTradeIntro?.();
   try {
     const url = new URL(rawUrl, window.location.href);
     const encoded = url.searchParams.get("turtle");
@@ -16201,3 +16216,6 @@ setupNativePushNotifications();
 startMessageUnreadPolling();
 refreshMessageUnread(true);
 startAppAnalytics();
+
+// One cold-start reminder; push and share-link routing dismiss it immediately.
+if (!pendingNativePushAction) window.showTradeIntro?.();

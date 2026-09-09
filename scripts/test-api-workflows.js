@@ -325,6 +325,12 @@ async function main() {
     });
     const listingId = market.json.myListings[0]?.id;
     assert.ok(listingId, "market listing should be returned after publishing");
+    await request("/api/market/seller-phone", { listingId }, { status: 401 });
+    await request("/api/market/seller-phone", { ...auth(buyer), listingId, isAdmin: true }, { status: 403 });
+    await request("/api/market/seller-phone", { phone: seller.phone, token: buyer.token, listingId }, { status: 401 });
+    const sellerPhone = await request("/api/market/seller-phone", { ...auth(seller), listingId });
+    assert.equal(sellerPhone.json.sellerPhone, seller.phone);
+    await request("/api/market/seller-phone", { ...auth(seller), listingId: "missing-listing" }, { status: 404 });
     await request("/api/market/create", {
       ...auth(seller), submissionId: "regression-no-location", title: "缺少定位的商品", speciesCode: "GHG", price: 100
     }, { status: 400 });

@@ -3982,6 +3982,18 @@ async function handleMarketVideoPoster(req, res) {
   return sendJson(res, 200, { ok: true, posterUrl });
 }
 
+async function handleMarketSellerPhone(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (!isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "仅管理员可查看卖家手机号" });
+  const listing = (db.marketListings || []).find(item => item.id === String(body.listingId || ""));
+  if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在或已删除" });
+  res.setHeader("Cache-Control", "no-store");
+  return sendJson(res, 200, { ok: true, sellerPhone: String(listing.sellerPhoneRaw || "") });
+}
+
 async function handleMarketList(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
@@ -4756,6 +4768,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/chat/delete") return await handleCommunityConversationDelete(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/video-poster") return await handleMarketVideoPoster(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/list") return await handleMarketList(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/seller-phone") return await handleMarketSellerPhone(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/detail") return await handleMarketPublicDetail(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/impression") return await handleMarketImpression(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/view") return await handleMarketView(req, res);
