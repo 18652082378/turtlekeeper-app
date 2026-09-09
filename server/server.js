@@ -86,7 +86,8 @@ function publicUserForPolicyClient(user, token, db, body = {}) {
 // 1.0.5 使用 build 89 及以下；1.0.6 从 build 90 开始。
 // 环境变量仍可在不改代码的情况下提高最低版本和最新构建号。
 const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 90)));
-const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || 96)));
+// Keep the public release at 1.0.6 (94) while 1.0.7 (96) is being built/tested.
+const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || 94)));
 const IOS_APP_STORE_URL = process.env.IOS_APP_STORE_URL || "https://apps.apple.com/app/id6783481335";
 // Apple Push Notification service (APNs) credentials are configured only on the server.
 const APNS_TEAM_ID = String(process.env.APNS_TEAM_ID || "").trim();

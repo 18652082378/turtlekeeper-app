@@ -122,6 +122,7 @@ async function main() {
     const health = await fetch(`${base}/api/app/version?build=1`).then(response => response.json());
     assert.equal(health.ok, true);
     assert.equal(health.minimumBuild, 90, "1.0.6 must remain supported when building 1.0.7");
+    assert.equal(health.latestBuild, 94, "unreleased build 96 must not replace the public release in update checks");
     assert.ok(90 >= health.minimumBuild, "1.0.6 build 90 must not require a forced update");
 
     await request("/api/upload/image", { image: "data:image/png;base64,AAAA" }, { status: 401 });
