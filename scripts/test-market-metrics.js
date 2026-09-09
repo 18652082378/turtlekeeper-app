@@ -1,0 +1,11 @@
+const fs=require('node:fs');const vm=require('node:vm');const assert=require('node:assert/strict');const path=require('node:path');
+const app=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+const label={dataset:{marketWantCount:'a'},textContent:'0人想要'};
+const other={dataset:{marketWantCount:'b'},textContent:'10人想要'};
+const context={state:{page:'market',marketListings:[{id:'a',impressionCount:0,viewCount:0,wantCount:0}]},document:{querySelectorAll:()=>[label,other]},setState:()=>{throw Error('must not rerender feed');},render:()=>{throw Error('must not replace images');},saveState:()=>{throw Error('must not serialize account for metrics');}};
+vm.createContext(context);vm.runInContext(app.slice(app.indexOf('function updateMarketMetrics('),app.indexOf('function openMarketDetail(')),context);
+for(let i=1;i<=100;i++)context.updateMarketMetrics('a',{impressionCount:i,wantCount:i});
+assert.equal(context.state.marketListings[0].impressionCount,100);assert.equal(label.textContent,'100人想要');assert.equal(other.textContent,'10人想要');
+context.updateMarketMetrics('a',{viewCount:2});assert.equal(context.state.marketListings[0].wantCount,100);
+context.updateMarketMetrics('missing',{viewCount:2});
+console.log('Market metrics regression passed: 100 receipts, no render or account serialization, partial counts preserved.');

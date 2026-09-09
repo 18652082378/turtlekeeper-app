@@ -153,6 +153,7 @@ window.TURTLE_SPECIES = [
   { code: "XGG", name: "希腊陆龟", letter: "X", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Testudo%20graeca.jpg" },
   { code: "XNG", name: "西部彩龟", letter: "X", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Chrysemys%20picta%20bellii.jpg" },
   { code: "XPG", name: "星斑陆龟", letter: "X", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Geochelone%20elegans.jpg" },
+  { code: "XZN", name: "蝎泽泥龟", letter: "X", image: "assets/species/XZN.jpg" },
 
   { code: "YBG", name: "印度黑龟", letter: "Y", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Melanochelys%20trijuga.jpg" },
   { code: "YDG", name: "印度棱背龟", letter: "Y", image: "https://commons.wikimedia.org/wiki/Special:FilePath/Pangshura%20tecta.jpg" },

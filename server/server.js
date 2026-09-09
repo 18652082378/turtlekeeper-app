@@ -86,7 +86,7 @@ function publicUserForPolicyClient(user, token, db, body = {}) {
 // 1.0.5 使用 build 89 及以下；1.0.6 从 build 90 开始。
 // 环境变量仍可在不改代码的情况下提高最低版本和最新构建号。
 const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 90)));
-const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || 95)));
+const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || 96)));
 const IOS_APP_STORE_URL = process.env.IOS_APP_STORE_URL || "https://apps.apple.com/app/id6783481335";
 // Apple Push Notification service (APNs) credentials are configured only on the server.
 const APNS_TEAM_ID = String(process.env.APNS_TEAM_ID || "").trim();
@@ -321,6 +321,7 @@ function emptyAccountData() {
   return {
     turtles: [],
     keptSpecies: [],
+    customSpecies: [],
     memos: [],
     ledgerRecords: [],
     breedingRecords: [],
@@ -343,11 +344,26 @@ function emptyAccountData() {
   };
 }
 
+function normalizeCustomSpecies(items = []) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).slice(0, 100).map(item => {
+    const code = String(item?.code || "");
+    const name = String(item?.name || "").replace(/[<>&"'\x00-\x1f]/g, "").trim().slice(0, 40);
+    if (!/^CUS-[a-f0-9-]{36}$/i.test(code) || !name || seen.has(code)) return null;
+    seen.add(code);
+    const photo = String(item?.photo || "");
+    return { code, name, letter: "自建", isCustom: true,
+      photo: /^(https?:\/\/|\/uploads\/)/i.test(photo) ? photo : "",
+      createdAt: String(item?.createdAt || "") };
+  }).filter(Boolean);
+}
+
 function normalizeAccountData(data = {}) {
   const next = { ...emptyAccountData(), ...(data || {}) };
   return {
     turtles: Array.isArray(next.turtles) ? next.turtles : [],
     keptSpecies: Array.isArray(next.keptSpecies) ? next.keptSpecies : [],
+    customSpecies: normalizeCustomSpecies(next.customSpecies),
     memos: Array.isArray(next.memos) ? next.memos : [],
     ledgerRecords: Array.isArray(next.ledgerRecords) ? next.ledgerRecords : [],
     breedingRecords: Array.isArray(next.breedingRecords) ? next.breedingRecords : [],
@@ -387,6 +403,7 @@ function accountDataHasContent(data = {}) {
   return [
     account.turtles,
     account.keptSpecies,
+    account.customSpecies,
     account.memos,
     account.ledgerRecords,
     account.breedingRecords,
@@ -1043,6 +1060,10 @@ function publicCommunityNotifications(db, user) {
     .slice(0, 100)
     .map(item => {
       const actor = db.users?.[item.actorPhone];
+      const post = item.postId
+        ? (Array.isArray(db.communityPosts) ? db.communityPosts : []).find(postItem => postItem.id === item.postId)
+        : null;
+      const firstMedia = communityMediaItemsFromPost(post)[0];
       return {
         id: item.id,
         type: item.type,
@@ -1053,6 +1074,7 @@ function publicCommunityNotifications(db, user) {
         postId: item.postId || "",
         postTitle: item.postTitle || "",
         preview: item.preview || "",
+        postThumbnail: firstMedia?.posterUrl || firstMedia?.url || "",
         createdAt: item.createdAt || "",
         read: Boolean(item.readAt)
       };
@@ -1101,6 +1123,9 @@ async function notifyCommunityMessage(db, message, sender, recipient) {
 }
 
 async function notifyCommunityActivity(db, notification) {
+  // 点赞和评论只进入应用内的互动消息，不弹出 iOS 系统通知。
+  // 关注仍保留系统通知，私聊通知由独立流程处理，不受这里影响。
+  if (["like", "comment"].includes(notification?.type)) return;
   const recipient = db.users?.[notification?.recipientPhone];
   const actor = db.users?.[notification?.actorPhone];
   if (!apnsConfigured() || !recipient || !actor) return;
@@ -1471,6 +1496,26 @@ async function handleLoadAccount(req, res) {
   return sendJson(res, 200, { ok: true, user: publicUserForPolicyClient(user, token, db, body) });
 }
 
+async function handleCreateCustomSpecies(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
+  if (!user) return sendJson(res, 401, { ok: false, message: "请先登录账号" });
+  const species = normalizeCustomSpecies([{ code: body.code, name: body.name, photo: body.photo, createdAt: new Date().toISOString() }])[0];
+  if (!species) return sendJson(res, 400, { ok: false, message: "请填写有效的品种名称" });
+  user.data = normalizeAccountData(user.data || {});
+  const existing = user.data.customSpecies.find(item => item.code === species.code || item.name.toLowerCase() === species.name.toLowerCase());
+  const publicSpecies = MARKET_SPECIES_CATALOG.find(item => item.name === species.name);
+  if (publicSpecies) return sendJson(res, 409, { ok: false, message: "公共品种库已有该品种，请搜索后加入" });
+  if (!existing && user.data.customSpecies.length >= 100) return sendJson(res, 400, { ok: false, message: "自建品种最多保存 100 个" });
+  const selected = existing || species;
+  if (!existing) user.data.customSpecies.push(species);
+  user.data.keptSpecies = [...new Set([...user.data.keptSpecies, selected.code])];
+  user.updatedAt = new Date().toISOString();
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, species: selected, customSpecies: user.data.customSpecies });
+}
+
 async function handleSaveAccount(req, res) {
   const body = await readJson(req);
   const phone = String(body.phone || "").trim();
@@ -1479,11 +1524,16 @@ async function handleSaveAccount(req, res) {
   const user = authenticate(db, phone, token);
   if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
   const incomingData = normalizeAccountData(body.data || {});
+  const incomingHasContent = accountDataHasContent(incomingData);
   const existingData = normalizeAccountData(user.data || {});
+  // Older clients and stale devices must not erase private catalogue entries.
+  incomingData.customSpecies = normalizeCustomSpecies([...new Map([
+    ...existingData.customSpecies, ...incomingData.customSpecies
+  ].map(item => [item.code, item])).values()]);
   // Never allow a cold-start client shell (all empty arrays) to erase an
   // account that already has real data. This is deliberately server-side so
   // older app builds are protected too.
-  if (accountDataHasContent(existingData) && !accountDataHasContent(incomingData)) {
+  if (accountDataHasContent(existingData) && !incomingHasContent) {
     return sendJson(res, 409, {
       ok: false,
       message: "检测到空数据写入请求，已保护云端数据；请重新打开应用后再试"
@@ -1976,6 +2026,9 @@ function parseMediaDataUrl(value) {
   return { buffer: Buffer.from(base64, "base64"), ext, mime, mediaType: mime.startsWith("video/") ? "video" : "image" };
 }
 
+const generateVideoPoster = require('./video-poster').createPosterService({ uploadRoot: UPLOAD_DIR, publish: publishUpload });
+const generateMarketThumbnail = require('./video-poster').createPosterService({ uploadRoot: UPLOAD_DIR, publish: publishUpload, thumbnail: true });
+
 async function handleUploadMedia(req, res) {
   const requestType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
   if (requestType && requestType !== "application/json") return await handleUploadMediaStream(req, res, requestType);
@@ -1994,7 +2047,8 @@ async function handleUploadMedia(req, res) {
   const target = path.resolve(folder, filename);
   fs.writeFileSync(target, media.buffer);
   const url = await publishUpload(target, year, month, filename, media.mime);
-  return sendJson(res, 200, { ok: true, url, mediaType: media.mediaType });
+  const posterUrl = media.mediaType === "video" ? await generateVideoPoster(url) : "";
+  return sendJson(res, 200, { ok: true, url, mediaType: media.mediaType, posterUrl });
 }
 
 function streamMediaInfo(mime) {
@@ -2064,7 +2118,8 @@ function handleUploadMediaStream(req, res, mime) {
     output.on("finish", async () => {
       try {
         const url = await publishUpload(target, year, month, filename, mime);
-        if (!res.headersSent) sendJson(res, 200, { ok: true, url, mediaType: media.mediaType });
+        const posterUrl = media.mediaType === "video" ? await generateVideoPoster(url) : "";
+        if (!res.headersSent) sendJson(res, 200, { ok: true, url, mediaType: media.mediaType, posterUrl });
       } catch (error) {
         if (!res.headersSent) sendJson(res, 500, { ok: false, message: "视频上传失败，请重试" });
       }
@@ -2919,6 +2974,17 @@ function communityMediaItemsFromPost(item) {
   return mediaItems.slice(0, 9);
 }
 
+function communityDisplayName(db, authorPhone, fallback, viewer) {
+  const account = db.users?.[authorPhone];
+  const name = account?.accountName || fallback || "";
+  // Only the authenticated server-side viewer grants access to a full number.
+  // Custom nicknames remain nicknames for both administrators and other users.
+  if (authorPhone && (!name || name === maskPhone(authorPhone) || name === authorPhone)) {
+    return isAdminUser(viewer) ? authorPhone : maskPhone(authorPhone);
+  }
+  return name || "壳友";
+}
+
 function publicCommunityPosts(db, viewer = null) {
   const viewerPhone = viewer?.phone || "";
   const blocked = blockedPhoneSet(viewer);
@@ -2951,7 +3017,7 @@ function publicCommunityPosts(db, viewer = null) {
         mentions: item.mentions || "",
         visibility: normalizedCommunityVisibility(item.visibility),
         authorId: communityUserId(item.authorPhoneRaw),
-        authorName: author?.accountName || item.authorName || "壳友",
+        authorName: communityDisplayName(db, item.authorPhoneRaw, item.authorName, viewer),
         authorAvatar: author?.accountAvatar || item.authorAvatar || "",
         authorIsAdmin: isAdminUser(author),
         createdAt: item.createdAt,
@@ -2963,11 +3029,14 @@ function publicCommunityPosts(db, viewer = null) {
         comments: (Array.isArray(item.comments) ? item.comments : []).filter(comment => !blocked.has(comment.authorPhoneRaw)).map(comment => ({
           id: comment.id,
           content: comment.content || "",
-          authorName: db.users?.[comment.authorPhoneRaw]?.accountName || comment.authorName || "壳友",
+          canDelete: Boolean(viewerPhone && comment.authorPhoneRaw === viewerPhone),
+          authorName: communityDisplayName(db, comment.authorPhoneRaw, comment.authorName, viewer),
           authorAvatar: db.users?.[comment.authorPhoneRaw]?.accountAvatar || comment.authorAvatar || "",
           authorIsAdmin: isAdminUser(db.users?.[comment.authorPhoneRaw]),
           replyToCommentId: comment.replyToCommentId || "",
-          replyToName: comment.replyToName || "",
+          replyToName: comment.replyToCommentId
+            ? communityDisplayName(db, (item.comments || []).find(target => target.id === comment.replyToCommentId)?.authorPhoneRaw, comment.replyToName, viewer)
+            : comment.replyToName || "",
           likeCount: (Array.isArray(comment.likes) ? comment.likes : []).length,
           liked: Boolean(viewerPhone && (Array.isArray(comment.likes) ? comment.likes : []).includes(viewerPhone)),
           createdAt: comment.createdAt
@@ -2999,6 +3068,7 @@ async function handleCommunityList(req, res) {
   return sendJson(res, 200, {
     ok: true,
     posts,
+    targetPost: body.postId ? allPosts.find(post => post.id === String(body.postId)) || null : null,
     hasMore: nextOffset < allPosts.length,
     nextOffset,
     total: allPosts.length,
@@ -3183,6 +3253,27 @@ async function handleCommunityComment(req, res) {
   });
   writeDatabase(db);
   if (notification) void notifyCommunityActivity(db, notification);
+  return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
+}
+
+async function handleCommunityCommentDelete(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const post = (db.communityPosts || []).find(item => item.id === String(body.postId || ""));
+  if (!post) return sendJson(res, 404, { ok: false, message: "帖子不存在" });
+  const comment = (post.comments || []).find(item => item.id === String(body.commentId || ""));
+  if (!comment) return sendJson(res, 404, { ok: false, message: "评论已删除或不存在" });
+  if (comment.authorPhoneRaw !== user.phone) return sendJson(res, 403, { ok: false, message: "只能删除自己的评论或留言" });
+  // Keep other people's replies, attaching them to the surviving parent when possible.
+  const parent = (post.comments || []).find(item => item.id === comment.replyToCommentId && item.id !== comment.id);
+  post.comments = post.comments.filter(item => item.id !== comment.id).map(item => item.replyToCommentId === comment.id
+    ? { ...item, replyToCommentId: parent?.id || "", replyToName: parent?.authorName || "" }
+    : item);
+  db.communityNotifications = (db.communityNotifications || []).filter(item =>
+    item.uniqueKey !== `comment:${comment.id}` && !String(item.uniqueKey || "").startsWith(`comment-like:${comment.id}:`));
+  writeDatabase(db);
   return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
 }
 
@@ -3826,6 +3917,26 @@ function ownMarketListings(db, user) {
     .map(item => marketListingView(db, item, user));
 }
 
+async function handleMarketVideoPoster(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = optionalReviewUser(db, body);
+  const listing = publicMarketListings(db, user).find(item => item.id === String(body.listingId || ""));
+  const media = listing?.mediaItems?.[0];
+  if (!media || media.type !== "video") return sendJson(res, 404, { ok: false, message: "商品不存在或不可见" });
+  const posterUrl = await generateVideoPoster(media.url);
+  if (!posterUrl) return sendJson(res, 503, { ok: false, message: "视频封面暂时无法生成，请稍后重试" });
+  // Re-read after decoding so concurrent edits/deletions are not overwritten.
+  const latest = readDatabase();
+  const current = latest.marketListings?.find(item => item.id === listing.id);
+  if (!publicMarketListings(latest, user).some(item => item.id === listing.id) || current?.mediaItems?.[0]?.url !== media.url) {
+    return sendJson(res, 409, { ok: false, message: "商品已更新，请刷新后重试" });
+  }
+  current.mediaItems[0].posterUrl = posterUrl;
+  writeDatabase(latest);
+  return sendJson(res, 200, { ok: true, posterUrl });
+}
+
 async function handleMarketList(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
@@ -3879,6 +3990,29 @@ async function handleMarketList(req, res) {
       .filter(item => requestedSavedIds.includes(String(item.id || "")) && savedIds.has(String(item.id || "")))
       .map(item => marketListingView(db, item, user))
     : [];
+  // Only process the returned page, never the full catalogue. Two decoders max.
+  // Originals remain available for product details and failed thumbnail builds.
+  if (body.thumbnails === true) {
+    const jobs = listings.slice(0, 20);
+    const worker = async () => {
+      while (jobs.length) {
+        const listing = jobs.shift();
+        const media = listing.mediaItems?.[0];
+        const source = media?.type === "video" ? media.posterUrl : media?.url || listing.photoUrl;
+        if (!source) continue;
+        const thumbnailUrl = await generateMarketThumbnail(source);
+        if (thumbnailUrl && media) media.thumbnailUrl = thumbnailUrl;
+      }
+    };
+    // A cold thumbnail build must never hold up the feed on a busy server.
+    // Completed files are cached and picked up by the next request.
+    let timer;
+    await Promise.race([
+      Promise.all([worker(), worker()]),
+      new Promise(resolve => { timer = setTimeout(resolve, 800); })
+    ]);
+    clearTimeout(timer);
+  }
   const nextOffset = offset + listings.length;
   return sendJson(res, 200, {
     ok: true,
@@ -4501,6 +4635,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/account/register") return await handleRegister(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/login") return await handleLogin(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/load") return await handleLoadAccount(req, res);
+    if (req.method === "POST" && url.pathname === "/api/account/species/create") return await handleCreateCustomSpecies(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/save") return await handleSaveAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/growth-record/delete") return await handleDeleteGrowthRecord(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/terms/accept") return await handleAcceptTerms(req, res);
@@ -4533,6 +4668,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/like") return await handleCommunityLike(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/comment") return await handleCommunityComment(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/comment/like") return await handleCommunityCommentLike(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/comment/delete") return await handleCommunityCommentDelete(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/circle/follow") return await handleCommunityCircleFollow(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/admin/action") return await handleCommunityAdminAction(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/delete") return await handleCommunityDelete(req, res);
@@ -4551,6 +4687,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/chat/recall") return await handleCommunityChatRecall(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/pin") return await handleCommunityConversationPin(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/chat/delete") return await handleCommunityConversationDelete(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/video-poster") return await handleMarketVideoPoster(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/list") return await handleMarketList(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/detail") return await handleMarketPublicDetail(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/impression") return await handleMarketImpression(req, res);

@@ -121,11 +121,24 @@ async function main() {
 
     const health = await fetch(`${base}/api/app/version?build=1`).then(response => response.json());
     assert.equal(health.ok, true);
+    assert.equal(health.minimumBuild, 90, "1.0.6 must remain supported when building 1.0.7");
+    assert.ok(90 >= health.minimumBuild, "1.0.6 build 90 must not require a forced update");
 
     await request("/api/upload/image", { image: "data:image/png;base64,AAAA" }, { status: 401 });
 
     const seller = await register("13900000001", "Regression Seller");
     const buyer = await register("13900000002", "Regression Buyer");
+
+    const privateCode = "CUS-" + crypto.randomUUID();
+    await request("/api/account/species/create", { code: privateCode, name: "私有测试品种" }, { status: 401 });
+    const custom = await request("/api/account/species/create", { ...auth(seller), code: privateCode, name: "私有测试品种" });
+    assert.equal(custom.json.customSpecies.length, 1);
+    assert.equal(custom.json.species.code, privateCode);
+    const repeated = await request("/api/account/species/create", { ...auth(seller), code: privateCode, name: "私有测试品种" });
+    assert.equal(repeated.json.customSpecies.length, 1, "retries must not create duplicates");
+    const otherAccount = await request("/api/account/load", auth(buyer));
+    assert.equal(otherAccount.json.user.data.customSpecies.length, 0, "private species must not leak to another account");
+    await request("/api/account/species/create", { phone: seller.phone, token: buyer.token, code: privateCode, name: "越权品种" }, { status: 401 });
 
     const accountData = {
       turtles: [{
@@ -147,6 +160,7 @@ async function main() {
     };
     const saved = await request("/api/account/save", { ...auth(seller), data: accountData, accountName: "Regression Seller" });
     assert.equal(saved.json.user.data.turtles.length, 1);
+    assert.equal(saved.json.user.data.customSpecies[0].code, privateCode, "an old client save must preserve private species");
     const loaded = await request("/api/account/load", auth(seller));
     assert.equal(loaded.json.user.data.turtles[0].id, "regression-turtle");
     await request("/api/account/save", { ...auth(seller), data: {}, accountName: "Regression Seller" }, { status: 409 });
@@ -214,6 +228,24 @@ async function main() {
     const community = await request("/api/community/list", auth(seller));
     assert.equal(community.json.posts[0].likeCount, 1);
     assert.equal(community.json.posts[0].comments[0].content, "Regression comment");
+    const commentId = community.json.posts[0].comments[0].id;
+    assert.equal(community.json.posts[0].comments[0].canDelete, false, "post owner cannot delete another user's comment");
+    const ownComments = await request("/api/community/list", auth(buyer));
+    assert.equal(ownComments.json.posts[0].comments[0].canDelete, true);
+    await request("/api/community/comment/delete", { postId, commentId }, { status: 401 });
+    await request("/api/community/comment/delete", { ...auth(seller), postId, commentId, canDelete: true }, { status: 403 });
+    const replyResult = await request("/api/community/comment", { ...auth(seller), postId, content: "Keep this reply", replyToCommentId: commentId });
+    const replyId = replyResult.json.posts[0].comments.find(item => item.content === "Keep this reply").id;
+    await request("/api/community/comment/like", { ...auth(seller), postId, commentId });
+    const removed = await request("/api/community/comment/delete", { ...auth(buyer), postId, commentId });
+    assert.equal(removed.json.posts[0].comments.length, 1);
+    assert.equal(removed.json.posts[0].comments[0].id, replyId, "other people's replies survive deletion");
+    assert.equal(removed.json.posts[0].comments[0].replyToCommentId, "");
+    const afterDeleteUnread = await request("/api/community/unread", auth(seller));
+    assert.ok(!afterDeleteUnread.json.notifications.some(item => item.preview === "Regression comment"), "deleted comment preview must be removed");
+    await request("/api/community/comment/delete", { ...auth(buyer), postId, commentId }, { status: 404 });
+    await request("/api/community/comment/delete", { ...auth(buyer), postId, commentId: replyId }, { status: 403 });
+    await request("/api/community/comment/delete", { ...auth(seller), postId, commentId: replyId });
 
     const sellerId = communityId(seller.phone);
     const buyerId = communityId(buyer.phone);
@@ -289,7 +321,7 @@ async function main() {
       price: 100
     });
     assert.equal(duplicate.json.duplicate, true, "retrying a publish request must not duplicate a product");
-    const marketForBuyer = await request("/api/market/list", auth(buyer));
+    const marketForBuyer = await request("/api/market/list", { ...auth(buyer), thumbnails: true });
     assert.equal(marketForBuyer.json.total, 1);
     await request("/api/market/detail", { ...auth(buyer), listingId });
     const wanted = await request("/api/market/want", { ...auth(buyer), listingId });

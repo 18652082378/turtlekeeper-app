@@ -19,14 +19,9 @@ workflows:
           npm ci || npm install
       - name: Build web assets
         script: |
-          # The 146 thumbnails are committed under assets/species before this
-          # build starts. Never download them in Codemagic: a cloud rate-limit
-          # must not be able to fail an IPA build.
-          test "$(find assets/species -maxdepth 1 -name '*.jpg' | wc -l | tr -d ' ')" = "146"
-          test -f assets/species/manifest.json
+          # Species photos are bundled locally; verify against source assets.
           npm run build
-          test "$(find www/assets/species -maxdepth 1 -name '*.jpg' | wc -l | tr -d ' ')" = "146"
-          test -f www/assets/species/manifest.json
+          node scripts/verify-ios-build.js
       - name: Create and sync iOS project
         script: |
           if [ ! -d "ios" ]; then

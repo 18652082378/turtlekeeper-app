@@ -4256,8 +4256,7 @@ html[data-theme-color="dark"] .turtle-row.menu-open .turtle-menu {
   gap: 6px;
 }
 
-.detail-grid-card > div:nth-child(7),
-.detail-grid-card > div:nth-child(9) {
+.detail-grid-card > .detail-grid-wide {
   grid-column: span 2;
 }
 
@@ -9673,7 +9672,7 @@ html[data-theme-color="dark"] .market-seller-card strong {
 }
 
 .message-notification-section {
-  margin: 12px 0 10px;
+  margin: 0 0 10px;
   border-top: 1px solid var(--divider);
   border-bottom: 1px solid var(--divider);
   background: var(--section-bg);
@@ -9696,7 +9695,7 @@ html[data-theme-color="dark"] .market-seller-card strong {
   min-height: 72px;
   padding: 10px 14px;
   display: grid;
-  grid-template-columns: 48px minmax(0,1fr) auto 12px;
+  grid-template-columns: 48px minmax(0,1fr) 54px;
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid var(--divider);
@@ -9736,12 +9735,14 @@ html[data-theme-color="dark"] .market-seller-card strong {
 }
 .message-notification-type.comment { background: #2f80ed; }
 .message-notification-type.follow { background: var(--primary); }
-.message-notification-copy { min-width: 0; display: grid; gap: 5px; }
+.message-notification-copy { min-width: 0; display: grid; gap: 3px; }
 .message-notification-copy strong { overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-.message-notification-copy strong > b { color: var(--muted); font-weight: 500; }
+.message-notification-copy > span { overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.message-notification-copy time { margin-left: 5px; color: var(--muted); font-size: 11px; }
 .message-notification-copy small { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.message-notification-row > time { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.message-notification-row > em { color: var(--muted); font-size: 22px; font-style: normal; }
+.message-notification-thumbnail { width: 48px; height: 48px; justify-self: end; border-radius: 6px; object-fit: cover; background: var(--raised-bg); }
+.message-notification-target-icon { justify-self: end; color: var(--muted); font-size: 22px; }
+.message-notification-empty { padding: 18px 16px; color: var(--muted); font-size: 13px; text-align: center; }
 .message-list-heading { margin-top: 10px; background: var(--section-bg); }
 
 .message-discover-list {
@@ -10289,18 +10290,21 @@ html[data-theme-color="dark"] .market-top-service-note {
 .forum-floor:active { background: color-mix(in srgb, var(--primary) 7%, var(--card-bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent), 0 4px 14px rgba(18, 42, 34, .1); transform: scale(.995); }
 .forum-reply-avatar { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; object-fit: cover; }
 .forum-floor header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.forum-floor header strong { color: var(--text); font-size: 14px; }
+.forum-floor header strong { color: var(--muted); font-size: 13px; font-weight: 500; }
 .forum-floor header span { flex: none; color: var(--muted); font-size: 11px; }
 .forum-floor small { display: block; margin-top: 4px; color: var(--primary); font-size: 12px; }
-.forum-floor p { margin: 6px 0; color: var(--text); font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
+.forum-floor p { margin: 3px 0 2px; color: var(--text); font-size: 15px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .forum-floor button { min-height: 30px; padding: 0 8px; color: var(--muted); background: transparent; font-size: 12px; }
-.forum-comment-thread { border-bottom: 1px solid var(--divider); }
+.forum-comment-thread { border-bottom: 0; }
+.forum-comment-thread > .forum-floor { padding-top: 10px; padding-bottom: 8px; }
 .forum-comment-thread > .forum-floor { border-bottom: 0; }
 .forum-floor-content { min-width: 0; }
-.forum-comment-actions { min-height: 32px; display: flex; align-items: center; gap: 8px; }
-.forum-comment-actions > button:first-child { padding-left: 0; }
+.forum-comment-actions { min-height: 32px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.community-social-panel [data-delete-community-comment] { margin-left: 8px; padding: 0 4px; min-height: 30px; background: transparent; color: var(--muted); font-size: 12px; }
+.forum-comment-actions > time { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.forum-comment-actions > button { padding: 0 4px; }
 .forum-comment-actions .forum-comment-like { min-width: 52px; margin-left: auto; display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; font-size: 14px; }
-.forum-comment-like span { font-size: 23px; font-weight: 400; line-height: 1; }
+.forum-comment-actions .forum-comment-like svg { width: 17px; height: 17px; flex: 0 0 17px; }
 .forum-comment-like b { min-width: 10px; font-size: 12px; font-weight: 500; }
 .forum-comment-like.active,
 .forum-comment-like.active span { color: #ef3f46 !important; }
@@ -13668,6 +13672,22 @@ html[data-theme-color="dark"] .about-contact-row strong {
 
 .turtle-detail-edit-form .breeding-form-grid > label:last-child {
   border-bottom: 0 !important;
+}
+
+.turtle-detail-edit-form .detail-measure-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.turtle-detail-edit-form .detail-measure-pair > label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 8px !important;
+  min-width: 0;
+  margin: 0;
 }
 
 .turtle-detail-edit-form .detail-choice-row {
@@ -19084,8 +19104,16 @@ html[data-theme-color="dark"] .community-detail-card.is-single-image .community-
 }
 
 /* 帖子详情是独立层级：隐藏主导航后，回复框贴合底部安全区。 */
-.community-detail-page .forum-reply-composer {
-  bottom: env(safe-area-inset-bottom);
+.forum-reply-composer {
+  bottom: var(--forum-keyboard-bottom, 0px);
+  margin: 0;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+  background: var(--topbar-bg);
+  border-radius: 0;
+}
+.forum-keyboard-open .forum-reply-composer { padding-bottom: 8px; }
+@media (max-width: 600px) {
+  .forum-reply-composer { left: 0; right: 0; }
 }
 
 /* 点赞采用 iOS 红色确认态，取消后恢复原有中性色。 */
@@ -19137,3 +19165,49 @@ html[data-theme-color="dark"] .community-detail-card.is-single-image .community-
 .community-search-result-copy small { color: var(--muted); font-size: 12px; }
 .community-search-suggestions img, .community-search-suggestions > button > i { width: 43px; height: 43px; flex: 0 0 auto; border-radius: 10px; object-fit: cover; background: var(--raised-bg); }
 .community-search-suggestions > button > i { display: grid; place-items: center; color: var(--primary); font-style: normal; font-weight: 750; }
+
+/* Breeding completion and sale archive selection. */
+.turtle-hatch-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  min-height: 24px;
+  padding: 3px 10px;
+  border-radius: 7px;
+  background: #ffe17a;
+  color: #624600;
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.breeding-hatch-panel { margin-top: 12px; }
+.breeding-hatch-panel > label { display: grid; gap: 8px; margin-top: 12px; }
+.breeding-hatch-panel > p { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.breeding-hatch-panel > button { width: 100%; }
+.ledger-dashboard-picker { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; margin-bottom: 12px; border: 1px solid var(--divider); border-radius: 14px; background: var(--raised-bg); }
+.ledger-dashboard-picker p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+.ledger-dashboard-picker > button { flex-shrink: 0; }
+
+.breeding-detail-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.breeding-detail-actions > .primary { display: flex; align-items: center; justify-content: center; width: 100%; min-width: 0; margin: 0; text-align: center; }
+.breeding-hatch-panel[hidden] { display: none; }
+
+/* Cover the full mobile viewport, including phones wider than the 430px shell. */
+html .topbar.community-detail-topbar { background: var(--topbar-bg) !important; }
+@media (max-width: 600px) {
+  .topbar.community-detail-topbar { width: 100vw !important; max-width: none !important; margin-left: 0 !important; margin-right: 0 !important; border-radius: 0 !important; }
+}
+
+.custom-species-card { padding: 16px; margin-bottom: 14px; }
+.custom-species-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.custom-species-heading h3 { margin: 0; font-size: 16px; }
+.custom-species-heading p, #customSpeciesForm > p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.custom-species-heading > button { flex: 0 0 auto; width: auto; padding: 10px 14px; }
+#customSpeciesForm { margin-top: 16px; }
+#customSpeciesForm[hidden] { display: none; }
+#customSpeciesForm > label { display: grid; gap: 8px; margin-top: 14px; }
+.custom-species-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+
+.species-alpha-nav[hidden] { display: none; }
