@@ -85,11 +85,11 @@ function publicUserForPolicyClient(user, token, db, body = {}) {
   if (!String(body.termsVersion || "").trim()) result.termsVersion = LEGACY_POLICY_VERSION;
   return result;
 }
-// 1.0.5 使用 build 89 及以下；1.0.6 从 build 90 开始。
+// 1.0.6 使用 build 90–94；1.0.7 从 build 95 开始。
 // 环境变量仍可在不改代码的情况下提高最低版本和最新构建号。
-const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 90)));
-// Keep the public release at 1.0.6 (94) while 1.0.7 is being built/tested.
-const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || 94)));
+const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 95)));
+// App Store 正式上线版本为 1.0.7（99），与开发中的构建号分别维护。
+const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || 99)));
 const IOS_APP_STORE_URL = process.env.IOS_APP_STORE_URL || "https://apps.apple.com/app/id6783481335";
 // Apple Push Notification service (APNs) credentials are configured only on the server.
 const APNS_TEAM_ID = String(process.env.APNS_TEAM_ID || "").trim();
@@ -4640,7 +4640,7 @@ function handleAppVersion(req, res) {
     minimumBuild: MIN_SUPPORTED_APP_BUILD,
     latestBuild: LATEST_APP_BUILD,
     appStoreUrl: IOS_APP_STORE_URL,
-    message: "1.0.5 已停止支持。请前往 App Store 更新至 1.0.6，更新后即可继续使用。"
+    message: "壳友手账 1.0.7 已正式上线。请前往 App Store 更新，更新后即可继续使用。"
   });
 }
 
