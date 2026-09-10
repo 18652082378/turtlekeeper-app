@@ -4,6 +4,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../app.js'), 'utf8');
 function fixture() {
   const ctx = {
+    window: { dismissTradeIntro() {} },
     state: { loggedInPhone: 'user', page: 'home', communityPosts: [] },
     pendingNativePushAction: null, cloudHydrationComplete: true,
     communityReplyTarget: null, token: 'token', notices: [], chats: [],
@@ -26,6 +27,16 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
   await settle();
   assert.equal(c.state.page, 'communityPostDetail');
   assert.equal(c.state.selectedCommunityPostId, 'old-post');
+  c = fixture();
+  c.queueNativePushAction({ data: { route: 'communityDaily', postId: 'old-post' } });
+  await settle();
+  assert.equal(c.state.page, 'communityPostDetail');
+  assert.equal(c.state.selectedCommunityPostId, 'old-post');
+  c = fixture(); c.apiPost = async () => ({ targetPost: null });
+  c.queueNativePushAction({ data: { route: 'communityDaily', postId: 'old-post' } });
+  await settle();
+  assert.equal(c.state.page, 'community');
+  assert.equal(c.notices.length, 1);
   c = fixture();
   c.queueNativePushAction({ data: { route: 'messages', postId: '' } });
   assert.equal(c.state.page, 'messages');

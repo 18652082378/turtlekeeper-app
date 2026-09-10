@@ -103,6 +103,8 @@ async function main() {
         ...process.env,
         PORT: String(port),
         HOST: "127.0.0.1",
+        MIN_SUPPORTED_APP_BUILD: "95",
+        LATEST_APP_BUILD: "99",
         TURTLE_RUNTIME_DIR: runtime,
         FFMPEG_PATH: path.join(runtime, "disabled-ffmpeg"), // Encoding is covered by test-media-variants.js.
         SMS_PROVIDER: "mock",
@@ -122,9 +124,9 @@ async function main() {
 
     const health = await fetch(`${base}/api/app/version?build=1`).then(response => response.json());
     assert.equal(health.ok, true);
-    assert.equal(health.minimumBuild, 90, "1.0.6 must remain supported when building 1.0.7");
-    assert.equal(health.latestBuild, 94, "unreleased builds must not replace the public release in update checks");
-    assert.ok(90 >= health.minimumBuild, "1.0.6 build 90 must not require a forced update");
+    assert.equal(health.minimumBuild, 95, "1.0.7 must remain supported when building 1.0.8");
+    assert.equal(health.latestBuild, 99, "unreleased builds must not replace the public release in update checks");
+    for (const build of [95, 96, 97, 98, 99, 102]) assert.ok(build >= health.minimumBuild, `Build ${build} must not require a forced update`);
 
     await request("/api/upload/image", { image: "data:image/png;base64,AAAA" }, { status: 401 });
 
@@ -216,6 +218,15 @@ async function main() {
     });
     const postId = post.json.posts[0]?.id;
     assert.ok(postId, "community post should be returned after creation");
+    await request("/api/community/daily-push/preference", {}, { status: 401 });
+    const preference = await request("/api/community/daily-push/preference", { ...auth(buyer), enabled: false });
+    assert.equal(preference.json.enabled, false);
+    assert.equal((await request("/api/community/daily-push/preference", auth(buyer))).json.enabled, false);
+    assert.equal((await request("/api/community/daily-push/preference", auth(seller))).json.enabled, true);
+    await request("/api/community/admin/action", { ...auth(buyer), postId, action: "dailyPushApprove", confirmNoAdvertising: true }, { status: 403 });
+    await request("/api/community/admin/action", { ...auth(seller), postId, action: "dailyPushApprove" }, { status: 400 });
+    await request("/api/community/admin/action", { ...auth(seller), postId, action: "dailyPushApprove", confirmNoAdvertising: true });
+    await request("/api/community/admin/action", { ...auth(seller), postId, action: "dailyPushReject" });
     await request("/api/community/create", {
       ...auth(seller), title: "Objectionable turtle post", content: "提供 色-情 裸聊服务"
     }, { status: 400 });

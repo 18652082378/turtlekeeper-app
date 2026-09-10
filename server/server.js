@@ -9,7 +9,9 @@ const http2 = require("http2");
 const path = require("path");
 const { URL } = require("url");
 const { createMarketRankPager } = require("./market-ranking");
+const { reviewHash, advertisingRisk, createDailyCommunityDispatcher } = require("./community-daily-push");
 const marketRankPage = createMarketRankPager();
+const TurtleLossAccounting = require('../assets/loss-accounting');
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -362,7 +364,7 @@ function normalizeCustomSpecies(items = []) {
 }
 
 function normalizeAccountData(data = {}) {
-  const next = { ...emptyAccountData(), ...(data || {}) };
+  const next = TurtleLossAccounting.reconcile({ ...emptyAccountData(), ...(data || {}) });
   return {
     turtles: Array.isArray(next.turtles) ? next.turtles : [],
     keptSpecies: Array.isArray(next.keptSpecies) ? next.keptSpecies : [],
@@ -545,6 +547,7 @@ function normalizeDatabase(data = {}) {
     friendships: Array.isArray(data.friendships) ? data.friendships : [], messages: Array.isArray(data.messages) ? data.messages : [],
     follows: Array.isArray(data.follows) ? data.follows : [], reports: Array.isArray(data.reports) ? data.reports : [],
     systemAnnouncements: Array.isArray(data.systemAnnouncements) ? data.systemAnnouncements : [],
+    communityDailyDeliveries: data.communityDailyDeliveries && typeof data.communityDailyDeliveries === "object" ? data.communityDailyDeliveries : {},
     careReminderDeliveries: data.careReminderDeliveries && typeof data.careReminderDeliveries === "object" ? data.careReminderDeliveries : {},
     appAnalytics: data.appAnalytics && typeof data.appAnalytics === "object" ? data.appAnalytics : { days: {} },
     adminAuditLogs: Array.isArray(data.adminAuditLogs) ? data.adminAuditLogs : []
@@ -971,6 +974,7 @@ function sendApnsNotification(deviceToken, payload) {
     };
     try {
       client = http2.connect(`https://${APNS_HOST}`);
+      if (payload.route === "communityDaily") client.setTimeout(10000, () => finish({ ok: false, reason: "Daily push timeout" }));
       client.once("error", error => finish({ ok: false, reason: error.message || "APNs connection error" }));
       const request = client.request({
         ":method": "POST",
@@ -978,7 +982,8 @@ function sendApnsNotification(deviceToken, payload) {
         authorization: `bearer ${apnsAuthorizationToken()}`,
         "apns-topic": APNS_BUNDLE_ID,
         "apns-push-type": "alert",
-        "apns-priority": "10"
+        "apns-priority": "10",
+        ...(payload.route === "communityDaily" ? { "apns-expiration": "0", "apns-collapse-id": "community-daily" } : {})
       });
       let status = 0;
       let responseBody = "";
@@ -3363,6 +3368,18 @@ async function handleCommunityCircleFollow(req, res) {
   return sendJson(res, 200, { ok: true, followedCircleIds: user.communityCircleIds });
 }
 
+async function handleDailyPushPreference(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (typeof body.enabled === "boolean") {
+    user.communityDailyPushEnabled = body.enabled;
+    await writeDatabase(db);
+  }
+  return sendJson(res, 200, { ok: true, enabled: user.communityDailyPushEnabled !== false });
+}
+
 async function handleCommunityAdminAction(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
@@ -3373,8 +3390,19 @@ async function handleCommunityAdminAction(req, res) {
   if (!post) return sendJson(res, 404, { ok: false, message: "帖子不存在" });
   if (body.action === "pin") post.isPinned = !post.isPinned;
   else if (body.action === "feature") post.isFeatured = !post.isFeatured;
+  else if (body.action === "dailyPushApprove") {
+    if (body.confirmNoAdvertising !== true) return sendJson(res, 400, { ok: false, message: "请先检查所有图片和文字，确认不含广告或引流" });
+    if (normalizedCommunityVisibility(post.visibility) !== "public" || advertisingRisk(post)) return sendJson(res, 400, { ok: false, message: "帖子非公开或包含疑似广告、联系方式、售卖信息，不可推送" });
+    if (Date.now() - Date.parse(post.createdAt) > 86400000) return sendJson(res, 400, { ok: false, message: "仅可推荐24小时内的新帖" });
+    post.dailyPushReview = { hash: reviewHash(post), reviewedBy: user.phone, reviewedAt: new Date().toISOString() };
+    recordAdminAudit(db, user, "确认新帖无广告，加入每日提醒候选", post.id);
+  }
+  else if (body.action === "dailyPushReject") {
+    delete post.dailyPushReview;
+    recordAdminAudit(db, user, "撤销每日新帖提醒资格", post.id);
+  }
   else return sendJson(res, 400, { ok: false, message: "操作无效" });
-  writeDatabase(db);
+  await writeDatabase(db);
   return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
 }
 
@@ -4749,6 +4777,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/community/comment/delete") return await handleCommunityCommentDelete(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/circle/follow") return await handleCommunityCircleFollow(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/admin/action") return await handleCommunityAdminAction(req, res);
+    if (req.method === "POST" && url.pathname === "/api/community/daily-push/preference") return await handleDailyPushPreference(req, res);
     if (req.method === "POST" && url.pathname === "/api/community/delete") return await handleCommunityDelete(req, res);
     if (req.method === "POST" && url.pathname === "/api/content-reports/create") return await handleContentReportCreate(req, res);
     if (req.method === "POST" && url.pathname === "/api/content-reports/list") return await handleContentReportList(req, res);
@@ -4797,6 +4826,17 @@ setInterval(() => {
 // Remote care reminders are checked twice a minute, allowing a short recovery
 // window if the timer runs close to the minute boundary.
 setInterval(() => { void dispatchDueCareReminders(); }, 30 * 1000).unref();
+const dispatchDailyCommunityPush = createDailyCommunityDispatcher({
+  read: readDatabase, write: writeDatabase,
+  configured: () => apnsConfigured(),
+  devices: user => normalizedPushDevices(user.pushDevices),
+  canReceive: (db, post, user) => canViewCommunityPost(db, post, user) && !blockedPhoneSet(user).has(post.authorPhoneRaw),
+  send: async (token, payload) => {
+    const result = await sendApnsNotification(token, payload);
+    if (!result.ok && !result.skipped) console.warn("Daily community push failed:", result.reason || result.status || "unknown");
+  }
+});
+setInterval(() => { dispatchDailyCommunityPush().catch(error => console.error("Daily community push stopped:", error.message)); }, 60 * 1000).unref();
 setInterval(runScheduledBackup, 60 * 60 * 1000).unref();
 
 // Videos are streamed directly from iOS. Keep the origin request alive long

@@ -1888,6 +1888,42 @@ body {
 .metric-strip div:nth-child(3) strong { color: var(--rose); }
 .metric-strip div:nth-child(4) strong { color: var(--sea); }
 
+/* Compact overview with all five counts on one row. */
+.home-redesign .home-hero {
+  min-height: 88px;
+  padding: 16px 16px 44px;
+  margin-bottom: 0;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 58px;
+}
+.home-redesign .home-hero h2 { margin: 0; font-size: 26px !important; }
+.metric-strip.home-overview-metrics {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: -28px 10px 16px;
+  gap: 4px;
+  padding: 8px 4px;
+}
+.home-overview-metrics > div {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-height: 66px;
+  padding: 10px 2px;
+  background: var(--surface, #f3f7f4);
+}
+.home-overview-metrics > div strong { font-size: 22px; line-height: 1.15; }
+.home-overview-metrics > div span { font-size: 12px; line-height: 1.4; white-space: nowrap; }
+.home-overview-metrics > div:nth-child(2) strong { color: var(--sea); }
+.home-overview-metrics > div:nth-child(3) strong { color: var(--aqua); }
+.home-overview-metrics > div:nth-child(4) strong,
+.home-overview-metrics > div:nth-child(5) strong { color: var(--rose); }
+@media (max-width: 360px) {
+  .home-redesign .home-hero h2 { font-size: 22px !important; }
+  .home-overview-metrics > div strong { font-size: 18px; }
+  .home-overview-metrics > div span { font-size: 11px; }
+}
+
 .action-panel {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
@@ -10277,7 +10313,7 @@ html[data-theme-color="dark"] .market-top-service-note {
 .forum-detail-context b { color: var(--primary); font-size: 14px; }
 .forum-detail-context small { color: var(--muted); font-size: 12px; }
 .forum-detail-title { margin: 15px 0 16px; color: var(--text); font-size: 23px; line-height: 1.35; letter-spacing: -.01em; }
-.forum-admin-actions { margin-top: 12px; padding-top: 12px; display: flex; gap: 8px; border-top: 1px solid var(--divider); }
+.forum-admin-actions { margin-top: 12px; padding-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; border-top: 1px solid var(--divider); }
 .forum-admin-actions button { min-height: 36px; padding: 0 14px; border-radius: 18px; color: var(--muted); background: var(--raised-bg); font-size: 13px; }
 .forum-admin-actions button.active { color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, var(--raised-bg)); }
 
@@ -19458,6 +19494,25 @@ html .forum-publish-nav.community-compose-nav { background: var(--topbar-bg) !im
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
   border: 0; border-radius: 0; color: #fff !important; background: transparent !important;
 }
+/* Species directories shared by archive association controls. */
+.turtle-row-bottom .turtle-loss-badge { flex-shrink: 0; margin-left: auto; padding: 4px 10px; border-radius: 12px; color: #c63b4a !important; background: #ffe8eb !important; font-size: 12px; font-weight: 700; }
+html[data-theme-color="dark"] .turtle-row-bottom .turtle-loss-badge { color: #ff9ca7 !important; background: #462b30 !important; }
+select[data-archive-directory][hidden] { display: none !important; }
+.archive-directory-trigger { width: 100%; min-width: 0; text-align: left !important; white-space: normal; overflow-wrap: anywhere; }
+.archive-directory-trigger::after { content: " ›"; }
+.modal-overlay.archive-directory-overlay { position: fixed; inset: 0; z-index: 15000; display: grid; place-items: center; padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); background: rgba(0,0,0,.5) !important; }
+.archive-directory-dialog { width: min(100%, 440px); max-height: 80vh; max-height: 80dvh; display: flex; flex-direction: column; border-radius: 18px; overflow: hidden; background: var(--surface, #fff); color: var(--text); box-shadow: 0 12px 40px rgba(0,0,0,.2); }
+.archive-directory-dialog header { display: grid; grid-template-columns: 44px minmax(0,1fr) 44px; align-items: center; flex-shrink: 0; min-height: 60px; padding: 4px 8px; border-bottom: 1px solid var(--divider, #ddd); }
+.archive-directory-dialog header strong { grid-column: 2; text-align: center; font-size: 17px; overflow-wrap: anywhere; }
+.archive-directory-dialog header button { width: 44px; height: 44px; background: transparent; color: inherit; font-size: 26px; }
+.archive-directory-dialog [data-directory-back] { grid-column: 1; }
+.archive-directory-dialog [data-directory-close] { grid-column: 3; }
+.archive-directory-dialog [hidden] { display: none !important; }
+.archive-directory-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 14px 14px; }
+.archive-directory-list > button { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding: 12px 4px; border-bottom: 1px solid var(--divider, #ddd); background: transparent; color: inherit; text-align: left; }
+.archive-directory-list > button > span { min-width: 0; overflow-wrap: anywhere; font-size: 16px; }
+.archive-directory-list > button > small { flex-shrink: 0; color: var(--muted); font-size: 12px; }
+html[data-theme-color="dark"] .archive-directory-dialog { background: #202020 !important; }
 .market-video-play > span { display: grid; place-items: center; width: 52px; height: 52px; padding-left: 4px; border-radius: 50%; font-size: 22px; color: #fff !important; background: rgba(0,0,0,.55) !important; }
 .market-video-play > small { padding: 5px 12px; border-radius: 20px; color: #fff !important; background: rgba(0,0,0,.55) !important; }
 .market-detail-video-shell:not(.is-idle) .market-video-play { display: none; }

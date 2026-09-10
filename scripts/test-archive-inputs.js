@@ -68,4 +68,12 @@ for(const input of ['1.234','-1','Infinity','']) {
 }
 reset('single');submit({weight:'91.23',carapaceLength:'8.366'});
 assert.equal(saved,undefined);assert.match(message,/背甲长度/);
-console.log('Archive inputs passed: 120 male + 90 female, individual records and one batch ledger, invalid counts rejected, two-decimal measurements retained in archive and ledger.');
+for (const birthDate of ['', '2025-05-20']) {
+  reset('single'); submit({weight:'91.23',carapaceLength:'8.36',acquiredDate:'2026-01-02',birthDate});
+  assert.equal(saved.turtles[0].birthDate,birthDate);
+  assert.equal(saved.turtles[0].acquiredDate,'2026-01-02');
+  assert.equal(saved.ledgerRecords[0].turtleSnapshot.birthDate,birthDate);
+  reset('batch'); submit({batchStage:'hatchling',batchCount:'2',batchTotalPrice:'100',acquiredDate:'2026-01-02',birthDate});
+  assert.ok(saved.turtles.every(t=>t.birthDate===birthDate && t.acquiredDate==='2026-01-02'));
+}
+console.log('Archive inputs passed: batch counts, two-decimal measurements and optional birth dates for single/batch archives.');

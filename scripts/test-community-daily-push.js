@@ -1,0 +1,31 @@
+const assert = require('node:assert/strict');
+const { clock, reviewHash, advertisingRisk, createDailyCommunityDispatcher } = require('../server/community-daily-push');
+const copy = value => JSON.parse(JSON.stringify(value));
+let time = new Date('2026-09-10T02:00:00Z');
+let db = { users: { a:{}, b:{}, off:{communityDailyPushEnabled:false} }, communityPosts:[], reports:[] };
+const post = (id, content = '今天记录小龟的成长情况') => ({id, authorPhoneRaw:'a', title:'今天小龟的生活记录',content,visibility:'public',createdAt:'2026-09-10T01:00:00Z'});
+const approve = item => { item.dailyPushReview = {hash:reviewHash(item)}; return item; };
+const sent = [];
+const options = {read:()=>copy(db),write:async next=>{db=copy(next);},configured:()=>true,now:()=>time,devices:user=>[{token:Object.keys(db.users).find(key=>JSON.stringify(db.users[key])===JSON.stringify(user)) || 'off'}],canReceive:()=>true,send:async(token,payload)=>{sent.push({token,payload});}};
+// Distinct account tokens, including one duplicate registration across accounts.
+db.users.a.token='aaa';db.users.b.token='bbb';db.users.off.token='ccc';
+options.devices=user=>[{token:user.token}];
+(async()=>{
+  assert.deepEqual(clock(new Date('2026-09-09T16:00:00Z')),{day:'2026-09-10',hour:0});
+  for(const content of ['加微信联系我','扫一扫二维码','出龟包邮','https://example.com','售卖小龟500元']) assert.ok(advertisingRisk(post('ad',content)));
+  db.communityPosts=[post('unreviewed'),approve(post('ad','二维码加群'))];
+  const dispatch=createDailyCommunityDispatcher(options);
+  await dispatch();assert.equal(sent.length,0,'Unreviewed and advertising posts must never broadcast');
+  const good=approve(post('first'));db.communityPosts.push(good,approve(post('second')));
+  await Promise.all([dispatch(),dispatch()]);
+  assert.equal(sent.length,2);assert.ok(sent.every(item=>item.payload.postId==='first'));
+  assert.equal(db.communityDailyDeliveries['2026-09-10'].postId,'first');
+  await createDailyCommunityDispatcher(options)();assert.equal(sent.length,2,'Restart must not resend');
+  time=new Date('2026-09-10T14:00:00Z');await dispatch();assert.equal(sent.length,2,'Quiet hours');
+  time=new Date('2026-09-11T02:00:00Z');db.communityPosts=[approve({...post('new-day'),createdAt:'2026-09-11T01:00:00Z'})];
+  await dispatch();assert.equal(sent.length,4,'Next day can select a new post');
+  time=new Date('2026-09-12T02:00:00Z');const changed=approve({...post('changed'),createdAt:'2026-09-12T01:00:00Z'});changed.content='编辑后的新内容';db.communityPosts=[changed];await dispatch();assert.equal(sent.length,4,'Editing invalidates approval');
+  db.communityPosts=[approve({...post('write-failure'),createdAt:'2026-09-12T01:00:00Z'})];
+  await assert.rejects(createDailyCommunityDispatcher({...options,write:async()=>{throw Error('disk failure');}})());assert.equal(sent.length,4,'No send unless durable claim succeeds');
+  console.log('Daily push passed: required ad review, suspicious text rejection, daily limit, concurrent calls, restart, quiet hours, opt-out, changed content and persistence failure.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

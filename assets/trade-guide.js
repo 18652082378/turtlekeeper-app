@@ -50,7 +50,7 @@
       } else {
         const buyer = tab === 'buyer';
         const steps = buyer ? ['确认品种、品相与健康情况', '约定总价、运输风险及售后', '如需中介，联系微信并建群确认', '付款留凭证，发货同步物流', '连续录像开箱，及时反馈验收'] : ['准备近期实拍图片与细节视频', '填写数量、性别、尺寸和体重', '如实说明品相与已知健康问题', '确认费用、运输风险和验收售后', '发货前留存打包与寄件凭证'];
-        content.innerHTML = `<section class="trade-fee"><strong>中介费 0.88%</strong><p>仅适用于中介服务，按交易总价计算；费用承担方请在付款前约定。</p></section><ol>${steps.map(step => `<li>${step}</li>`).join('')}</ol><p class="trade-caption">下方海报为流程摘要，收费及具体规则请查看完整条款。</p><img class="trade-poster" src="assets/trade-guide/${buyer ? 'buyer' : 'seller'}.png" alt="${buyer ? '交易流程须知' : '卖方信息确认清单'}" loading="lazy" decoding="async"><button class="trade-read-terms" data-read-terms>阅读完整交易条款 →</button>`;
+        content.innerHTML = `<section class="trade-fee"><strong>中介费 0.88% · 最低8.80元</strong><p>交易总价不足1000元收取8.80元，1000元及以上按0.88%收取。仅适用于中介服务；费用承担方请在付款前约定。</p></section><ol>${steps.map(step => `<li>${step}</li>`).join('')}</ol><p class="trade-caption">下方海报为流程摘要，收费及具体规则请查看完整条款。</p><img class="trade-poster" src="assets/trade-guide/${buyer ? 'buyer' : 'seller'}.png" alt="${buyer ? '交易流程须知' : '卖方信息确认清单'}" loading="lazy" decoding="async"><button class="trade-read-terms" data-read-terms>阅读完整交易条款 →</button>`;
         content.querySelector('[data-read-terms]').onclick = () => select('terms');
         content.querySelector('img').onclick = () => {
           const zoom = document.createElement('div');
