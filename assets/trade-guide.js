@@ -74,12 +74,7 @@
   };
   window.showTradeIntro = () => {
     if (startupCancelled || document.hidden || location.search || location.hash) return;
-    const now = new Date();
-    const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
-    try {
-      if (localStorage.getItem('turtle.tradeIntro.day.v1') === day) return;
-      localStorage.setItem('turtle.tradeIntro.day.v1', day);
-    } catch (_) { return; }
+    // Temporarily show on every cold start for visual testing, ignoring saved daily limits.
     const intro = document.createElement('div');
     intro.className = 'trade-intro';
     intro.innerHTML = `<div class="trade-intro-brand">壳友手账<small>记录相遇 · 陪伴成长</small></div><button class="trade-intro-skip">跳过</button><button class="trade-intro-content" aria-label="查看交易指南"><img class="trade-intro-art" src="assets/trade-guide/intro-turtle.png" alt="抱着信封的小乌龟" fetchpriority="high"><span class="trade-intro-label">给每一次相遇，多一份安心</span><h1>遇见喜欢的龟<br>也懂怎么交易</h1><p>约定清楚，留好凭证</p><strong>查看交易指南 <i aria-hidden="true">→</i></strong></button><div class="trade-intro-footnote">从壳友相遇，到安心相伴</div>`;

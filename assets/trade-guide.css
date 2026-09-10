@@ -26,3 +26,14 @@ html[data-theme-color="dark"] .trade-guide{background:#17231e;color:#e8efdf}html
 .trade-intro-content strong{box-sizing:border-box;display:flex;justify-content:space-between;align-items:center;width:min(100%,280px);margin-top:26px;padding:17px 25px;border-radius:18px;background:#1a5d42;color:#fff8e6;font-size:17px;box-shadow:0 5px 0 #d7c783}.trade-intro-content i{font-style:normal;font-size:22px;font-weight:400}
 .trade-intro-footnote{position:absolute;bottom:calc(22px + env(safe-area-inset-bottom));font-size:10px;letter-spacing:3px;color:#8b9078}
 @media(max-height:700px){.trade-intro-art{width:29vh;height:29vh}.trade-intro-content .trade-intro-label{margin-bottom:10px}.trade-intro-content strong{margin-top:18px;padding:13px 23px}.trade-intro-content h1{font-size:27px}}
+/* Keep the splash palette independent from global dark-mode text overrides. */
+html .trade-intro{--intro-bg:#e9e1cb;--intro-ink:#183f2d;--intro-muted:#4e604a;--intro-label:#ebd18a;--intro-button:#1a5d42;--intro-button-text:#fff8e6;background:var(--intro-bg)!important;color:var(--intro-ink)!important;color-scheme:light;isolation:isolate}
+html .trade-intro .trade-intro-brand,html .trade-intro .trade-intro-content,html .trade-intro .trade-intro-content h1{color:var(--intro-ink)!important}
+html .trade-intro .trade-intro-brand small,html .trade-intro .trade-intro-content p,html .trade-intro .trade-intro-footnote{color:var(--intro-muted)!important}
+html .trade-intro .trade-intro-label{color:#24452f!important;background:var(--intro-label)!important}
+html .trade-intro .trade-intro-skip{color:var(--intro-ink)!important;background:var(--intro-bg)!important;border:1px solid #8b9876}
+html .trade-intro .trade-intro-content strong,html .trade-intro .trade-intro-content strong i{color:var(--intro-button-text)!important;background:var(--intro-button)!important}
+html .trade-intro .trade-intro-art{border-radius:24px}
+html[data-theme-color="dark"] .trade-intro{--intro-bg:#202e26;--intro-ink:#f0ecd9;--intro-muted:#c6cabb;--intro-label:#dac183;--intro-button:#b5d2a3;--intro-button-text:#173a29;color-scheme:dark}
+html[data-theme-color="dark"] .trade-intro .trade-intro-art{mix-blend-mode:normal;filter:brightness(.78);}
+html[data-theme-color="dark"] .trade-intro .trade-intro-content strong{box-shadow:0 4px 0 #687552}
