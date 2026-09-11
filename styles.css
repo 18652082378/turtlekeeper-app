@@ -19524,3 +19524,29 @@ html[data-theme-color="dark"] .archive-directory-dialog { background: #202020 !i
   border-radius: 50%; font-size: 17px; color: #fff !important; background: rgba(0,0,0,.55) !important;
   pointer-events: none;
 }
+/* Batch archives keep quantity and shared care separate from individual measurements. */
+.batch-count-badge { display: inline-block; margin-left: 6px; color: var(--primary, #56b5a0); font-size: 12px; }
+.batch-form-hint { font-size: 13px; line-height: 1.6; color: var(--muted, #888); margin: 12px 0; }
+.batch-summary { gap: 12px; }
+.batch-summary > div:last-child { grid-column: 1 / -1; }
+.batch-summary strong { overflow-wrap: anywhere; }
+.batch-movement-form { margin-top: 20px; }
+.archive-search { display: block; margin-bottom: 10px; scroll-margin-top: 80px; }
+.archive-search .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.archive-search .field { width: 100%; box-sizing: border-box; }
+.archive-page-count { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+.archive-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 16px 0; }
+.archive-pagination .secondary { width: auto; min-width: 88px; }
+.archive-pagination button:disabled { opacity: .4; cursor: default; }
+.archive-pagination > span { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.local-backup-warning { padding: 14px; margin-bottom: 14px; border: 1px solid var(--amber); border-radius: 12px; background: var(--card-bg); color: var(--text); }
+.local-backup-warning p { font-size: 13px; line-height: 1.5; }
+.local-backup-warning .secondary { width: auto; margin: 4px 8px 0 0; }
+.turtle-batch-row .turtle-row-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.turtle-batch-detail .history-card { margin-bottom: 12px; }
+.turtle-batch-detail .history-card p { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .turtle-batch-row .turtle-row-species p { display: flex; flex-wrap: wrap; gap: 4px; }
+  .turtle-batch-row .batch-count-badge { margin-left: 0; }
+  .turtle-batch-row .turtle-row-meta { flex-wrap: wrap; }
+}

@@ -7,6 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
 let saved, message;
 const species = { code: 'GHG', name: '果核蛋龟' };
 const ctx = {
+  TurtleBatches: require('../assets/turtle-batches'),
   crypto, FormData: class { constructor(data) { this.data=data; } get(key) { return this.data[key] ?? null; } },
   state: {}, requireArchiveCapacity: () => true, speciesByCode: () => species, speciesPhoto: () => 'photo',
   turtleLabel: turtle => turtle.code, formatDate: date => date.toISOString().slice(0,10), money: value => Number(value).toFixed(2),
@@ -28,7 +29,7 @@ assert.equal(saved.turtles.filter(item=>item.gender==='母').length,90);
 assert.equal(new Set(saved.turtles.map(item=>item.id)).size,210);
 assert.equal(saved.ledgerRecords.length,1);
 assert.equal(saved.ledgerRecords[0].amount,2100);
-assert.equal(saved.memos.length,210);
+assert.equal(saved.memos.length,1, 'One reminder per batch');
 assert.ok(saved.turtles.every(item=>item.stage==='juvenile'));
 reset('batch');
 submit({batchStage:'hatchling',batchCount:'120',batchTotalPrice:'2400',batchMaleCount:'999',batchFemaleCount:'bad'});

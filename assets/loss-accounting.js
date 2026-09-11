@@ -18,6 +18,15 @@
       turtleSnapshot: representative ? { ...representative, batchCount: members.length } : { ...record.turtleSnapshot, id: members[0], batchCount: members.length }
     };
   }
+  function lossPurchaseSnapshot(purchase, turtleId) {
+    if (!purchase) return null;
+    // Undo adds back only this member and its transferred amount. Keeping all
+    // remaining batch IDs in every loss grows quadratically with batch size.
+    if (purchase.batchPurchase || ids(purchase).length > 1) {
+      return { ...purchase, batchPurchase: true, turtleId, turtleIds: [turtleId] };
+    }
+    return { ...purchase };
+  }
   function transferLoss(data, loss, turtle) {
     if (loss.lossCostTransferred) return data;
     const purchase = purchaseFor(turtle, data.ledgerRecords);
@@ -29,7 +38,7 @@
     });
     const updatedLoss = { ...loss, amount, photo: turtle.photo || loss.turtleSnapshot?.photo || loss.photo || "", turtleId: turtle.id, turtleSnapshot: loss.turtleSnapshot || { ...turtle },
       lossCostTransferred: true, originalLossAmount: loss.amount,
-      transferredPurchase: purchase ? { ...purchase } : null, transferredPurchaseAmount: purchase ? amount : 0 };
+      transferredPurchase: lossPurchaseSnapshot(purchase, turtle.id), transferredPurchaseAmount: purchase ? amount : 0 };
     const lostTurtle = { ...turtle, status: '已死亡', lossRecordId: loss.id, lossDate: loss.recordDate || '', pinned: false };
     return { ...data,
       turtles: data.turtles.some(item => item.id === turtle.id) ? data.turtles.map(item => item.id === turtle.id ? lostTurtle : item) : [...data.turtles, lostTurtle],
@@ -39,6 +48,8 @@
   }
   function reconcile(data) {
     let next = { ...data, turtles: Array.isArray(data.turtles) ? data.turtles : [], ledgerRecords: Array.isArray(data.ledgerRecords) ? data.ledgerRecords : [], memos: Array.isArray(data.memos) ? data.memos : [] };
+    next.ledgerRecords = next.ledgerRecords.map(record => record.type === 'loss' && record.lossCostTransferred && record.transferredPurchase?.turtleIds?.length > 1
+      ? { ...record, transferredPurchase: lossPurchaseSnapshot(record.transferredPurchase, record.turtleId) } : record);
     // The marker makes this safe to run on load/sync repeatedly. Historical
     // snapshots retain the original amount and purchase record for review/undo.
     for (const original of [...next.ledgerRecords].reverse()) {

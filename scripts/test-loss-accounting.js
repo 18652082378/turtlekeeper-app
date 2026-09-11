@@ -53,7 +53,7 @@ assert.equal(accounting.reconcile(unlinked).ledgerRecords[0].amount,25);
 // Exercise the actual save handler: ignore tampered cost, separate extra fees,
 // preserve archive, prevent duplicate submissions and sales of lost turtles.
 let saved, message;
-const ctx={TurtleLossAccounting:accounting,crypto,
+const ctx={TurtleLossAccounting:accounting,TurtleBatches:require('../assets/turtle-batches'),crypto,
  FormData:class{constructor(values){this.values=values;}get(key){return this.values[key]??null;}},
  requireLogin:()=>true,turtlePoolName:()=>'',turtleLabel:t=>t.code,ledgerTypeText:type=>type,money:n=>Number(n).toFixed(2),
  logActivity:text=>[text],saveWithDeferredImages:patch=>{saved=patch;Object.assign(ctx.state,patch);},toast:text=>message=text,
