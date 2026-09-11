@@ -19226,9 +19226,8 @@ html[data-theme-color="dark"] .community-detail-card.is-single-image .community-
 .ledger-dashboard-picker p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
 .ledger-dashboard-picker > button { flex-shrink: 0; }
 
-.breeding-detail-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.breeding-detail-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .breeding-detail-actions > .primary { display: flex; align-items: center; justify-content: center; width: 100%; min-width: 0; margin: 0; text-align: center; }
-.breeding-hatch-panel[hidden] { display: none; }
 
 /* Cover the full mobile viewport, including phones wider than the 430px shell. */
 html .topbar.community-detail-topbar { background: var(--topbar-bg) !important; }
@@ -19495,8 +19494,12 @@ html .forum-publish-nav.community-compose-nav { background: var(--topbar-bg) !im
   border: 0; border-radius: 0; color: #fff !important; background: transparent !important;
 }
 /* Species directories shared by archive association controls. */
-.turtle-row-bottom .turtle-loss-badge { flex-shrink: 0; margin-left: auto; padding: 4px 10px; border-radius: 12px; color: #c63b4a !important; background: #ffe8eb !important; font-size: 12px; font-weight: 700; }
-html[data-theme-color="dark"] .turtle-row-bottom .turtle-loss-badge { color: #ff9ca7 !important; background: #462b30 !important; }
+/* Align status labels with measurements, in the reserved menu column. */
+.turtle-row-bottom { position: relative; }
+.turtle-row-bottom > .turtle-row-status-badge { position: absolute; top: 50%; right: -38px; transform: translateY(-50%); box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; width: 36px; min-height: 0; margin: 0; padding: 4px 2px; border-radius: 12px; font-size: 11px; line-height: 14px; font-weight: 700; white-space: nowrap; pointer-events: none; }
+.home-archive-section .turtle-row-bottom > .turtle-row-status-badge { right: -40px; }
+.turtle-row-bottom > .turtle-loss-badge { color: #c63b4a !important; background: #ffe8eb !important; }
+html[data-theme-color="dark"] .turtle-row-bottom > .turtle-loss-badge { color: #ff9ca7 !important; background: #462b30 !important; }
 select[data-archive-directory][hidden] { display: none !important; }
 .archive-directory-trigger { width: 100%; min-width: 0; text-align: left !important; white-space: normal; overflow-wrap: anywhere; }
 .archive-directory-trigger::after { content: " ›"; }

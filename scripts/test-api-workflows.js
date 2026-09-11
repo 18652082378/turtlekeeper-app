@@ -177,6 +177,10 @@ async function main() {
     const undoSaved = await request("/api/account/save", { ...auth(modern), data: undone });
     assert.deepEqual(undoSaved.json.user.data.ledgerRecords, undone.ledgerRecords);
     assert.equal(undoSaved.json.user.data.turtles[0].status, "正常饲养");
+    await request("/api/account/save", { ...auth(modern), baseUpdatedAt: "2000-01-01T00:00:00.000Z", data: modernData }, { status: 409 });
+    const afterStaleWrite = await request("/api/account/load", auth(modern));
+    assert.deepEqual(afterStaleWrite.json.user.data.ledgerRecords, undone.ledgerRecords, "stale device cannot overwrite newer ledger records");
+    await request("/api/account/save", { ...auth(modern), baseUpdatedAt: afterStaleWrite.json.user.updatedAt, data: undone });
 
     const privateCode = "CUS-" + crypto.randomUUID();
     await request("/api/account/species/create", { code: privateCode, name: "私有测试品种" }, { status: 401 });

@@ -7,14 +7,79 @@ import UIKit
 import UniformTypeIdentifiers
 
 @objc(TurtleMediaPickerPlugin)
-public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePickerControllerDelegate, UINavigationControllerDelegate, UIDocumentPickerDelegate {
     public let identifier = "TurtleMediaPickerPlugin"
     public let jsName = "TurtleMediaPicker"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "pick", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "pick", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "exportText", returnType: CAPPluginReturnPromise)
     ]
 
     private var cameraCall: CAPPluginCall?
+    private var exportCall: CAPPluginCall?
+    private var exportDirectory: URL?
+
+    @objc func exportText(_ call: CAPPluginCall) {
+        guard let content = call.getString("content"),
+              let requestedName = call.getString("filename") else {
+            call.reject("缺少导出内容或文件名")
+            return
+        }
+        let filename = (requestedName as NSString).lastPathComponent
+        guard !filename.isEmpty, filename.count <= 200,
+              ["csv", "json"].contains((filename as NSString).pathExtension.lowercased()) else {
+            call.reject("导出文件名无效")
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let host = self.bridge?.viewController else {
+                call.reject("文件保存窗口暂时不可用")
+                return
+            }
+            guard self.exportCall == nil, host.presentedViewController == nil else {
+                call.reject("请先关闭当前窗口，再导出文件")
+                return
+            }
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("turtle-export-" + UUID().uuidString, isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let file = directory.appendingPathComponent(filename)
+                try Data(content.utf8).write(to: file, options: .atomic)
+                let picker = UIDocumentPickerViewController(forExporting: [file], asCopy: true)
+                picker.delegate = self
+                picker.shouldShowFileExtensions = true
+                picker.modalPresentationStyle = .fullScreen
+                self.exportCall = call
+                self.exportDirectory = directory
+                host.present(picker, animated: true)
+            } catch {
+                try? FileManager.default.removeItem(at: directory)
+                call.reject("导出文件准备失败：" + error.localizedDescription)
+            }
+        }
+    }
+
+    public func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let call = exportCall else { return }
+        if let destination = urls.first {
+            call.resolve(["saved": true, "filename": destination.lastPathComponent])
+        } else {
+            call.resolve(["saved": false, "cancelled": true])
+        }
+        finishTextExport()
+    }
+
+    public func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        exportCall?.resolve(["saved": false, "cancelled": true])
+        finishTextExport()
+    }
+
+    private func finishTextExport() {
+        if let directory = exportDirectory { try? FileManager.default.removeItem(at: directory) }
+        exportDirectory = nil
+        exportCall = nil
+    }
 
     @objc func pick(_ call: CAPPluginCall) {
         let allowImages = call.getBool("allowImages", true)

@@ -1565,6 +1565,11 @@ async function handleSaveAccount(req, res) {
   const user = authenticate(db, phone, token);
   if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
   const incomingData = normalizeAccountData(body.data || {});
+  // New clients identify the cloud snapshot they edited. Legacy 1.0.7 does
+  // not send this field, so its existing request contract remains supported.
+  if (typeof body.baseUpdatedAt === "string" && body.baseUpdatedAt !== String(user.updatedAt || "")) {
+    return sendJson(res, 409, { ok: false, code: "ACCOUNT_DATA_CONFLICT", message: "其他设备已更新云端，本次保存未覆盖云端数据，请保留本机备份后核对" });
+  }
   const incomingHasContent = accountDataHasContent(incomingData);
   const existingData = normalizeAccountData(user.data || {});
   // Older clients and stale devices must not erase private catalogue entries.
@@ -1610,7 +1615,7 @@ async function handleSaveAccount(req, res) {
   }
   user.accountAvatar = String(body.accountAvatar || "");
   user.data = incomingData;
-  user.updatedAt = new Date().toISOString();
+  user.updatedAt = new Date(Math.max(Date.now(), (Date.parse(user.updatedAt) || 0) + 1)).toISOString();
   writeDatabase(db);
   // A legacy client does not send termsVersion when saving. Return the same
   // compatible version as /account/load so its background auto-save cannot

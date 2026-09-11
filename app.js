@@ -98,7 +98,6 @@ const initialState = {
   breedingManualMother: "",
   breedingEggCount: "",
   breedingFertileCount: "",
-  breedingHatchCount: "",
   breedingNote: "",
   selectedTurtleId: "",
   selectedLedgerId: "",
@@ -308,7 +307,7 @@ function normalizeCustomSpecies(items = []) {
 function normalizeAccountData(data = {}) {
   const next = TurtleLossAccounting.reconcile({ ...emptyAccountData(), ...(data || {}) });
   return {
-    turtles: Array.isArray(next.turtles) ? next.turtles : [],
+    turtles: TurtleBatches.normalizeHatchBatches(Array.isArray(next.turtles) ? next.turtles : []),
     keptSpecies: Array.isArray(next.keptSpecies) ? next.keptSpecies : [],
     customSpecies: normalizeCustomSpecies(next.customSpecies),
     memos: Array.isArray(next.memos) ? next.memos : [],
@@ -596,6 +595,7 @@ function persistPendingCloudData(source = state) {
       accountName: source.accountName,
       accountAvatar: source.accountAvatar || "",
       data: accountDataSnapshot(source),
+      baseUpdatedAt: source.cloudAccountUpdatedAt || "",
       updatedAt: new Date().toISOString()
     }));
     return true;
@@ -621,6 +621,7 @@ function restorePendingCloudData() {
   state = {
     ...state,
     ...normalizeAccountData(pending.data || {}),
+    cloudAccountUpdatedAt: pending.baseUpdatedAt || "",
     accountName: pending.accountName || state.accountName,
     accountAvatar: pending.accountAvatar || state.accountAvatar
   };
@@ -829,6 +830,7 @@ function saveState(options = {}) {
       accountMode: state.accountMode,
       loggedInPhone: state.loggedInPhone,
       cloudToken: activeCloudToken,
+      cloudAccountUpdatedAt: state.cloudAccountUpdatedAt || "",
       registeredUsers: storageUsers,
       pendingAuthCode: state.pendingAuthCode,
       pendingAuthPhone: state.pendingAuthPhone,
@@ -1784,6 +1786,7 @@ async function migrateEmbeddedImagesToCloud(options = {}) {
     return false;
   }
   if (!hasCloudSession()) return false;
+  const migrationPhone = state.loggedInPhone;
   cloudImageMigrationInFlight = true;
   let changed = false;
   const uploadCache = new Map();
@@ -1846,7 +1849,20 @@ async function migrateEmbeddedImagesToCloud(options = {}) {
     }
 
     if (changed) {
-      state = { ...state, accountAvatar, turtles, ledgerRecords, breedingRecords };
+      if (state.loggedInPhone !== migrationPhone) return false;
+      // Uploads can take seconds. Only replace uploaded URLs in the CURRENT
+      // data, never restore the record snapshots taken before those awaits.
+      const uploadedUrls = new Map(await Promise.all([...uploadCache].map(async ([image, upload]) => [image, await upload])));
+      if (state.loggedInPhone !== migrationPhone) return false;
+      const replaceUploadedImages = value => {
+        if (typeof value === "string") return uploadedUrls.get(value) || value;
+        if (Array.isArray(value)) return value.map(replaceUploadedImages);
+        if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replaceUploadedImages(item)]));
+        return value;
+      };
+      state = { ...state, accountAvatar: replaceUploadedImages(state.accountAvatar),
+        turtles: replaceUploadedImages(state.turtles), ledgerRecords: replaceUploadedImages(state.ledgerRecords),
+        breedingRecords: replaceUploadedImages(state.breedingRecords) };
       saveState({ skipCloud: true });
       render();
       refreshCareReminderTimers();
@@ -4829,12 +4845,15 @@ function turtleActionIcon(type) {
   }[type] || "");
 }
 
-function turtleKeepingDays(acquiredDate) {
+function turtleKeepingDays(acquiredDate, endedDate) {
   const matched = String(acquiredDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!matched) return "";
   const startedAt = Date.UTC(Number(matched[1]), Number(matched[2]) - 1, Number(matched[3]));
   const today = new Date();
-  const currentAt = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const end = endedDate === undefined ? null : String(endedDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (endedDate !== undefined && !end) return "";
+  const currentAt = end ? Date.UTC(Number(end[1]), Number(end[2]) - 1, Number(end[3]))
+    : Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
   if (!Number.isFinite(startedAt) || startedAt > currentAt) return "";
   return `已饲养 ${Math.floor((currentAt - startedAt) / 86400000)} 天`;
 }
@@ -4961,7 +4980,18 @@ function turtleTotalCost(turtle, records = state.ledgerRecords || []) {
 }
 
 function turtleBatchLabel(t) {
+  if (t.sourceBreedingId) return t.batchName || `${t.speciesName} · ${t.acquiredDate || ""}孵化批次`;
   return t.batchName || `${t.speciesName} · ${t.acquiredDate || "未填写日期"}批次`;
+}
+
+function turtleArchiveKeepingDays(turtle, records = state.ledgerRecords || []) {
+  if (turtle.status !== "已死亡" && !turtle.lossRecordId) return turtleKeepingDays(turtle.acquiredDate);
+  const loss = records.find(record => record.type === "loss" && !record.duplicateLossOf &&
+    (turtle.lossRecordId ? record.id === turtle.lossRecordId : record.turtleId === turtle.id));
+  // Historical losses may only have their ledger date. Never fall back to
+  // today's date for a lost turtle, as that would keep increasing its age.
+  const lossDate = turtle.lossDate || loss?.recordDate || String(loss?.createdAt || "").slice(0, 10);
+  return turtleKeepingDays(turtle.acquiredDate || loss?.turtleSnapshot?.acquiredDate, lossDate) || "饲养天数待补";
 }
 
 function turtleBatchPoolLabel(summary) {
@@ -4971,13 +5001,14 @@ function turtleBatchPoolLabel(summary) {
 function turtleBatchListRow(t) {
   const summary = TurtleBatches.summary(t.batchMembers || TurtleBatches.members(t, state.turtles));
   const menuOpen = state.openTurtleMenuId === t.id;
+  const keepingDays = t.sourceBreedingId ? turtleArchiveKeepingDays(summary.representative) : turtleKeepingDays(t.acquiredDate);
   return `<article class="turtle-row fresh-card turtle-batch-row ${menuOpen ? "menu-open" : ""}" data-view-turtle="${t.id}" data-reorder-turtle="${t.id}">
     <img src="${t.photo || defaultPhoto}" alt="${escapeHtml(t.speciesName)}" draggable="false" loading="lazy" decoding="async" width="58" height="58">
     ${t.pinned ? `<span class="turtle-pinned-badge">置顶</span>` : ""}
     <div class="turtle-row-content">
       <div class="turtle-row-title"><strong>${escapeHtml(turtleBatchLabel(t))}</strong><span class="turtle-pool-title-meta">龟池 ${escapeHtml(turtleBatchPoolLabel(summary))}</span></div>
-      <div class="turtle-row-species"><p>${escapeHtml(t.speciesName)} <b class="batch-count-badge">批次 · 在养 ${summary.count} 只</b></p><span class="turtle-price" aria-label="在养购入成本 ${money(summary.cost)} 元">¥${money(summary.cost)}</span></div>
-      <div class="turtle-row-bottom"><div class="turtle-row-meta"><span>${({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[t.stage] || "未填阶段"}</span><span>${summary.male} 公 · ${summary.female} 母${summary.unknown ? ` · ${summary.unknown} 未知` : ""}</span></div><span class="turtle-keeping-days">${summary.lost ? `损耗 ${summary.lost} 只` : turtleKeepingDays(t.acquiredDate)}</span></div>
+      <div class="turtle-row-species"><p>${escapeHtml(t.speciesName)} <b class="batch-count-badge">批次 · 在养 ${summary.count} 只</b></p>${!t.sourceBreedingId || summary.cost > 0 ? `<span class="turtle-price" aria-label="在养购入成本 ${money(summary.cost)} 元">¥${money(summary.cost)}</span>` : ""}</div>
+      <div class="turtle-row-bottom"><div class="turtle-row-meta"><span>${({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[t.stage] || "未填阶段"}</span><span>${summary.male} 公 · ${summary.female} 母${summary.unknown ? ` · ${summary.unknown} 未知` : ""}</span>${t.sourceBreedingId && summary.lost ? `<span>损耗 ${summary.lost} 只</span>` : ""}</div><span class="turtle-keeping-days">${summary.lost && !t.sourceBreedingId ? `损耗 ${summary.lost} 只` : keepingDays}</span>${t.sourceBreedingId ? `<span class="turtle-row-status-badge ${summary.count ? "turtle-hatch-badge" : "turtle-loss-badge"}">${summary.count ? "孵化" : "损耗"}</span>` : ""}</div>
     </div>
     <button class="more-btn" data-toggle-turtle-menu="${t.id}" aria-label="批次操作" aria-expanded="${menuOpen}">•••</button>
     ${menuOpen ? `<div class="turtle-menu archive-turtle-menu" role="menu">
@@ -5002,7 +5033,7 @@ function pageTurtleBatchDetail(t) {
   const photo = editing && state.updateDraftPhoto === "__CLEAR__" ? defaultPhoto : (editing && state.updateDraftPhoto) || current.photo || defaultPhoto;
   const histories = (state.activityLogs || []).filter(log => log.batchId === t.batchId);
   return `${topbar(editing ? "更新批次" : "批次详情", true)}<main class="content page-fresh turtle-batch-detail">
-    <section class="page-intro compact-intro"><div><p class="eyebrow dark">批量购入</p><h2>${escapeHtml(turtleBatchLabel(t))}</h2><p>${escapeHtml(t.speciesName)} · ${escapeHtml(t.acquiredDate || "未填写购入日期")}</p></div></section>
+    <section class="page-intro compact-intro"><div><p class="eyebrow dark">${t.sourceBreedingId ? "同窝孵化" : "批量购入"}</p><h2>${escapeHtml(turtleBatchLabel(t))}</h2><p>${escapeHtml(t.speciesName)} · ${escapeHtml(t.acquiredDate || "未填写日期")}</p></div></section>
     <section class="turtle-pool-summary fresh-card batch-summary"><div><strong>${summary.count}</strong><span>当前在养</span></div><div><strong>${summary.lost}</strong><span>累计损耗</span></div><div><strong>¥${money(summary.cost)}</strong><span>在养购入成本</span></div></section>
     <section class="fresh-card note-card"><p>${summary.male} 公 · ${summary.female} 母 · ${summary.unknown} 性别未知</p><p>龟池：${escapeHtml(turtleBatchPoolLabel(summary))}</p><p>阶段：${({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[current.stage] || "未填写"} · ${escapeHtml(current.health || "健康")}</p>${current.note ? `<p>${escapeHtml(current.note)}</p>` : ""}</section>
     ${!editing ? `<section class="turtle-detail-hero fresh-card detail-photo-card"><img class="growth-preview-photo" src="${photo}" alt="批次照片" data-growth-photo-preview role="button" tabindex="0"></section>` : ""}
@@ -5127,7 +5158,8 @@ function submitTurtleBatchMovement(event) {
 function turtleListRow(t) {
   if (t.batchId) return turtleBatchListRow(t);
   const menuOpen = state.openTurtleMenuId === t.id;
-  const keepingDays = turtleKeepingDays(t.acquiredDate);
+  const keepingDays = turtleArchiveKeepingDays(t);
+  const isHatched = Boolean(t.sourceBreedingId || t.source === "孵化");
   const totalCost = turtleTotalCost(t);
   return `
     <article class="turtle-row fresh-card ${menuOpen ? "menu-open" : ""}" data-view-turtle="${t.id}" data-reorder-turtle="${t.id}">
@@ -5147,7 +5179,8 @@ function turtleListRow(t) {
             <span>${t.weight || "-"}g</span>
             <span>背甲 ${t.carapaceLength || "-"}cm</span>
           </div>
-          ${t.status === "已死亡" ? `<span class="turtle-loss-badge">损耗</span>` : t.sourceBreedingId ? `<span class="turtle-hatch-badge">孵化</span>` : keepingDays ? `<span class="turtle-keeping-days">${keepingDays}</span>` : ""}
+          ${keepingDays ? `<span class="turtle-keeping-days">${keepingDays}</span>` : ""}
+          ${t.status === "已死亡" ? `<span class="turtle-row-status-badge turtle-loss-badge">损耗</span>` : isHatched ? `<span class="turtle-row-status-badge turtle-hatch-badge">孵化</span>` : ""}
         </div>
       </div>
       <button class="more-btn" data-toggle-turtle-menu="${t.id}" aria-label="档案操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
@@ -6176,6 +6209,7 @@ function ledgerForm() {
   const purchaseGender = ledgerFormValue("purchaseGender", state.ledgerPurchaseGender || "未知") || "未知";
   const supportsPool = type === "purchase" || type === "loss";
   const poolId = ledgerFormValue("poolId", turtle?.poolId || "");
+  const archiveChoices = !isPurchase && !isOther ? TurtleBatches.group(state.turtles.filter(TurtleBatches.isActive)) : [];
   return `
     <form class="ledger-shell" id="ledgerForm">
       <section class="form-block fresh-card">
@@ -6194,10 +6228,10 @@ function ledgerForm() {
           <input class="field" name="otherTitle" required value="${escapeHtml(ledgerFormValue("otherTitle"))}" placeholder="例如：购买幼龟粮、加热棒、过滤棉">
         ` : !isPurchase ? `
           <div class="label">关联档案</div>
-          <select class="select" name="turtleId" data-archive-directory>
+          <select class="select" name="turtleId" data-archive-directory data-archive-batches>
             <option value="">不关联档案</option>
             ${type === "sold" ? `<option value="__dashboard__">去看板查找</option>` : ""}
-            ${state.turtles.filter(t => !t.lossRecordId).map(t => `<option value="${t.id}" ${draftTurtleId === t.id ? "selected" : ""}>${t.code} · ${t.speciesName}</option>`).join("")}
+            ${archiveChoices.map(t => `<option value="${t.id}" ${t.batchId ? `data-batch-count="${t.batchMembers.length}"` : ""} ${draftTurtleId === t.id ? "selected" : ""}>${escapeHtml(t.batchId ? `${turtleBatchLabel(t)} · 在养 ${t.batchMembers.length} 只` : `${t.code} · ${t.speciesName}`)}</option>`).join("")}
           </select>
         ` : ""}
         ${supportsPool ? `
@@ -6435,7 +6469,7 @@ function pageBreedingAdd() {
         <div>
           <p class="eyebrow dark">新增</p>
           <h2>记录一窝蛋</h2>
-          <p>填写种母、产蛋数量、受精数量、孵化数量，并可上传备注附图。</p>
+          <p>填写种母、产蛋数量、受精数量，并可上传备注附图。孵化后在详情中确认数量并关联看板。</p>
         </div>
       </section>
       <form class="breeding-form fresh-card" id="breedingForm">
@@ -6469,7 +6503,6 @@ function pageBreedingAdd() {
           ${manualMotherSelected ? `<label class="breeding-manual-mother"><span>手动备注</span><input class="field" name="manualMother" value="${escapeHtml(manualMotherValue)}" placeholder="可自行修改编号" required></label>` : ""}
           <label><span>产蛋数</span><input class="field" name="eggCount" type="number" min="0" step="1" required placeholder="0" value="${state.breedingEggCount || ""}"></label>
           <label><span>受精数</span><input class="field" name="fertileCount" type="number" min="0" step="1" required placeholder="0" value="${state.breedingFertileCount || ""}"></label>
-          <label><span>孵化数</span><input class="field" name="hatchCount" type="number" min="0" step="1" placeholder="0" value="${state.breedingHatchCount || ""}"></label>
         </div>
         <label class="breeding-note"><span>备注</span><textarea name="note" placeholder="产蛋位置、状态、孵化盒编号、温度等">${state.breedingNote || ""}</textarea></label>
         <button class="primary" type="submit">保存繁殖记录</button>
@@ -6541,11 +6574,17 @@ function pageBreedingDetail() {
           <label class="breeding-manual-mother"><span>种母备注</span><input class="field" name="manualMother" value="${isManual ? (record.motherName || "") : ""}" placeholder="可自行修改编号"></label>
           <label><span>产蛋数</span><input class="field" name="eggCount" type="number" min="0" step="1" required value="${record.eggCount || 0}"></label>
           <label><span>受精数</span><input class="field" name="fertileCount" type="number" min="0" step="1" required value="${record.fertileCount || 0}"></label>
-          <label><span>孵化数</span><input class="field" name="hatchCount" type="number" min="0" step="1" value="${record.hatchCount || 0}"></label>
         </div>
         <label class="breeding-note"><span>备注</span><textarea name="note" placeholder="产蛋位置、状态、孵化盒编号、温度等">${record.note || ""}</textarea></label>
-        <div class="breeding-detail-actions"><button class="primary" type="button" data-toggle-breeding-hatch aria-expanded="false" aria-controls="breedingHatchPanel">孵化成功</button><button class="primary" type="submit">保存修改</button></div>
-        <div class="breeding-hatch-panel" id="breedingHatchPanel" hidden><label><span>本窝累计孵化成功几只</span><input class="field" name="successfulHatchCount" type="number" min="1" step="1" value="${record.hatchCount || 1}" inputmode="numeric"></label><label><span>幼龟品种</span><select class="select" name="hatchSpeciesCode"><option value="">请选择品种</option>${accountSpeciesList().map(species => `<option value="${species.code}" ${state.turtles.find(t => t.id === record.motherId)?.speciesCode === species.code ? "selected" : ""}>${escapeHtml(species.name)}</option>`).join("")}</select></label><p>按累计数量创建幼龟档案，已关联的不会重复创建。</p><button class="primary" type="button" data-confirm-breeding-hatch>确认孵化并关联看板</button></div>
+        <div class="breeding-detail-actions"><button class="primary" type="submit">保存修改</button></div>
+        <div class="breeding-hatch-panel" id="breedingHatchPanel">
+          <input type="hidden" name="hatchEventId" value="${crypto.randomUUID()}">
+          <label><span>本次孵化成功几只</span><input class="field" name="successfulHatchCount" type="number" min="1" step="1" placeholder="填写本次数量" inputmode="numeric"></label>
+          <label><span>孵化日期</span><input class="field" name="hatchDate" type="date" value="${formatDate(new Date())}" max="${formatDate(new Date())}"></label>
+          <label><span>幼龟品种</span><select class="select" name="hatchSpeciesCode"><option value="">请选择品种</option>${accountSpeciesList().map(species => `<option value="${species.code}" ${state.turtles.find(t => t.id === record.motherId)?.speciesCode === species.code ? "selected" : ""}>${escapeHtml(species.name)}</option>`).join("")}</select></label>
+          <p>每次确认在看板生成一条孵化批次，饲养天数从所选孵化日期计算。累计孵化数量不能超过产蛋数。</p>
+          <button class="primary" type="button" data-confirm-breeding-hatch>确认孵化并关联看板</button>
+        </div>
       </form>
       <section class="section-title"><h3>繁殖记录</h3></section>
       ${historyList.map((item, index) => `
@@ -6999,7 +7038,8 @@ function pageSync() {
         <div><p class="eyebrow dark">同步</p><h2>账号云端保存</h2><p>登录后，档案、护理、繁殖、账本、空间资料和图片都会随账号保存到云端，同一账号可在不同设备查看。</p></div>
       </section>
       <section class="fresh-card settings-card">
-        <button class="mine-row sync-toggle" data-toggle-sync><span>⇄</span><strong>立即同步到云端</strong><span>›</span></button>
+        <button class="mine-row sync-toggle" data-toggle-sync><span>⇄</span><strong>立即同步并获取最新数据</strong><span>›</span></button>
+        <button class="mine-row" data-export-local-backup><span>↓</span><strong>导出本机完整备份</strong><span>›</span></button>
       </section>
     </main>
     ${bottomNav()}
@@ -7531,7 +7571,8 @@ function openArchiveDirectory(select, trigger) {
     overlay.querySelector("[data-directory-title]").textContent = name;
     for (const { option, turtle } of entries) {
       const selected = select.value === option.value;
-      const button = row(turtle.code || turtle.name || "未命名乌龟", selected ? "已选择 ✓" : "选择", () => choose(option.value));
+      const isBatch = option.hasAttribute("data-batch-count");
+      const button = row(isBatch ? option.textContent : (turtle.code || turtle.name || "未命名乌龟"), selected ? "已选择 ✓" : isBatch ? "选择批次" : "选择", () => choose(option.value));
       button.setAttribute("aria-pressed", String(selected));
     }
     back.focus();
@@ -7543,7 +7584,7 @@ function openArchiveDirectory(select, trigger) {
     overlay.querySelector("[data-directory-title]").textContent = "选择品种";
     for (const option of special) row(option.textContent, select.value === option.value ? "✓" : "", () => choose(option.value));
     for (const [name, entries] of [...groups].sort(([a], [b]) => a.localeCompare(b, "zh-CN"))) {
-      row(name, `${entries.length} 只 ›`, () => showGroup(name, entries));
+      row(name, `${entries.length} ${select.hasAttribute("data-archive-batches") ? "条" : "只"} ›`, () => showGroup(name, entries));
     }
   };
   function onKey(event) {
@@ -7566,6 +7607,7 @@ function openArchiveDirectory(select, trigger) {
 }
 
 function bindEvents() {
+  document.querySelector("[data-toggle-sync]")?.addEventListener("click", () => syncCloudAccountManually());
   document.querySelector("[data-retry-local-backup]")?.addEventListener("click", () => setState({}, { forceRender: true }));
   document.querySelector("[data-export-local-backup]")?.addEventListener("click", () => {
     downloadTextFile(`壳友手账-完整备份-${formatDate(new Date())}.json`, TurtleLocalData.stringify({
@@ -7909,6 +7951,7 @@ function bindEvents() {
     if (event.target.value === "__dashboard__") return startLedgerDashboardSelection();
     const turtle = (state.turtles || []).find(item => item.id === event.target.value);
     const draft = captureLedgerFormDraft();
+    if (turtle?.batchId && ["sold", "loss"].includes(state.ledgerDraftType)) return openLedgerForm(state.ledgerDraftType, turtle.id, draft);
     if (turtle?.poolId && ["purchase", "loss"].includes(state.ledgerDraftType)) draft.poolId = turtle.poolId;
     setState({ ledgerDraftTurtleId: event.target.value || "", ledgerDraftForm: draft }, { skipCloud: true });
   });
@@ -7947,13 +7990,6 @@ function bindEvents() {
     setState({ breedingEditPhoto: "__CLEAR__" });
   });
   document.querySelector("#breedingDetailForm")?.addEventListener("submit", submitBreedingDetail);
-  document.querySelector("[data-toggle-breeding-hatch]")?.addEventListener("click", event => {
-    const panel = document.querySelector("#breedingHatchPanel");
-    if (!panel) return;
-    panel.hidden = !panel.hidden;
-    event.currentTarget.setAttribute("aria-expanded", String(!panel.hidden));
-    if (!panel.hidden) panel.querySelector("[name='successfulHatchCount']")?.focus();
-  });
   document.querySelector("[data-confirm-breeding-hatch]")?.addEventListener("click", confirmBreedingHatch);
   bindBreedingSpeciesPicker();
   document.querySelector("[data-breeding-mother]")?.addEventListener("change", e => {
@@ -7969,7 +8005,7 @@ function bindEvents() {
       breedingManualMother: manual ? (draft.breedingManualMother || suggestedManualBreedingMother(draft.breedingDraftDate || state.breedingDraftDate || formatDate(new Date()))) : draft.breedingManualMother
     });
   });
-  document.querySelectorAll("#breedingForm [name='date'], #breedingForm [name='manualMother'], #breedingForm [name='eggCount'], #breedingForm [name='fertileCount'], #breedingForm [name='hatchCount'], #breedingForm [name='note']").forEach(input => {
+  document.querySelectorAll("#breedingForm [name='date'], #breedingForm [name='manualMother'], #breedingForm [name='eggCount'], #breedingForm [name='fertileCount'], #breedingForm [name='note']").forEach(input => {
     input.addEventListener("input", event => {
       if (!requireLogin()) return;
       const draft = readBreedingDraft();
@@ -13711,6 +13747,7 @@ function applyCloudUser(user, activityText = "", options = {}) {
     registeredUsers: [localUser, ...(state.registeredUsers || []).filter(item => item.phone !== localUser.phone)],
     loggedInPhone: localUser.phone,
     cloudToken: localUser.cloudToken,
+    cloudAccountUpdatedAt: user.updatedAt || "",
     accountName: localUser.accountName,
     accountAvatar: localUser.accountAvatar,
     isCommunityAdmin: localUser.isCommunityAdmin,
@@ -13758,22 +13795,34 @@ async function pushCloudDataNow(throwOnError = false) {
     return;
   }
   cloudSyncInFlight = true;
+  const savingPhone = state.loggedInPhone;
+  const pendingAtStart = readPendingCloudData();
   try {
-    await apiPost("/api/account/save", {
+    const result = await apiPost("/api/account/save", {
       phone: state.loggedInPhone,
       token: currentCloudToken(),
       termsVersion: POLICY_VERSION,
       accountName: state.accountName,
       accountAvatar: state.accountAvatar,
+      baseUpdatedAt: state.cloudAccountUpdatedAt || "",
       data: accountDataSnapshot(state)
     });
-    if (!accountHasEmbeddedImages(state)) clearPendingCloudData();
+    const pendingNow = readPendingCloudData();
+    if (state.loggedInPhone === savingPhone) {
+      state.cloudAccountUpdatedAt = result.user?.updatedAt || state.cloudAccountUpdatedAt;
+      if (!accountHasEmbeddedImages(state) && JSON.stringify(pendingNow) === JSON.stringify(pendingAtStart)) clearPendingCloudData(savingPhone);
+      else if (pendingNow?.phone === savingPhone) persistPendingCloudData();
+      saveState({ skipCloud: true });
+    }
   } catch (error) {
     console.warn(error.message || "云端同步失败");
     // Never retry a rejected stale-history write automatically: doing so can
     // turn a recoverable multi-device conflict into repeated overwrites.  The
     // local journal stays intact, and the person gets a clear instruction.
-    if (error?.code === "GROWTH_HISTORY_CONFLICT") {
+    if (error?.code === "ACCOUNT_DATA_CONFLICT") {
+      persistPendingCloudData();
+      toast("其他设备已更新云端，本机修改已保留；请先在同步设置导出备份，再核对两端数据");
+    } else if (error?.code === "GROWTH_HISTORY_CONFLICT") {
       persistPendingCloudData();
       toast("云端有更新的成长记录，本机修改已保留；刷新后再继续编辑");
     }
@@ -13787,9 +13836,11 @@ async function pushCloudDataNow(throwOnError = false) {
   }
 }
 
-async function refreshCloudAccountFromServer() {
+async function refreshCloudAccountFromServer(options = {}) {
   if (!CONFIGURED_SMS_BACKEND || !state.loggedInPhone || !currentCloudToken()) return;
+  const loadingPhone = state.loggedInPhone;
   const pendingBeforeLoad = readPendingCloudData();
+  if (options.background && (cloudSyncInFlight || cloudImageMigrationInFlight || pendingBeforeLoad?.phone === loadingPhone)) return false;
   try {
     const result = await apiPost("/api/account/load", {
       phone: state.loggedInPhone,
@@ -13799,23 +13850,20 @@ async function refreshCloudAccountFromServer() {
     // Keep the route that is already on screen. During boot this is "home";
     // during a normal refresh it is the page the person is currently using.
     if (result.user) {
+      if (state.loggedInPhone !== loadingPhone) return false;
       // The request may have been in flight while the person edited their
       // profile. Read the journal after the response arrives; using a snapshot
       // captured before the request would miss that edit and let the older
       // server nickname/avatar visibly overwrite it.
       const pendingAfterLoad = readPendingCloudData();
-      const localEditDuringLoad = pendingAfterLoad?.phone === result.user.phone &&
-        pendingAfterLoad.updatedAt !== pendingBeforeLoad?.updatedAt;
+      if (options.background && (cloudSyncInFlight || cloudImageMigrationInFlight || pendingAfterLoad?.phone === loadingPhone)) return false;
       applyCloudUser(result.user, "", { skipCloud: true, page: state.page });
-      // A journal newer than the server is an interrupted local save. Restore
-      // it after the authoritative account shell is applied, then retry the
-      // normal save pipeline. A stale journal is discarded so an older device
-      // never overwrites a newer cloud edit.
-      if ((localEditDuringLoad || pendingCloudDataIsNewerThan(result.user.updatedAt, pendingAfterLoad)) && restorePendingCloudData()) {
+      // Device clocks cannot decide whether an unsent sale/loss is disposable.
+      // Keep every pending edit; only retry when its cloud base still matches.
+      if (pendingAfterLoad?.phone === result.user.phone && restorePendingCloudData()) {
         setState({}, { skipCloud: true });
-        queueCloudSave();
-      } else if (pendingAfterLoad?.phone === result.user.phone) {
-        clearPendingCloudData(result.user.phone);
+        if (pendingAfterLoad.baseUpdatedAt === result.user.updatedAt) queueCloudSave();
+        else toast("本机有未同步修改，已保留；请在同步设置导出备份后核对云端数据");
       }
       return true;
     }
@@ -13824,6 +13872,37 @@ async function refreshCloudAccountFromServer() {
     console.warn(error.message || "云端数据读取失败");
     return false;
   }
+}
+
+async function syncCloudAccountManually() {
+  if (!hasCloudSession()) return toast("请先登录云端账号");
+  if (cloudSyncInFlight || cloudImageMigrationInFlight) return toast("正在同步，请稍候再试");
+  try {
+    if (readPendingCloudData()?.phone === state.loggedInPhone) {
+      if (accountHasEmbeddedImages(state)) await migrateEmbeddedImagesToCloud();
+      if (accountHasEmbeddedImages(state)) throw new Error("照片尚未上传完成，本机数据已保留，请稍后重试");
+      await pushCloudDataNow(true);
+    }
+    const loaded = await refreshCloudAccountFromServer({ background: true });
+    toast(loaded ? "已获取云端最新数据" : "暂未获取最新数据，本机修改已保留，请稍后重试");
+  } catch (error) { toast(error.message || "同步失败，本机修改已保留"); }
+}
+
+function startCloudAccountRefresh() {
+  let refreshing = false;
+  const refresh = async () => {
+    if (refreshing || document.hidden || !cloudHydrationComplete || !hasCloudSession()
+      || !["home", "ledger", "mine", "sync"].includes(state.page)
+      || document.querySelector("input:focus, textarea:focus, select:focus, .modal-overlay, .image-preview-overlay")
+      || state.openTurtleMenuId) return;
+    refreshing = true;
+    try { await refreshCloudAccountFromServer({ background: true }); }
+    finally { refreshing = false; }
+  };
+  window.addEventListener("focus", refresh);
+  window.addEventListener("online", refresh);
+  document.addEventListener("visibilitychange", refresh);
+  window.setInterval(refresh, 30000);
 }
 
 async function startCloudSessionHydration() {
@@ -14073,16 +14152,37 @@ async function shareGrowthCard() {
   }
 }
 
-function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") {
-  const blob = new Blob([`\ufeff${content}`], { type });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 800);
+async function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") {
+  try {
+    const text = `\ufeff${content}`;
+    const capacitor = window.Capacitor;
+    if (capacitor?.isNativePlatform?.() && capacitor.getPlatform?.() === "ios") {
+      const plugin = capacitor.Plugins?.TurtleMediaPicker || capacitor.registerPlugin?.("TurtleMediaPicker");
+      if (!plugin?.exportText) throw new Error("当前安装版本尚不支持文件保存，请更新 App；本机数据仍保留");
+      const result = await plugin.exportText({ filename, content: text });
+      if (result?.saved) {
+        toast(`已保存 ${result.filename || filename}，可在“文件”中你选择的位置找到`);
+        return true;
+      }
+      if (result?.cancelled) { toast("已取消导出，未保存文件"); return false; }
+      throw new Error("未确认文件保存成功，请重试");
+    }
+    const blob = new Blob([text], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    toast("已发起下载，请查看浏览器下载列表");
+    return true;
+  } catch (error) {
+    const unsupported = /not implemented|unimplemented|not available/i.test(error?.message || "");
+    toast(unsupported ? "当前安装版本尚不支持文件保存，请更新 App；本机数据仍保留" : (error?.message || "导出失败，本机数据仍保留"));
+    return false;
+  }
 }
 
 function exportAccountData(kind = "account") {
@@ -14100,7 +14200,6 @@ function exportAccountData(kind = "account") {
   });
   const fileName = kind === "business" ? `壳友手账-经营报表-${formatDate(new Date())}.csv` : `壳友手账-数据导出-${formatDate(new Date())}.csv`;
   downloadTextFile(fileName, lines.join("\n"), "text/csv;charset=utf-8");
-  toast("导出文件已生成");
 }
 
 function submitBatchImport(event) {
@@ -14899,12 +14998,19 @@ function deleteTurtlePool(id) {
   toast("龟池已删除");
 }
 
-function openLedgerForm(type, turtleId = "") {
+function openLedgerForm(type, turtleId = "", draft = null) {
   if (!requireLogin()) return;
   const batchTurtle = state.turtles.find(item => item.id === turtleId && item.batchId);
   if (batchTurtle && ["sold", "loss"].includes(type)) {
     setState({ page: "turtleDetail", selectedTurtleId: batchTurtle.id, updatingTurtleId: "", batchMovementType: type, openTurtleMenuId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" });
-    requestAnimationFrame(() => document.querySelector("#turtleBatchMovementForm")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    requestAnimationFrame(() => {
+      const form = document.querySelector("#turtleBatchMovementForm");
+      for (const name of ["recordDate", "amount", "note"]) {
+        const input = form?.elements.namedItem(name);
+        if (input && draft?.[name]) input.value = draft[name];
+      }
+      form?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
     return;
   }
   // 收购始终新建档案；只有售出、损耗才可以操作既有档案。
@@ -14980,31 +15086,39 @@ function readBreedingDraft() {
     breedingManualMother: String(data.get("manualMother") || ""),
     breedingEggCount: String(data.get("eggCount") || ""),
     breedingFertileCount: String(data.get("fertileCount") || ""),
-    breedingHatchCount: String(data.get("hatchCount") || ""),
     breedingNote: String(data.get("note") || "")
   };
 }
 
-function buildBreedingHatchPlan(record, count, species, turtles, ledgerRecords, today) {
+function buildBreedingHatchPlan(record, count, species, turtles, ledgerRecords, hatchDate, eventId = crypto.randomUUID(), today = formatDate(new Date())) {
   if (!Number.isSafeInteger(count) || count < 1) throw new Error("请填写孵化成功的整数只数");
-  if (count > 1000) throw new Error("单窝孵化数量不能超过 1000 只，请核对数量");
-  if (!Number.isSafeInteger(Number(record.eggCount)) || count > Number(record.eggCount)) throw new Error("孵化成功数量不能超过产蛋数");
+  if (count > 1000) throw new Error("单次孵化数量不能超过 1000 只，请核对数量");
   if (!species) throw new Error("请选择幼龟品种");
+  const dateParts = String(hatchDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!dateParts || new Date(Date.UTC(Number(dateParts[1]), Number(dateParts[2]) - 1, Number(dateParts[3]))).toISOString().slice(0, 10) !== hatchDate) throw new Error("请选择正确的孵化日期");
+  if (hatchDate > today) throw new Error("孵化日期不能晚于今天");
+  if (record.date && hatchDate < record.date) throw new Error("孵化日期不能早于产蛋日期");
   const linked = new Set(Array.isArray(record.hatchArchiveIds) ? record.hatchArchiveIds : []);
   for (const turtle of [...turtles, ...ledgerRecords.map(item => item.turtleSnapshot).filter(Boolean)]) {
     if (turtle.sourceBreedingId === record.id) linked.add(turtle.id);
   }
-  if (count < linked.size) throw new Error(`已有 ${linked.size} 只关联档案，累计孵化数量不能减少`);
+  const events = Array.isArray(record.hatchEvents) ? record.hatchEvents : [];
+  const previousCount = Math.max(Number(record.hatchCount) || 0, linked.size, events.reduce((sum, event) => sum + (Number(event.count) || 0), 0));
+  if (events.some(event => event.id === eventId)) return { added: [], hatchArchiveIds: [...linked], hatchEvents: events, hatchCount: previousCount };
+  const hatchCount = previousCount + count;
+  if (!Number.isSafeInteger(Number(record.eggCount)) || hatchCount > Number(record.eggCount)) throw new Error(`已累计孵化 ${previousCount} 只，本次 ${count} 只，合计不能超过产蛋 ${record.eggCount} 枚`);
+  const batchId = `hatch:${record.id}:${eventId}`;
   const added = [];
   const codes = new Set(turtles.map(turtle => turtle.code));
   let serial = 1;
-  for (let index = linked.size; index < count; index++) {
+  for (let index = 0; index < count; index++) {
     let code;
     do { code = `${species.isCustom ? species.name : species.code}-孵化${serial++}`; } while (codes.has(code));
     codes.add(code);
     const turtle = {
       id: crypto.randomUUID(), code, speciesCode: species.code, speciesName: species.name,
-      source: "孵化", sourceBreedingId: record.id, acquiredDate: today,
+      source: "孵化", sourceBreedingId: record.id, hatchEventId: eventId, acquiredDate: hatchDate,
+      batchId, batchName: `${species.name} · ${hatchDate}孵化批次`, stage: "hatchling",
       gender: "未知", status: "正常饲养", health: "健康", poolId: record.poolId || "",
       weight: 0, carapaceLength: 0, price: 0, photo: speciesPhoto(species),
       note: `来自 ${record.motherName} 的繁殖记录（${record.date}）`,
@@ -15013,15 +15127,18 @@ function buildBreedingHatchPlan(record, count, species, turtles, ledgerRecords, 
     linked.add(turtle.id);
     added.push(turtle);
   }
-  return { added, hatchArchiveIds: [...linked] };
+  return { added, hatchArchiveIds: [...linked], hatchCount,
+    hatchEvents: [...events, { id: eventId, batchId, date: hatchDate, count, speciesCode: species.code, turtleIds: added.map(turtle => turtle.id), createdAt: new Date().toISOString() }] };
 }
 
 function confirmBreedingHatch() {
   const form = document.querySelector("#breedingDetailForm");
-  if (!form || !form.reportValidity()) return;
+  if (!form || form.__hatchSubmitted || !form.reportValidity()) return;
   const data = new FormData(form);
   submitBreedingDetail({ preventDefault() {}, currentTarget: form }, {
     count: Number(data.get("successfulHatchCount")),
+    date: String(data.get("hatchDate") || ""),
+    eventId: String(data.get("hatchEventId") || ""),
     species: speciesByCode(String(data.get("hatchSpeciesCode") || ""))
   });
 }
@@ -15039,8 +15156,9 @@ function submitBreedingDetail(event, hatch = null) {
   const manualMother = String(form.get("manualMother") || "").trim();
   const eggCount = Number(form.get("eggCount"));
   const fertileCount = Number(form.get("fertileCount"));
-  const hatchCount = hatch ? hatch.count : Number(form.get("hatchCount") || 0);
+  const hatchCount = Number(record.hatchCount || 0);
   if (![eggCount, fertileCount, hatchCount].every(value => Number.isSafeInteger(value) && value >= 0)) return toast("请填写正确的产蛋数、受精数和孵化数");
+  if (hatchCount > eggCount) return toast("产蛋数不能少于已累计孵化数量");
   if (hatchCount < (record.hatchArchiveIds || []).length) return toast("孵化数量不能少于已关联的幼龟档案数");
   if (motherId === "manual" && !manualMother) return toast("请填写种母备注");
   const photo = state.breedingEditPhoto === "__CLEAR__" ? "" : state.breedingEditPhoto || record.photo || "";
@@ -15091,11 +15209,19 @@ function submitBreedingDetail(event, hatch = null) {
   if (hatch) {
     let plan;
     try {
-      plan = buildBreedingHatchPlan(updated, hatch.count, hatch.species, state.turtles, state.ledgerRecords || [], formatDate(new Date()));
+      plan = buildBreedingHatchPlan(updated, hatch.count, hatch.species, state.turtles, state.ledgerRecords || [], hatch.date, hatch.eventId);
     } catch (error) { return toast(error.message); }
     addedCount = plan.added.length;
     if (addedCount && !requireArchiveCapacity(addedCount)) return;
+    if (!addedCount) return toast("本次孵化已记录，请勿重复提交");
     updated.hatchArchiveIds = plan.hatchArchiveIds;
+    updated.hatchCount = plan.hatchCount;
+    updated.hatchEvents = plan.hatchEvents;
+    historyItem.newSnapshot.hatchCount = plan.hatchCount;
+    historyItem.hatchEventId = hatch.eventId;
+    historyItem.hatchDate = hatch.date;
+    historyItem.hatchAddedCount = addedCount;
+    event.currentTarget.__hatchSubmitted = true;
     hatchPatch = {
       turtles: [...plan.added, ...state.turtles],
       keptSpecies: [...new Set([...state.keptSpecies, hatch.species.code])],
@@ -15107,7 +15233,7 @@ function submitBreedingDetail(event, hatch = null) {
     breedingRecords: (state.breedingRecords || []).map(item => item.id === record.id ? updated : item),
     breedingEditPhoto: "",
     page: hatch ? "home" : "breedingDetail",
-    activityLogs: logActivity(`修改繁殖记录：${updated.motherName}，产蛋 ${eggCount} 枚，受精 ${fertileCount} 枚，孵化 ${hatchCount} 只`, "繁殖")
+    activityLogs: logActivity(hatch ? `记录孵化：${updated.motherName}，孵化日期 ${hatch.date}，本次 ${addedCount} 只，累计 ${updated.hatchCount} 只` : `修改繁殖记录：${updated.motherName}，产蛋 ${eggCount} 枚，受精 ${fertileCount} 枚，孵化 ${hatchCount} 只`, "繁殖")
   }, [photo, historyItem.newPhoto]);
   toast(hatch ? (addedCount ? `孵化成功，已将 ${addedCount} 只幼龟关联至看板` : "这些幼龟已关联看板，未重复创建") : "繁殖记录已更新");
 }
@@ -15122,13 +15248,13 @@ function submitBreedingRecord(event) {
   const manualMother = String(form.get("manualMother") || "").trim();
   const eggCount = Number(form.get("eggCount"));
   const fertileCount = Number(form.get("fertileCount"));
-  const hatchCount = Number(form.get("hatchCount") || 0);
+  const hatchCount = 0;
   if (motherId === "manual" && !manualMother) {
     toast("请填写种母的手动备注");
     return;
   }
-  if (Number.isNaN(eggCount) || Number.isNaN(fertileCount) || Number.isNaN(hatchCount)) {
-    toast("请填写正确的产蛋数、受精数和孵化数");
+  if (Number.isNaN(eggCount) || Number.isNaN(fertileCount)) {
+    toast("请填写正确的产蛋数和受精数");
     return;
   }
   const record = {
@@ -15157,7 +15283,6 @@ function submitBreedingRecord(event) {
     breedingManualMother: "",
     breedingEggCount: "",
     breedingFertileCount: "",
-    breedingHatchCount: "",
     breedingNote: "",
     page: "breeding",
     activityLogs: logActivity(`新增繁殖记录：${record.motherName}，产蛋 ${eggCount} 枚，受精 ${fertileCount} 枚，孵化 ${hatchCount} 只`, "繁殖")
@@ -16708,6 +16833,7 @@ checkRequiredAppUpdate();
 startMarketNetworkMonitoring();
 refreshCareReminderTimers();
 startCloudSessionHydration();
+startCloudAccountRefresh();
 setupNativePushNotifications();
 startMessageUnreadPolling();
 refreshMessageUnread(true);

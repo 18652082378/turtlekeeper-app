@@ -61,4 +61,21 @@ vm.runInContext(source.slice(source.indexOf('function isMigratableImage('), sour
   await ctx.migrateEmbeddedImagesToCloud();
   assert.equal(uploads, 1, 'Repeat saves do not reupload the same image');
   console.log('Shared batch image: one upload, reused by every member and loss snapshot.');
+  // A loss entered while a slow photo upload is pending must survive when
+  // the upload completes; only image URLs may be changed by that completion.
+  ctx.state = { loggedInPhone: 'same-account', ...data };
+  let finishUpload;
+  ctx.uploadDataUrlToCloud = () => new Promise(resolve => { finishUpload = resolve; });
+  const uploading = ctx.migrateEmbeddedImagesToCloud();
+  const currentTurtle = ctx.state.turtles.find(t => t.status !== '已死亡');
+  const concurrentLoss = { id: 'loss-during-upload', type: 'loss', turtleId: currentTurtle.id, photo };
+  ctx.state = accounting.transferLoss({ ...ctx.state, ledgerRecords: [concurrentLoss, ...ctx.state.ledgerRecords] }, concurrentLoss, currentTurtle);
+  ctx.state.turtles = ctx.state.turtles.map(t => t.id === currentTurtle.id ? { ...t, note: 'edited during upload' } : t);
+  finishUpload('https://example.test/concurrent.jpg');
+  await uploading;
+  assert.equal(ctx.state.turtles.filter(t => t.status !== '已死亡').length, 99);
+  assert.ok(ctx.state.ledgerRecords.some(r => r.id === concurrentLoss.id));
+  assert.equal(ctx.state.turtles.find(t => t.id === currentTurtle.id).note, 'edited during upload');
+  assert.equal(ctx.state.ledgerRecords.find(r => r.id === concurrentLoss.id).photo, 'https://example.test/concurrent.jpg');
+  console.log('Concurrent loss and edits survive delayed photo uploads.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

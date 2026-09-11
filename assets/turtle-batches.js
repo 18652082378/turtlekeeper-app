@@ -1,5 +1,8 @@
 (function (root) {
   const isActive = turtle => !['已死亡', '已转让'].includes(turtle.status) && !turtle.lossRecordId;
+  const normalizeHatchBatches = turtles => turtles.map(turtle => turtle.sourceBreedingId
+    ? { ...turtle, batchId: turtle.batchId || `hatch:${turtle.sourceBreedingId}${turtle.hatchEventId ? `:${turtle.hatchEventId}` : ''}`, stage: turtle.stage || 'hatchling' }
+    : turtle);
   const members = (turtle, turtles) => turtle.batchId ? turtles.filter(item => item.batchId === turtle.batchId) : [turtle];
   function group(turtles) {
     const batches = new Map();
@@ -41,7 +44,7 @@
     const cents = Math.round(Number(amount) * 100);
     return Array.from({ length: count }, (_, index) => (Math.floor(cents / count) + (index < cents % count ? 1 : 0)) / 100);
   }
-  const api = { isActive, members, group, summary, poolCount, splitCents };
+  const api = { isActive, normalizeHatchBatches, members, group, summary, poolCount, splitCents };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.TurtleBatches = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
