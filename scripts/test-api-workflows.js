@@ -99,6 +99,7 @@ async function main() {
   try {
     child = spawn(process.execPath, [serverFile], {
       cwd: root,
+      windowsHide: true,
       env: {
         ...process.env,
         PORT: String(port),
@@ -126,12 +127,56 @@ async function main() {
     assert.equal(health.ok, true);
     assert.equal(health.minimumBuild, 95, "1.0.7 must remain supported when building 1.0.8");
     assert.equal(health.latestBuild, 99, "unreleased builds must not replace the public release in update checks");
-    for (const build of [95, 96, 97, 98, 99, 102]) assert.ok(build >= health.minimumBuild, `Build ${build} must not require a forced update`);
+    for (const build of [95, 96, 97, 98, 99, 102, 103]) assert.ok(build >= health.minimumBuild, `Build ${build} must not require a forced update`);
 
     await request("/api/upload/image", { image: "data:image/png;base64,AAAA" }, { status: 401 });
 
     const seller = await register("13900000001", "Regression Seller");
     const buyer = await register("13900000002", "Regression Buyer");
+
+    // 1.0.7 removes a lost turtle but retains the original purchase and the
+    // user-entered loss amount. A shared server must not migrate that ledger.
+    const legacy = await register("13900000003", "Legacy Client");
+    const legacyTurtle = { id: "legacy-lost", speciesName: "果核蛋龟", price: 100, status: "正常饲养", photo: "/uploads/shared.png?media-v=compat-test" };
+    const legacyPurchase = { id: "legacy-purchase", type: "purchase", turtleId: legacyTurtle.id, amount: 100, turtleSnapshot: legacyTurtle };
+    const legacyLoss = { id: "legacy-loss", type: "loss", turtleId: legacyTurtle.id, amount: 25, turtleSnapshot: legacyTurtle };
+    const legacyData = {
+      turtles: [],
+      ledgerRecords: [legacyLoss, legacyPurchase],
+      memos: [{ id: "legacy-memo", turtleId: legacyTurtle.id, reminderEnabled: true }],
+      turtlePools: [{ id: "legacy-pool", name: "旧版龟池", type: "hatchling", count: 12 }]
+    };
+    const legacySaved = await request("/api/account/save", { ...auth(legacy), data: legacyData });
+    const legacyLoaded = await request("/api/account/load", auth(legacy));
+    for (const result of [legacySaved, legacyLoaded]) {
+      const data = result.json.user.data;
+      assert.deepEqual(data.turtles, [], "1.0.7 losses must not reappear in archives");
+      assert.deepEqual(data.ledgerRecords, legacyData.ledgerRecords, "server must preserve 1.0.7 purchase and loss amounts");
+      assert.deepEqual(data.memos, legacyData.memos, "server must not migrate legacy reminders");
+      assert.equal(data.turtlePools[0].count, 12, "legacy pool counts must remain unchanged");
+      assert.equal(result.json.user.termsVersion, "2026-08-12", "legacy saves and loads must keep the compatible agreement");
+    }
+    const legacyDeleted = await request("/api/account/save", {
+      ...auth(legacy), data: { ...legacyData, ledgerRecords: [legacyPurchase] }
+    });
+    assert.deepEqual(legacyDeleted.json.user.data.ledgerRecords, [legacyPurchase], "1.0.7 can still delete a loss without rewriting its purchase");
+
+    // Build 103 performs its own accounting migration. The same endpoints
+    // must round-trip its metadata and shared image URLs as ordinary JSON.
+    const modern = await register("13900000004", "Build 103 Client");
+    const accounting = require("../assets/loss-accounting");
+    const modernData = accounting.reconcile(legacyData);
+    const modernSaved = await request("/api/account/save", { ...auth(modern), data: modernData });
+    const modernLoaded = await request("/api/account/load", auth(modern));
+    for (const result of [modernSaved, modernLoaded]) {
+      assert.deepEqual(result.json.user.data.turtles, modernData.turtles);
+      assert.deepEqual(result.json.user.data.ledgerRecords, modernData.ledgerRecords);
+      assert.deepEqual(result.json.user.data.memos, modernData.memos);
+    }
+    const undone = accounting.undoLoss(modernLoaded.json.user.data, modernLoaded.json.user.data.ledgerRecords.find(record => record.id === legacyLoss.id));
+    const undoSaved = await request("/api/account/save", { ...auth(modern), data: undone });
+    assert.deepEqual(undoSaved.json.user.data.ledgerRecords, undone.ledgerRecords);
+    assert.equal(undoSaved.json.user.data.turtles[0].status, "正常饲养");
 
     const privateCode = "CUS-" + crypto.randomUUID();
     await request("/api/account/species/create", { code: privateCode, name: "私有测试品种" }, { status: 401 });

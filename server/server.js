@@ -11,7 +11,6 @@ const { URL } = require("url");
 const { createMarketRankPager } = require("./market-ranking");
 const { reviewHash, advertisingRisk, createDailyCommunityDispatcher } = require("./community-daily-push");
 const marketRankPage = createMarketRankPager();
-const TurtleLossAccounting = require('../assets/loss-accounting');
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -364,7 +363,11 @@ function normalizeCustomSpecies(items = []) {
 }
 
 function normalizeAccountData(data = {}) {
-  const next = TurtleLossAccounting.reconcile({ ...emptyAccountData(), ...(data || {}) });
+  // Loss accounting migration belongs to the newer client. 1.0.7 removes
+  // lost turtles and keeps user-entered ledger amounts; migrating here would
+  // silently change its archives, costs and reminders on both load and save.
+  // Preserve newer clients' loss metadata through the same JSON API.
+  const next = { ...emptyAccountData(), ...(data || {}) };
   return {
     turtles: Array.isArray(next.turtles) ? next.turtles : [],
     keptSpecies: Array.isArray(next.keptSpecies) ? next.keptSpecies : [],
