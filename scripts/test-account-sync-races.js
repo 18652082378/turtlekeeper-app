@@ -7,9 +7,14 @@ const clone = value => JSON.parse(JSON.stringify(value));
 function device() {
   const ctx = {
     CONFIGURED_SMS_BACKEND: true, POLICY_VERSION: 'test',
+    TurtleLocalData: require('../assets/local-data-codec'),
     state: { loggedInPhone: 'account', cloudAccountUpdatedAt: 'revision-1', page: 'home', ledgerRecords: [] },
     pending: null, cloudHydrationComplete: true, cloudSyncInFlight: false,
     cloudSyncQueued: false, cloudImageMigrationInFlight: false,
+    cloudSyncTimer: null, CLOUD_SYNC_DEBOUNCE_MS: 10,
+    setTimeout: () => 1, clearTimeout() {},
+    document: { querySelector: () => null, createElement: () => ({ dataset: {}, setAttribute() {}, querySelector: () => ({ addEventListener() {} }) }) },
+    normalizeAccountData: data => clone(data), hasCloudSession: () => true, render() {},
     currentCloudToken: () => 'token', accountHasEmbeddedImages: () => false,
     accountDataSnapshot: state => ({ ledgerRecords: clone(state.ledgerRecords) }),
     saveState() {}, queueCloudSave() {}, toast() {}, console,
@@ -18,11 +23,13 @@ function device() {
   ctx.clearPendingCloudData = () => { ctx.pending = null; };
   ctx.persistPendingCloudData = () => {
     ctx.pending = { phone: ctx.state.loggedInPhone, baseUpdatedAt: ctx.state.cloudAccountUpdatedAt,
+      baseDataRevision: ctx.state.cloudAccountDataRevision || '', conflict: ctx.state.cloudSyncConflict || null,
       data: ctx.accountDataSnapshot(ctx.state), updatedAt: new Date().toISOString() };
   };
   ctx.restorePendingCloudData = () => {
     if (!ctx.pending || ctx.pending.phone !== ctx.state.loggedInPhone) return false;
-    Object.assign(ctx.state, clone(ctx.pending.data), { cloudAccountUpdatedAt: ctx.pending.baseUpdatedAt });
+    Object.assign(ctx.state, clone(ctx.pending.data), { cloudAccountUpdatedAt: ctx.pending.baseUpdatedAt,
+      cloudAccountDataRevision: ctx.pending.baseDataRevision || '', cloudSyncConflict: ctx.pending.conflict || null });
     return true;
   };
   ctx.applyCloudUser = user => {
@@ -30,7 +37,7 @@ function device() {
   };
   ctx.setState = patch => Object.assign(ctx.state, patch);
   vm.createContext(ctx);
-  vm.runInContext(source.slice(source.indexOf('async function pushCloudDataNow('), source.indexOf('async function startCloudSessionHydration(')), ctx);
+  vm.runInContext(source.slice(source.indexOf('function accountSyncSignature('), source.indexOf('async function startCloudSessionHydration(')), ctx);
   return ctx;
 }
 (async () => {
@@ -74,5 +81,45 @@ function device() {
   d.apiPost = async () => { throw Object.assign(new Error('stale device'), { code: 'ACCOUNT_DATA_CONFLICT' }); };
   await assert.rejects(d.pushCloudDataNow(true), /stale device/);
   assert.equal(d.pending.data.ledgerRecords[0].id, 'conflicted-loss');
+  let retries = 0;
+  let warnings = 0;
+  d.apiPost = async () => { retries++; throw new Error('must not retry'); };
+  d.toast = () => { warnings++; };
+  for (let i = 0; i < 5; i++) {
+    d.queueCloudSave();
+    await d.pushCloudDataNow();
+    d.pauseCloudSync();
+  }
+  assert.equal(retries, 0, 'paused sync cannot flood retries while navigating');
+  assert.equal(warnings, 0, 'an existing conflict cannot flood toasts');
+  assert.equal(d.pending.conflict.phone, 'account', 'pause is retained in the recovery journal');
+
+  const e = device();
+  e.state.cloudAccountUpdatedAt = '';
+  e.state.ledgerRecords = [{ id: 'already-saved-loss', type: 'loss', amount: 450 }];
+  e.persistPendingCloudData();
+  e.apiPost = async () => ({ user: { phone: 'account', updatedAt: 'revision-8', dataRevision: 'hash-8', data: clone(e.pending.data) } });
+  await e.refreshCloudAccountFromServer();
+  assert.equal(e.pending, null, 'identical full snapshots repair empty legacy revisions without uploading');
+  assert.equal(e.state.cloudAccountDataRevision, 'hash-8');
+
+  const f = device();
+  f.state.cloudAccountDataRevision = 'hash-1';
+  f.state.ledgerRecords = [{ id: 'loss-during-notification', type: 'loss' }];
+  f.persistPendingCloudData();
+  f.apiPost = async (route, payload) => {
+    assert.equal(payload.baseDataRevision, 'hash-1');
+    return { user: { updatedAt: 'revision-9', dataRevision: 'hash-2' } };
+  };
+  await f.pushCloudDataNow(true);
+  assert.equal(f.pending, null);
+
+  const g = device();
+  g.state.ledgerRecords = [{ id: 'different-note', type: 'loss', amount: 450, note: 'local' }];
+  g.persistPendingCloudData();
+  g.apiPost = async () => ({ user: { phone: 'account', updatedAt: 'revision-7', dataRevision: 'hash-7', data: { ledgerRecords: [{ id: 'different-note', type: 'loss', amount: 450, note: 'remote' }] } } });
+  await g.syncCloudAccountManually();
+  assert.equal(g.pending.data.ledgerRecords[0].note, 'local', 'matching totals cannot erase different record details');
+  assert.equal(g.cloudSyncIsPaused(), true);
   console.log('Account sync races passed: concurrent saves, cross-device refresh, pending recovery, load/edit races and stale-write preservation.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

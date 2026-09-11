@@ -17,7 +17,7 @@ const ctx = { TurtleBatches, TurtleLossAccounting, crypto,
   makeActivity: text => ({ id: crypto.randomUUID(), text, createdAt: '2026-09-10' }),
   saveWithDeferredImages: patch => { saved = patch; Object.assign(ctx.state, patch); },
   toast: text => { message = text; }, activateCareReminder: () => {}, window: { setTimeout() {} },
-  state: { turtles: [], ledgerRecords: [], turtlePools: [{ id: 'p1', name: '苗池', count: 7 }, { id: 'p2', name: '新池', count: 0 }], memos: [], keptSpecies: [], activityLogs: [], formPhoto: '', turtleSort: 'default', turtleFilter: 'all', turtlePoolFilter: 'all' }
+  state: { turtles: [], ledgerRecords: [], turtlePools: [{ id: 'p1', name: '苗池', count: 7, countMode: 'additional' }, { id: 'p2', name: '新池', count: 0, countMode: 'additional' }], memos: [], keptSpecies: [], activityLogs: [], formPhoto: '', turtleSort: 'default', turtleFilter: 'all', turtlePoolFilter: 'all' }
 };
 ctx.turtlePoolName = id => ctx.state.turtlePools.find(pool => pool.id === id)?.name || '未关联';
 vm.createContext(ctx);

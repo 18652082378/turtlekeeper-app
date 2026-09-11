@@ -179,10 +179,38 @@ async function main() {
     assert.equal(undoSaved.json.user.data.turtles[0].status, "正常饲养");
     await request("/api/account/save", { ...auth(modern), baseUpdatedAt: "2000-01-01T00:00:00.000Z", data: modernData }, { status: 409 });
     const afterStaleWrite = await request("/api/account/load", auth(modern));
+    assert.ok(Number.isFinite(Date.parse(afterStaleWrite.json.user.updatedAt)), "account/load must actually return the revision timestamp");
+    assert.match(afterStaleWrite.json.user.dataRevision, /^[a-f0-9]{64}$/, "account/load must return a data revision");
     assert.deepEqual(afterStaleWrite.json.user.data.ledgerRecords, undone.ledgerRecords, "stale device cannot overwrite newer ledger records");
     await request("/api/account/save", { ...auth(modern), baseUpdatedAt: afterStaleWrite.json.user.updatedAt, data: undone });
 
+    const baseForNotification = (await request("/api/account/load", auth(modern))).json.user;
+    await request("/api/notifications/device/register", { ...auth(modern), deviceToken: "ab".repeat(32), platform: "ios" });
+    const afterNotification = (await request("/api/account/load", auth(modern))).json.user;
+    assert.equal(afterNotification.dataRevision, baseForNotification.dataRevision, "notification registration is not an account data edit");
+    const newMemoData = { ...baseForNotification.data, memos: [...baseForNotification.data.memos, { id: "sync-revision-memo", text: "new care note" }] };
+    const savedWithRevision = (await request("/api/account/save", { ...auth(modern), baseUpdatedAt: "2000-01-01T00:00:00.000Z", baseDataRevision: baseForNotification.dataRevision, data: newMemoData })).json.user;
+    assert.notEqual(savedWithRevision.dataRevision, baseForNotification.dataRevision, "actual edits change the revision");
+    const rejectedOldRevision = await request("/api/account/save", { ...auth(modern), baseDataRevision: baseForNotification.dataRevision, data: baseForNotification.data }, { status: 409 });
+    assert.equal(rejectedOldRevision.json.code, "ACCOUNT_DATA_CONFLICT");
+    assert.ok((await request("/api/account/load", auth(modern))).json.user.data.memos.some(item => item.id === "sync-revision-memo"));
+
     const privateCode = "CUS-" + crypto.randomUUID();
+    const { createLegacyData, legacyNormalize } = require('./legacy-upgrade-fixture');
+    const batches = require('../assets/turtle-batches');
+    const upgradeAccount = await register('13900000005', 'Upgrade Regression');
+    const oldAccount = legacyNormalize(createLegacyData(500, 1000.01));
+    await request('/api/account/save', { ...auth(upgradeAccount), data: oldAccount });
+    const oldCloud = (await request('/api/account/load', auth(upgradeAccount))).json.user;
+    const allocated = batches.normalizeLegacyPurchaseCosts(oldCloud.data);
+    const upgradedAccountData = { ...allocated, turtles: batches.normalizeHatchBatches(allocated.turtles) };
+    const upgradedCloud = (await request('/api/account/save', { ...auth(upgradeAccount), baseDataRevision: oldCloud.dataRevision, data: upgradedAccountData })).json.user;
+    assert.equal(batches.group(upgradedCloud.data.turtles).length, 3);
+    assert.equal(upgradedCloud.data.ledgerRecords.filter(record => record.type === 'purchase').length, 1);
+    assert.equal(batches.summary(upgradedCloud.data.turtles.filter(turtle => turtle.source === '购买')).cost, 1000.01);
+    const legacyResave = legacyNormalize(upgradedCloud.data);
+    await request('/api/account/save', { ...auth(upgradeAccount), data: legacyResave });
+    assert.deepEqual((await request('/api/account/load', auth(upgradeAccount))).json.user.data, upgradedCloud.data, '1.0.7 ordinary save preserves upgraded batch data');
     await request("/api/account/species/create", { code: privateCode, name: "私有测试品种" }, { status: 401 });
     const custom = await request("/api/account/species/create", { ...auth(seller), code: privateCode, name: "私有测试品种" });
     assert.equal(custom.json.customSpecies.length, 1);

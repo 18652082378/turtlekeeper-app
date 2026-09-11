@@ -305,19 +305,34 @@ function sendJson(res, status, body) {
 
 function readJson(req) {
   return new Promise((resolve, reject) => {
-    let raw = "";
+    const chunks = [];
+    let bytes = 0;
+    let failed = false;
     req.on("data", chunk => {
-      raw += chunk;
-      if (raw.length > 25 * 1024 * 1024) reject(new Error("请求内容过大"));
+      if (failed) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += buffer.length;
+      if (bytes > 25 * 1024 * 1024) {
+        failed = true;
+        chunks.length = 0;
+        reject(new Error("请求内容过大"));
+        return;
+      }
+      chunks.push(buffer);
     });
     req.on("end", () => {
+      if (failed) return;
       try {
+        // A UTF-8 character may span TCP chunks. Decode only after joining
+        // the bytes; coercing each chunk to text corrupts Chinese and emoji.
+        const raw = Buffer.concat(chunks, bytes).toString("utf8");
         resolve(raw ? JSON.parse(raw) : {});
       } catch {
         reject(new Error("请求格式不正确"));
       }
     });
     req.on("error", reject);
+    req.on("aborted", () => reject(new Error("请求已中断")));
   });
 }
 
@@ -785,12 +800,23 @@ function hasVerifiedPhone(phone) {
   return true;
 }
 
+function accountDataRevision(user) {
+  // Only data written by /account/save belongs to its concurrency boundary.
+  // Device registration, login and notifications also change user.updatedAt.
+  const snapshot = { accountName: user.accountName || maskPhone(user.phone), accountAvatar: user.accountAvatar || "", data: normalizeAccountData(user.data || {}) };
+  const canonical = JSON.stringify(snapshot, (key, value) => value && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map(name => [name, value[name]])) : value);
+  return crypto.createHash("sha256").update(canonical).digest("hex");
+}
+
 function publicUser(user, token = "", db = null) {
   return {
     phone: user.phone,
     accountName: user.accountName || maskPhone(user.phone),
     accountAvatar: user.accountAvatar || "",
     data: normalizeAccountData(user.data || {}),
+    updatedAt: user.updatedAt || "",
+    dataRevision: accountDataRevision(user),
     termsAcceptedAt: user.termsAcceptedAt || "",
     termsVersion: user.termsVersion || "",
     blockedUsers: [...new Set([...(Array.isArray(user.blockedPhones) ? user.blockedPhones : []), ...(Array.isArray(user.blacklistedPhones) ? user.blacklistedPhones : [])])].map(phone => ({
@@ -1567,7 +1593,10 @@ async function handleSaveAccount(req, res) {
   const incomingData = normalizeAccountData(body.data || {});
   // New clients identify the cloud snapshot they edited. Legacy 1.0.7 does
   // not send this field, so its existing request contract remains supported.
-  if (typeof body.baseUpdatedAt === "string" && body.baseUpdatedAt !== String(user.updatedAt || "")) {
+  const staleAccount = typeof body.baseDataRevision === "string"
+    ? body.baseDataRevision !== accountDataRevision(user)
+    : typeof body.baseUpdatedAt === "string" && body.baseUpdatedAt !== String(user.updatedAt || "");
+  if (staleAccount) {
     return sendJson(res, 409, { ok: false, code: "ACCOUNT_DATA_CONFLICT", message: "其他设备已更新云端，本次保存未覆盖云端数据，请保留本机备份后核对" });
   }
   const incomingHasContent = accountDataHasContent(incomingData);

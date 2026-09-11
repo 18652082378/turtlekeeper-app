@@ -30,6 +30,32 @@ const root = path.resolve(__dirname, '..');
     await page.goto('https://archive.test/', { waitUntil: 'load' });
     const skip = page.getByRole('button', { name: '跳过', exact: true });
     if (await skip.isVisible()) await skip.click();
+    async function assertFormPosition(selector) {
+      await page.waitForFunction(selector => {
+        const form = document.querySelector(selector);
+        const header = document.querySelector('.topbar');
+        return form && header && Math.abs(form.getBoundingClientRect().top - header.getBoundingClientRect().bottom - 10) < 2;
+      }, selector, { timeout: 5000 }).catch(async error => {
+        console.error(await page.evaluate(selector => ({ selector, width: innerWidth, scrollY, height: innerHeight, documentHeight: document.documentElement.scrollHeight, formTop: document.querySelector(selector)?.getBoundingClientRect().top, headerBottom: document.querySelector('.topbar')?.getBoundingClientRect().bottom }), selector));
+        throw error;
+      });
+    }
+    for (const width of [1280, 430, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      // A taller header also covers the safe-area inset used by iPhone builds.
+      const insetStyle = width === 430 ? await page.addStyleTag({ content: '.topbar { height: 110px !important; min-height: 110px !important; }' }) : null;
+      for (const action of ['sold', 'loss', 'update']) {
+        await page.evaluate(() => setState({ page: 'home', updatingTurtleId: '', openTurtleMenuId: '' }, { skipSave: true }));
+        await page.locator('[data-toggle-turtle-menu="batch-0"]').click();
+        await page.locator(action === 'update' ? '[data-update-turtle="batch-0"]' : `[data-ledger-for-turtle="${action}:batch-0"]`).click();
+        const selector = action === 'update' ? '#turtleDetailForm' : '#turtleBatchMovementForm';
+        await assertFormPosition(selector);
+        if (action !== 'update') assert.equal(await page.locator(`${selector} [name="type"]`).inputValue(), action);
+        else assert.match(await page.locator('.topbar').innerText(), /更新批次/);
+        if (width === 390) await page.screenshot({ path: path.join(root, 'output', `batch-navigation-${action}.png`) });
+      }
+      if (insetStyle) await insetStyle.evaluate(element => element.remove());
+    }
     for (const [type, count, active] of [['loss', 5, 500], ['sold', 3, 495]]) {
       await page.evaluate(() => setState({ page: 'ledger' }, { skipSave: true }));
       await page.locator(`[data-new-ledger="${type}"]`).click();
@@ -44,19 +70,55 @@ const root = path.resolve(__dirname, '..');
       await page.locator('.archive-directory-list button').filter({ hasText: '九月果核批次' }).click();
       assert.equal(await page.locator('#turtleBatchMovementForm [name="type"]').inputValue(), type);
       await page.waitForFunction(() => document.querySelector('#turtleBatchMovementForm [name="note"]').value === '批次关联备注');
+      await assertFormPosition('#turtleBatchMovementForm');
       assert.equal(await page.evaluate(() => TurtleBatches.summary(state.turtles.filter(t => t.batchId === 'batch')).count), active, 'Selecting does not move inventory');
       await page.locator('#turtleBatchMovementForm [name="count"]').fill(String(count));
       if (type === 'sold') assert.equal(await page.locator('#turtleBatchMovementForm [name="amount"]').inputValue(), '15');
       await page.getByRole('button', { name: '记录数量变动', exact: true }).click();
       assert.equal(await page.evaluate(() => TurtleBatches.summary(state.turtles.filter(t => t.batchId === 'batch')).count), active - count);
+      await page.evaluate(type => setState({ page: 'ledger', ledgerTab: type, ledgerDraftType: '' }, { skipSave: true }), type);
+      assert.equal(await page.locator('.ledger-row').count(), 1, 'One row per batch movement');
+      assert.match(await page.locator('.ledger-row').innerText(), new RegExp(`本次${type === 'loss' ? '损耗' : '售出'} ${count} 只`));
+      assert.equal(await page.locator('.ledger-row .ledger-amount').innerText(), type === 'loss' ? '-10.00' : '+15.00');
+      await page.locator('.ledger-row').click();
+      assert.match(await page.locator('.ledger-detail-card').innerText(), new RegExp(`${count} 只`));
+      assert.equal(await page.locator('.ledger-detail-card h2').innerText(), '九月果核批次');
     }
+    // A second loss from the same batch/date remains a separate operation.
+    await page.evaluate(() => openLedgerForm('loss', state.turtles.find(t => t.batchId === 'batch' && TurtleBatches.isActive(t)).id));
+    await page.locator('#turtleBatchMovementForm [name="count"]').fill('2');
+    await page.locator('#turtleBatchMovementForm').evaluate(form => form.requestSubmit());
+    await page.reload({ waitUntil: 'load' });
+    if (await skip.isVisible()) await skip.click();
+    await page.evaluate(() => setState({ page: 'ledger', ledgerTab: 'loss', ledgerDraftType: '' }, { skipSave: true }));
+    assert.equal(await page.locator('.ledger-row').count(), 2, 'Reload preserves separate movements');
+    await page.locator('.ledger-row').first().scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(root, 'output', 'ledger-grouped-loss.png') });
+    const firstLoss = page.locator('.ledger-row').filter({ hasText: '本次损耗 5 只' });
+    await firstLoss.locator('[data-toggle-ledger-menu]').click();
+    page.once('dialog', dialog => dialog.dismiss());
+    await firstLoss.locator('[data-delete-ledger]').click();
+    assert.equal(await page.evaluate(() => state.ledgerRecords.filter(r => r.type === 'loss').length), 7, 'Cancel keeps every member');
+    page.once('dialog', dialog => { assert.match(dialog.message(), /5 只/); dialog.accept(); });
+    await firstLoss.locator('[data-delete-ledger]').click();
+    await page.waitForFunction(() => state.ledgerRecords.filter(r => r.type === 'loss').length === 2);
+    assert.equal(await page.locator('.ledger-row').count(), 1);
+    assert.equal(await page.evaluate(() => TurtleBatches.summary(state.turtles.filter(t => t.batchId === 'batch')).count), 495, 'Deleting a grouped loss restores all five archives');
+    assert.equal(await page.evaluate(() => state.ledgerRecords.find(r => r.type === 'purchase').amount), 996, 'Only the remaining two losses reduce purchase cost');
+    await page.evaluate(() => setState({ ledgerTab: 'sold' }, { skipSave: true }));
+    await page.locator('[data-toggle-ledger-menu]').click();
+    page.once('dialog', dialog => { assert.match(dialog.message(), /3 只/); dialog.accept(); });
+    await page.locator('[data-delete-ledger]').click();
+    await page.waitForFunction(() => !state.ledgerRecords.some(r => r.type === 'sold'));
+    assert.equal(await page.evaluate(() => state.ledgerRecords.filter(r => r.type === 'loss').length), 2, 'Deleting a sale does not touch losses');
     await page.evaluate(() => openLedgerForm('loss'));
+    await assertFormPosition('#ledgerForm');
     await page.locator('#ledgerForm .archive-directory-trigger').click();
     await page.locator('.archive-directory-list button').filter({ hasText: '果核蛋龟' }).click();
     await page.locator('.archive-directory-list button').filter({ hasText: '小果' }).click();
     assert.equal(await page.locator('#ledgerForm [name="turtleId"]').inputValue(), 'single');
     assert.equal(await page.locator('#turtleBatchMovementForm').count(), 0);
     assert.deepEqual(errors, []);
-    console.log('Ledger picker passed: 500-member batch stays one option, loss/sale quantity flow, draft retained, unavailable archives excluded, singles unchanged.');
+    console.log('Ledger picker passed: form navigation, collapsed batches and movements, grouped details/totals, separate operations after reload, whole-loss restore, whole-sale delete, drafts and singles.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

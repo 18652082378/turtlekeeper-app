@@ -8,7 +8,7 @@ const accounting = require('../assets/loss-accounting');
 const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
 const ctx = { crypto, speciesPhoto: () => 'shared-photo.jpg', formatDate: () => '2026-09-13' };
 vm.createContext(ctx);
-vm.runInContext(source.slice(source.indexOf('function buildBreedingHatchPlan('), source.indexOf('function confirmBreedingHatch(')), ctx);
+vm.runInContext(source.slice(source.indexOf('function breedingHatchProgress('), source.indexOf('function confirmBreedingHatch(')), ctx);
 const nest = { id: 'nest-1', date: '2026-09-09', motherName: '种母', poolId: 'p1', eggCount: 5 };
 const species = { code: 'GHG', name: '果核蛋龟' };
 const first = ctx.buildBreedingHatchPlan(nest, 3, species, [], [], '2026-09-11', 'event-1');

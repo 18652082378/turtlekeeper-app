@@ -305,7 +305,7 @@ function normalizeCustomSpecies(items = []) {
 }
 
 function normalizeAccountData(data = {}) {
-  const next = TurtleLossAccounting.reconcile({ ...emptyAccountData(), ...(data || {}) });
+  const next = TurtleLossAccounting.reconcile(TurtleBatches.normalizeLegacyPurchaseCosts({ ...emptyAccountData(), ...(data || {}) }));
   return {
     turtles: TurtleBatches.normalizeHatchBatches(Array.isArray(next.turtles) ? next.turtles : []),
     keptSpecies: Array.isArray(next.keptSpecies) ? next.keptSpecies : [],
@@ -372,6 +372,7 @@ function syncRegisteredUsers(source = state) {
 }
 
 let state = loadState();
+let lastLocalAccountSignature = accountSyncSignature(state);
 let accountCooldownTimer = null;
 let cloudSyncTimer = null;
 let cloudSyncInFlight = false;
@@ -596,6 +597,8 @@ function persistPendingCloudData(source = state) {
       accountAvatar: source.accountAvatar || "",
       data: accountDataSnapshot(source),
       baseUpdatedAt: source.cloudAccountUpdatedAt || "",
+      baseDataRevision: source.cloudAccountDataRevision || "",
+      conflict: source.cloudSyncConflict?.phone === source.loggedInPhone ? source.cloudSyncConflict : null,
       updatedAt: new Date().toISOString()
     }));
     return true;
@@ -622,6 +625,8 @@ function restorePendingCloudData() {
     ...state,
     ...normalizeAccountData(pending.data || {}),
     cloudAccountUpdatedAt: pending.baseUpdatedAt || "",
+    cloudAccountDataRevision: pending.baseDataRevision || "",
+    cloudSyncConflict: pending.conflict || null,
     accountName: pending.accountName || state.accountName,
     accountAvatar: pending.accountAvatar || state.accountAvatar
   };
@@ -809,6 +814,8 @@ function accountHasEmbeddedImages(source = state) {
 let localBackupFailed = false;
 
 function saveState(options = {}) {
+  const accountSignature = accountSyncSignature(state);
+  const accountChanged = accountSignature !== lastLocalAccountSignature;
   const registeredUsers = syncRegisteredUsers(state);
   const cloudSession = hasCloudSession();
   // The device copy is a recovery mirror, not merely an offline fallback.
@@ -831,6 +838,8 @@ function saveState(options = {}) {
       loggedInPhone: state.loggedInPhone,
       cloudToken: activeCloudToken,
       cloudAccountUpdatedAt: state.cloudAccountUpdatedAt || "",
+      cloudAccountDataRevision: state.cloudAccountDataRevision || "",
+      cloudSyncConflict: state.cloudSyncConflict || null,
       registeredUsers: storageUsers,
       pendingAuthCode: state.pendingAuthCode,
       pendingAuthPhone: state.pendingAuthPhone,
@@ -854,8 +863,10 @@ function saveState(options = {}) {
   }
   // Write-ahead journal: the cloud sync may be delayed or interrupted after
   // this local save. It is cleared only after /api/account/save succeeds.
-  if (cloudSession && !options.skipCloud) persistPendingCloudData();
-  if (!options.skipCloud) queueCloudSave();
+  if (cloudSession && !options.skipCloud && accountChanged) {
+    if (persistPendingCloudData()) lastLocalAccountSignature = accountSignature;
+    queueCloudSave();
+  } else if (options.skipCloud || !cloudSession) lastLocalAccountSignature = accountSignature;
   return !localBackupFailed;
 }
 
@@ -4639,6 +4650,7 @@ function turtlePoolDimensions(pool = {}) {
 }
 
 function turtlePoolRow(pool) {
+  const needsReview = TurtleBatches.poolCountNeedsReview(pool);
   return `
     <article class="turtle-pool-row fresh-card" data-edit-turtle-pool="${pool.id}" role="button" tabindex="0">
       <div class="turtle-pool-row-head">
@@ -4649,6 +4661,7 @@ function turtlePoolRow(pool) {
         </div>
         <b>${TurtleBatches.poolCount(pool, state.turtles)}<em>只</em></b>
       </div>
+      ${needsReview ? `<p>已关联在养 ${TurtleBatches.poolCount(pool, state.turtles)} 只；历史手填 ${Number(pool.count)} 只，尚未核对。点击核对实际总数。</p>` : ""}
       ${pool.note ? `<p>${escapeHtml(pool.note)}</p>` : ""}
     </article>
   `;
@@ -4656,6 +4669,7 @@ function turtlePoolRow(pool) {
 
 function pageTurtlePools() {
   const pools = state.turtlePools || [];
+  const unconfirmedPools = pools.filter(TurtleBatches.poolCountNeedsReview).length;
   const turtleCount = pools.reduce((sum, pool) => sum + TurtleBatches.poolCount(pool, state.turtles), 0);
   return `
     ${topbar("龟池管理", true)}
@@ -4666,8 +4680,9 @@ function pageTurtlePools() {
       </section>
       <section class="turtle-pool-summary fresh-card">
         <div><strong>${pools.length}</strong><span>龟池数量</span></div>
-        <div><strong>${turtleCount}</strong><span>记录饲养数量</span></div>
+        <div><strong>${turtleCount}</strong><span>${unconfirmedPools ? "已确认数量" : "记录饲养数量"}</span></div>
       </section>
+      ${unconfirmedPools ? `<p class="muted">${unconfirmedPools} 个龟池的历史手填数量尚未核对，暂不与已关联档案相加。</p>` : ""}
       <section class="turtle-pool-list">
         ${pools.map(turtlePoolRow).join("") || `<div class="empty small-empty"><div><strong>还没有龟池</strong><br>点击右上角加号，先记录第一个龟池。</div></div>`}
       </section>
@@ -4679,6 +4694,8 @@ function pageTurtlePools() {
 function pageTurtlePoolAdd() {
   const pool = (state.turtlePools || []).find(item => item.id === state.editingTurtlePoolId);
   const editing = Boolean(pool);
+  const needsReview = pool && TurtleBatches.poolCountNeedsReview(pool);
+  const linkedCount = pool ? state.turtles.filter(turtle => turtle.poolId === pool.id && TurtleBatches.isActive(turtle)).length : 0;
   return `
     ${topbar(editing ? "编辑龟池" : "新增龟池", true)}
     <main class="content page-fresh turtle-pool-add-page">
@@ -4702,8 +4719,8 @@ function pageTurtlePoolAdd() {
             <label><span>高</span><input class="field" name="height" type="number" min="0" step="0.1" value="${escapeHtml(pool?.height ?? "")}" placeholder="未填写"></label>
           </div>
         </section>
-        <label><span>额外数量（未关联档案）</span><input class="field" name="count" type="number" min="0" step="1" value="${pool ? Math.max(0, Number(pool.count || 0)) : ""}" placeholder="没有则填 0"></label>
-        <p class="batch-form-hint">已关联的在养龟自动计入，无需重复填写。${pool ? `当前自动计入 ${TurtleBatches.poolCount(pool, state.turtles) - Number(pool.count || 0)} 只，合计 ${TurtleBatches.poolCount(pool, state.turtles)} 只。` : ""}</p>
+        <label><span>${needsReview ? "核对当前池内总数量（选填）" : "额外数量（未关联档案）"}</span><input class="field" name="count" type="number" min="${needsReview ? linkedCount : 0}" step="1" value="${pool && !needsReview ? Math.max(0, Number(pool.count || 0)) : ""}" placeholder="${needsReview ? "留空保留历史数量" : "没有则填 0"}"></label>
+        <p class="batch-form-hint">${needsReview ? `历史手填 ${Number(pool.count)} 只，当前关联在养 ${linkedCount} 只。填写实际总数后，会自动扣除已关联部分，余下作为未建档数量；原手填数仍保留。` : `已关联的在养龟自动计入，无需重复填写。${pool ? `当前自动计入 ${linkedCount} 只，合计 ${TurtleBatches.poolCount(pool, state.turtles)} 只。` : ""}`}</p>
         <label class="pool-note"><span>备注</span><textarea name="note" maxlength="200" placeholder="可记录水温、位置、设备或其他说明">${escapeHtml(pool?.note || "")}</textarea></label>
         <button class="primary" type="submit">${editing ? "保存修改" : "添加龟池"}</button>
         ${editing ? `<button class="pool-delete-button" type="button" data-delete-turtle-pool="${pool.id}">删除此龟池</button>` : ""}
@@ -5033,15 +5050,14 @@ function pageTurtleBatchDetail(t) {
   const photo = editing && state.updateDraftPhoto === "__CLEAR__" ? defaultPhoto : (editing && state.updateDraftPhoto) || current.photo || defaultPhoto;
   const histories = (state.activityLogs || []).filter(log => log.batchId === t.batchId);
   return `${topbar(editing ? "更新批次" : "批次详情", true)}<main class="content page-fresh turtle-batch-detail">
-    <section class="page-intro compact-intro"><div><p class="eyebrow dark">${t.sourceBreedingId ? "同窝孵化" : "批量购入"}</p><h2>${escapeHtml(turtleBatchLabel(t))}</h2><p>${escapeHtml(t.speciesName)} · ${escapeHtml(t.acquiredDate || "未填写日期")}</p></div></section>
-    <section class="turtle-pool-summary fresh-card batch-summary"><div><strong>${summary.count}</strong><span>当前在养</span></div><div><strong>${summary.lost}</strong><span>累计损耗</span></div><div><strong>¥${money(summary.cost)}</strong><span>在养购入成本</span></div></section>
-    <section class="fresh-card note-card"><p>${summary.male} 公 · ${summary.female} 母 · ${summary.unknown} 性别未知</p><p>龟池：${escapeHtml(turtleBatchPoolLabel(summary))}</p><p>阶段：${({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[current.stage] || "未填写"} · ${escapeHtml(current.health || "健康")}</p>${current.note ? `<p>${escapeHtml(current.note)}</p>` : ""}</section>
-    ${!editing ? `<section class="turtle-detail-hero fresh-card detail-photo-card"><img class="growth-preview-photo" src="${photo}" alt="批次照片" data-growth-photo-preview role="button" tabindex="0"></section>` : ""}
+    <section class="page-intro compact-intro batch-identity"><img class="batch-cover" src="${escapeHtml(photo)}" alt="批次照片" data-growth-photo-preview role="button" tabindex="0"><div><p class="eyebrow dark">${t.sourceBreedingId ? "同窝孵化" : "批量购入"}</p><h2>${escapeHtml(turtleBatchLabel(t))}</h2><p>${escapeHtml(t.speciesName)} · ${escapeHtml(t.acquiredDate || "未填写日期")}</p></div></section>
+    <section class="turtle-pool-summary fresh-card batch-summary"><div><span>当前在养</span><strong>${summary.count}<small>只</small></strong></div><div><span>累计损耗</span><strong>${summary.lost}<small>只</small></strong></div><div><span>在养购入成本</span><strong><small>¥</small>${money(summary.cost)}</strong></div></section>
+    <section class="fresh-card note-card batch-profile"><h3>批次资料</h3><div class="batch-profile-line"><span>性别组成</span><p>${summary.male} 公 · ${summary.female} 母 · ${summary.unknown} 性别未知</p></div><div class="batch-profile-line"><span>所在龟池</span><p>${escapeHtml(turtleBatchPoolLabel(summary))}</p></div><div class="batch-profile-line"><span>阶段 / 健康</span><p>${({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[current.stage] || "未填写"} · ${escapeHtml(current.health || "健康")}</p></div>${current.note ? `<p class="batch-profile-note">${escapeHtml(current.note)}</p>` : ""}</section>
     ${editing ? `<form id="turtleDetailForm" class="breeding-form fresh-card turtle-detail-edit-form">
       <div class="photo-uploader breeding-photo-box"><img src="${photo}" alt="批次照片"><div><button class="secondary" type="button" data-update-photo-button>更新批次照片</button><button class="danger-link" type="button" data-clear-update-photo>清除图片</button></div></div>
       <input class="hidden-file" type="file" accept="image/*" data-update-photo-input>
       <div class="breeding-form-grid">
-        <label><span>批次名称</span><input class="field" name="batchName" maxlength="60" value="${value("batchName")}" required></label>
+        <label class="batch-field-wide"><span>批次名称</span><input class="field" name="batchName" maxlength="60" value="${value("batchName")}" required></label>
         <label><span>阶段</span><select class="select" name="stage">${[["hatchling", "苗子"], ["juvenile", "压成"], ["adult", "种龟"]].map(([key, label]) => `<option value="${key}" ${stage === key ? "selected" : ""}>${label}</option>`).join("")}</select></label>
         <label><span>在养龟关联到</span><select class="select" name="poolId">${summary.pools.length > 1 ? `<option value="__KEEP__" ${poolId === "__KEEP__" ? "selected" : ""}>保留各自龟池</option>` : ""}<option value="" ${poolId === "" ? "selected" : ""}>暂不关联龟池</option>${(state.turtlePools || []).map(pool => `<option value="${pool.id}" ${poolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name)}</option>`).join("")}</select></label>
         <label><span>批次健康状态</span><select class="select" name="health"><option value="__KEEP__">保留各自状态</option>${["健康", "生病"].map(health => `<option ${draft.health === health ? "selected" : ""}>${health}</option>`).join("")}</select></label>
@@ -5050,19 +5066,19 @@ function pageTurtleBatchDetail(t) {
       <p class="batch-form-hint">公、母及未知数量合计须为 ${summary.count} 只。保存后可按数量记录售出或损耗，龟池数量会自动同步。</p>
       <label class="breeding-note"><span>批次备注</span><textarea name="note">${value("note")}</textarea></label>
       <button class="primary" type="submit">保存批次更新</button>
-    </form>` : `<button class="primary" type="button" data-update-turtle="${t.id}">更新批次</button>`}
+    </form>` : `<button class="secondary batch-edit-button" type="button" data-update-turtle="${t.id}">更新批次<span aria-hidden="true">↗</span></button>`}
     ${summary.count && !editing ? `<form id="turtleBatchMovementForm" class="breeding-form fresh-card batch-movement-form">
-      <h3>数量变动</h3><div class="breeding-form-grid">
+      <div class="batch-section-heading"><h3>数量变动</h3><p>记录本次数量，自动更新在养与龟池</p></div><div class="breeding-form-grid">
         <label><span>类型</span><select class="select" name="type"><option value="sold" ${state.batchMovementType !== "loss" ? "selected" : ""}>售出</option><option value="loss" ${state.batchMovementType === "loss" ? "selected" : ""}>损耗</option></select></label>
         <label><span>龟池范围</span><select class="select" name="poolId"><option value="__ALL__">全部在养龟池</option>${summary.pools.map(id => `<option value="${escapeHtml(id)}">${escapeHtml(turtlePoolName(id))}</option>`).join("")}</select></label>
         <label><span>性别范围</span><select class="select" name="gender"><option value="all">不限性别</option><option>公</option><option>母</option><option>未知</option></select></label>
         <label><span>本次数量</span><input class="field" name="count" type="number" min="1" max="${summary.count}" step="1" required></label>
-        <label><span>售出总金额（元）</span><input class="field" name="amount" type="number" min="0" step="0.01" placeholder="售出时必填"></label>
+        <label><span data-batch-amount-label>${state.batchMovementType === "loss" ? "损耗金额（元）" : "售出总金额（元）"}</span><input class="field" name="amount" type="number" min="0" step="0.01" placeholder="${state.batchMovementType === "loss" ? "按购入成本自动计算" : "售出时必填"}"></label>
         <label><span>日期</span><input class="field" name="recordDate" type="date" value="${formatDate(new Date())}" required></label>
-      </div><p class="batch-form-hint">损耗金额按所选数量的购入成本自动计算，无需填写售出总金额。</p>
+      </div><p class="batch-form-hint">损耗金额按所选数量的购入成本自动计算，无需手动填写。</p>
       <label class="breeding-note"><span>备注</span><textarea name="note"></textarea></label><button class="primary" type="submit">记录数量变动</button>
     </form>` : ""}
-    <section class="section-title"><h3>批次更新记录</h3></section>${histories.map(log => `<article class="history-card fresh-card"><p>${escapeHtml(log.text || log.title || log.content || "批次已更新")}</p><small>${formatTime(log.createdAt)}</small></article>`).join("") || `<div class="empty small-empty">暂无批次更新</div>`}
+    <section class="section-title batch-history-heading"><h3>批次更新记录</h3><span>${histories.length} 条</span></section>${histories.map(log => `<article class="history-card fresh-card"><p>${escapeHtml(log.text || log.title || log.content || "批次已更新")}</p><small>${formatTime(log.createdAt)}</small></article>`).join("") || `<div class="empty small-empty batch-history-empty"><strong>暂无批次更新</strong><span>更新资料、记录售出或损耗后，会在这里留下记录</span></div>`}
     </main>${bottomNav()}`;
 }
 
@@ -5698,7 +5714,7 @@ function pageLedger() {
     if (dateRange.to && date > dateRange.to) return false;
     return true;
   };
-  const allRecords = (state.ledgerRecords || []).filter(inDateRange);
+  const allRecords = TurtleBatches.groupLedgerRecords((state.ledgerRecords || []).filter(inDateRange));
   const records = allRecords.filter(item => state.ledgerTab === "all" || item.type === state.ledgerTab);
   const purchaseTotal = allRecords.filter(item => item.type === "purchase").reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const soldTotal = allRecords.filter(item => item.type === "sold").reduce((sum, item) => sum + Number(item.amount || 0), 0);
@@ -6308,12 +6324,17 @@ function ledgerRecordPhoto(item) {
   return turtle?.photo || item.turtleSnapshot?.photo || item.photo || (item.turtleId ? defaultPhoto : "");
 }
 
+function ledgerMovementLabel(item) {
+  const turtle = item.turtleSnapshot || state.turtles.find(t => t.id === item.turtleId);
+  return turtle?.batchName || (turtle ? turtleBatchLabel(turtle) : "未命名批次");
+}
+
 function ledgerRow(item) {
   const photo = ledgerRecordPhoto(item);
   const turtle = state.turtles.find(t => t.id === item.turtleId) || item.turtleSnapshot;
   const typeText = ledgerTypeText(item.type);
   const isOther = item.type === "other";
-  const nickname = isOther ? (item.title || "未命名支出") : (turtle?.code || String(item.title || "未关联档案").split(" · ")[0] || "未关联档案");
+  const nickname = item.movementRecords ? ledgerMovementLabel(item) : isOther ? (item.title || "未命名支出") : (turtle?.code || String(item.title || "未关联档案").split(" · ")[0] || "未关联档案");
   const speciesName = isOther ? (item.category || "日常养护支出") : (turtle?.speciesName || item.speciesName || String(item.title || "").split(" · ").slice(1).join(" · ") || "未填写品种");
   const weight = item.weight || turtle?.weight || "";
   const carapaceLength = item.carapaceLength || turtle?.carapaceLength || "";
@@ -6334,7 +6355,7 @@ function ledgerRow(item) {
           <div class="ledger-row-title"><span class="ledger-inline-type ${item.type}">${typeText}</span><strong class="ledger-title-text">${escapeHtml(nickname)}</strong></div>
           <p class="ledger-row-species">${escapeHtml(speciesName)}</p>
         </div>
-        ${isOther ? `<div class="ledger-turtle-meta"><span>${escapeHtml(item.note || "未填写备注")}</span></div>` : `<div class="ledger-turtle-meta"><span>${escapeHtml(String(weightText))}</span><span>${escapeHtml(carapaceText)}</span></div>`}
+        ${item.movementRecords ? `<div class="ledger-turtle-meta"><span>本次${typeText} ${item.movementRecords.length} 只</span><span>批次记录</span></div>` : isOther ? `<div class="ledger-turtle-meta"><span>${escapeHtml(item.note || "未填写备注")}</span></div>` : `<div class="ledger-turtle-meta"><span>${escapeHtml(String(weightText))}</span><span>${escapeHtml(carapaceText)}</span></div>`}
       </div>
       <div class="ledger-row-side ${linkedStatus ? "has-linked-status" : ""}">
         ${linkedStatus ? `<span class="ledger-linked-status ${linkedFollowup.type}">${linkedStatus}</span>` : ""}
@@ -6348,7 +6369,7 @@ function ledgerRow(item) {
 }
 
 function pageLedgerDetail() {
-  const item = (state.ledgerRecords || []).find(record => record.id === state.selectedLedgerId);
+  const item = TurtleBatches.groupLedgerRecords(state.ledgerRecords || []).find(record => record.id === state.selectedLedgerId || record.movementRecords?.some(member => member.id === state.selectedLedgerId));
   if (!item) return `${topbar("账本详情", true)}<main class="content page-fresh"><div class="empty"><strong>没有找到这条记录</strong></div></main>`;
   const turtle = state.turtles.find(t => t.id === item.turtleId) || item.turtleSnapshot;
   const typeText = ledgerTypeText(item.type);
@@ -6361,10 +6382,10 @@ function pageLedgerDetail() {
       <section class="ledger-detail-hero">${photo ? `<img src="${escapeHtml(photo)}" alt="${typeText}照片">` : `<div class="ledger-detail-empty">${typeText}</div>`}</section>
       <section class="fresh-card ledger-detail-card">
         <div class="ledger-detail-head"><span class="ledger-inline-type ${item.type}">${typeText}</span><strong class="${item.type !== "sold" ? "danger-text" : ""}">${amountPrefix}${money(item.amount)}</strong></div>
-        <h2>${isOther ? escapeHtml(item.title || "未命名支出") : (turtle ? `${turtle.code} · ${turtle.speciesName}` : (item.title || "未关联档案"))}</h2>
+        <h2>${item.movementRecords ? escapeHtml(ledgerMovementLabel(item)) : isOther ? escapeHtml(item.title || "未命名支出") : (turtle ? `${turtle.code} · ${turtle.speciesName}` : (item.title || "未关联档案"))}</h2>
         <p class="muted">${item.recordDate || formatDate(item.createdAt)}</p>
         <div class="detail-grid">
-          ${isOther ? `<div><span>支出分类</span><strong>${escapeHtml(item.category || "其他")}</strong></div><div><span>凭证</span><strong>${item.photo ? "已上传" : "未上传"}</strong></div>` : `
+          ${item.movementRecords ? `<div><span>本次${typeText}数量</span><strong>${item.movementRecords.length} 只</strong></div><div><span>品种</span><strong>${escapeHtml(turtle?.speciesName || "未填写品种")}</strong></div><div><span>记录时间</span><strong>${formatTime(item.createdAt)}</strong></div>` : isOther ? `<div><span>支出分类</span><strong>${escapeHtml(item.category || "其他")}</strong></div><div><span>凭证</span><strong>${item.photo ? "已上传" : "未上传"}</strong></div>` : `
           <div><span>档案状态</span><strong>${turtle ? "已保留快照" : "未关联"}</strong></div>
           <div><span>性别</span><strong>${turtle?.gender || "-"}</strong></div>
           <div><span>体重</span><strong>${item.weight || turtle?.weight || "-"}g</strong></div>
@@ -6547,6 +6568,7 @@ function pageBreedingDetail() {
   const isManual = !record.motherId || record.motherId === "manual";
   const historyList = [...(record.editHistory || [])].reverse();
   const turtlePools = state.turtlePools || [];
+  const hatchProgress = breedingHatchProgress(record, state.turtles, state.ledgerRecords || []);
   return `
     ${topbar("繁殖详情", true)}
     <main class="content page-fresh">
@@ -6579,11 +6601,13 @@ function pageBreedingDetail() {
         <div class="breeding-detail-actions"><button class="primary" type="submit">保存修改</button></div>
         <div class="breeding-hatch-panel" id="breedingHatchPanel">
           <input type="hidden" name="hatchEventId" value="${crypto.randomUUID()}">
+          <p>已累计孵化 ${hatchProgress.previousCount} 只，还可新增 ${Math.max(0, Number(record.eggCount || 0) - hatchProgress.previousCount)} 只。下方填写本次数量。</p>
           <label><span>本次孵化成功几只</span><input class="field" name="successfulHatchCount" type="number" min="1" step="1" placeholder="填写本次数量" inputmode="numeric"></label>
           <label><span>孵化日期</span><input class="field" name="hatchDate" type="date" value="${formatDate(new Date())}" max="${formatDate(new Date())}"></label>
           <label><span>幼龟品种</span><select class="select" name="hatchSpeciesCode"><option value="">请选择品种</option>${accountSpeciesList().map(species => `<option value="${species.code}" ${state.turtles.find(t => t.id === record.motherId)?.speciesCode === species.code ? "selected" : ""}>${escapeHtml(species.name)}</option>`).join("")}</select></label>
           <p>每次确认在看板生成一条孵化批次，饲养天数从所选孵化日期计算。累计孵化数量不能超过产蛋数。</p>
           <button class="primary" type="button" data-confirm-breeding-hatch>确认孵化并关联看板</button>
+          ${hatchProgress.unlinked ? `<p>旧版已记录的孵化中，有 ${hatchProgress.unlinked} 只尚未关联看板。选择上方的孵化日期和幼龟品种后，可补关联，累计孵化数量不会增加。</p><button class="secondary" type="button" data-link-legacy-hatch>关联历史已记录的 ${hatchProgress.unlinked} 只</button>` : ""}
         </div>
       </form>
       <section class="section-title"><h3>繁殖记录</h3></section>
@@ -6653,6 +6677,7 @@ function pageMine() {
       </section>
       <section class="fresh-card mine-list">
         <button class="mine-row" data-page="reports"><span>表</span><strong>高级报表</strong></button>
+        <button class="mine-row" data-page="sync"><span>⇄</span><strong>数据同步与备份</strong></button>
         <button class="mine-row" data-page="calendar"><span>◷</span><strong>操作日志</strong></button>
         <button class="mine-row" data-page="satisfaction"><span>☆</span><strong>满意度调查</strong></button>
         <button class="mine-row" data-page="feedback"><span>✎</span><strong>意见反馈</strong></button>
@@ -7038,6 +7063,7 @@ function pageSync() {
         <div><p class="eyebrow dark">同步</p><h2>账号云端保存</h2><p>登录后，档案、护理、繁殖、账本、空间资料和图片都会随账号保存到云端，同一账号可在不同设备查看。</p></div>
       </section>
       <section class="fresh-card settings-card">
+        ${cloudSyncIsPaused() ? `<div role="status"><strong>同步已暂停，本机修改已保留</strong><p class="muted">两端完整数据仍有差异。请分别导出本机完整备份用于核对。点击下方同步按钮可重新检查；数据一致后自动恢复。</p></div>` : ""}
         <button class="mine-row sync-toggle" data-toggle-sync><span>⇄</span><strong>立即同步并获取最新数据</strong><span>›</span></button>
         <button class="mine-row" data-export-local-backup><span>↓</span><strong>导出本机完整备份</strong><span>›</span></button>
       </section>
@@ -7355,6 +7381,7 @@ function render() {
     feedbackAdd: pageFeedbackAdd,
     feedbackDetail: pageFeedbackDetail,
     account: pageAccount,
+    sync: pageSync,
     reports: pageReports,
     about: pageAbout,
     rules: pageRules,
@@ -7381,6 +7408,7 @@ function render() {
   const persistentBottomNav = $app.querySelector(".bottom-nav");
   stopMarketDetailVideos($app, true);
   $app.innerHTML = (pages[state.page] || pageHome)() + policyConsentGate() + systemAnnouncementOverlay() + appReviewInviteOverlay();
+  updateCloudSyncNotice();
   if (localBackupFailed) {
     const warning = document.createElement("section");
     warning.className = "local-backup-warning";
@@ -7633,6 +7661,7 @@ function bindEvents() {
   }
   if (state.openLedgerMenuId) {
     $app.addEventListener("click", event => {
+      if (!state.openLedgerMenuId) return;
       if (event.target.closest("[data-toggle-ledger-menu], .ledger-action-menu")) return;
       setState({ openLedgerMenuId: "" });
     }, { once: true });
@@ -7797,7 +7826,7 @@ function bindEvents() {
       page: "turtleDetail",
       selectedTurtleId: btn.dataset.updateTurtle
     }, { skipSave: true });
-    requestAnimationFrame(() => document.querySelector("#turtleDetailForm")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    requestAnimationFrame(() => requestAnimationFrame(() => scrollFormBelowTopbar("#turtleDetailForm")));
   }));
   document.querySelector("[data-clear-update-photo]")?.addEventListener("click", () => {
     if (!requireLogin()) return;
@@ -7817,6 +7846,12 @@ function bindEvents() {
   document.querySelector("[data-update-photo-input]")?.addEventListener("change", readUpdatePhoto);
   document.querySelector("#turtleDetailForm")?.addEventListener("submit", submitTurtleDetail);
   document.querySelector("#turtleBatchMovementForm")?.addEventListener("submit", submitTurtleBatchMovement);
+  document.querySelector("#turtleBatchMovementForm [name='type']")?.addEventListener("change", event => {
+    const form = event.currentTarget.form;
+    const isLoss = event.currentTarget.value === "loss";
+    form.querySelector("[data-batch-amount-label]").textContent = isLoss ? "损耗金额（元）" : "售出总金额（元）";
+    form.elements.namedItem("amount").placeholder = isLoss ? "按购入成本自动计算" : "售出时必填";
+  });
   document.querySelector("[data-share-growth-card]")?.addEventListener("click", shareGrowthCard);
   document.querySelector("[data-save-growth-card]")?.addEventListener("click", saveGrowthCard);
   document.querySelector("[data-toggle-growth-reminder]")?.addEventListener("click", event => toggleGrowthReminder(event.currentTarget.dataset.toggleGrowthReminder));
@@ -7991,6 +8026,7 @@ function bindEvents() {
   });
   document.querySelector("#breedingDetailForm")?.addEventListener("submit", submitBreedingDetail);
   document.querySelector("[data-confirm-breeding-hatch]")?.addEventListener("click", confirmBreedingHatch);
+  document.querySelector("[data-link-legacy-hatch]")?.addEventListener("click", () => confirmBreedingHatch(null, true));
   bindBreedingSpeciesPicker();
   document.querySelector("[data-breeding-mother]")?.addEventListener("change", e => {
     if (!requireLogin()) return;
@@ -13748,6 +13784,8 @@ function applyCloudUser(user, activityText = "", options = {}) {
     loggedInPhone: localUser.phone,
     cloudToken: localUser.cloudToken,
     cloudAccountUpdatedAt: user.updatedAt || "",
+    cloudAccountDataRevision: user.dataRevision || "",
+    cloudSyncConflict: null,
     accountName: localUser.accountName,
     accountAvatar: localUser.accountAvatar,
     isCommunityAdmin: localUser.isCommunityAdmin,
@@ -13767,8 +13805,71 @@ function applyCloudUser(user, activityText = "", options = {}) {
   window.setTimeout(setupNativePushNotifications, 0);
 }
 
+function accountSyncSignature(source) {
+  const canonical = value => Array.isArray(value) ? value.map(canonical)
+    : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  // Lossless deduplication avoids retaining hundreds of copies of a batch photo.
+  return TurtleLocalData.stringify(canonical({ phone: source.loggedInPhone || "", accountName: source.accountName || "",
+    accountAvatar: source.accountAvatar || "", data: accountDataSnapshot(source) }));
+}
+
+function cloudSyncIsPaused() {
+  return Boolean(state.loggedInPhone && state.cloudSyncConflict?.phone === state.loggedInPhone);
+}
+
+function updateCloudSyncNotice() {
+  document.querySelector("[data-cloud-sync-notice]")?.remove();
+  if (!cloudSyncIsPaused() || !["home", "ledger", "mine"].includes(state.page)) return;
+  const notice = document.createElement("section");
+  notice.className = "fresh-card";
+  notice.dataset.cloudSyncNotice = "";
+  notice.setAttribute("role", "status");
+  notice.innerHTML = `<p>同步已暂停，本机修改已保留</p><button class="secondary" type="button">前往同步设置核对</button>`;
+  notice.querySelector("button").addEventListener("click", () => setState({ page: "sync" }, { skipCloud: true }));
+  document.querySelector("main")?.prepend(notice);
+}
+
+function pauseCloudSync(code = "ACCOUNT_DATA_CONFLICT") {
+  const alreadyPaused = cloudSyncIsPaused();
+  state.cloudSyncConflict = { phone: state.loggedInPhone, code };
+  if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = null;
+  cloudSyncQueued = false;
+  persistPendingCloudData();
+  saveState({ skipCloud: true });
+  updateCloudSyncNotice();
+  if (!alreadyPaused) toast("同步已暂停，本机修改已保留，请到同步设置核对；不会反复提醒");
+}
+
+function setCloudAccountRevision(user) {
+  state.cloudAccountUpdatedAt = user.updatedAt || "";
+  state.cloudAccountDataRevision = user.dataRevision || "";
+  state.cloudSyncConflict = null;
+}
+
+function acknowledgeIdenticalCloudUser(user) {
+  if (!user || user.phone !== state.loggedInPhone) return false;
+  const cloud = { ...normalizeAccountData(user.data || {}), loggedInPhone: user.phone,
+    accountName: user.accountName || "", accountAvatar: user.accountAvatar || "" };
+  // Compare the complete sync payload, not CSV totals or just record counts.
+  // This safely repairs old empty revisions and lost save acknowledgments.
+  if (accountSyncSignature(cloud) !== accountSyncSignature(state)) return false;
+  setCloudAccountRevision(user);
+  clearPendingCloudData(user.phone);
+  saveState({ skipCloud: true });
+  updateCloudSyncNotice();
+  return true;
+}
+
+function pendingMatchesCloudBase(pending, user) {
+  return pending?.baseDataRevision && user.dataRevision
+    ? pending.baseDataRevision === user.dataRevision
+    : Boolean(pending?.baseUpdatedAt && user.updatedAt && pending.baseUpdatedAt === user.updatedAt);
+}
+
 function queueCloudSave() {
   if (!CONFIGURED_SMS_BACKEND || !state.loggedInPhone || !currentCloudToken()) return;
+  if (cloudSyncIsPaused()) return;
   if (!cloudHydrationComplete) {
     // Preserve genuine offline edits, but never turn the empty startup shell
     // into an account/save request before the authoritative cloud data lands.
@@ -13786,6 +13887,10 @@ function queueCloudSave() {
 
 async function pushCloudDataNow(throwOnError = false) {
   if (!CONFIGURED_SMS_BACKEND || !state.loggedInPhone || !currentCloudToken()) return;
+  if (cloudSyncIsPaused()) {
+    if (throwOnError) throw new Error("同步已暂停，请先在同步设置核对两端完整备份");
+    return;
+  }
   if (!cloudHydrationComplete) {
     if (accountHasContent(state)) persistPendingCloudData();
     return;
@@ -13805,11 +13910,12 @@ async function pushCloudDataNow(throwOnError = false) {
       accountName: state.accountName,
       accountAvatar: state.accountAvatar,
       baseUpdatedAt: state.cloudAccountUpdatedAt || "",
+      ...(state.cloudAccountDataRevision ? { baseDataRevision: state.cloudAccountDataRevision } : {}),
       data: accountDataSnapshot(state)
     });
     const pendingNow = readPendingCloudData();
     if (state.loggedInPhone === savingPhone) {
-      state.cloudAccountUpdatedAt = result.user?.updatedAt || state.cloudAccountUpdatedAt;
+      setCloudAccountRevision(result.user || {});
       if (!accountHasEmbeddedImages(state) && JSON.stringify(pendingNow) === JSON.stringify(pendingAtStart)) clearPendingCloudData(savingPhone);
       else if (pendingNow?.phone === savingPhone) persistPendingCloudData();
       saveState({ skipCloud: true });
@@ -13819,12 +13925,17 @@ async function pushCloudDataNow(throwOnError = false) {
     // Never retry a rejected stale-history write automatically: doing so can
     // turn a recoverable multi-device conflict into repeated overwrites.  The
     // local journal stays intact, and the person gets a clear instruction.
+    if (state.loggedInPhone !== savingPhone) return;
     if (error?.code === "ACCOUNT_DATA_CONFLICT") {
-      persistPendingCloudData();
-      toast("其他设备已更新云端，本机修改已保留；请先在同步设置导出备份，再核对两端数据");
+      try {
+        const latest = await apiPost("/api/account/load", { phone: savingPhone, token: currentCloudToken(), termsVersion: POLICY_VERSION });
+        if (state.loggedInPhone !== savingPhone) return;
+        if (acknowledgeIdenticalCloudUser(latest.user)) return;
+      } catch { /* Keep the journal while offline. */ }
+      if (state.loggedInPhone !== savingPhone) return;
+      pauseCloudSync(error.code);
     } else if (error?.code === "GROWTH_HISTORY_CONFLICT") {
-      persistPendingCloudData();
-      toast("云端有更新的成长记录，本机修改已保留；刷新后再继续编辑");
+      pauseCloudSync(error.code);
     }
     if (throwOnError) throw error;
   } finally {
@@ -13862,8 +13973,13 @@ async function refreshCloudAccountFromServer(options = {}) {
       // Keep every pending edit; only retry when its cloud base still matches.
       if (pendingAfterLoad?.phone === result.user.phone && restorePendingCloudData()) {
         setState({}, { skipCloud: true });
-        if (pendingAfterLoad.baseUpdatedAt === result.user.updatedAt) queueCloudSave();
-        else toast("本机有未同步修改，已保留；请在同步设置导出备份后核对云端数据");
+        if (acknowledgeIdenticalCloudUser(result.user)) return true;
+        if (pendingMatchesCloudBase(pendingAfterLoad, result.user)) {
+          setCloudAccountRevision(result.user);
+          persistPendingCloudData();
+          saveState({ skipCloud: true });
+          queueCloudSave();
+        } else pauseCloudSync();
       }
       return true;
     }
@@ -13879,24 +13995,63 @@ async function syncCloudAccountManually() {
   if (cloudSyncInFlight || cloudImageMigrationInFlight) return toast("正在同步，请稍候再试");
   try {
     if (readPendingCloudData()?.phone === state.loggedInPhone) {
+      const checkingPhone = state.loggedInPhone;
+      const latest = await apiPost("/api/account/load", { phone: checkingPhone, token: currentCloudToken(), termsVersion: POLICY_VERSION });
+      if (state.loggedInPhone !== checkingPhone || latest.user?.phone !== checkingPhone) return;
+      cloudHydrationComplete = true;
+      if (acknowledgeIdenticalCloudUser(latest.user)) {
+        render();
+        return toast("完整数据与云端一致，已恢复同步");
+      }
+      if (!pendingMatchesCloudBase(readPendingCloudData(), latest.user)) {
+        const wasPaused = cloudSyncIsPaused();
+        pauseCloudSync();
+        render();
+        if (wasPaused) toast("两端完整数据仍有差异，请分别导出完整备份后核对");
+        return;
+      }
+      setCloudAccountRevision(latest.user);
+      persistPendingCloudData();
+      saveState({ skipCloud: true });
       if (accountHasEmbeddedImages(state)) await migrateEmbeddedImagesToCloud();
       if (accountHasEmbeddedImages(state)) throw new Error("照片尚未上传完成，本机数据已保留，请稍后重试");
       await pushCloudDataNow(true);
     }
     const loaded = await refreshCloudAccountFromServer({ background: true });
     toast(loaded ? "已获取云端最新数据" : "暂未获取最新数据，本机修改已保留，请稍后重试");
-  } catch (error) { toast(error.message || "同步失败，本机修改已保留"); }
+  } catch (error) {
+    if (!["ACCOUNT_DATA_CONFLICT", "GROWTH_HISTORY_CONFLICT"].includes(error?.code)) toast(error.message || "同步失败，本机修改已保留");
+  }
 }
 
 function startCloudAccountRefresh() {
   let refreshing = false;
   const refresh = async () => {
-    if (refreshing || document.hidden || !cloudHydrationComplete || !hasCloudSession()
-      || !["home", "ledger", "mine", "sync"].includes(state.page)
-      || document.querySelector("input:focus, textarea:focus, select:focus, .modal-overlay, .image-preview-overlay")
-      || state.openTurtleMenuId) return;
+    if (refreshing || document.hidden || navigator.onLine === false || !hasCloudSession()
+      || cloudSyncInFlight || cloudImageMigrationInFlight || cloudSyncIsPaused()) return;
     refreshing = true;
-    try { await refreshCloudAccountFromServer({ background: true }); }
+    try {
+      // Reconnect must flush the journal before the read guard checks it.
+      // A pending offline write used to make every background read return,
+      // leaving that write stranded until another edit or a manual sync.
+      if (!cloudHydrationComplete) {
+        await startCloudSessionHydration();
+        if (!cloudHydrationComplete || cloudSyncIsPaused()) return;
+      }
+      if (readPendingCloudData()?.phone === state.loggedInPhone) {
+        if (accountHasEmbeddedImages(state)) await migrateEmbeddedImagesToCloud({ silent: true });
+        if (accountHasEmbeddedImages(state) || cloudSyncIsPaused()) return;
+        if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+        cloudSyncTimer = null;
+        await pushCloudDataNow();
+      }
+      // Saving a completed edit is safe on any route; only refresh the visible
+      // data after the user leaves form inputs, dialogs and contextual menus.
+      if (!["home", "ledger", "mine", "sync"].includes(state.page)
+        || document.querySelector("input:focus, textarea:focus, select:focus, .modal-overlay, .image-preview-overlay")
+        || state.openTurtleMenuId) return;
+      await refreshCloudAccountFromServer({ background: true });
+    }
     finally { refreshing = false; }
   };
   window.addEventListener("focus", refresh);
@@ -13917,6 +14072,7 @@ async function startCloudSessionHydration() {
   } catch (error) {
     console.warn(error.message || "云端数据初始化失败");
   } finally {
+    if (!cloudHydrationComplete) cloudHydrationStarted = false;
     consumePendingNativePushAction();
   }
 }
@@ -14642,11 +14798,12 @@ function submitTurtleDetail(event) {
 
 function submitTurtle(event) {
   event.preventDefault();
+  if (event.currentTarget.__turtleSaved) return;
   if (!requireArchiveCapacity()) return;
   const form = new FormData(event.currentTarget);
   const species = speciesByCode(form.get("speciesCode"));
   if (!species) return toast("先选择一个品种，再保存档案");
-  if (state.archivePurchaseMode === "batch") return submitBatchTurtles(form, species);
+  if (state.archivePurchaseMode === "batch") return submitBatchTurtles(form, species, event.currentTarget);
   const weight = Number(form.get("weight"));
   const carapaceLength = Number(form.get("carapaceLength"));
   for (const [key, value, label] of [["weight", weight, "克重"], ["carapaceLength", carapaceLength, "背甲长度"]]) {
@@ -14657,7 +14814,7 @@ function submitTurtle(event) {
   // Invite after any successful new archive once the account has reached the
   // fifth archive. This also covers existing users who already have 5+ turtles.
   const shouldInviteAppReview = state.turtles.length >= 4;
-  const code = form.get("code") || `${species.isCustom ? species.name : species.code}-${state.turtles.filter(t => t.speciesCode === species.code).length + 1}`;
+  const code = form.get("code") || TurtleBatches.codeAllocator(species.isCustom ? species.name : species.code, state.turtles, state.ledgerRecords)();
   const turtle = {
     id: crypto.randomUUID(),
     code,
@@ -14720,6 +14877,7 @@ function submitTurtle(event) {
     });
     logs.unshift(makeActivity(`购买入账：${turtleLabel(turtle)}，金额 ${money(turtle.price)} 元`, "账本"));
   }
+  event.currentTarget.__turtleSaved = true;
   saveWithDeferredImages({
     turtles: [turtle, ...state.turtles],
     keptSpecies,
@@ -14738,7 +14896,7 @@ function submitTurtle(event) {
   if (shouldInviteAppReview) window.setTimeout(() => showAppReviewInvite(state.turtles.length), 900);
 }
 
-function submitBatchTurtles(form, species) {
+function submitBatchTurtles(form, species, sourceForm = null) {
   const stage = String(form.get("batchStage") || "juvenile");
   if (!["hatchling", "juvenile", "adult"].includes(stage)) return toast("请选择苗子、压成或种龟阶段");
   const isHatchling = stage === "hatchling";
@@ -14752,6 +14910,7 @@ function submitBatchTurtles(form, species) {
   const totalCount = isHatchling ? Number(form.get("batchCount")) : maleCount + femaleCount;
   if (!Number.isSafeInteger(totalCount)) return toast(isHatchling ? "苗子数量需要填写正整数" : "请填写有效的公龟和母龟数量");
   if (totalCount < 1) return toast("批量购入至少需要填写 1 只龟");
+  if (totalCount > 10000) return toast("单次批量购入最多 10000 只，请分批记录");
   if (!requireArchiveCapacity(totalCount)) return;
   const totalPriceText = String(form.get("batchTotalPrice") || "").trim();
   const totalPrice = Number(totalPriceText);
@@ -14768,14 +14927,14 @@ function submitBatchTurtles(form, species) {
   const nextGrowth = new Date();
   nextGrowth.setDate(nextGrowth.getDate() + 30);
   const nextGrowthAt = formatDate(nextGrowth);
-  const existingSpeciesCount = state.turtles.filter(turtle => turtle.speciesCode === species.code).length;
+  const nextCode = TurtleBatches.codeAllocator(prefix, state.turtles, state.ledgerRecords);
   const genders = isHatchling ? Array(totalCount).fill("未知") : [...Array(maleCount).fill("公"), ...Array(femaleCount).fill("母")];
   const unitPrices = TurtleBatches.splitCents(totalPrice, totalCount);
   const photo = state.formPhoto || speciesPhoto(species);
 
   const turtles = genders.map((gender, index) => ({
     id: crypto.randomUUID(),
-    code: `${prefix}-${existingSpeciesCount + index + 1}`,
+    code: nextCode(),
     speciesCode: species.code,
     speciesName: species.name,
     poolId: validPoolId,
@@ -14833,6 +14992,7 @@ function submitBatchTurtles(form, species) {
   };
   const keptSpecies = state.keptSpecies.includes(species.code) ? state.keptSpecies : [...state.keptSpecies, species.code];
   const shouldInviteAppReview = state.turtles.length + totalCount >= 5;
+  if (sourceForm) sourceForm.__turtleSaved = true;
   saveWithDeferredImages({
     turtles: [...turtles, ...state.turtles],
     keptSpecies,
@@ -14947,6 +15107,7 @@ function deleteMemo(id) {
 
 function submitTurtlePool(event) {
   event.preventDefault();
+  if (event.currentTarget.__poolSaved) return;
   if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const name = String(form.get("name") || "").trim();
@@ -14958,8 +15119,11 @@ function submitTurtlePool(event) {
   };
   const rawCount = String(form.get("count") || "").trim();
   const count = rawCount === "" ? 0 : Number(rawCount);
-  if (!Number.isFinite(count) || count < 0) return toast("养殖数量请填写为不小于 0 的数字");
+  if (!Number.isSafeInteger(count) || count < 0) return toast("养殖数量请填写为不小于 0 的整数");
   const existing = (state.turtlePools || []).find(pool => pool.id === state.editingTurtlePoolId);
+  const needsReview = existing && TurtleBatches.poolCountNeedsReview(existing);
+  const linkedCount = existing ? state.turtles.filter(turtle => turtle.poolId === existing.id && TurtleBatches.isActive(turtle)).length : 0;
+  if (needsReview && rawCount !== "" && count < linkedCount) return toast(`当前已关联 ${linkedCount} 只在养龟，总数量不能少于已关联数量`);
   const now = new Date().toISOString();
   const pool = {
     id: existing?.id || crypto.randomUUID(),
@@ -14968,7 +15132,9 @@ function submitTurtlePool(event) {
     length: parseOptionalSize("length"),
     width: parseOptionalSize("width"),
     height: parseOptionalSize("height"),
-    count: Math.floor(count),
+    count: needsReview ? (rawCount === "" ? existing.count : count - linkedCount) : count,
+    countMode: needsReview && rawCount === "" ? existing.countMode : "additional",
+    ...(existing?.legacyCount !== undefined ? { legacyCount: existing.legacyCount } : needsReview && rawCount !== "" ? { legacyCount: existing.count } : {}),
     note: String(form.get("note") || "").trim(),
     createdAt: existing?.createdAt || now,
     updatedAt: now
@@ -14976,6 +15142,7 @@ function submitTurtlePool(event) {
   const turtlePools = existing
     ? (state.turtlePools || []).map(item => item.id === existing.id ? pool : item)
     : [pool, ...(state.turtlePools || [])];
+  event.currentTarget.__poolSaved = true;
   setState({
     turtlePools,
     editingTurtlePoolId: "",
@@ -14991,6 +15158,9 @@ function deleteTurtlePool(id) {
   if (!pool || !confirm(`要删除龟池“${pool.name || "未命名"}”吗？`)) return;
   setState({
     turtlePools: (state.turtlePools || []).filter(item => item.id !== id),
+    turtles: state.turtles.map(turtle => turtle.poolId === id ? { ...turtle, poolId: "" } : turtle),
+    breedingRecords: (state.breedingRecords || []).map(record => record.poolId === id ? { ...record, poolId: "" } : record),
+    turtlePoolFilter: state.turtlePoolFilter === id ? "all" : state.turtlePoolFilter,
     editingTurtlePoolId: "",
     page: "pools",
     activityLogs: logActivity(`删除龟池：${pool.name || "未命名龟池"}`, "龟池")
@@ -15009,7 +15179,7 @@ function openLedgerForm(type, turtleId = "", draft = null) {
         const input = form?.elements.namedItem(name);
         if (input && draft?.[name]) input.value = draft[name];
       }
-      form?.scrollIntoView({ behavior: "smooth", block: "start" });
+      requestAnimationFrame(() => scrollFormBelowTopbar("#turtleBatchMovementForm"));
     });
     return;
   }
@@ -15022,10 +15192,17 @@ function openLedgerForm(type, turtleId = "", draft = null) {
 }
 
 function scrollLedgerFormIntoView() {
-  const form = document.querySelector("#ledgerForm");
+  scrollFormBelowTopbar("#ledgerForm");
+}
+
+function scrollFormBelowTopbar(selector) {
+  const form = document.querySelector(selector);
   if (!form) return;
-  const topbarHeight = document.querySelector(".topbar")?.getBoundingClientRect().height || 0;
-  const targetTop = window.scrollY + form.getBoundingClientRect().top - topbarHeight - 10;
+  // Anchor navigation needs the final layout, not the entry animation's temporary transform.
+  $app.classList.remove("page-enter-motion");
+  // Include the fixed header's safe-area offset so the form heading remains visible on iOS.
+  const topbarBottom = Math.max(0, document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0);
+  const targetTop = window.scrollY + form.getBoundingClientRect().top - topbarBottom - 10;
   window.scrollTo({ top: Math.max(0, targetTop), left: 0, behavior: "smooth" });
 }
 
@@ -15090,7 +15267,18 @@ function readBreedingDraft() {
   };
 }
 
-function buildBreedingHatchPlan(record, count, species, turtles, ledgerRecords, hatchDate, eventId = crypto.randomUUID(), today = formatDate(new Date())) {
+function breedingHatchProgress(record, turtles, ledgerRecords) {
+  const linked = new Set((Array.isArray(record.hatchArchiveIds) ? record.hatchArchiveIds : []).filter(Boolean));
+  for (const turtle of [...turtles, ...ledgerRecords.map(item => item.turtleSnapshot).filter(Boolean)]) {
+    if (turtle.sourceBreedingId === record.id && turtle.id) linked.add(turtle.id);
+  }
+  const events = Array.isArray(record.hatchEvents) ? record.hatchEvents : [];
+  for (const event of events) for (const id of event.turtleIds || []) if (id) linked.add(id);
+  const previousCount = Math.max(Number(record.hatchCount) || 0, linked.size, events.reduce((sum, event) => sum + (Number(event.count) || 0), 0));
+  return { linked, events, previousCount, unlinked: Math.max(0, previousCount - linked.size) };
+}
+
+function buildBreedingHatchPlan(record, count, species, turtles, ledgerRecords, hatchDate, eventId = crypto.randomUUID(), today = formatDate(new Date()), linkHistorical = false) {
   if (!Number.isSafeInteger(count) || count < 1) throw new Error("请填写孵化成功的整数只数");
   if (count > 1000) throw new Error("单次孵化数量不能超过 1000 只，请核对数量");
   if (!species) throw new Error("请选择幼龟品种");
@@ -15098,18 +15286,14 @@ function buildBreedingHatchPlan(record, count, species, turtles, ledgerRecords, 
   if (!dateParts || new Date(Date.UTC(Number(dateParts[1]), Number(dateParts[2]) - 1, Number(dateParts[3]))).toISOString().slice(0, 10) !== hatchDate) throw new Error("请选择正确的孵化日期");
   if (hatchDate > today) throw new Error("孵化日期不能晚于今天");
   if (record.date && hatchDate < record.date) throw new Error("孵化日期不能早于产蛋日期");
-  const linked = new Set(Array.isArray(record.hatchArchiveIds) ? record.hatchArchiveIds : []);
-  for (const turtle of [...turtles, ...ledgerRecords.map(item => item.turtleSnapshot).filter(Boolean)]) {
-    if (turtle.sourceBreedingId === record.id) linked.add(turtle.id);
-  }
-  const events = Array.isArray(record.hatchEvents) ? record.hatchEvents : [];
-  const previousCount = Math.max(Number(record.hatchCount) || 0, linked.size, events.reduce((sum, event) => sum + (Number(event.count) || 0), 0));
+  const { linked, events, previousCount, unlinked } = breedingHatchProgress(record, turtles, ledgerRecords);
   if (events.some(event => event.id === eventId)) return { added: [], hatchArchiveIds: [...linked], hatchEvents: events, hatchCount: previousCount };
-  const hatchCount = previousCount + count;
+  if (linkHistorical && count > unlinked) throw new Error(`仅有 ${unlinked} 只历史孵化尚未关联，不能重复关联`);
+  const hatchCount = linkHistorical ? previousCount : previousCount + count;
   if (!Number.isSafeInteger(Number(record.eggCount)) || hatchCount > Number(record.eggCount)) throw new Error(`已累计孵化 ${previousCount} 只，本次 ${count} 只，合计不能超过产蛋 ${record.eggCount} 枚`);
   const batchId = `hatch:${record.id}:${eventId}`;
   const added = [];
-  const codes = new Set(turtles.map(turtle => turtle.code));
+  const codes = new Set([...turtles.map(turtle => turtle.code), ...ledgerRecords.map(item => item.turtleSnapshot?.code)].filter(Boolean));
   let serial = 1;
   for (let index = 0; index < count; index++) {
     let code;
@@ -15128,15 +15312,18 @@ function buildBreedingHatchPlan(record, count, species, turtles, ledgerRecords, 
     added.push(turtle);
   }
   return { added, hatchArchiveIds: [...linked], hatchCount,
-    hatchEvents: [...events, { id: eventId, batchId, date: hatchDate, count, speciesCode: species.code, turtleIds: added.map(turtle => turtle.id), createdAt: new Date().toISOString() }] };
+    hatchEvents: [...events, { id: eventId, batchId, date: hatchDate, count, ...(linkHistorical ? { historicalLink: true } : {}), speciesCode: species.code, turtleIds: added.map(turtle => turtle.id), createdAt: new Date().toISOString() }] };
 }
 
-function confirmBreedingHatch() {
+function confirmBreedingHatch(event, linkHistorical = false) {
   const form = document.querySelector("#breedingDetailForm");
   if (!form || form.__hatchSubmitted || !form.reportValidity()) return;
   const data = new FormData(form);
+  const record = (state.breedingRecords || []).find(item => item.id === state.selectedBreedingId);
+  if (!record) return;
   submitBreedingDetail({ preventDefault() {}, currentTarget: form }, {
-    count: Number(data.get("successfulHatchCount")),
+    count: linkHistorical ? breedingHatchProgress(record, state.turtles, state.ledgerRecords || []).unlinked : Number(data.get("successfulHatchCount")),
+    linkHistorical,
     date: String(data.get("hatchDate") || ""),
     eventId: String(data.get("hatchEventId") || ""),
     species: speciesByCode(String(data.get("hatchSpeciesCode") || ""))
@@ -15145,6 +15332,7 @@ function confirmBreedingHatch() {
 
 function submitBreedingDetail(event, hatch = null) {
   event.preventDefault();
+  if (event.currentTarget.__breedingDetailSaved) return;
   if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const record = (state.breedingRecords || []).find(item => item.id === state.selectedBreedingId);
@@ -15158,7 +15346,14 @@ function submitBreedingDetail(event, hatch = null) {
   const fertileCount = Number(form.get("fertileCount"));
   const hatchCount = Number(record.hatchCount || 0);
   if (![eggCount, fertileCount, hatchCount].every(value => Number.isSafeInteger(value) && value >= 0)) return toast("请填写正确的产蛋数、受精数和孵化数");
+  if (fertileCount > eggCount) return toast("受精数不能大于产蛋数");
   if (hatchCount > eggCount) return toast("产蛋数不能少于已累计孵化数量");
+  const recordedHatchDates = [
+    ...(record.hatchEvents || []).map(item => item.date),
+    ...state.turtles.filter(item => item.sourceBreedingId === record.id).map(item => item.acquiredDate),
+    ...(state.ledgerRecords || []).filter(item => item.turtleSnapshot?.sourceBreedingId === record.id).map(item => item.turtleSnapshot.acquiredDate)
+  ].filter(Boolean);
+  if (recordedHatchDates.some(date => String(form.get("date") || "") > date)) return toast("产蛋日期不能晚于已记录的孵化日期");
   if (hatchCount < (record.hatchArchiveIds || []).length) return toast("孵化数量不能少于已关联的幼龟档案数");
   if (motherId === "manual" && !manualMother) return toast("请填写种母备注");
   const photo = state.breedingEditPhoto === "__CLEAR__" ? "" : state.breedingEditPhoto || record.photo || "";
@@ -15209,7 +15404,7 @@ function submitBreedingDetail(event, hatch = null) {
   if (hatch) {
     let plan;
     try {
-      plan = buildBreedingHatchPlan(updated, hatch.count, hatch.species, state.turtles, state.ledgerRecords || [], hatch.date, hatch.eventId);
+      plan = buildBreedingHatchPlan(updated, hatch.count, hatch.species, state.turtles, state.ledgerRecords || [], hatch.date, hatch.eventId, formatDate(new Date()), hatch.linkHistorical);
     } catch (error) { return toast(error.message); }
     addedCount = plan.added.length;
     if (addedCount && !requireArchiveCapacity(addedCount)) return;
@@ -15221,6 +15416,7 @@ function submitBreedingDetail(event, hatch = null) {
     historyItem.hatchEventId = hatch.eventId;
     historyItem.hatchDate = hatch.date;
     historyItem.hatchAddedCount = addedCount;
+    if (hatch.linkHistorical) historyItem.historicalLink = true;
     event.currentTarget.__hatchSubmitted = true;
     hatchPatch = {
       turtles: [...plan.added, ...state.turtles],
@@ -15228,6 +15424,7 @@ function submitBreedingDetail(event, hatch = null) {
       turtleFilter: "all", turtlePoolFilter: "all", turtleSort: "latest"
     };
   }
+  event.currentTarget.__breedingDetailSaved = true;
   saveWithDeferredImages({
     ...hatchPatch,
     breedingRecords: (state.breedingRecords || []).map(item => item.id === record.id ? updated : item),
@@ -15240,6 +15437,7 @@ function submitBreedingDetail(event, hatch = null) {
 
 function submitBreedingRecord(event) {
   event.preventDefault();
+  if (event.currentTarget.__breedingSaved) return;
   if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const motherId = form.get("mother");
@@ -15253,10 +15451,12 @@ function submitBreedingRecord(event) {
     toast("请填写种母的手动备注");
     return;
   }
-  if (Number.isNaN(eggCount) || Number.isNaN(fertileCount)) {
+  if (![eggCount, fertileCount].every(value => Number.isSafeInteger(value) && value >= 0)) {
     toast("请填写正确的产蛋数和受精数");
     return;
   }
+  if (fertileCount > eggCount) return toast("受精数不能大于产蛋数");
+  if (motherId !== "manual" && !mother) return toast("请选择有效的种母档案");
   const record = {
     id: crypto.randomUUID(),
     date: form.get("date"),
@@ -15272,6 +15472,7 @@ function submitBreedingRecord(event) {
     createdAt: new Date().toISOString(),
     editHistory: []
   };
+  event.currentTarget.__breedingSaved = true;
   saveWithDeferredImages({
     breedingRecords: [record, ...(state.breedingRecords || [])],
     breedingDraftPhoto: "",
@@ -15326,7 +15527,7 @@ function submitLedgerRecord(event) {
     if (!requireArchiveCapacity()) return;
     const species = speciesByCode(form.get("purchaseSpeciesCode"));
     if (!species) return toast("收购记录需要选择品种");
-    const code = form.get("purchaseCode") || `${species.isCustom ? species.name : species.code}-${state.turtles.filter(t => t.speciesCode === species.code).length + 1}`;
+    const code = form.get("purchaseCode") || TurtleBatches.codeAllocator(species.isCustom ? species.name : species.code, state.turtles, state.ledgerRecords)();
     turtle = {
       id: crypto.randomUUID(),
       code,
@@ -15404,6 +15605,22 @@ function submitLedgerRecord(event) {
 function deleteLedgerRecord(id) {
   if (!requireLogin()) return;
   const record = state.ledgerRecords.find(item => item.id === id);
+  const movement = TurtleBatches.groupLedgerRecords(state.ledgerRecords).find(item => item.movementRecords?.some(member => member.id === id));
+  if (movement) {
+    const records = movement.movementRecords;
+    const effect = record.type === "loss" ? "会恢复这笔损耗对应的收购投入和档案状态。" : "会删除这笔售出收入，已售出的档案不会自动恢复。";
+    if (!confirm(`要删除这笔批次${ledgerTypeText(record.type)}记录（${records.length} 只，合计 ${money(movement.amount)} 元）吗？${effect}`)) return;
+    let data = { turtles: state.turtles, ledgerRecords: state.ledgerRecords, memos: state.memos };
+    for (const member of records) {
+      const current = data.ledgerRecords.find(item => item.id === member.id);
+      if (!current) continue;
+      data = current.type === "loss" && current.lossCostTransferred
+        ? TurtleLossAccounting.undoLoss(data, current)
+        : { ...data, ledgerRecords: data.ledgerRecords.filter(item => item.id !== current.id) };
+    }
+    setState({ ...data, openLedgerMenuId: "", activityLogs: logActivity(`删除批次${ledgerTypeText(record.type)}记录：${ledgerMovementLabel(movement)}，${records.length} 只`, "账本") });
+    return;
+  }
   if (!record || !confirm(record.type === "loss" && record.lossCostTransferred && !record.duplicateLossOf ? "删除损耗记录后，会恢复对应收购投入和档案状态。单独记录的其他支出会保留。确认删除？" : "要删除这条账本记录吗？")) return;
   const accounting = record.type === "loss" && record.lossCostTransferred
     ? TurtleLossAccounting.undoLoss({ turtles: state.turtles, ledgerRecords: state.ledgerRecords, memos: state.memos }, record)

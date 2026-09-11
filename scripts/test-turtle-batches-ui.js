@@ -38,6 +38,14 @@ fs.mkdirSync(output, { recursive: true });
     assert.match(await page.locator('.turtle-batch-row').innerText(), /在养 500 只/);
     await page.locator('.turtle-batch-row').screenshot({ path: path.join(output, 'batch-dashboard-390.png') });
     await page.locator('.turtle-batch-row').click();
+    for (const theme of ['teal', 'dark']) {
+      await page.evaluate(async theme => {
+        setState({ themeColor: theme }, { skipSave: true });
+        await Promise.all(document.querySelector('.content').getAnimations().map(animation => animation.finished.catch(() => {})));
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      }, theme);
+      await page.screenshot({ path: path.join(output, `batch-detail-${theme}-390.png`), fullPage: true });
+    }
     await page.getByRole('button', { name: '更新批次', exact: true }).click();
     assert.equal(await page.locator('#turtleDetailForm [name="weight"]').count(), 0);
     await page.locator('#turtleDetailForm [name="stage"]').selectOption('juvenile');
@@ -51,6 +59,11 @@ fs.mkdirSync(output, { recursive: true });
     await page.locator('#turtleBatchMovementForm').waitFor();
     assert.match(await page.locator('.turtle-batch-detail').innerText(), /200 公 · 250 母 · 50 性别未知/);
     assert.deepEqual(await page.evaluate(() => state.turtlePools.map(pool => TurtleBatches.poolCount(pool, state.turtles))), [0, 500]);
+    await page.locator('#turtleBatchMovementForm [name="type"]').selectOption('loss');
+    assert.equal(await page.locator('[data-batch-amount-label]').innerText(), '损耗金额（元）');
+    assert.equal(await page.locator('#turtleBatchMovementForm [name="amount"]').getAttribute('placeholder'), '按购入成本自动计算');
+    await page.locator('#turtleBatchMovementForm [name="type"]').selectOption('sold');
+    assert.equal(await page.locator('[data-batch-amount-label]').innerText(), '售出总金额（元）');
     await page.locator('#turtleBatchMovementForm [name="type"]').selectOption('loss');
     await page.locator('#turtleBatchMovementForm [name="gender"]').selectOption('未知');
     await page.locator('#turtleBatchMovementForm [name="count"]').fill('12');
