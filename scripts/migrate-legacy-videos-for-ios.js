@@ -91,6 +91,8 @@ async function main() {
   const mysql = require("mysql2/promise");
   const connection = await mysql.createConnection({ host: mysqlHost, port: Number(process.env.MYSQL_PORT || 3306), user: process.env.MYSQL_USER, password: process.env.MYSQL_PASSWORD, database: process.env.MYSQL_DATABASE || "turtlekeeper", charset: "utf8mb4" });
   try {
+    await require('../server/mysql-record-store').acquireWriter(connection);
+    await require('../server/mysql-record-store').assertLegacyMode(connection);
     const [rows] = await connection.query("SELECT payload FROM turtlekeeper_app_state WHERE id = 1");
     if (!rows.length) throw new Error("RDS 中没有应用数据；未修改任何数据。");
     const payload = typeof rows[0].payload === "string" ? JSON.parse(rows[0].payload) : rows[0].payload;

@@ -97,13 +97,15 @@ async function main() {
   }
 
   try {
-    child = spawn(process.execPath, [serverFile], {
+    const recordMode = process.env.TURTLE_TEST_RECORD_DRIVER === '1';
+    child = spawn(process.execPath, [...(recordMode ? ['--require', path.join(root, 'scripts/mysql-record-test-preload.js')] : []), serverFile], {
       cwd: root,
       windowsHide: true,
       env: {
         ...process.env,
         PORT: String(port),
         HOST: "127.0.0.1",
+        MYSQL_URL: "", MYSQL_HOST: recordMode ? "isolated-test-driver" : "", MYSQL_STORAGE_MODE: recordMode ? "records" : "legacy",
         MIN_SUPPORTED_APP_BUILD: "95",
         LATEST_APP_BUILD: "99",
         TURTLE_RUNTIME_DIR: runtime,
@@ -506,6 +508,8 @@ async function main() {
       child.kill();
       await new Promise(resolve => child.once("exit", resolve));
     }
+    assert.equal(path.dirname(path.resolve(runtime)), path.resolve(os.tmpdir()));
+    assert.ok(path.basename(runtime).startsWith('turtlekeeper-api-regression-'));
     await fs.rm(runtime, { recursive: true, force: true });
     if (output && process.env.DEBUG_API_REGRESSION === "1") console.error(output);
   }

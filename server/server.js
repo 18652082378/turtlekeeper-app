@@ -9,6 +9,7 @@ const http2 = require("http2");
 const path = require("path");
 const { URL } = require("url");
 const { createMarketRankPager } = require("./market-ranking");
+const { MysqlRecordStore, assertLegacyMode, acquireWriter } = require("./mysql-record-store");
 const { reviewHash, advertisingRisk, createDailyCommunityDispatcher } = require("./community-daily-push");
 const marketRankPage = createMarketRankPager();
 
@@ -44,6 +45,7 @@ const DATA_FILE = path.resolve(DATA_DIR, "app-data.json");
 const MYSQL_URL = String(process.env.MYSQL_URL || "").trim();
 const MYSQL_HOST = String(process.env.MYSQL_HOST || "").trim();
 const MYSQL_ENABLED = Boolean(MYSQL_URL || MYSQL_HOST);
+const MYSQL_STORAGE_MODE = String(process.env.MYSQL_STORAGE_MODE || "legacy").trim();
 const SMS_STATE_FILE = path.resolve(DATA_DIR, "sms-state.json");
 const UPLOAD_DIR = path.resolve(RUNTIME_ROOT, "uploads");
 const BACKUP_DIR = path.resolve(RUNTIME_ROOT, "backups");
@@ -293,14 +295,28 @@ function cacheBustMediaUrls(value) {
 }
 
 function sendJson(res, status, body) {
-  res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Range, X-Auth-Phone, X-Auth-Token, X-Media-Duration",
-    "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range"
-  });
-  res.end(JSON.stringify(cacheBustMediaUrls(body)));
+  // Capture this response before another request mutates shared records. A
+  // successful API response must wait for the queued database commit.
+  const payload = JSON.stringify(cacheBustMediaUrls(body));
+  const finish = (code, text) => {
+    if (res.writableEnded || res.destroyed) return;
+    res.writeHead(code, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Range, X-Auth-Phone, X-Auth-Token, X-Media-Duration",
+      "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range"
+    });
+    res.end(text);
+  };
+  if (MYSQL_ENABLED && status < 400) {
+    return Promise.resolve().then(() => mysqlRecordStore ? mysqlRecordStore.flush() : mysqlWriteQueue)
+      .then(() => finish(status, payload), error => {
+        console.error("数据库未确认保存：", error.message);
+        finish(503, JSON.stringify({ ok: false, message: "数据库暂时无法保存，本次操作未确认成功，请保留本机数据后重试" }));
+      });
+  }
+  finish(status, payload);
 }
 
 function readJson(req) {
@@ -556,6 +572,9 @@ class DatabaseIntegrityError extends Error {
 let mysqlPool = null;
 let mysqlDatabase = null;
 let mysqlWriteQueue = Promise.resolve();
+let mysqlRecordStore = null;
+let mysqlWriterConnection = null;
+let shuttingDown = false;
 
 function normalizeDatabase(data = {}) {
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("数据库根节点无效");
@@ -574,6 +593,7 @@ function normalizeDatabase(data = {}) {
 
 async function initializeMysqlDatabase() {
   if (!MYSQL_ENABLED) return;
+  if (!["legacy", "records"].includes(MYSQL_STORAGE_MODE)) throw new Error("MYSQL_STORAGE_MODE 必须为 legacy 或 records");
   let mysql;
   try { mysql = require("mysql2/promise"); } catch { throw new Error("已设置 MySQL 配置，但未安装 mysql2；请先执行 npm install"); }
   mysqlPool = mysql.createPool(MYSQL_URL || {
@@ -587,6 +607,21 @@ async function initializeMysqlDatabase() {
     connectionLimit: 10,
     queueLimit: 0
   });
+  mysqlWriterConnection = await mysqlPool.getConnection();
+  if (MYSQL_STORAGE_MODE === "records") {
+    mysqlRecordStore = await MysqlRecordStore.open(mysqlWriterConnection);
+    mysqlDatabase = mysqlRecordStore.data;
+    // Older snapshots may predate newer modules. Add only absent defaults;
+    // preserve all existing and unknown fields from the verified migration.
+    for (const [field, value] of Object.entries(normalizeDatabase(mysqlDatabase))) {
+      if (!Object.hasOwn(mysqlDatabase, field)) mysqlDatabase[field] = value;
+    }
+    await mysqlRecordStore.write();
+    console.log("数据库模式：MySQL 分记录增量写入（单 API 实例）");
+    return;
+  }
+  await acquireWriter(mysqlWriterConnection);
+  await assertLegacyMode(mysqlWriterConnection);
   await mysqlPool.query("CREATE TABLE IF NOT EXISTS turtlekeeper_app_state (id TINYINT UNSIGNED NOT NULL PRIMARY KEY, payload JSON NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
   const [rows] = await mysqlPool.query("SELECT payload FROM turtlekeeper_app_state WHERE id = 1");
   mysqlDatabase = rows.length ? normalizeDatabase(typeof rows[0].payload === "string" ? JSON.parse(rows[0].payload) : rows[0].payload) : emptyDatabase();
@@ -596,6 +631,7 @@ async function initializeMysqlDatabase() {
 function readDatabase() {
   if (MYSQL_ENABLED) {
     if (!mysqlDatabase) throw new DatabaseIntegrityError(new Error("MySQL 尚未完成初始化"));
+    mysqlRecordStore?.assertHealthy();
     return mysqlDatabase;
   }
   if (!fs.existsSync(DATA_FILE)) return emptyDatabase();
@@ -610,9 +646,10 @@ function readDatabase() {
 function writeDatabase(db) {
   if (MYSQL_ENABLED) {
     if (!mysqlPool || !mysqlDatabase) throw new DatabaseIntegrityError(new Error("MySQL 尚未完成初始化"));
+    if (mysqlRecordStore) return mysqlRecordStore.write(db);
     mysqlDatabase = normalizeDatabase(db);
     const payload = JSON.stringify(mysqlDatabase);
-    mysqlWriteQueue = mysqlWriteQueue.catch(error => console.error("上一笔 MySQL 写入失败：", error.message)).then(() => mysqlPool.execute(
+    mysqlWriteQueue = mysqlWriteQueue.then(() => mysqlWriterConnection.execute(
       "INSERT INTO turtlekeeper_app_state (id, payload) VALUES (1, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload)", [payload]
     ));
     mysqlWriteQueue.catch(error => console.error("MySQL 写入失败；请立即检查 RDS：", error.message));
@@ -4854,15 +4891,18 @@ const server = http.createServer(async (req, res) => {
 });
 
 setInterval(() => {
-  const db = readDatabase();
-  let changed = autoOfflineStaleMarketListings(db);
-  if (autoOfflineRestrictedMarketListings(db)) changed = true;
-  if (changed) writeDatabase(db);
+  if (shuttingDown) return;
+  try {
+    const db = readDatabase();
+    let changed = autoOfflineStaleMarketListings(db);
+    if (autoOfflineRestrictedMarketListings(db)) changed = true;
+    if (changed) writeDatabase(db);
+  } catch (error) { console.error("商城定时维护已暂停：", error.message); }
 }, 60 * 60 * 1000).unref();
 
 // Remote care reminders are checked twice a minute, allowing a short recovery
 // window if the timer runs close to the minute boundary.
-setInterval(() => { void dispatchDueCareReminders(); }, 30 * 1000).unref();
+setInterval(() => { if (!shuttingDown) void dispatchDueCareReminders(); }, 30 * 1000).unref();
 const dispatchDailyCommunityPush = createDailyCommunityDispatcher({
   read: readDatabase, write: writeDatabase,
   configured: () => apnsConfigured(),
@@ -4873,14 +4913,29 @@ const dispatchDailyCommunityPush = createDailyCommunityDispatcher({
     if (!result.ok && !result.skipped) console.warn("Daily community push failed:", result.reason || result.status || "unknown");
   }
 });
-setInterval(() => { dispatchDailyCommunityPush().catch(error => console.error("Daily community push stopped:", error.message)); }, 60 * 1000).unref();
-setInterval(runScheduledBackup, 60 * 60 * 1000).unref();
+setInterval(() => { if (!shuttingDown) dispatchDailyCommunityPush().catch(error => console.error("Daily community push stopped:", error.message)); }, 60 * 1000).unref();
+setInterval(() => { if (!shuttingDown) runScheduledBackup(); }, 60 * 60 * 1000).unref();
 
 // Videos are streamed directly from iOS. Keep the origin request alive long
 // enough for a slow but healthy Wi-Fi upload instead of letting Node cut it off.
 server.requestTimeout = 15 * 60 * 1000;
 server.headersTimeout = 75 * 1000;
 server.keepAliveTimeout = 70 * 1000;
+
+async function shutdownDatabaseServer() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  server.close(async () => {
+    try {
+      if (mysqlRecordStore) await mysqlRecordStore.close();
+      else await mysqlWriteQueue;
+    } catch (error) { console.error("停止前数据库保存失败：", error.message); process.exitCode = 1; }
+    finally { mysqlWriterConnection?.release(); if (mysqlPool) await mysqlPool.end(); }
+  });
+  server.closeIdleConnections();
+}
+process.on("SIGTERM", shutdownDatabaseServer);
+process.on("SIGINT", shutdownDatabaseServer);
 
 void initializeMysqlDatabase().then(() => {
   void dispatchDueCareReminders();
@@ -4901,5 +4956,7 @@ void initializeMysqlDatabase().then(() => {
   });
 }).catch(error => {
   console.error("服务启动失败：", error.message);
+  mysqlWriterConnection?.release();
+  if (mysqlPool) void mysqlPool.end();
   process.exitCode = 1;
 });

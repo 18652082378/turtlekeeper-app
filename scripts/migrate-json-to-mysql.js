@@ -57,6 +57,8 @@ async function main() {
     charset: "utf8mb4"
   });
   try {
+    await require('../server/mysql-record-store').acquireWriter(connection);
+    await require('../server/mysql-record-store').assertLegacyMode(connection);
     await connection.query("CREATE TABLE IF NOT EXISTS turtlekeeper_app_state (id TINYINT UNSIGNED NOT NULL PRIMARY KEY, payload JSON NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     await connection.beginTransaction();
     const [rows] = await connection.query("SELECT id FROM turtlekeeper_app_state WHERE id = 1");
