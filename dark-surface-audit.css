@@ -222,6 +222,7 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
   contain: layout paint;
 }
 .edge-back-preview::-webkit-scrollbar { display: none; }
+.edge-back-preview.is-restoring { z-index: 3; }
 .edge-back-preview * { animation: none !important; transition: none !important; caret-color: transparent !important; }
 .edge-back-preview video,
 .edge-back-preview audio,

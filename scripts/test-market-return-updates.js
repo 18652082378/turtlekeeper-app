@@ -38,6 +38,15 @@ async function main(){
     assert.equal(await page.locator('.market-card-photo > i').textContent(),'可议价');
     assert.equal(await page.locator('.system-announcement-overlay').count(),0,'dismissed announcement stays dismissed');
     assert.equal(await page.evaluate(()=>originalGrid===document.querySelector('.market-grid')&&originalImage===document.querySelector('img')),true,'metadata and announcement updates retain list and image nodes');
+    await page.addScriptTag({content:`
+      var marketNetworkMonitoringStarted=false,marketNetworkType='unknown',videoSyncCount=0,networkChanged;
+      Object.defineProperty(navigator,'connection',{configurable:true,value:{addEventListener(type,listener){networkChanged=listener}}});
+      function syncMarketWifiVideos(){videoSyncCount++}
+      ${extract('function startMarketNetworkMonitoring(', 'function marketListingCard(')}
+      startMarketNetworkMonitoring();networkChanged();
+    `});
+    assert.equal(await page.evaluate(()=>videoSyncCount),1,'network changes update playback without rebuilding cards');
+    assert.equal(await page.evaluate(()=>originalGrid===document.querySelector('.market-grid')),true);
     console.log('Market return updates passed: media retention, favorites/price/status patches, announcement polling and dismissal without full render.');
   } finally {await browser.close()}
 }

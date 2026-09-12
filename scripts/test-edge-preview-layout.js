@@ -30,6 +30,13 @@ const extract = (start,end) => source.slice(source.indexOf(start),source.indexOf
     for(const theme of ['light','dark']) for(const origin of ['market','community','mine','home']){
       await page.evaluate(({origin,theme})=>{document.documentElement.dataset.themeColor=theme;state.page=origin;render();scrollTo(0,origin==='home'?0:theme==='dark'?99999:1200);},{origin,theme});
       await page.waitForTimeout(40);
+      await page.evaluate(async () => {
+        const card=document.querySelector('[data-card="6"]');
+        const cover=new Image();
+        cover.src='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="green"/></svg>');
+        await cover.decode();
+        cover.loading='lazy';cover.decoding='async';card.appendChild(cover);
+      });
       const before = await page.evaluate(()=>{
         window.originalCard=document.querySelector('[data-card="6"]');
         const result={header:document.querySelector('.topbar').getBoundingClientRect().top,nav:document.querySelector('.bottom-nav').getBoundingClientRect().top,y:scrollY,card:originalCard.getBoundingClientRect().top};
@@ -42,6 +49,11 @@ const extract = (start,end) => source.slice(source.indexOf(start),source.indexOf
         return {header:root.querySelector('.topbar').getBoundingClientRect().top,nav:root.querySelector('.bottom-nav').getBoundingClientRect().top,card:root.querySelector('[data-card="6"]').getBoundingClientRect().top,renders:renderCount};
       });
       for(const key of ['header','nav','card'])assert.ok(Math.abs(during[key]-before[key])<1,`${origin} ${key}: ${during[key]} vs ${before[key]}`);
+      const cover=await page.evaluate(()=>{
+        const image=document.querySelector('.edge-back-preview [data-card="6"] img');
+        return {loading:image.loading,decoding:image.decoding,ready:image.complete&&image.naturalWidth>0};
+      });
+      assert.deepEqual(cover,{loading:'eager',decoding:'sync',ready:true},'loaded photos must be visible during the swipe, before hand-off');
       await page.screenshot({path:'build/edge-preview-'+origin+'.png'});
       await page.mouse.move(380,400,{steps:5});await page.mouse.up();await page.waitForTimeout(500);
       const after=await page.evaluate(()=>({same:originalCard===document.querySelector('[data-card="6"]'),renders:renderCount,y:scrollY,page:state.page,nav:document.querySelector('#app .bottom-nav').getBoundingClientRect().top}));
@@ -53,6 +65,19 @@ const extract = (start,end) => source.slice(source.indexOf(start),source.indexOf
       await page.evaluate(()=>navigateBack());await page.waitForTimeout(40);
       assert.equal(await page.evaluate(()=>scrollY),before.y);
     }
+    // Inspect the intermediate hand-off itself, before either animation frame.
+    const handoff=await page.evaluate(()=>{
+      state.page='market';render();scrollTo(0,1200);const y=scrollY;
+      setState({page:'child'});showEdgeBackPreview(edgeBackSnapshots.at(-1));
+      $app.style.transform='translate3d(100vw,0,0)';navigateBack({fromEdgeGesture:true});
+      return {y,restored:scrollY,transform:$app.style.transform,
+        covered:Number(getComputedStyle(document.querySelector('.edge-back-preview')).zIndex)>Number(getComputedStyle($app).zIndex)};
+    });
+    assert.equal(handoff.restored,handoff.y);
+    assert.equal(handoff.transform,'','fixed layers must use the viewport before restoring scroll');
+    assert.equal(handoff.covered,true,'preview covers the layout hand-off until the restored page paints');
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator('.edge-back-preview').count(),0,'handoff overlay must release interaction');
     console.log('Actual pointer gestures passed: scrolled market/community/mine and growth-style home, fixed header/footer geometry, unchanged DOM, completion, cancellation and button return.');
   }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

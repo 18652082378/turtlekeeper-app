@@ -3591,6 +3591,11 @@ function bottomNavFromHtml(html) {
 }
 
 function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
+  const handoffPreview = options.fromEdgeGesture ? document.querySelector(".edge-back-preview") : null;
+  // Cover the restored page until its fixed layers and images have painted.
+  // Keeping #app translated offscreen during scroll restoration makes iOS
+  // calculate fixed headers against that transformed, tall list for a frame.
+  handoffPreview?.classList.add("is-restoring");
   const liveDom = takeLiveSnapshotDom(snapshot);
   if (!liveDom.hasChildNodes()) return false;
   state = { ...state, ...nextState };
@@ -3599,7 +3604,7 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
   pendingCommunityChatEnterMotion = false;
   pendingPageScrollReset = false;
   $app.style.transition = "";
-  if (!options.fromEdgeGesture) $app.style.transform = "";
+  $app.style.transform = "";
   $app.classList.remove("edge-back-dragging", "page-enter-motion", "community-chat-enter-motion");
   const persistentBottomNav = $app.querySelector(":scope > .bottom-nav");
   persistentBottomNav?.remove();
@@ -3633,6 +3638,7 @@ function navigateBack(options = {}) {
   const nextState = snapshot?.page ? { ...fallback, page: snapshot.page } : fallback;
   if (snapshot && restoreLiveNavigationSnapshot(snapshot, nextState, options)) return;
   if (snapshot?.html) {
+    if (options.fromEdgeGesture) document.querySelector(".edge-back-preview")?.classList.add("is-restoring");
     // Hand the exact frozen page to the real app before removing the preview.
     // This is intentionally not render(): recreating a long list (especially
     // messages) at this point is what caused the one-frame bounce on return.
@@ -3641,12 +3647,10 @@ function navigateBack(options = {}) {
     pendingPageEnterMotion = false;
     pendingCommunityChatEnterMotion = false;
     pendingPageScrollReset = false;
-    // During an edge-back completion the outgoing page is already fully off
-    // screen. Keep that layer offscreen until the previous page HTML and its
-    // scroll position are ready, rather than briefly snapping the outgoing
-    // page back to x=0 before replacing it.
+    // The preview now covers the hand-off. Remove the outgoing transform
+    // before restoring scroll, so fixed layers use viewport coordinates.
     $app.style.transition = "";
-    if (!options.fromEdgeGesture) $app.style.transform = "";
+    $app.style.transform = "";
     $app.classList.remove("edge-back-dragging", "page-enter-motion", "community-chat-enter-motion");
     stopMarketDetailVideos($app, true);
     $app.innerHTML = snapshot.html;
@@ -4036,7 +4040,7 @@ function startMarketNetworkMonitoring() {
 
   const browserConnection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
   browserConnection?.addEventListener?.("change", () => {
-    if (marketNetworkType === "unknown" && state.page === "market") render();
+    if (marketNetworkType === "unknown" && state.page === "market") syncMarketWifiVideos();
   });
 
   const capacitor = window.Capacitor;
@@ -17081,6 +17085,18 @@ function showEdgeBackPreview(snapshot) {
     preview.__edgeBackSnapshot = snapshot;
     preview.__edgeBackUsesClone = true;
     preview.appendChild(snapshot.liveDom.cloneNode(true));
+    // cloneNode copies loading="lazy" and decoding="async", but not the
+    // decoded image. A short back swipe can therefore show empty covers and
+    // then reveal every photo together at the hand-off. Only warm images that
+    // the original page has already loaded; unseen cards stay lazy.
+    const sourceImages = snapshot.liveDom.querySelectorAll("img");
+    preview.querySelectorAll("img").forEach((image, index) => {
+      const original = sourceImages[index];
+      if (!original?.complete || !original.naturalWidth) return;
+      image.loading = "eager";
+      image.decoding = "sync";
+      if (original.currentSrc) image.src = original.currentSrc;
+    });
     const bottomNav = bottomNavFromHtml(snapshot.bottomNavHtml);
     if (bottomNav) {
       preview.__edgeBackBottomNav = bottomNav;
