@@ -19638,3 +19638,15 @@ html[data-theme-color="dark"] .turtle-batch-detail .breeding-form { color-scheme
   .turtle-batch-row .batch-count-badge { margin-left: 0; }
   .turtle-batch-row .turtle-row-meta { flex-wrap: wrap; }
 }
+/* Keep both versions readable on a narrow phone; no file-format details. */
+.sync-conflict-review { padding: 20px; }
+.sync-conflict-review h2 { font-size: 20px; margin-top: 0; }
+.sync-conflict-review fieldset { border: 1px solid var(--border, #dce6e4); border-radius: 16px; padding: 16px; margin: 20px 0; min-width: 0; }
+.sync-conflict-review legend { font-weight: 700; padding: 0 8px; max-width: 100%; overflow-wrap: anywhere; }
+.sync-conflict-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.sync-conflict-options label { display: block; padding: 14px; border: 1px solid var(--border, #dce6e4); border-radius: 12px; cursor: pointer; overflow-wrap: anywhere; }
+.sync-conflict-options label:has(input:checked) { border-color: #2ba582; background: rgba(43, 165, 130, .08); }
+.sync-conflict-options input { margin-right: 8px; }
+.sync-conflict-options p, .sync-conflict-options li { font-size: 13px; line-height: 1.7; }
+.sync-conflict-options ul { padding-left: 20px; max-height: 220px; overflow: auto; }
+@media (max-width: 600px) { .sync-conflict-options { grid-template-columns: 1fr; } }

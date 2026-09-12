@@ -9,7 +9,7 @@ function device() {
     CONFIGURED_SMS_BACKEND: true, POLICY_VERSION: 'test',
     TurtleLocalData: require('../assets/local-data-codec'),
     state: { loggedInPhone: 'account', cloudAccountUpdatedAt: 'revision-1', page: 'home', ledgerRecords: [] },
-    pending: null, cloudHydrationComplete: true, cloudSyncInFlight: false,
+    pending: null, cloudRenders: 0, localRenders: 0, cloudHydrationComplete: true, cloudSyncInFlight: false,
     cloudSyncQueued: false, cloudImageMigrationInFlight: false,
     cloudSyncTimer: null, CLOUD_SYNC_DEBOUNCE_MS: 10,
     setTimeout: () => 1, clearTimeout() {},
@@ -33,9 +33,10 @@ function device() {
     return true;
   };
   ctx.applyCloudUser = user => {
+    ctx.cloudRenders++;
     Object.assign(ctx.state, clone(user.data), { cloudAccountUpdatedAt: user.updatedAt });
   };
-  ctx.setState = patch => Object.assign(ctx.state, patch);
+  ctx.setState = patch => { ctx.localRenders++; Object.assign(ctx.state, patch); };
   vm.createContext(ctx);
   vm.runInContext(source.slice(source.indexOf('function accountSyncSignature('), source.indexOf('async function startCloudSessionHydration(')), ctx);
   return ctx;
@@ -121,5 +122,19 @@ function device() {
   await g.syncCloudAccountManually();
   assert.equal(g.pending.data.ledgerRecords[0].note, 'local', 'matching totals cannot erase different record details');
   assert.equal(g.cloudSyncIsPaused(), true);
+  let conflictWarnings = 0;
+  g.toast = () => { conflictWarnings++; };
+  g.cloudHydrationComplete = false;
+  for (let i = 0; i < 3; i++) await g.refreshCloudAccountFromServer();
+  assert.equal(g.cloudRenders, 0, 'startup must never briefly display cloud data over pending local edits');
+  assert.equal(g.localRenders, 0, 'an unchanged journal must not redraw the current form');
+  assert.equal(conflictWarnings, 0, 'repeated loads cannot reset and reannounce a persisted conflict');
+  assert.equal(g.cloudHydrationComplete, true, 'protected local startup completes hydration');
+  assert.equal(g.state.ledgerRecords[0].note, 'local');
+
+  const h = device();
+  h.apiPost = async () => ({ user: { phone: 'different-account', data: { ledgerRecords: [] } } });
+  assert.equal(await h.refreshCloudAccountFromServer(), false);
+  assert.equal(h.cloudRenders, 0, 'a mismatched account response cannot replace the current session');
   console.log('Account sync races passed: concurrent saves, cross-device refresh, pending recovery, load/edit races and stale-write preservation.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

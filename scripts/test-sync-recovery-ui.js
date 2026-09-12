@@ -60,12 +60,13 @@ const clone = value => JSON.parse(JSON.stringify(value));
     assert.equal(saves, 1, 'real edits still upload automatically');
 
     user.data.memos.push({ id: 'remote-care', text: 'remote note' });
+    user.data.memos[0].text = 'remote edit of shared care';
     user.dataRevision = `data-${++revision}`;
     await page.evaluate(() => {
       window.syncWarnings = [];
       const original = toast;
       toast = message => { window.syncWarnings.push(message); original(message); };
-      setState({ memos: [...state.memos, { id: 'unsent-care', text: 'keep this' }] });
+      setState({ memos: [...state.memos.map(m => ({ ...m, text: 'local edit of shared care' })), { id: 'unsent-care', text: 'keep this' }] });
     });
     await page.waitForFunction(() => cloudSyncIsPaused());
     assert.equal(saves, 2);
@@ -83,6 +84,22 @@ const clone = value => JSON.parse(JSON.stringify(value));
     await page.waitForFunction(() => cloudHydrationComplete && cloudSyncIsPaused());
     assert.ok(await page.evaluate(() => state.memos.some(item => item.id === 'unsent-care')));
     assert.equal(saves, 2, 'pause persists across reload');
+    const protectedRefresh = await page.evaluate(async () => {
+      const main = document.querySelector('main');
+      const warnings = [];
+      const originalToast = toast;
+      toast = text => { warnings.push(text); };
+      let remoteRenders = 0;
+      const originalApply = applyCloudUser;
+      applyCloudUser = (...args) => { remoteRenders++; return originalApply(...args); };
+      try {
+        for (let i = 0; i < 3; i++) await refreshCloudAccountFromServer();
+        return { remoteRenders, warnings, sameMain: main === document.querySelector('main'),
+          keptLocal: state.memos.some(item => item.id === 'unsent-care') };
+      } finally { toast = originalToast; applyCloudUser = originalApply; }
+    });
+    assert.deepEqual(protectedRefresh, { remoteRenders: 0, warnings: [], sameMain: true, keptLocal: true },
+      'repeated hydration keeps the local screen mounted and does not flash remote records or conflict toasts');
     await page.locator('[data-cloud-sync-notice] button').click();
     assert.equal(await page.evaluate(() => state.page), 'sync', JSON.stringify(errors));
     await page.locator('.settings-card').screenshot({ path: path.join(root, 'output', 'sync-recovery-settings.png') });

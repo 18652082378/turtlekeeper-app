@@ -13,7 +13,7 @@ assert.ok(builds.length && builds.every(value => value === builds[0]), "Debug/Re
 for (const file of ["config.js", "www/config.js"]) {
   assert.equal(Number(read(file).match(/TURTLE_APP_BUILD\s*=\s*(\d+)/)?.[1]), builds[0], `${file} build number differs from Xcode`);
 }
-for (const file of ["app.js", "styles.css", "species-data.js"]) {
+for (const file of ["index.html", "app.js", "styles.css", "species-data.js", "assets/account-merge.js"]) {
   assert.equal(read(`www/${file}`), read(file), `${file} is stale in www`);
 }
 // Validate the bundled files themselves; adding a species must not break a
