@@ -4695,44 +4695,68 @@ function marketSharePageHtml(req, url, content) {
     .replace(/<\/head>/i, `    ${metadata}\n  </head>`), "utf8");
 }
 
+const PUBLIC_WEB_FILES = new Set([
+  '/index.html', '/official.html', '/privacy.html', '/terms.html', '/support.html',
+  '/app.js', '/config.js', '/species-data.js', '/styles.css', '/chat-tools.css', '/dark-surface-audit.css',
+  '/apple-app-site-association', '/.well-known/apple-app-site-association', '/favicon.ico', '/robots.txt'
+]);
+
 function serveStatic(req, res, url) {
-  const pathname = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
-  const target = path.resolve(STATIC_ROOT, `.${pathname}`);
-  if (!target.startsWith(STATIC_ROOT)) {
+  let pathname;
+  try { pathname = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname); }
+  catch { res.writeHead(400); res.end('Bad request'); return; }
+  const publicAsset = pathname.startsWith('/assets/')
+    && !pathname.includes('\\') && !pathname.includes('\0')
+    && pathname.split('/').slice(2).every(part => part && !part.startsWith('.'));
+  // The project also contains credentials, backups and Git metadata. A path
+  // being inside STATIC_ROOT is not permission to publish it. Existing iOS
+  // clients only need these web files, bundled assets and /uploads (handled
+  // separately above); no account or storage format changes are involved.
+  if (!PUBLIC_WEB_FILES.has(pathname) && !publicAsset) {
     res.writeHead(403);
     res.end("Forbidden");
     return;
   }
-  fs.readFile(target, (error, content) => {
-    if (error) {
-      res.writeHead(404);
-      res.end("Not found");
-      return;
+  const target = path.resolve(STATIC_ROOT, `.${pathname}`);
+  fs.realpath(target, (resolveError, resolvedTarget) => {
+    if (resolveError) { res.writeHead(404); res.end('Not found'); return; }
+    const allowedRoot = publicAsset ? path.join(STATIC_ROOT, 'assets') : STATIC_ROOT;
+    const relative = path.relative(allowedRoot, resolvedTarget);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)
+      || (!publicAsset && resolvedTarget !== target)) {
+      res.writeHead(403); res.end('Forbidden'); return;
     }
-    const ext = path.extname(target).toLowerCase();
-    const isAppleAppSiteAssociation = pathname === "/apple-app-site-association"
-      || pathname === "/.well-known/apple-app-site-association";
-    const contentType = isAppleAppSiteAssociation
-      ? "application/json"
-      : (mimeTypes[ext] || "application/octet-stream");
-    const pageContent = pathname === "/index.html" ? marketSharePageHtml(req, url, content) : content;
-    // Shared product links are usually opened in the WeChat in-app browser.
-    // It can retain app.js/styles.css for a long time, even after a listing
-    // link points at a freshly deployed server.  The page shell and its
-    // executable assets must therefore revalidate on every visit; otherwise
-    // users keep an older gallery implementation and later listing photos
-    // appear blank until they open a preview.
-    const shouldRevalidate = pathname === "/index.html"
-      || /\.(?:js|css)$/i.test(pathname);
-    res.writeHead(200, {
-      "Content-Type": contentType,
-      ...((isAppleAppSiteAssociation || shouldRevalidate) ? {
-        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-        "Pragma": "no-cache",
-        "Expires": "0"
-      } : {})
+    fs.readFile(resolvedTarget, (error, content) => {
+      if (error) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+      const ext = path.extname(target).toLowerCase();
+      const isAppleAppSiteAssociation = pathname === "/apple-app-site-association"
+        || pathname === "/.well-known/apple-app-site-association";
+      const contentType = isAppleAppSiteAssociation
+        ? "application/json"
+        : (mimeTypes[ext] || "application/octet-stream");
+      const pageContent = pathname === "/index.html" ? marketSharePageHtml(req, url, content) : content;
+      // Shared product links are usually opened in the WeChat in-app browser.
+      // It can retain app.js/styles.css for a long time, even after a listing
+      // link points at a freshly deployed server.  The page shell and its
+      // executable assets must therefore revalidate on every visit; otherwise
+      // users keep an older gallery implementation and later listing photos
+      // appear blank until they open a preview.
+      const shouldRevalidate = pathname === "/index.html"
+        || /\.(?:js|css)$/i.test(pathname);
+      res.writeHead(200, {
+        "Content-Type": contentType,
+        ...((isAppleAppSiteAssociation || shouldRevalidate) ? {
+          "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+          "Pragma": "no-cache",
+          "Expires": "0"
+        } : {})
+      });
+      res.end(pageContent);
     });
-    res.end(pageContent);
   });
 }
 
@@ -4806,7 +4830,9 @@ function serveUpload(req, res, url) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  let url;
+  try { url = new URL(req.url, `http://${req.headers.host}`); }
+  catch { res.writeHead(400); res.end('Bad request'); return; }
   if (req.method === "OPTIONS") return sendJson(res, 200, { ok: true });
   try {
     if (req.method === "GET" && url.pathname === "/api/app/version") return handleAppVersion(req, res);

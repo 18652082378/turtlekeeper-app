@@ -15,7 +15,8 @@ async function main() {
     const actionsStart = source.indexOf('  const detailActions =');
     const actionsEnd = source.indexOf('\n  return `', actionsStart);
     const profileStart = source.indexOf('  document.querySelectorAll("[data-view-community-user]")');
-    const profileEnd = source.indexOf('  document.querySelectorAll("[data-open-community-notification]")', profileStart);
+    const profileEnd = source.indexOf('  bindMessageActivityEntries();', profileStart);
+    assert.ok(profileStart >= 0 && profileEnd > profileStart, 'isolate the profile click handler without unrelated page bindings');
     await page.addScriptTag({ content: `
       var state={loggedInPhone:'viewer'}, communityReplyTarget=null, communityCommentsPostId='',communityExpandedReplyRoots=new Set();
       var profiles=[],likes=[],deletions=[];

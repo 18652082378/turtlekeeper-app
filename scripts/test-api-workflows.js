@@ -61,6 +61,7 @@ async function main() {
   const base = `http://127.0.0.1:${port}`;
   let output = "";
   let child;
+  let testConnection, testSchema;
 
   async function request(pathname, payload, options = {}) {
     const headers = { ...(options.headers || {}) };
@@ -97,7 +98,19 @@ async function main() {
   }
 
   try {
-    const recordMode = process.env.TURTLE_TEST_RECORD_DRIVER === '1';
+    let realMysqlUrl = '';
+    if (process.env.TURTLE_TEST_MYSQL_URL) {
+      testConnection = await require('mysql2/promise').createConnection(process.env.TURTLE_TEST_MYSQL_URL);
+      const name = 'tk_api_test_' + crypto.randomBytes(8).toString('hex');
+      await testConnection.query(`CREATE DATABASE \`${name}\` CHARACTER SET utf8mb4`);
+      testSchema = name;
+      await testConnection.query(`USE \`${name}\``);
+      await testConnection.query('CREATE TABLE turtlekeeper_app_state (id TINYINT PRIMARY KEY, payload JSON NOT NULL) ENGINE=InnoDB');
+      await testConnection.execute('INSERT INTO turtlekeeper_app_state VALUES (1, ?)', [JSON.stringify({ users: {} })]);
+      await require('../server/mysql-record-store').migrate(testConnection, { users: {} });
+      const url = new URL(process.env.TURTLE_TEST_MYSQL_URL); url.pathname = '/' + name; realMysqlUrl = url.toString();
+    }
+    const recordMode = !realMysqlUrl && process.env.TURTLE_TEST_RECORD_DRIVER === '1';
     child = spawn(process.execPath, [...(recordMode ? ['--require', path.join(root, 'scripts/mysql-record-test-preload.js')] : []), serverFile], {
       cwd: root,
       windowsHide: true,
@@ -105,7 +118,7 @@ async function main() {
         ...process.env,
         PORT: String(port),
         HOST: "127.0.0.1",
-        MYSQL_URL: "", MYSQL_HOST: recordMode ? "isolated-test-driver" : "", MYSQL_STORAGE_MODE: recordMode ? "records" : "legacy",
+        MYSQL_URL: realMysqlUrl, MYSQL_HOST: recordMode ? "isolated-test-driver" : "", MYSQL_STORAGE_MODE: (recordMode || realMysqlUrl) ? "records" : "legacy",
         MIN_SUPPORTED_APP_BUILD: "95",
         LATEST_APP_BUILD: "99",
         TURTLE_RUNTIME_DIR: runtime,
@@ -129,6 +142,32 @@ async function main() {
     assert.equal(health.ok, true);
     assert.equal(health.minimumBuild, 95, "1.0.7 must remain supported when building 1.0.8");
     assert.equal(health.latestBuild, 99, "unreleased builds must not replace the public release in update checks");
+    for (const host of ['invalid host', '%', 'localhost:invalid-port']) {
+      // fetch may replace Host with its own authority. Use a real HTTP request
+      // to exercise the malformed header received by the server.
+      const status = await new Promise((resolve, reject) => {
+        const request = require('node:http').get(base + '/', { headers: { Host: host } }, response => {
+          response.resume(); response.on('end', () => resolve(response.statusCode));
+        });
+        request.on('error', reject);
+      });
+      assert.equal(status, 400, 'invalid Host must not cause an unhandled rejection or stop the API');
+    }
+    assert.equal((await fetch(base + '/api/app/version')).status, 200, 'API remains available after malformed requests');
+    // Check status codes only: never copy private file contents into test logs.
+    for (const pathname of ['/server/server.js', '/server/.env', '/server/data/app-data.json', '/.git/HEAD',
+      '/output/turtlekeeper-build108.bundle', '/scripts/test-api-workflows.js', '/package.json',
+      '/assets/%2e%2e%2fserver%2fserver.js', '/assets/%2e%2e%5cserver%5cserver.js']) {
+      const response = await fetch(base + pathname);
+      await response.body?.cancel();
+      assert.equal(response.status, 403, `private static path must be blocked: ${pathname}`);
+    }
+    for (const pathname of ['/', '/app.js', '/config.js', '/styles.css', '/assets/turtle-batches.js',
+      '/privacy.html', '/terms.html', '/apple-app-site-association']) {
+      const response = await fetch(base + pathname);
+      await response.body?.cancel();
+      assert.equal(response.status, 200, `public client resource must remain available: ${pathname}`);
+    }
     for (const build of [95, 96, 97, 98, 99, 102, 103]) assert.ok(build >= health.minimumBuild, `Build ${build} must not require a forced update`);
 
     await request("/api/upload/image", { image: "data:image/png;base64,AAAA" }, { status: 401 });
@@ -507,6 +546,10 @@ async function main() {
     if (child && !child.killed) {
       child.kill();
       await new Promise(resolve => child.once("exit", resolve));
+    }
+    if (testConnection) {
+      try { if (testSchema) await testConnection.query(`DROP DATABASE \`${testSchema}\``); }
+      finally { await testConnection.end(); }
     }
     assert.equal(path.dirname(path.resolve(runtime)), path.resolve(os.tmpdir()));
     assert.ok(path.basename(runtime).startsWith('turtlekeeper-api-regression-'));
