@@ -379,6 +379,8 @@ let cloudSyncInFlight = false;
 let cloudSyncQueued = false;
 let cloudConflictReview = null;
 let cloudAutoMergeAttempts = 0;
+let syncPageActionBusy = false;
+let syncPageFeedback = "";
 let cloudHydrationStarted = false;
 // A cloud-backed account initially boots from a deliberately lightweight
 // local shell. Until /api/account/load has supplied the real account data,
@@ -7064,16 +7066,17 @@ function pageReports() {
 function pageSync() {
   return `
     ${topbar("数据同步设置", true)}
-    <main class="content page-fresh">
+    <main class="content page-fresh sync-settings-page">
       <section class="page-intro compact-intro">
         <div><p class="eyebrow dark">同步</p><h2>账号云端保存</h2><p>登录后，档案、护理、繁殖、账本、空间资料和图片都会随账号保存到云端，同一账号可在不同设备查看。</p></div>
       </section>
       <section class="fresh-card settings-card">
         ${cloudSyncIsPaused() ? `<div role="status"><strong>有几条记录需要你确认</strong><p class="muted">两台设备修改了相关记录，本机修改已保留。可在这里查看差异并处理，无需导出文件。</p><button class="primary" type="button" data-review-cloud-conflict>查看并处理不同记录</button></div>` : ""}
-        <button class="mine-row sync-toggle" data-toggle-sync><span>⇄</span><strong>立即同步并获取最新数据</strong><span>›</span></button>
+        <p class="sync-action-status" data-sync-action-status role="status" aria-live="polite">${escapeHtml(syncPageFeedback || "点击下方按钮可检查同步状态，本机未同步的修改会保留。")}</p>
+        <button type="button" class="mine-row sync-toggle" data-toggle-sync><span>⇄</span><strong>立即同步并获取最新数据</strong><span>›</span></button>
         <details><summary>备份与高级恢复</summary>
-        <button class="mine-row" data-export-local-backup><span>↓</span><strong>导出本机完整备份</strong><span>›</span></button>
-        <button class="mine-row" data-import-reviewed-recovery><span>↑</span><strong>导入已核对的恢复文件</strong><span>›</span></button>
+        <button type="button" class="mine-row" data-export-local-backup><span>↓</span><strong>导出本机完整备份</strong><span>›</span></button>
+        <button type="button" class="mine-row" data-import-reviewed-recovery><span>↑</span><strong>导入已核对的恢复文件</strong><span>›</span></button>
         <input type="file" data-reviewed-recovery-file accept=".json,application/json" hidden>
         <p class="muted">恢复前会核对本机和云端是否仍与原备份一致，并显示恢复后的数量和金额。有新修改时会停止恢复。</p>
         </details>
@@ -7646,29 +7649,91 @@ function openArchiveDirectory(select, trigger) {
   overlay.querySelector("[data-directory-close]").focus();
 }
 
-function bindEvents() {
-  document.querySelector("[data-review-cloud-conflict]")?.addEventListener("click", openCloudConflictReview);
-  document.querySelectorAll("[data-cloud-conflict-choice]").forEach(input => input.addEventListener("change", () => {
-    if (!cloudConflictReview || cloudConflictReview.phone !== state.loggedInPhone) return;
-    cloudConflictReview.choices[input.dataset.cloudConflictChoice] = input.value;
-    cloudConflictReview.plan = cloudMergePlan(cloudConflictReview.user, cloudConflictReview.choices);
-    render();
-  }));
-  document.querySelector("[data-apply-cloud-conflict]")?.addEventListener("click", applyCloudConflictChoices);
-  document.querySelector("[data-toggle-sync]")?.addEventListener("click", () => syncCloudAccountManually());
-  document.querySelector("[data-import-reviewed-recovery]")?.addEventListener("click", () => document.querySelector("[data-reviewed-recovery-file]")?.click());
-  document.querySelector("[data-reviewed-recovery-file]")?.addEventListener("change", event => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (file) importReviewedAccountRecovery(file);
+function updateSyncPageActionUI() {
+  const status = $app.querySelector("[data-sync-action-status]");
+  if (status && syncPageFeedback) status.textContent = syncPageFeedback;
+  status?.setAttribute("aria-busy", String(syncPageActionBusy));
+  $app.querySelectorAll("[data-review-cloud-conflict], [data-toggle-sync], [data-apply-cloud-conflict]").forEach(button => {
+    button.disabled = syncPageActionBusy || (button.hasAttribute("data-apply-cloud-conflict") && !cloudConflictReview?.plan?.ready);
   });
-  document.querySelector("[data-retry-local-backup]")?.addEventListener("click", () => setState({}, { forceRender: true }));
-  document.querySelector("[data-export-local-backup]")?.addEventListener("click", () => {
-    downloadTextFile(`壳友手账-完整备份-${formatDate(new Date())}.json`, TurtleLocalData.stringify({
+}
+
+async function runSyncPageAction(message, action) {
+  if (syncPageActionBusy) return toast("正在处理同步，请稍候");
+  syncPageActionBusy = true;
+  syncPageFeedback = message;
+  updateSyncPageActionUI();
+  try { await action(); }
+  catch (error) { toast(error?.message || "操作未完成，本机修改已保留，请重试"); }
+  finally {
+    syncPageActionBusy = false;
+    if (syncPageFeedback === message) syncPageFeedback = cloudConflictReview
+      ? "已读取两端记录，请核对下方差异并选择要保留的版本。"
+      : "本次检查已结束，请查看同步状态。";
+    updateSyncPageActionUI();
+  }
+}
+
+async function exportLocalAccountBackup() {
+  try {
+    toast("正在准备完整备份，请在弹出的窗口中选择保存位置");
+    await downloadTextFile(`壳友手账-完整备份-${formatDate(new Date())}.json`, TurtleLocalData.stringify({
       backupFormat: "turtlekeeper-account-v1", createdAt: new Date().toISOString(),
       accountName: state.accountName, accountAvatar: state.accountAvatar, data: accountDataSnapshot(state)
     }), "application/json;charset=utf-8");
+  } catch (error) { toast(error?.message || "备份生成失败，本机数据仍保留"); }
+}
+
+function bindSyncPageActions() {
+  updateSyncPageActionUI();
+  // The app root survives page renders and live/HTML back snapshots. Delegate
+  // here so every visible control works, including duplicate warning exports,
+  // without binding to an inert edge-preview clone or stacking handlers.
+  if ($app.__syncPageActionsBound) return;
+  $app.__syncPageActionsBound = true;
+  $app.addEventListener("click", event => {
+    const button = event.target.closest?.("[data-review-cloud-conflict], [data-toggle-sync], [data-apply-cloud-conflict], [data-export-local-backup], [data-import-reviewed-recovery], [data-retry-local-backup], [data-back]");
+    if (!button || !$app.contains(button) || button.disabled) return;
+    if (button.hasAttribute("data-back") && state.page !== "sync") return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (button.hasAttribute("data-back")) navigateBack();
+    else if (button.hasAttribute("data-review-cloud-conflict")) void runSyncPageAction("正在读取两端记录…", openCloudConflictReview);
+    else if (button.hasAttribute("data-toggle-sync")) void runSyncPageAction("正在检查并同步数据…", syncCloudAccountManually);
+    else if (button.hasAttribute("data-apply-cloud-conflict")) void runSyncPageAction("正在核对并保存所选记录…", applyCloudConflictChoices);
+    else if (button.hasAttribute("data-export-local-backup")) void exportLocalAccountBackup();
+    else if (button.hasAttribute("data-import-reviewed-recovery")) {
+      const input = $app.querySelector("[data-reviewed-recovery-file]");
+      if (!input) return toast("文件选择入口未加载，请重新打开同步设置");
+      toast("请选择已核对的恢复文件，选择后会先检查，不会直接覆盖数据");
+      input.click(); // Keep the native picker in this user gesture.
+    } else {
+      const saved = setState({}, { forceRender: true });
+      toast(saved ? "本地备份已保存" : "本地备份仍未完成，请先导出备份");
+    }
+  }, true);
+  $app.addEventListener("change", event => {
+    const input = event.target;
+    if (input.matches?.("[data-reviewed-recovery-file]")) {
+      const file = input.files?.[0];
+      input.value = "";
+      if (file) void runSyncPageAction("正在核对恢复文件…", () => importReviewedAccountRecovery(file));
+    } else if (input.matches?.("[data-cloud-conflict-choice]")) {
+      if (syncPageActionBusy || !cloudConflictReview || cloudConflictReview.phone !== state.loggedInPhone) return;
+      try {
+        cloudConflictReview.choices[input.dataset.cloudConflictChoice] = input.value;
+        cloudConflictReview.plan = cloudMergePlan(cloudConflictReview.user, cloudConflictReview.choices);
+        render();
+      } catch (error) { toast(error?.message || "记录核对失败，请重新读取"); }
+    }
   });
+  $app.addEventListener("cancel", event => {
+    if (event.target.matches?.("[data-reviewed-recovery-file]")) toast("已取消选择文件，本机数据未改变");
+  }, true);
+}
+
+function bindEvents() {
+  bindSyncPageActions();
   bindArchiveDirectoryPickers();
   setupNativeMessageRowSwipes($app);
   if (state.openTurtleMenuId) {
@@ -13556,12 +13621,29 @@ async function testNativePushNotification() {
 
 async function apiPost(path, payload) {
   const base = window.TURTLE_API_BASE_URL || "";
-  const response = await fetch(`${base}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  const data = await response.json().catch(() => ({}));
+  const controller = /^\/api\/account\/(load|save)$/.test(path) ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), 20000) : null;
+  let response, data;
+  try {
+    response = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      ...(controller ? { signal: controller.signal } : {})
+    });
+    data = await response.json().catch(error => {
+      if (controller?.signal.aborted) throw error;
+      return {};
+    });
+  } catch (error) {
+    if (controller?.signal.aborted) {
+      const timeout = new Error("同步请求超时，本机修改已保留，请检查网络后重试");
+      timeout.code = "ACCOUNT_SYNC_TIMEOUT";
+      throw timeout;
+    }
+    if (controller && error instanceof TypeError) throw new Error("暂时无法连接云端，本机修改已保留，请检查网络后重试");
+    throw error;
+  } finally { if (timer) clearTimeout(timer); }
   if (response.status === 401) {
     clearExpiredCloudSession();
   }
@@ -13945,16 +14027,19 @@ function tryAutomaticCloudMerge(user) {
 }
 
 async function openCloudConflictReview() {
-  if (!hasCloudSession() || cloudSyncInFlight || cloudImageMigrationInFlight) return toast("正在同步，请稍候再试");
+  if (!hasCloudSession()) return toast("登录状态已失效，请先登录；本机修改仍保留");
+  if (cloudSyncInFlight || cloudImageMigrationInFlight) return toast("正在同步，请稍候再试");
   const phone = state.loggedInPhone;
+  const openingPage = state.page;
   try {
     const latest = await apiPost("/api/account/load", { phone, token: currentCloudToken(), termsVersion: POLICY_VERSION });
-    if (phone !== state.loggedInPhone || latest.user?.phone !== phone) return;
+    if (phone !== state.loggedInPhone || state.page !== openingPage) return;
+    if (latest.user?.phone !== phone) throw new Error("云端未返回有效账号数据，本机修改已保留，请重试");
     if (acknowledgeIdenticalCloudUser(latest.user)) { cloudConflictReview = null; render(); return toast("数据已一致，已恢复同步"); }
     const plan = cloudMergePlan(latest.user);
     if (!plan) throw new Error("暂时无法读取记录，请稍后重试");
     cloudConflictReview = { phone, user: latest.user, localSignature: accountSyncSignature(state), plan, choices: {} };
-    setState({ page: "sync" }, { skipCloud: true });
+    setState({ page: "sync" }, { skipCloud: true, forceRender: true });
     scrollFormBelowTopbar(".sync-conflict-review");
   } catch (error) { toast(error.message || "核对失败，请稍后重试"); }
 }
@@ -15837,6 +15922,10 @@ function deleteLedgerRecord(id) {
 }
 
 function toast(text) {
+  if (state.page === "sync") {
+    syncPageFeedback = text;
+    updateSyncPageActionUI();
+  }
   const now = Date.now();
   if (text === lastToastText && now - lastToastAt < 1500) return;
   lastToastText = text;

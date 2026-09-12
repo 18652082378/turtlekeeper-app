@@ -19649,4 +19649,9 @@ html[data-theme-color="dark"] .turtle-batch-detail .breeding-form { color-scheme
 .sync-conflict-options input { margin-right: 8px; }
 .sync-conflict-options p, .sync-conflict-options li { font-size: 13px; line-height: 1.7; }
 .sync-conflict-options ul { padding-left: 20px; max-height: 220px; overflow: auto; }
+.sync-action-status { padding: 12px 14px; border-radius: 10px; background: var(--row-bg, #eef7f3); color: var(--text); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.sync-action-status[aria-busy="true"] { border-left: 3px solid var(--aqua, #2ba682); }
+.sync-settings-page button, .sync-settings-page summary { touch-action: manipulation; }
+.sync-settings-page .mine-row { width: 100%; text-align: left; }
+.sync-settings-page button:disabled { opacity: .6; cursor: wait; }
 @media (max-width: 600px) { .sync-conflict-options { grid-template-columns: 1fr; } }

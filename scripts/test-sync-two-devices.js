@@ -68,7 +68,7 @@ async function freePort() {
           assert.equal(response.status(), 200, 'server commits before acknowledgment is lost');
           return route.abort('connectionreset');
         }
-        if (url.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: `window.TURTLE_API_BASE_URL = ${JSON.stringify(base)}; window.TURTLE_APP_BUILD = 106;` });
+        if (url.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: `window.TURTLE_API_BASE_URL = ${JSON.stringify(base)}; window.TURTLE_APP_BUILD = 107;` });
         if (width === 390 && offlineRelaunchAssets && !url.pathname.startsWith('/api/')) {
           // Native app assets are bundled even without internet. Keep only
           // those assets available while real API requests remain offline.
