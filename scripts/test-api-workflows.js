@@ -175,6 +175,40 @@ async function main() {
     const seller = await register("13900000001", "Regression Seller");
     const buyer = await register("13900000002", "Regression Buyer");
 
+    const devices = await register("13900000006", "Device Sessions");
+    const deviceLogin = async (id, platform) => {
+      const result = await request('/api/account/login', {
+        phone: devices.phone, password, termsAccepted: true,
+        ...(id ? { deviceId: `test-installation-${id}`, devicePlatform: platform } : {})
+      });
+      return { phone: devices.phone, token: result.json.user.token };
+    };
+    const iphoneA = await deviceLogin('iphone-a', 'ios');
+    const iphoneB = await deviceLogin('iphone-b', 'ios');
+    let android = await deviceLogin('android', 'android');
+    let web = await deviceLogin('desktop', 'web');
+    for (let i = 0; i < 7; i++) android = await deviceLogin('android', 'android');
+    for (const user of [devices, iphoneA, iphoneB, android, web]) {
+      await request('/api/account/load', auth(user));
+      await request('/api/market/list', auth(user));
+      await request('/api/community/list', auth(user));
+    }
+    // Legacy logins and desktop refreshes cannot use up native phone slots.
+    for (let i = 0; i < 6; i++) {
+      await deviceLogin();
+      web = await deviceLogin(`desktop-${i}`, 'web');
+    }
+    for (const user of [iphoneA, iphoneB, android]) await request('/api/account/load', auth(user));
+    const fourth = await deviceLogin('fourth-phone', 'android');
+    await request('/api/account/load', auth(iphoneA), { status: 401 });
+    for (const user of [iphoneB, android, fourth, web]) await request('/api/account/load', auth(user));
+    await request('/api/account/logout', { phone: devices.phone, token: buyer.token });
+    await request('/api/account/load', auth(fourth));
+    await request('/api/account/logout', auth(android));
+    await request('/api/account/logout', auth(android));
+    await request('/api/account/load', auth(android), { status: 401 });
+    for (const user of [iphoneB, fourth, web]) await request('/api/account/load', auth(user));
+
     // 1.0.7 removes a lost turtle but retains the original purchase and the
     // user-entered loss amount. A shared server must not migrate that ledger.
     const legacy = await register("13900000003", "Legacy Client");

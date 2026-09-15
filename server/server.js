@@ -1515,6 +1515,23 @@ async function verifyRegistrationCode(phone, code) {
   if (!storedCodeMatches(phone, item, code)) throw new Error("验证码不正确");
 }
 
+function addAccountSession(user, token, body, now) {
+  const deviceId = String(body.deviceId || "");
+  const platform = String(body.devicePlatform || "");
+  const identified = /^[A-Za-z0-9_-]{16,128}$/.test(deviceId) && ["ios", "android", "web"].includes(platform);
+  const group = identified ? (platform === "web" ? "web" : "mobile") : "legacy";
+  const deviceHash = identified ? hashValue(`session-device:${user.phone}:${deviceId}`) : "";
+  const sessionGroup = item => item.deviceHash ? (item.platform === "web" ? "web" : "mobile") : "legacy";
+  const current = (Array.isArray(user.tokens) ? user.tokens : []).filter(item => item?.hash);
+  const other = current.filter(item => sessionGroup(item) !== group);
+  const same = current.filter(item => sessionGroup(item) === group && (!deviceHash || item.deviceHash !== deviceHash));
+  same.push({ hash: hashValue(token), createdAt: now, ...(identified ? { deviceHash, platform } : {}) });
+  // Known phones occupy installation slots, not login-attempt slots. Keep
+  // legacy clients in their existing five-token pool until they can identify
+  // their installation; a login from Android must not evict a legacy iPhone.
+  user.tokens = [...other, ...same.slice(group === "mobile" ? -3 : -5)];
+}
+
 async function handleRegister(req, res) {
   const body = await readJson(req);
   const phone = String(body.phone || "").trim();
@@ -1553,10 +1570,11 @@ async function handleRegister(req, res) {
     // App Store 1.0.3 (84) does not include termsVersion while registering.
     // Keep those new legacy accounts on the version bundled in that app.
     termsVersion: clientPolicyVersion(body, LEGACY_POLICY_VERSION),
-    tokens: [{ hash: hashValue(token), createdAt: now }],
+    tokens: [],
     createdAt: now,
     updatedAt: now
   };
+  addAccountSession(user, token, body, now);
   db.users[phone] = user;
   writeDatabase(db);
   verifiedPhones.delete(phone);
@@ -1577,7 +1595,7 @@ async function handleLogin(req, res) {
   }
   const token = makeAuthToken();
   const now = new Date().toISOString();
-  user.tokens = [...(Array.isArray(user.tokens) ? user.tokens : []), { hash: hashValue(token), createdAt: now }].slice(-5);
+  addAccountSession(user, token, body, now);
   // Keep a server-side audit trail for the agreement accepted at login.
   user.termsAcceptedAt = now;
   // Older App Store builds do not send termsVersion. Keep their server-side
@@ -1588,6 +1606,20 @@ async function handleLogin(req, res) {
   user.updatedAt = now;
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, user: publicUserForPolicyClient(user, token, db, body) });
+}
+
+async function handleLogout(req, res) {
+  const body = await readJson(req);
+  const phone = String(body.phone || "").trim();
+  const token = String(body.token || "");
+  const db = readDatabase();
+  const user = authenticate(db, phone, token);
+  // Idempotent: an already expired credential cannot revoke another session.
+  if (user) {
+    user.tokens = user.tokens.filter(item => item.hash !== hashValue(token));
+    writeDatabase(db);
+  }
+  return sendJson(res, 200, { ok: true });
 }
 
 async function handleLoadAccount(req, res) {
@@ -4766,7 +4798,7 @@ function handleAppVersion(req, res) {
     minimumBuild: MIN_SUPPORTED_APP_BUILD,
     latestBuild: LATEST_APP_BUILD,
     appStoreUrl: IOS_APP_STORE_URL,
-    message: "壳友手账 1.0.7 已正式上线。请前往 App Store 更新，更新后即可继续使用。"
+    message: "壳友手账 1.0.8 已正式上线。请前往 App Store 更新，更新后即可继续使用。"
   });
 }
 
@@ -4840,6 +4872,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/sms/verify") return await handleVerifySms(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/register") return await handleRegister(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/login") return await handleLogin(req, res);
+    if (req.method === "POST" && url.pathname === "/api/account/logout") return await handleLogout(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/load") return await handleLoadAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/species/create") return await handleCreateCustomSpecies(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/save") return await handleSaveAccount(req, res);

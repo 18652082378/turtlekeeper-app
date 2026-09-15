@@ -27,4 +27,28 @@ ctx.state.ledgerRecords = [];
 assert.equal(ctx.stats().loss, 1, 'Deleting ledger records updates the count');
 delete ctx.state.ledgerRecords;
 assert.equal(ctx.stats().loss, 1, 'Older state without ledger records is supported');
-console.log('Home loss count passed.');
+// Reproduce the upgrade screenshot: 537 archives, 532 active, four losses,
+// and one healthy transferred turtle that must not inflate current health.
+ctx.state.turtles = [
+  ...Array.from({ length: 532 }, (_, i) => ({ id: `active-${i}`, status: '正常饲养', health: '健康', speciesCode: 'A' })),
+  ...Array.from({ length: 4 }, (_, i) => ({ id: `dead-${i}`, status: '已死亡', health: '健康', speciesCode: 'A' })),
+  { id: 'sold', status: '已转让', health: '健康', speciesCode: 'A' }
+];
+const before = JSON.stringify(ctx.state);
+assert.equal(ctx.stats().total, 537);
+assert.equal(ctx.stats().active, 532);
+assert.equal(ctx.stats().healthy, 532);
+assert.equal(ctx.stats().sick, 0);
+assert.equal(ctx.stats().loss, 4);
+assert.equal(JSON.stringify(ctx.state), before, 'Statistics preserve historical archive data');
+
+ctx.state.turtles[0].health = '生病';
+ctx.state.turtles[532].health = '生病';
+ctx.state.turtles[536].health = '生病';
+assert.equal(ctx.stats().healthy, 531);
+assert.equal(ctx.stats().sick, 1, 'Exclude deceased and transferred sick turtles');
+assert.equal(ctx.stats().healthy + ctx.stats().sick, ctx.stats().active);
+ctx.state.turtles = [];
+assert.equal(ctx.stats().healthy, 0);
+assert.equal(ctx.stats().sick, 0);
+console.log('Home loss and active health counts passed.');

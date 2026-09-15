@@ -1372,6 +1372,7 @@ function activeTurtles() {
 }
 
 function stats() {
+  const active = activeTurtles();
   // Loss records remove turtles from the archive; count their IDs together
   // with archived deaths, without counting the same turtle twice.
   const lostTurtleIds = new Set(state.turtles.filter(t => t.status === "已死亡").map(t => t.id).filter(Boolean));
@@ -1382,9 +1383,9 @@ function stats() {
   }
   return {
     total: state.turtles.length,
-    active: activeTurtles().length,
-    healthy: state.turtles.filter(t => t.status !== "已死亡" && t.health === "健康").length,
-    sick: state.turtles.filter(t => t.status !== "已死亡" && t.health === "生病").length,
+    active: active.length,
+    healthy: active.filter(t => t.health === "健康").length,
+    sick: active.filter(t => t.health === "生病").length,
     loss: lostTurtleIds.size,
     species: new Set(state.turtles.map(t => t.speciesCode)).size
   };
@@ -1553,11 +1554,26 @@ function readImageAsDataUrl(file, maxSide = 960, quality = 0.66, maxLength = 260
       return;
     }
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error("图片读取失败"));
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error); else resolve(value);
+    };
+    const timer = setTimeout(() => {
+      finish(new Error("照片读取超时，请确认照片已下载到本机后重试"));
+      if (reader.readyState === 1) reader.abort();
+    }, 20000);
+    reader.onerror = () => finish(new Error("图片读取失败，请重新选择照片"));
+    reader.onabort = () => finish(new Error("图片读取已中断，请重新选择照片"));
     reader.onload = () => {
+      if (settled) return;
       const original = String(reader.result || "");
       const image = new Image();
       image.onload = () => {
+        if (settled) return;
+        try {
         const originalWidth = image.width || maxSide;
         const originalHeight = image.height || maxSide;
         let side = maxSide;
@@ -1572,7 +1588,7 @@ function readImageAsDataUrl(file, maxSide = 960, quality = 0.66, maxLength = 260
           canvas.width = width;
           canvas.height = height;
           const context = canvas.getContext("2d");
-          if (!context) break;
+          if (!context) throw new Error("照片处理失败，请重新选择照片");
           context.drawImage(image, 0, 0, width, height);
           dataUrl = canvas.toDataURL("image/jpeg", currentQuality);
           if (dataUrl.length <= maxLength || (side <= 480 && currentQuality <= 0.52)) break;
@@ -1580,12 +1596,14 @@ function readImageAsDataUrl(file, maxSide = 960, quality = 0.66, maxLength = 260
           currentQuality = Math.max(0.52, currentQuality - 0.06);
         }
 
-        resolve(dataUrl);
+        if (!/^data:image\/[^;,]+;base64,.+/.test(dataUrl)) throw new Error("照片内容为空，请重新选择照片");
+        finish(null, dataUrl);
+        } catch (error) { finish(new Error(error.message || "照片处理失败，请重新选择照片")); }
       };
-      image.onerror = () => resolve(original);
+      image.onerror = () => finish(new Error("无法读取这张照片，请选择 JPG、PNG 或可正常预览的照片"));
       image.src = original;
     };
-    reader.readAsDataURL(file);
+    try { reader.readAsDataURL(file); } catch (error) { finish(new Error(error.message || "图片读取失败")); }
   });
 }
 
@@ -2933,12 +2951,20 @@ async function searchCommunityPosts(query) {
   }
 }
 
+function feedLoadNotice(kind) {
+  if (!CONFIGURED_SMS_BACKEND) return "";
+  if (!hasCloudSession()) return `<div class="empty"><strong>${state.loggedInPhone ? "登录状态已失效" : "请先登录账号"}</strong><p>登录后即可查看商品和帖子，本机记录仍保留。</p><button type="button" data-page="account">去登录</button></div>`;
+  if (!state[`${kind}FeedError`]) return "";
+  return `<div class="empty" role="status"><strong>${kind === "market" ? "商品" : "帖子"}暂时加载失败</strong><p>请检查网络连接后重试。</p><button type="button" data-feed-retry="${kind}">重新加载</button></div>`;
+}
+
 function pageCommunity() {
   const posts = state.communityPosts || [];
   const visiblePosts = communityForumPosts(posts);
   const selectedCircle = communitySelectedCircleId === "all" ? null : communityCircle(communitySelectedCircleId);
   const followed = selectedCircle && (state.communityFollowedCircleIds || []).includes(selectedCircle.id);
-  const communityInitialLoading = Boolean(CONFIGURED_SMS_BACKEND && hasCloudSession() && !state.communityFeedInitialized && !posts.length);
+  const feedNotice = feedLoadNotice("community");
+  const communityInitialLoading = Boolean(!feedNotice && CONFIGURED_SMS_BACKEND && hasCloudSession() && !state.communityFeedInitialized && !posts.length);
   return `
     ${communityPublishProgressMarkup()}
     ${topbar("壳友圈", false, `<button class="community-camera-button" type="button" data-community-camera-button aria-label="拍摄或从相册选择"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"></path><circle cx="12" cy="13.5" r="3.5"></circle></svg></button>`, platformServiceTopButton())}
@@ -2949,7 +2975,7 @@ function pageCommunity() {
       ${communityCircleStrip(posts)}
       ${selectedCircle ? `<section class="forum-selected-circle"><div><i>${selectedCircle.icon}</i><span><strong>${selectedCircle.name}</strong><small>${selectedCircle.note}</small></span></div><button class="${followed ? "active" : ""}" type="button" data-toggle-community-circle="${selectedCircle.id}">${followed ? "已关注" : "+ 关注"}</button></section>` : ""}
       ${communityTopicTabs()}
-      <section class="community-feed ${communityInitialLoading ? "is-initial-loading" : ""}">${communityInitialLoading ? `<div class="community-feed-initial-loading" role="status" aria-live="polite"><i aria-hidden="true"></i><span>正在加载帖子…</span></div>` : communityFeedMarkup(visiblePosts)}</section>
+      <section class="community-feed ${communityInitialLoading ? "is-initial-loading" : ""}">${feedNotice || (communityInitialLoading ? `<div class="community-feed-initial-loading" role="status" aria-live="polite"><i aria-hidden="true"></i><span>正在加载帖子…</span></div>` : "")}${!communityInitialLoading && (visiblePosts.length || !feedNotice) ? communityFeedMarkup(visiblePosts) : ""}</section>
       ${posts.length ? `<div class="community-feed-status" data-community-load-sentinel>${state.communityFeedLoadingMore ? "正在加载更多动态…" : state.communityFeedHasMore ? "继续上滑，加载更多" : "已经到底了"}</div>` : ""}
     </main>
     ${bottomNav()}
@@ -4362,8 +4388,9 @@ function pageMarket() {
   const listings = marketSearchResultListings();
   const regions = [...new Set((state.marketListings || []).map(item => String(item.city || "").trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
   const showAssistSearch = Boolean(keyword || state.marketPriceOrder || state.marketFreshOnly || state.marketRegion || state.marketDelivery);
-  const marketRequiresLogin = !state.loggedInPhone;
-  const marketInitialLoading = Boolean(!marketRequiresLogin && CONFIGURED_SMS_BACKEND && !state.marketFeedInitialized && !listings.length);
+  const marketRequiresLogin = CONFIGURED_SMS_BACKEND ? !hasCloudSession() : !state.loggedInPhone;
+  const feedNotice = feedLoadNotice("market");
+  const marketInitialLoading = Boolean(!feedNotice && !marketRequiresLogin && CONFIGURED_SMS_BACKEND && !state.marketFeedInitialized && !listings.length);
   const marketEmptyMarkup = marketRequiresLogin
     ? ""
     : `<div class="market-empty"><span>龟</span><strong>${keyword || stage !== "all" ? "没有找到合适的商品" : "龟集市还没有商品"}</strong><p>从自己的乌龟档案一键发布，尺寸和状态会自动带入。</p><button type="button" data-page="marketAdd">发布第一只</button></div>`;
@@ -4389,7 +4416,8 @@ function pageMarket() {
       </section>
       <section class="market-grid ${marketInitialLoading ? "is-initial-loading" : ""}">
         ${marketInitialLoading ? `<div class="market-feed-initial-loading" role="status" aria-live="polite"><i aria-hidden="true"></i><span>正在加载商品…</span></div>` : ""}
-        ${listings.map(marketListingCard).join("") || marketEmptyMarkup}
+        ${feedNotice}
+        ${listings.map(marketListingCard).join("") || (!marketInitialLoading && !feedNotice ? marketEmptyMarkup : "")}
       </section>
       ${listings.length ? `<div class="market-feed-status" data-market-load-sentinel>${state.marketFeedLoadingMore ? "正在加载更多商品…" : state.marketFeedHasMore ? "继续上滑，加载更多" : "已经到底了"}</div>` : ""}
     </main>
@@ -6901,7 +6929,7 @@ function pageFeedbackDetail() {
 }
 
 function pageAccount() {
-  const loggedIn = Boolean(state.loggedInPhone);
+  const loggedIn = CONFIGURED_SMS_BACKEND ? hasCloudSession() : Boolean(state.loggedInPhone);
   const maskedPhone = state.loggedInPhone ? `${state.loggedInPhone.slice(0, 3)}****${state.loggedInPhone.slice(7)}` : "";
   const codeCooldown = accountCodeCooldownRemaining();
   return `
@@ -7737,6 +7765,16 @@ function bindSyncPageActions() {
 }
 
 function bindEvents() {
+  $app.querySelectorAll("[data-feed-retry]").forEach(button => {
+    button.onclick = () => {
+      const kind = button.dataset.feedRetry;
+      if (!["market", "community"].includes(kind)) return;
+      state = { ...state, [`${kind}FeedError`]: "" };
+      if (kind === "market") void refreshMarket(true);
+      else void refreshCommunity(true);
+      render();
+    };
+  });
   bindSyncPageActions();
   bindArchiveDirectoryPickers();
   setupNativeMessageRowSwipes($app);
@@ -8036,6 +8074,7 @@ function bindEvents() {
     if (!requireLogin()) return;
     const input = document.querySelector("[data-photo-input]");
     if (!input) return;
+    preservePhotoPickerDraft(input);
     input.value = "";
     input.click();
   });
@@ -8089,6 +8128,7 @@ function bindEvents() {
     if (!requireLogin()) return;
     const input = document.querySelector("[data-ledger-photo-input]");
     if (!input) return;
+    preservePhotoPickerDraft(input);
     input.value = "";
     input.click();
   });
@@ -9179,6 +9219,7 @@ async function refreshMarket(force = false) {
     }
     const nextMarketState = {
       ...accountPatch,
+      marketFeedError: "",
       marketListings: [...mergedListings.values()],
       myMarketListings: normalizeMarketListings(result.myListings || []),
       ...(isMarketFeed ? {
@@ -9206,6 +9247,11 @@ async function refreshMarket(force = false) {
       if (state.page === "marketDetail") render();
     }
     if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "龟集市读取失败");
+    if (isMarketFeed && state.loggedInPhone === requestPhone && requestKey === marketFeedRequestKey()) {
+      marketLastLoadedAt = Date.now();
+      state = { ...state, marketFeedError: "load_failed" };
+      if (state.page === "market") render();
+    }
   } finally {
     marketLoading = false;
     if (state.page === "market" && requestKey !== marketFeedRequestKey() && hasCloudSession()) void refreshMarket(true);
@@ -9221,6 +9267,7 @@ function resetMarketFeed(patch = {}) {
     marketFeedOrderIds: [],
     marketFeedGeneration: (state.marketFeedGeneration || 0) + 1,
     marketFeedInitialized: false,
+    marketFeedError: "",
     marketFeedNextOffset: 0,
     marketFeedHasMore: true,
     marketFeedLoadingMore: false
@@ -9839,16 +9886,23 @@ async function nativePickedFiles(items = []) {
     // a second before Capacitor's local-file handler can serve its contents.
     // Retry that transient empty response so the first user action succeeds.
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      response = await fetch(`${source}${source.includes("?") ? "&" : "?"}read=${Date.now()}-${attempt}`, { cache: "no-store" });
-      blob = await response.blob();
-      if ((response.ok || response.status === 0) && blob.size) break;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      try {
+        response = await fetch(`${source}${source.includes("?") ? "&" : "?"}read=${Date.now()}-${attempt}`, { cache: "no-store", signal: controller.signal });
+        blob = await response.blob();
+        if ((response.ok || response.status === 0) && blob.size) break;
+      } catch {
+        response = null;
+        blob = null;
+      } finally { clearTimeout(timer); }
       if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 120 * (attempt + 1)));
     }
     // Capacitor's iOS local-file handler returns URLResponse for media files,
     // which has no HTTP status even when the file body is valid.  Trust a
     // non-empty body in that case instead of rejecting every selected photo
     // or video as a failed network response.
-    if ((!response.ok && response.status !== 0) || !blob?.size) throw new Error("读取已选媒体失败，请重试");
+    if (!response || (!response.ok && response.status !== 0) || !blob?.size) throw new Error("读取已选媒体失败，请重试");
     const mimeType = String(item?.mimeType || blob.type || (item?.mediaType === "video" ? "video/mp4" : "image/jpeg"));
     const extension = mimeType.startsWith("video/") ? "mp4" : "jpg";
     const name = String(item?.name || `${item?.mediaType === "video" ? "video" : "photo"}-${Date.now()}-${index + 1}.${extension}`);
@@ -9857,12 +9911,34 @@ async function nativePickedFiles(items = []) {
   return files;
 }
 
+function photoSelectionContext() {
+  return JSON.stringify([state.page, state.loggedInPhone, state.updatingTurtleId, state.selectedTurtleId,
+    state.selectedBreedingId, state.selectedLedgerId, state.ledgerDraftType, state.ledgerDraftTurtleId,
+    state.selectedMarketListingId, state.selectedCommunityFriendId, state.selectedCommunityPostId]);
+}
+
+function preservePhotoPickerDraft(input) {
+  // Keep typed fields before opening the native sheet. A background render
+  // during selection must not replace those fields with an older saved draft.
+  if (input.hasAttribute("data-photo-input")) state = { ...state, formDraft: captureTurtleFormDraft() };
+  if (input.hasAttribute("data-ledger-photo-input")) state = { ...state, ledgerDraftForm: captureLedgerFormDraft() };
+  if (input.hasAttribute("data-update-photo-input")) state = { ...state, turtleDetailDraftId: state.selectedTurtleId, turtleDetailDraft: captureTurtleDetailDraft() };
+}
+
 async function openNativeMediaPickerForInput(input) {
   const picker = nativeMediaPickerPlugin();
   if (!picker || !input?.isConnected) return false;
+  const context = photoSelectionContext();
+  const inputAttribute = input.getAttributeNames().find(name => /^data-[a-z0-9-]*input$/.test(name));
+  preservePhotoPickerDraft(input);
   const result = await picker.pick(nativeMediaPickerOptions(input));
+  if (!result?.files?.length) return true;
+  if (context !== photoSelectionContext()) return true;
+  toast("正在读取所选照片或视频…");
   const files = await nativePickedFiles(Array.isArray(result?.files) ? result.files : []);
-  if (!files.length || !input.isConnected) return true;
+  if (!files.length || context !== photoSelectionContext()) return true;
+  if (!input.isConnected && inputAttribute) input = document.querySelector(`input[${inputAttribute}]`);
+  if (!input?.isConnected) throw new Error("照片输入区域已关闭，请重新打开后选择照片");
   const transfer = new DataTransfer();
   files.forEach(file => transfer.items.add(file));
   try {
@@ -11092,8 +11168,10 @@ async function refreshCommunity(force = false) {
   if (!hasCloudSession() || communityLoading) return;
   if (!force && Date.now() - communityLastLoadedAt < 10000) return;
   communityLoading = true;
+  const requestPhone = state.loggedInPhone;
   try {
     const result = await apiPost("/api/community/list", communityAuthPayload({ offset: 0, limit: 10, sort: "latest" }));
+    if (state.loggedInPhone !== requestPhone) return;
     communityLastLoadedAt = Date.now();
     const friends = mergeCommunityFriends(Array.isArray(result.friends) ? result.friends : []);
     const messageUnreadCount = friends.reduce((sum, friend) => sum + Math.max(0, Number(friend.unreadCount || 0)), 0);
@@ -11107,6 +11185,7 @@ async function refreshCommunity(force = false) {
     const communityPosts = normalizeCommunityPosts(result.posts || []);
     const nextCommunityState = {
       communityPosts,
+      communityFeedError: "",
       communityFeedInitialized: true,
       communityFeedNextOffset: Math.max(0, Number(result.nextOffset ?? communityPosts.length)),
       communityFeedHasMore: Boolean(result.hasMore),
@@ -11125,13 +11204,24 @@ async function refreshCommunity(force = false) {
       // the entire page and produced the visible render/flicker the user saw.
       state = { ...state, ...nextCommunityState };
       saveState({ skipCloud: true });
-      if (feedChanged) patchVisibleCommunityFeed(communityPosts, previousPosts);
+      if (feedChanged || $app.querySelector(".community-feed.is-initial-loading, .community-feed [data-feed-retry]")) {
+        $app.querySelector(".community-feed")?.classList.remove("is-initial-loading");
+        // Empty success must replace the loading/error notice too.
+        const feed = $app.querySelector(".community-feed");
+        if (!communityPosts.length && feed) feed.innerHTML = communityFeedMarkup([]);
+        else patchVisibleCommunityFeed(communityPosts, previousPosts);
+      }
       syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
     } else {
       setState(nextCommunityState, { skipCloud: true });
     }
   } catch (error) {
     console.warn(error.message || "壳友圈读取失败");
+    if (state.loggedInPhone === requestPhone) {
+      communityLastLoadedAt = Date.now();
+      state = { ...state, communityFeedError: "load_failed" };
+      if (state.page === "community") render();
+    }
   } finally {
     communityLoading = false;
   }
@@ -13102,6 +13192,21 @@ function submitFeedback(event) {
   toast("反馈已提交");
 }
 
+let accountInstallationId = "";
+function accountDeviceIdentity() {
+  const storageKey = "turtlekeeper-installation-id-v1";
+  if (!accountInstallationId) {
+    try { accountInstallationId = localStorage.getItem(storageKey) || ""; } catch {}
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(accountInstallationId)) {
+      accountInstallationId = crypto.randomUUID();
+      try { localStorage.setItem(storageKey, accountInstallationId); } catch {}
+    }
+  }
+  const capacitor = window.Capacitor;
+  const platform = capacitor?.isNativePlatform?.() ? capacitor.getPlatform?.() : "web";
+  return { deviceId: accountInstallationId, devicePlatform: ["ios", "android"].includes(platform) ? platform : "web" };
+}
+
 async function submitAccount(event) {
   event.preventDefault();
   if (accountSubmitInFlight) return;
@@ -13137,7 +13242,7 @@ async function submitAccountInner(event) {
   if (mode === "login") {
     if (CONFIGURED_SMS_BACKEND) {
       try {
-        const result = await apiPost("/api/account/login", { phone, password, termsAccepted: true, termsVersion: POLICY_VERSION });
+        const result = await apiPost("/api/account/login", { phone, password, termsAccepted: true, termsVersion: POLICY_VERSION, ...accountDeviceIdentity() });
         if (!result.user) throw new Error("登录失败，请稍后重试");
         applyCloudUser(result.user, `手机号登录：${maskPhone(phone)}`, { skipCloud: true, skipMigration: true });
         void requestLocationPermissionOnLogin();
@@ -13187,6 +13292,7 @@ async function submitAccountInner(event) {
         localAccount?.data || (state.loggedInPhone === phone ? accountDataSnapshot(state) : emptyAccountData())
       );
       const result = await apiPost("/api/account/register", {
+        ...accountDeviceIdentity(),
         phone,
         password,
         code,
@@ -13387,7 +13493,11 @@ function logoutAccount() {
   const pushToken = currentCloudToken();
   if (!confirm("确定要退出当前账号吗？")) return;
   cloudHydrationComplete = false;
-  void unregisterNativePushNotifications(pushAccount, pushToken);
+  void unregisterNativePushNotifications(pushAccount, pushToken).catch(() => {}).finally(() => {
+    if (CONFIGURED_SMS_BACKEND && pushAccount && pushToken) {
+      void apiPost("/api/account/logout", { phone: pushAccount, token: pushToken }).catch(() => {});
+    }
+  });
   forgetCloudToken(state.loggedInPhone);
   const registeredUsers = syncRegisteredUsers(state);
   setState({
@@ -13625,8 +13735,10 @@ async function testNativePushNotification() {
 
 async function apiPost(path, payload) {
   const base = window.TURTLE_API_BASE_URL || "";
-  const controller = /^\/api\/account\/(load|save)$/.test(path) ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(), 20000) : null;
+  const accountSync = /^\/api\/account\/(load|save)$/.test(path);
+  const feedRead = /^\/api\/(market\/(list|detail)|community\/list)$/.test(path);
+  const controller = accountSync || feedRead ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), accountSync ? 20000 : 15000) : null;
   let response, data;
   try {
     response = await fetch(`${base}${path}`, {
@@ -13641,14 +13753,19 @@ async function apiPost(path, payload) {
     });
   } catch (error) {
     if (controller?.signal.aborted) {
+      if (feedRead) {
+        const timeout = new Error("加载超时，请检查网络后重试");
+        timeout.code = "FEED_LOAD_TIMEOUT";
+        throw timeout;
+      }
       const timeout = new Error("同步请求超时，本机修改已保留，请检查网络后重试");
       timeout.code = "ACCOUNT_SYNC_TIMEOUT";
       throw timeout;
     }
-    if (controller && error instanceof TypeError) throw new Error("暂时无法连接云端，本机修改已保留，请检查网络后重试");
+    if (accountSync && error instanceof TypeError) throw new Error("暂时无法连接云端，本机修改已保留，请检查网络后重试");
     throw error;
   } finally { if (timer) clearTimeout(timer); }
-  if (response.status === 401) {
+  if (response.status === 401 && payload?.phone === state.loggedInPhone && payload?.token && payload.token === currentCloudToken()) {
     clearExpiredCloudSession();
   }
   if (path === "/api/upload/image" && response.status === 401) {
@@ -14778,19 +14895,23 @@ function deleteTurtle(id) {
   });
 }
 
+let photoReadSequence = 0;
 async function readPhoto(event) {
   if (!requireLogin()) return;
   const input = event.target;
   const file = input.files?.[0];
   if (!file) return;
   const draft = captureTurtleFormDraft();
+  const sequence = ++photoReadSequence;
+  const context = photoSelectionContext();
   try {
     const photo = await readImageForLocalUse(file, "turtle");
     input.value = "";
-    setState({ formDraft: draft, formPhoto: photo }, { skipCloud: true });
+    if (sequence !== photoReadSequence || context !== photoSelectionContext()) return;
+    setState({ formDraft: document.querySelector("#turtleForm") ? captureTurtleFormDraft() : draft, formPhoto: photo }, { skipCloud: true });
   } catch (error) {
     input.value = "";
-    toast(error.message || "图片读取失败");
+    if (sequence === photoReadSequence && context === photoSelectionContext()) toast(error.message || "图片读取失败");
   }
 }
 
@@ -14800,9 +14921,12 @@ async function readUpdatePhoto(event) {
   const file = input.files?.[0];
   if (!file) return;
   const draft = captureTurtleDetailDraft();
+  const sequence = ++photoReadSequence;
+  const context = photoSelectionContext();
   try {
     const photo = await readImageForLocalUse(file, "turtle");
     input.value = "";
+    if (sequence !== photoReadSequence || context !== photoSelectionContext()) return;
     setState({
       turtleDetailDraftId: state.selectedTurtleId,
       turtleDetailDraft: draft,
@@ -15508,10 +15632,14 @@ async function readLedgerPhoto(event) {
   const input = event.target;
   const file = input.files?.[0];
   if (!file) return;
-  const draft = captureLedgerFormDraft();
+  let draft = captureLedgerFormDraft();
+  const sequence = ++photoReadSequence;
+  const context = photoSelectionContext();
   try {
     const photo = await readImageForLocalUse(file, "ledger");
     input.value = "";
+    if (sequence !== photoReadSequence || context !== photoSelectionContext()) return;
+    if (document.querySelector("#ledgerForm")) draft = captureLedgerFormDraft();
     setState({ ledgerDraftForm: draft, ledgerDraftPhoto: photo, ledgerDraftTurtleId: draft.turtleId || state.ledgerDraftTurtleId, ledgerPurchaseGender: draft.purchaseGender || state.ledgerPurchaseGender }, { skipCloud: true });
   } catch (error) {
     input.value = "";

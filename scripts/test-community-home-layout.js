@@ -34,7 +34,7 @@ async function main() {
       ${extract('function formatCommunityCommentTime(', 'function communityCommentDeleteMarkup(')}
       ${extract('const COMMUNITY_TOPICS =', 'function communityShareUrl(')}
       ${extract('function communitySearchSuggestionsMarkup(', 'function bindCommunitySearchResults(')}
-      ${extract('function pageCommunity()', 'function communityFeedSignature(')}
+      ${extract('function feedLoadNotice(', 'function communityFeedSignature(')}
       ${extract('function communityPostRenderSignature(', 'function bindPatchedCommunityFeed(')}
       ${extract('function patchVisibleCommunityFeed(', 'function pageCommunityAdd(')}
       var $app=document.querySelector('#app');
