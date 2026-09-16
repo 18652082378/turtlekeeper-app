@@ -12,12 +12,37 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePicker
     public let jsName = "TurtleMediaPicker"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "pick", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "exportText", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "exportText", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "shareImage", returnType: CAPPluginReturnPromise)
     ]
 
     private var cameraCall: CAPPluginCall?
     private var exportCall: CAPPluginCall?
     private var exportDirectory: URL?
+
+    @objc func shareImage(_ call: CAPPluginCall) {
+        guard let dataUrl = call.getString("dataUrl"), dataUrl.count <= 14000000,
+              dataUrl.hasPrefix("data:image/png;base64,"),
+              let data = Data(base64Encoded: String(dataUrl.dropFirst("data:image/png;base64,".count))),
+              let image = UIImage(data: data) else {
+            call.reject("分享图片无效，请重新生成")
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let host = self?.bridge?.viewController, host.presentedViewController == nil else {
+                call.reject("请先关闭当前窗口，再分享图片")
+                return
+            }
+            let sheet = UIActivityViewController(activityItems: [image], applicationActivities: nil)
+            sheet.popoverPresentationController?.sourceView = host.view
+            sheet.popoverPresentationController?.sourceRect = CGRect(x: host.view.bounds.midX, y: host.view.bounds.midY, width: 1, height: 1)
+            sheet.completionWithItemsHandler = { _, completed, _, error in
+                if let error { call.reject("分享失败：" + error.localizedDescription) }
+                else { call.resolve(["completed": completed, "cancelled": !completed]) }
+            }
+            host.present(sheet, animated: true)
+        }
+    }
 
     @objc func exportText(_ call: CAPPluginCall) {
         guard let content = call.getString("content"),

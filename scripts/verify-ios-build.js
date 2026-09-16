@@ -13,8 +13,23 @@ assert.ok(builds.length && builds.every(value => value === builds[0]), "Debug/Re
 for (const file of ["config.js", "www/config.js"]) {
   assert.equal(Number(read(file).match(/TURTLE_APP_BUILD\s*=\s*(\d+)/)?.[1]), builds[0], `${file} build number differs from Xcode`);
 }
-for (const file of ["index.html", "app.js", "styles.css", "species-data.js", "assets/account-merge.js"]) {
+for (const file of ["index.html", "app.js", "styles.css", "species-data.js", "assets/account-merge.js", "assets/team-space.js", "assets/team-space.css"]) {
   assert.equal(read(`www/${file}`), read(file), `${file} is stale in www`);
+}
+assert.ok(read('index.html').includes('./assets/team-space.js'), 'Team page script is missing from the app');
+const purchases = read('ios/App/App/TurtlePurchasesPlugin.swift');
+for (const product of ['keyoushouzhang.team.monthly', 'keyoushouzhang.team.yearly']) {
+  assert.ok(purchases.includes(product) && read('server/apple-team-purchases.js').includes(product), `Missing product: ${product}`);
+}
+assert.ok(project.includes('TurtlePurchasesPlugin.swift in Sources'), 'StoreKit plugin is not compiled by Xcode');
+assert.ok(project.includes('com.apple.InAppPurchase = { enabled = 1; }'), 'In-App Purchase capability is missing');
+assert.ok(read('scripts/configure-ios-local-plugins.js').includes('plugins.add("TurtlePurchasesPlugin")'), 'StoreKit plugin registration is missing');
+if (process.argv.includes('--native')) {
+  const native = JSON.parse(read('ios/App/App/capacitor.config.json'));
+  assert.ok(native.packageClassList.includes('TurtlePurchasesPlugin'), 'Synced iOS plugin registration is missing');
+  for (const file of ['index.html', 'app.js', 'config.js', 'assets/team-space.js', 'assets/team-space.css']) {
+    assert.equal(read(`ios/App/App/public/${file}`), read(`www/${file}`), `Stale native asset: ${file}`);
+  }
 }
 // Validate the bundled files themselves; adding a species must not break a
 // cloud build because an old hard-coded image count was left behind.

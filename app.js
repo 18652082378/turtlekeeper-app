@@ -6703,6 +6703,7 @@ function pageMine() {
         <div><strong>${state.ledgerRecords.length}</strong><span>账本</span></div>
         <div><strong>${state.memos.length}</strong><span>护理</span></div>
       </section>
+      ${window.TurtleTeam ? TurtleTeam.entry() : ''}
       <section class="fresh-card settings-card">
         <div class="settings-title">页面颜色</div>
         <div class="theme-row">
@@ -7385,7 +7386,8 @@ function placeholder(title) {
 }
 
 function render() {
-  if (state.page === "membership") state.page = "mine";
+  if (state.page === "membership") state.page = "team";
+  $app.classList.toggle('team-page', state.page === 'team');
   applyTheme();
   if (forceUpdateState.required) {
     $app.innerHTML = forceUpdatePage();
@@ -7423,6 +7425,7 @@ function render() {
     ledgerDetail: pageLedgerDetail,
     calendar: pageCalendar,
     mine: pageMine,
+    team: () => TurtleTeam.render({ auth: communityAuthPayload, api: apiPost, topbar, render, page: () => state.page, toast, download: downloadTextFile, login: () => setState({ page: 'account' }) }),
     satisfaction: pagePublicSatisfaction,
     feedback: pageFeedback,
     feedbackAdd: pageFeedbackAdd,
@@ -7488,6 +7491,7 @@ function render() {
     window.setTimeout(() => $app.classList.remove("community-chat-enter-motion"), 300);
   }
   bindEvents();
+  if (state.page === 'team') TurtleTeam.bind();
   setupMarketInfiniteScroll();
   setupCommunityInfiniteScroll();
   requestAnimationFrame(() => {
@@ -15699,7 +15703,7 @@ function breedingHatchProgress(record, turtles, ledgerRecords) {
   }
   const events = Array.isArray(record.hatchEvents) ? record.hatchEvents : [];
   for (const event of events) for (const id of event.turtleIds || []) if (id) linked.add(id);
-  const previousCount = Math.max(Number(record.hatchCount) || 0, linked.size, events.reduce((sum, event) => sum + (Number(event.count) || 0), 0));
+  const previousCount = Math.max(Number(record.hatchCount) || 0, linked.size, events.filter(event => !event.historicalLink).reduce((sum, event) => sum + (Number(event.count) || 0), 0));
   return { linked, events, previousCount, unlinked: Math.max(0, previousCount - linked.size) };
 }
 

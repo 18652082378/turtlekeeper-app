@@ -12,6 +12,8 @@ const { createMarketRankPager } = require("./market-ranking");
 const { MysqlRecordStore, assertLegacyMode, acquireWriter } = require("./mysql-record-store");
 const { reviewHash, advertisingRisk, createDailyCommunityDispatcher } = require("./community-daily-push");
 const marketRankPage = createMarketRankPager();
+const { createTeamService, recordAccountChange } = require('./team-space');
+const { createApplePurchases } = require('./apple-team-purchases');
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -1660,6 +1662,9 @@ async function handleSaveAccount(req, res) {
   const user = authenticate(db, phone, token);
   if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
   const incomingData = normalizeAccountData(body.data || {});
+  if (user.teamSpace && typeof body.baseDataRevision !== 'string') {
+    return sendJson(res, 409, { ok: false, message: '团队共享已启用，请更新客户端并刷新云端数据后再保存' });
+  }
   // New clients identify the cloud snapshot they edited. Legacy 1.0.7 does
   // not send this field, so its existing request contract remains supported.
   const staleAccount = typeof body.baseDataRevision === "string"
@@ -1712,6 +1717,7 @@ async function handleSaveAccount(req, res) {
     return sendJson(res, 400, { ok: false, message: error.message || "昵称不可使用" });
   }
   user.accountAvatar = String(body.accountAvatar || "");
+  recordAccountChange(user, existingData, incomingData);
   user.data = incomingData;
   user.updatedAt = new Date(Math.max(Date.now(), (Date.parse(user.updatedAt) || 0) + 1)).toISOString();
   writeDatabase(db);
@@ -4861,12 +4867,32 @@ function serveUpload(req, res, url) {
   });
 }
 
+const teamService = createTeamService({ read: readDatabase, write: writeDatabase, authenticate, normalize: normalizeAccountData });
+const applePurchases = createApplePurchases({ read: readDatabase, write: writeDatabase, authenticate });
+const teamRequestTimes = new Map();
+async function handleTeamRequest(req, res, pathname) {
+  const body = await readJson(req);
+  const actor = pathname === '/api/apple/notifications' ? null : authenticate(readDatabase(), String(body.phone || '').trim(), body.token);
+  if (pathname !== '/api/apple/notifications' && !actor) return sendJson(res, 401, { ok: false, message: '登录已过期，请重新登录' });
+  const bucket = `${actor?.phone || req.socket.remoteAddress}:${pathname}`;
+  const now = Date.now(), recent = (teamRequestTimes.get(bucket) || []).filter(t => now - t < 60000);
+  if (recent.length >= (pathname.includes('apple') ? 40 : 180)) return sendJson(res, 429, { ok: false, message: '操作较频繁，请稍后重试' });
+  recent.push(now); teamRequestTimes.set(bucket, recent);
+  try {
+    if (pathname === '/api/apple/notifications') { await applePurchases.notification(body); return sendJson(res, 200, { ok: true }); }
+    const result = pathname === '/api/apple/purchases' ? await applePurchases.action(body) : await teamService.action(body);
+    return sendJson(res, 200, { ok: true, ...result });
+  } catch (error) { return sendJson(res, error.status || 500, { ok: false, message: error.status ? error.message : '服务暂时不可用，请重试' }); }
+}
+setInterval(() => { if (!shuttingDown) applePurchases.refresh().catch(error => console.error('Apple refresh:', error.message)); }, 60000).unref();
+setInterval(() => teamRequestTimes.clear(), 60000).unref();
 const server = http.createServer(async (req, res) => {
   let url;
   try { url = new URL(req.url, `http://${req.headers.host}`); }
   catch { res.writeHead(400); res.end('Bad request'); return; }
   if (req.method === "OPTIONS") return sendJson(res, 200, { ok: true });
   try {
+    if (req.method === 'POST' && ['/api/team', '/api/apple/purchases', '/api/apple/notifications'].includes(url.pathname)) return await handleTeamRequest(req, res, url.pathname);
     if (req.method === "GET" && url.pathname === "/api/app/version") return handleAppVersion(req, res);
     if (req.method === "POST" && url.pathname === "/api/sms/send") return await handleSendSms(req, res);
     if (req.method === "POST" && url.pathname === "/api/sms/verify") return await handleVerifySms(req, res);

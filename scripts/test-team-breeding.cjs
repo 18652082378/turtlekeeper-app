@@ -1,0 +1,81 @@
+const assert = require('node:assert/strict');
+const { fixture } = require('./team-test-fixture');
+const { createTeamService } = require('../server/team-space');
+const breeding = require('../server/team-breeding');
+const batches = require('../assets/turtle-batches');
+process.env.TURTLE_TEAM_TEST = '1';
+async function main() {
+  const db = fixture(), owner = db.users['13900000001'];
+  owner.data.turtlePools = [{ id: 'p1', name: '一号池' }];
+  owner.data.breedingRecords = [];
+  let writes = 0;
+  const service = createTeamService({ read: () => db, write: async () => { writes++; }, authenticate: (db, phone, token) => token === 'token' ? db.users[phone] : null, normalize: data => data });
+  const request = (action, body = {}, who = 1) => service.action({ phone: `1390000000${who}`, token: 'token', action, teamId: 'fixture-team', ...body });
+  const get = async who => (await request('get', {}, who)).team;
+  const edit = async (action, body, who = 1) => request(action, { revision: (await get(who)).revision, ...body }, who);
+  let member = await get(2);
+  assert.equal(member.permissions.breeding, 'none'); assert.deepEqual(member.breedingRecords, []); assert.equal(member.breedingStats, null);
+  await assert.rejects(edit('breeding', {}, 2), e => e.status === 403);
+  await edit('member', { id: 'member-2', permissions: { breeding: 'edit', dashboard: 'none', ledger: 'none', tasks: 'read' } });
+  member = await get(2); assert.equal(member.turtles.length, 0);
+  assert(!JSON.stringify(member.breedingParents).includes('price'));
+  const fields = { date: '2026-09-01', motherId: 'manual', motherName: '团队种母', poolId: 'p1', eggCount: 10, fertileCount: 8, note: '专用繁殖备注' };
+  await edit('breeding', fields, 2);
+  let record = (await get(2)).breedingRecords[0]; const id = record.id;
+  assert.equal(record.hatchRate, 0); assert.equal(record.fertileRate, 80);
+  const hidden = await get(3); assert(!JSON.stringify(hidden).includes('专用繁殖备注')); assert(!hidden.logs.some(l => l.module === 'breeding'));
+  const firstEvent = 'hatch-test-event-0001', secondEvent = 'hatch-test-event-0002';
+  const hatch = { id, count: 3, hatchDate: '2026-09-02', speciesCode: 'ZYG', eventId: firstEvent };
+  const beforeTurtles = owner.data.turtles.length;
+  await edit('hatch', hatch, 2);
+  assert.equal(owner.data.turtles.length, beforeTurtles + 3);
+  record = (await get(2)).breedingRecords[0]; assert.equal(record.hatchRate, 37.5);
+  assert.equal(owner.data.breedingRecords[0].hatchArchiveIds.length, 3);
+  assert.equal(batches.group(owner.data.turtles.filter(t => t.sourceBreedingId === id)).length, 1);
+  // Lost response retry with refreshed revision cannot mint another birth batch.
+  await edit('hatch', hatch, 2); assert.equal(owner.data.turtles.length, beforeTurtles + 3);
+  const stale = (await get(2)).revision;
+  await edit('hatch', { ...hatch, count: 2, eventId: secondEvent }, 2);
+  await assert.rejects(request('hatch', { ...hatch, eventId: 'hatch-test-event-0003', revision: stale }, 2), e => e.status === 409);
+  record = (await get(2)).breedingRecords[0]; assert.equal(record.hatchCount, 5); assert.equal(record.hatchRate, 62.5);
+  assert.equal(batches.group(owner.data.turtles.filter(t => t.sourceBreedingId === id)).length, 2);
+  for (const invalid of [{ count: 4 }, { count: 1.5 }, { hatchDate: '2026-08-31' }, { hatchDate: '2026-02-30' }, { hatchDate: '2099-01-01' }, { speciesCode: 'unknown' }]) {
+    const before = JSON.stringify(owner.data);
+    await assert.rejects(edit('hatch', { ...hatch, eventId: 'hatch-test-event-0004', ...invalid }, 2));
+    assert.equal(JSON.stringify(owner.data), before, 'failed commands must not partially alter data');
+  }
+  await assert.rejects(edit('breeding', { ...fields, id, date: '2026-09-03' }, 2), /产蛋日期不能晚于/);
+  await assert.rejects(edit('breeding', { ...fields, id, fertileCount: 4 }, 2), /不能少于/);
+  await edit('breeding', { ...fields, id, incubationClosed: true }, 2);
+  await assert.rejects(edit('hatch', { ...hatch, count: 1, eventId: 'hatch-test-event-0005' }, 2), /已结束/);
+  await edit('breeding', { ...fields, id, incubationClosed: false }, 2);
+  const juvenile = owner.data.turtles.find(t => t.sourceBreedingId === id);
+  owner.data.turtles = owner.data.turtles.filter(t => t !== juvenile);
+  owner.data.ledgerRecords.push({ id: 'sold-hatchling', type: 'sold', turtleSnapshot: juvenile });
+  assert.equal((await get(2)).breedingRecords[0].hatchCount, 5, 'sold juveniles remain in lifetime birth count');
+  // Legacy hatches can get archives without raising the count, even across several links.
+  const legacy = { id: 'legacy-nest', date: '2026-09-01', motherId: 'manual', motherName: '历史种母', eggCount: 6, fertileCount: 6, hatchCount: 4, photo: '/assets/legacy.jpg', note: '' };
+  legacy.hatchEvents = [{ id: 'original-counted-birth', date: '2026-09-03', count: 4, turtleIds: [] }];
+  owner.data.breedingRecords.push(legacy);
+  for (const [i, n] of [[1, 2], [2, 2]]) await edit('hatch', { id: legacy.id, count: n, hatchDate: '2026-09-03', speciesCode: 'ZYG', eventId: 'legacy-link-event-000' + i, linkHistorical: true }, 2);
+  await edit('hatch', { id: legacy.id, count: 1, hatchDate: '2026-09-04', speciesCode: 'ZYG', eventId: 'legacy-new-event-0003' }, 2);
+  const legacyResult = (await get(2)).breedingRecords.find(r => r.id === legacy.id);
+  assert.equal(legacyResult.hatchCount, 5); assert.equal(legacyResult.unlinked, 0);
+  await assert.rejects(edit('hatch', { id: legacy.id, count: 1, hatchDate: '2026-09-04', speciesCode: 'ZYG', eventId: 'legacy-link-event-0004', linkHistorical: true }, 2));
+  await edit('breeding', { ...fields, id: legacy.id, motherName: '历史种母', eggCount: 6, fertileCount: 6 }, 2);
+  assert.equal(owner.data.breedingRecords.find(r => r.id === legacy.id).photo, '/assets/legacy.jpg');
+  // Weighted ratio, not the mean of per-nest percentages, and no invented zero denominator.
+  const rows = [{ eggCount: 10, fertileCount: 8, hatchCount: 5 }, { eggCount: 6, fertileCount: 6, hatchCount: 5 }];
+  assert.equal(breeding.stats(rows).hatchRate, 71.4);
+  assert.equal(breeding.stats([{ eggCount: 4, fertileCount: 0, hatchCount: 0 }]).hatchRate, null);
+  assert.equal(breeding.stats([{ eggCount: 4, fertileCount: 0, hatchCount: 2 }, ...rows]).hatchRate, null);
+  await edit('member', { id: 'member-2', permissions: { breeding: 'read' } });
+  assert((await get(2)).breedingRecords.length);
+  await assert.rejects(edit('breeding', fields, 2), e => e.status === 403);
+  await assert.rejects(edit('hatch', hatch, 2), e => e.status === 403);
+  owner.teamEntitlement.expiresAt = '2020-01-01T00:00:00Z';
+  assert.deepEqual((await get(2)).breedingRecords, []);
+  await assert.rejects(edit('hatch', hatch, 2), e => e.status === 403);
+  console.log(`PASS: breeding/hatching permissions, counts/rates, weighted totals, invalid/unknown data, repeated/stale requests, batch archives, sold history, historical links, lifecycle, preserved photos, expiry (${writes} writes).`);
+}
+main().catch(e => { console.error(e); process.exitCode = 1; });

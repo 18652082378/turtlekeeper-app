@@ -49,4 +49,13 @@ assert.throws(() => ctx.buildBreedingHatchPlan({ ...nest, hatchCount: 5 }, 1, sp
 for (const date of ['', '2026-02-30', '2026-09-08', '2026-09-14']) assert.throws(() => ctx.buildBreedingHatchPlan(nest, 1, species, [], [], date), /孵化日期/);
 for (const count of [0, -1, 1.5]) assert.throws(() => ctx.buildBreedingHatchPlan(nest, count, species, [], [], '2026-09-11'), /整数/);
 assert.equal(batches.group(ctx.buildBreedingHatchPlan({ ...nest, eggCount: 500 }, 500, species, [], [], '2026-09-11').added).length, 1);
+const historical = { ...nest, eggCount: 8, hatchCount: 4, hatchEvents: [
+  { id: 'original-birth', count: 4, turtleIds: [] },
+  { id: 'old-1', historicalLink: true, count: 2, turtleIds: ['a', 'b'] },
+  { id: 'old-2', historicalLink: true, count: 2, turtleIds: ['c', 'd'] },
+  { id: 'new-1', count: 1, turtleIds: ['e'] }
+], hatchArchiveIds: ['a', 'b', 'c', 'd', 'e'] };
+assert.equal(ctx.breedingHatchProgress(historical, [], []).previousCount, 5, 'Historical linking does not count births twice');
+const later = ctx.buildBreedingHatchPlan(historical, 1, species, [], [], '2026-09-13', 'new-2');
+assert.equal(later.hatchCount, 6);
 console.log('Hatch events passed: 3+2 creates two rows, dates, same-day events, retry, legacy capacity, losses and egg limit.');

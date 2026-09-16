@@ -1,4 +1,5 @@
 node_modules/
+.npm-cache/
 www/
 build/
 dist/
@@ -10,3 +11,6 @@ server/uploads/
 server/backups/
 *.p8
 keys/
+.android-build-tools/
+*.jks
+*.keystore

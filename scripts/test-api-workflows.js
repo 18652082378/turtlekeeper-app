@@ -13,7 +13,7 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 
-const root = path.resolve(__dirname, "..");
+const root = process.env.API_TEST_ROOT ? path.resolve(process.env.API_TEST_ROOT) : path.resolve(__dirname, "..");
 const serverFile = path.join(root, "server", "server.js");
 const password = "RegressionPass123";
 const tinyPng = Buffer.from(
@@ -175,6 +175,14 @@ async function main() {
     const seller = await register("13900000001", "Regression Seller");
     const buyer = await register("13900000002", "Regression Buyer");
 
+    if (process.env.API_TEST_LEGACY_SESSIONS === '1') {
+      // The narrow team release intentionally preserves the live five-session pool.
+      const originalSession = await register('13900000006', 'Live Sessions');
+      let currentSession;
+      for (let i = 0; i < 5; i++) currentSession = (await request('/api/account/login', { phone: originalSession.phone, password, termsAccepted: true })).json.user;
+      await request('/api/account/load', auth(originalSession), { status: 401 });
+      await request('/api/account/load', auth(currentSession));
+    } else {
     const devices = await register("13900000006", "Device Sessions");
     const deviceLogin = async (id, platform) => {
       const result = await request('/api/account/login', {
@@ -208,6 +216,7 @@ async function main() {
     await request('/api/account/logout', auth(android));
     await request('/api/account/load', auth(android), { status: 401 });
     for (const user of [iphoneB, fourth, web]) await request('/api/account/load', auth(user));
+    }
 
     // 1.0.7 removes a lost turtle but retains the original purchase and the
     // user-entered loss amount. A shared server must not migrate that ledger.
