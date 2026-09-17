@@ -139,16 +139,27 @@
     if (hasOwn) return '';
     const signedIn = Boolean(auth().phone), ready = signedIn && loaded && !error && canCreate;
     const status = !signedIn ? '登录后开启' : error ? '状态待确认' : !loaded ? '正在同步' : ready ? (membership?.testing ? '测试权限已开通' : '团队会员已开通') : '团队会员未开通';
-    return `<section class="ts-panel ts-setup" aria-label="添加子账号"><div class="ts-section-title"><div><span class="ts-kicker">从第一位伙伴开始</span><h2>添加子账号</h2></div><span class="ts-tag">${status}</span></div>
+    const content = `<section class="ts-panel ts-setup" aria-label="添加子账号"><div class="ts-section-title"><div><span class="ts-kicker">从第一位伙伴开始</span><h2>添加子账号</h2></div><span class="ts-tag">${status}</span></div>
     <p class="ts-muted">先创建团队，再用成员的注册手机号邀请。每位成员使用自己的账号登录，接受邀请后加入协作。</p>
     <ol class="ts-steps"><li><b>01</b><div><strong>创建团队</strong><small>主账号开通后创建</small></div></li><li><b>02</b><div><strong>邀请成员</strong><small>设置看板、账本与任务权限</small></div></li><li><b>03</b><div><strong>接受邀请</strong><small>最多 6 位成员共同协作</small></div></li></ol>
     ${ready ? `<p class="ts-note">${membership?.testing ? `测试有效期至 ${E(membership.expiresAt.slice(0, 10))}，到期自动结束。` : '团队权限已就绪。'}创建后会直接进入成员管理。团队共享主账号的云端档案和账本。${membership?.testing ? '请使用测试数据验证操作。' : ''}</p>${button('create', '创建团队并添加子账号 ' + icon('arrow'), '', 'ts-primary ts-wide')}` : !signedIn ? button('login', '登录并查看团队状态', '', 'ts-primary ts-wide') : `<p class="ts-note">${error ? '暂时未能确认团队权限，请刷新状态。' : !loaded ? '正在确认当前账号的团队权限。' : '当前账号还不能创建团队。开通团队会员后即可添加子账号；受邀成员无需单独订阅。'}</p>${button('create', '开通后创建团队', 'disabled', 'ts-primary ts-wide')}${button('refresh', '刷新团队状态', loading ? 'disabled' : '', 'ts-wide')}`}</section>`;
+    return ready ? content : `<details class="ts-setup-guide"><summary>开通后，如何添加子账号？<span>查看步骤</span></summary>${content}</details>`;
+  }
+
+  function purchaseSection() {
+    const ios = Boolean(native());
+    return `<section class="ts-panel ts-purchase" id="team-subscribe" aria-label="开通团队会员"><div class="ts-purchase-heading"><h2>选择你的团队会员</h2><span class="ts-tag">成员无需另付费</span></div>
+    ${!auth().phone ? button('login', '登录后查看团队与会员', '', 'ts-primary ts-wide') : ios ? `<div class="ts-plans">${['monthly', 'yearly'].map(period => {
+      const p = products.find(p => p.id.endsWith(period));
+      return `<div class="ts-plan ${period === 'yearly' ? 'ts-plan-year' : ''}"><small>${period === 'yearly' ? '安心经营一整年' : '灵活开启协作'}</small><h3>${period === 'yearly' ? '年度会员' : '月度会员'}</h3><strong>${p ? E(p.displayPrice) : '加载价格中'}<em> / ${period === 'yearly' ? '年' : '月'}</em></strong>${button('purchase', busy ? '处理中…' : '订阅' + (period === 'yearly' ? '年度' : '月度') + '会员', `data-id="keyoushouzhang.team.${period}" ${!p || busy || !purchaseInfo?.configured ? 'disabled' : ''}`, 'ts-primary ts-wide')}</div>`;
+    }).join('')}</div><p class="ts-fine">自动续期，费用由 Apple 账户扣取。可在 Apple 订阅设置中取消续订；取消后可使用至当前周期结束。</p><div class="ts-inline">${button('restore', '恢复购买')}${button('manage', '管理订阅')}</div>` : `<p class="ts-muted">网页端支持管理已开通的团队和接受邀请。苹果订阅需在支持购买的 iPhone App 中开通，再用同一账号登录这里。</p>${purchaseInfo?.configured === false ? '<p class="ts-note">订阅购买暂未开放。</p>' : ''}`}
+    ${purchaseError ? `<p class="ts-error">${E(purchaseError)}</p>${button('prices', '重新加载')}` : ''}
+    <div class="ts-legal"><a href="./terms.html" target="_blank" rel="noopener">服务条款</a><span>·</span><a href="./privacy.html" target="_blank" rel="noopener">隐私政策</a><span>·</span><a href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/" target="_blank" rel="noopener">Apple 标准使用条款</a></div></section>`;
   }
   function landing() {
-    const ios = Boolean(native());
-    return `${teams.length ? button('refresh', '← 返回团队空间', '', 'ts-wide') : ''}<section class="ts-hero"><div class="ts-eyebrow"><span class="ts-spark"></span> 龟友手账 · 团队会员</div><h1>一起记录，<br>把龟场照顾得更好。</h1><p>从一人的手账，到井然有序的团队协作。<br>看清经营，也让每一份照料有迹可循。</p><div class="ts-people"><span>主</span><span>01</span><span>02</span><span>+4</span><small>1 个主账号 · 6 个子账号</small></div><div class="ts-hero-ring"></div></section>
+    return `${teams.length ? button('refresh', '← 返回团队空间', '', 'ts-wide') : ''}<section class="ts-hero ts-member-hero"><div class="ts-eyebrow"><span class="ts-spark"></span> 龟友手账 · 团队会员</div><h1>一个团队，一起照顾好龟场。</h1><p>共享记录 · 看清经营 · 跟进孵化</p><div class="ts-people"><span>主</span><span>01</span><span>02</span><span>+4</span><small>1 个主账号 · 6 个子账号</small></div><div class="ts-hero-ring"></div></section>
+    ${canCreate && !hasOwn ? teamSetup() : purchaseSection()}
     ${invitations.map(i => `<section class="ts-panel ts-invite"><div><small>团队邀请</small><h3>${E(i.name)}</h3></div>${button('accept', '加入', `data-id="${E(i.id)}" data-team="${E(i.teamId)}"`, 'ts-primary')}${button('decline', '婉拒', `data-id="${E(i.id)}" data-team="${E(i.teamId)}"`)}</section>`).join('')}
-    ${teamSetup()}
     <section class="ts-panel"><div class="ts-section-title"><div><span class="ts-kicker">为共同经营而设计</span><h2>不止是多几个账号</h2></div>${icon('shield')}</div><div class="ts-features">
       ${feature('users', '分工清楚，权限有界', '共享看板和账本，逐人设置查看、编辑权限。')}
       ${feature('chart', '经营数据，一目了然', '月度趋势、品种收支与带龟场名称的报表导出。')}
@@ -157,13 +168,8 @@
       ${feature('clock', '每次操作，都有记录', '按成员查阅操作记录，重要账目可先审批。')}
       ${feature('card', '分享档案，带上品牌', '专属名称、Logo 与联系方式，展示照料成果。')}
     </div></section>
-    <section class="ts-panel ts-purchase"><span class="ts-kicker">开启团队协作</span><h2>一个团队，一份会员</h2>
-    ${!auth().phone ? button('login', '登录后查看团队与会员', '', 'ts-primary ts-wide') : ios ? `<div class="ts-plans">${['monthly', 'yearly'].map(period => {
-      const p = products.find(p => p.id.endsWith(period));
-      return `<div class="ts-plan ${period === 'yearly' ? 'ts-plan-year' : ''}"><small>${period === 'yearly' ? '安心经营一整年' : '灵活开启协作'}</small><h3>${period === 'yearly' ? '年度会员' : '月度会员'}</h3><strong>${p ? E(p.displayPrice) : '加载价格中'}<em> / ${period === 'yearly' ? '年' : '月'}</em></strong>${button('purchase', busy ? '处理中…' : '订阅' + (period === 'yearly' ? '年度' : '月度') + '会员', `data-id="keyoushouzhang.team.${period}" ${!p || busy || !purchaseInfo?.configured ? 'disabled' : ''}`, 'ts-primary ts-wide')}</div>`;
-    }).join('')}</div><p class="ts-fine">自动续期，费用由 Apple 账户扣取。可在 Apple 订阅设置中取消续订；取消后可使用至当前周期结束。</p><div class="ts-inline">${button('restore', '恢复购买')}${button('manage', '管理订阅')}</div>` : `<p class="ts-muted">网页端支持管理已开通的团队和接受邀请。苹果订阅需在支持购买的 iPhone App 中开通，再用同一账号登录这里。</p>${purchaseInfo?.configured === false ? '<p class="ts-note">订阅购买暂未开放。</p>' : ''}`}
-    ${purchaseError ? `<p class="ts-error">${E(purchaseError)}</p>${button('prices', '重新加载')}` : ''}
-    <div class="ts-legal"><a href="./terms.html" target="_blank" rel="noopener">服务条款</a><span>·</span><a href="./privacy.html" target="_blank" rel="noopener">隐私政策</a><span>·</span><a href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/" target="_blank" rel="noopener">Apple 标准使用条款</a></div></section>`;
+    ${canCreate && !hasOwn ? purchaseSection() : teamSetup()}
+    `;
   }
   const person = mid => mid === 'owner' ? team.owner.name : team.members.find(m => m.id === mid)?.name || '已离队成员';
   function metric(label, value, small, cls = '') { return `<div class="ts-metric ${cls}"><span>${label}</span><strong>${value}</strong><small>${small}</small></div>`; }

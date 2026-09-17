@@ -58,5 +58,7 @@
   "scripts/test-navigation-freshness.cjs",
   "scripts/test-market-back-scroll.js",
   "scripts/test-edge-preview-layout.js",
-  "docs/navigation-cache-fix.md"
+  "docs/navigation-cache-fix.md",
+  "scripts/package-ios-111-update.cjs",
+  "docs/ios-111-release.md"
 ]

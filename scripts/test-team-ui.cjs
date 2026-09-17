@@ -325,7 +325,38 @@ async function main() {
     await page.getByText('繁殖与孵化未开放', { exact: true }).waitFor();
     assert.equal(await page.locator('.ts-nest').count(), 0);
     // New owners must see an explicit blocked state, then gain a real create path.
-    await page.evaluate(() => { state.loggedInPhone = '13900000008'; state.themeColor = 'forest'; render(); });
+    await page.route('**/api/apple/purchases', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, configured: true, appAccountToken: 'ui-preview-account' }) }));
+    await page.evaluate(() => {
+      window.Capacitor = { isNativePlatform: () => true, getPlatform: () => 'ios', Plugins: { TurtlePurchases: {
+        addListener: async () => ({ remove() {} }),
+        products: async () => ({ products: [{ id: 'keyoushouzhang.team.monthly', displayPrice: '¥18.00' }, { id: 'keyoushouzhang.team.yearly', displayPrice: '¥128.00' }] }),
+        restore: async () => ({ transactions: [] }),
+        purchase: async ({ productId }) => { window.previewPurchase = productId; return { cancelled: true }; },
+        manage: async () => { window.previewManage = true; }
+      } } };
+      state.loggedInPhone = '13900000008'; state.themeColor = 'forest'; render();
+    });
+    await page.locator('[data-ts="purchase"]:enabled').first().waitFor();
+    await page.waitForSelector('.toast', { state: 'hidden' });
+    for (const [width, height] of [[375, 667], [390, 844], [430, 932]]) {
+      await page.setViewportSize({ width, height });
+      await page.evaluate(() => scrollTo(0, 0));
+      for (const btn of await page.locator('[data-ts="purchase"]').all()) {
+        const box = await btn.boundingBox();
+        assert(box.y >= 0 && box.y + box.height < height - 34, 'Both subscription buttons must fit above the iPhone home indicator');
+      }
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No horizontal overflow');
+      await page.screenshot({ path: path.join(output, `membership-first-screen-${width}.png`) });
+    }
+    await page.locator('[data-ts="purchase"]').first().click();
+    assert.equal(await page.evaluate(() => window.previewPurchase), 'keyoushouzhang.team.monthly');
+    await page.locator('[data-ts="manage"]').click();
+    assert(await page.evaluate(() => window.previewManage));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => { state.themeColor = 'dark'; render(); scrollTo(0, 0); });
+    await page.screenshot({ path: path.join(output, 'membership-first-screen-dark.png') });
+    await page.evaluate(() => { state.themeColor = 'forest'; render(); });
+    await page.locator('.ts-setup-guide>summary').click();
     await page.getByText('团队会员未开通', { exact: true }).waitFor();
     assert(await page.locator('[data-ts="create"]').isDisabled());
     await page.evaluate(() => scrollTo(0, 0));
