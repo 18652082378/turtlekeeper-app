@@ -42,23 +42,19 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await page.locator('.trade-intro').count(),1, 'Intro must remain visible beyond one second');
     await page.waitForTimeout(1000);
     assert.equal(await page.locator('.trade-intro').count(),0);
-    // Simulate a new cold start on the same day by reloading the module.
-    await page.addScriptTag({path:'assets/trade-guide.js'});
-    await page.evaluate(() => showTradeIntro());
-    assert.equal(await page.locator('.trade-intro').count(),0, 'Do not repeat the intro on a same-day cold start');
-    assert.equal(await page.evaluate(() => localStorage.getItem('turtlekeeper-trade-intro-last-day')), '2026-09-11');
-    // Two minutes later is a new local calendar day, not a 24-hour interval.
-    await page.clock.setFixedTime(new Date('2026-09-11T16:01:00Z'));
+    // Old daily markers must no longer suppress another cold launch.
+    await page.evaluate(() => localStorage.setItem('turtlekeeper-trade-intro-last-day', '2026-09-11'));
     await page.addScriptTag({path:'assets/trade-guide.js'});
     await page.evaluate(() => { showTradeIntro(); showTradeIntro(); });
-    assert.equal(await page.locator('.trade-intro').count(),1, 'Next day shows exactly one intro');
+    assert.equal(await page.locator('.trade-intro').count(),1, 'Same-day cold launch shows exactly one intro');
     await page.locator('.trade-intro-skip').click();
+    await page.evaluate(() => showTradeIntro());
+    assert.equal(await page.locator('.trade-intro').count(),0, 'No repeat during the same foreground visit');
     await page.addScriptTag({path:'assets/trade-guide.js'});
     await page.evaluate(() => showTradeIntro());
-    assert.equal(await page.locator('.trade-intro').count(),0, 'Skipping still counts as today\'s display');
-    await page.evaluate(() => { localStorage.clear(); dismissTradeIntro(); showTradeIntro(); });
-    assert.equal(await page.locator('.trade-intro').count(),0, 'Push cancellation must suppress startup');
-    assert.equal(await page.evaluate(() => localStorage.getItem('turtlekeeper-trade-intro-last-day')), null, 'Cancelled launch does not consume the daily display');
+    assert.equal(await page.locator('.trade-intro').count(),1, 'Reopening after skip still shows intro');
+    await page.evaluate(() => { dismissTradeIntro(); showTradeIntro(); });
+    assert.equal(await page.locator('.trade-intro').count(),0, 'Push cancellation must suppress this entry');
     await page.evaluate(() => openTradeGuide());
     await page.getByRole('button',{name:'我想卖龟'}).click();
     assert.match(await page.locator('.trade-poster').getAttribute('src'), /seller.png$/);
@@ -80,7 +76,33 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       Storage.prototype.setItem = () => { throw new DOMException('Storage full', 'QuotaExceededError'); };
       try { showTradeIntro(); } finally { Storage.prototype.setItem = original; }
     });
-    assert.equal(await page.locator('.trade-intro').count(),0, 'Storage failure does not block startup or repeatedly show an intro');
-    console.log('Trade guide: daily cold-start limit, local midnight, skip, timeout, push cancellation, storage failure, manual entry, tabs, copy and layout passed.');
+    assert.equal(await page.locator('.trade-intro').count(),1, 'Intro does not depend on storage availability');
+    // Simulate the actual iOS event order, including temporary interruptions.
+    const nativePage = await browser.newPage();
+    await nativePage.goto('about:blank');
+    await nativePage.evaluate(() => {
+      window.appListeners = {};
+      window.Capacitor = { isNativePlatform: () => true, Plugins: { App: {
+        addListener: async (name, callback) => { appListeners[name] = callback; return { remove() {} }; }
+      } } };
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => Boolean(window.testHidden) });
+      window.visibility = value => { testHidden = value; document.dispatchEvent(new Event('visibilitychange')); };
+    });
+    await nativePage.addScriptTag({path:'assets/trade-guide.js'});
+    await nativePage.evaluate(() => { showTradeIntro(); dismissTradeIntro(); appListeners.appStateChange({isActive:false}); appListeners.appStateChange({isActive:true}); });
+    assert.equal(await nativePage.locator('.trade-intro').count(),0, 'System prompt return is not a new entry');
+    for (let visit = 0; visit < 3; visit++) {
+      await nativePage.evaluate(() => { visibility(true); appListeners.pause(); appListeners.appStateChange({isActive:true}); });
+      assert.equal(await nativePage.locator('.trade-intro').count(),0, 'Wait until WebView is visible');
+      await nativePage.evaluate(() => { visibility(false); appListeners.appStateChange({isActive:true}); });
+      assert.equal(await nativePage.locator('.trade-intro').count(),1, 'Every background return shows exactly one intro');
+      await nativePage.locator('.trade-intro-skip').click();
+    }
+    await nativePage.evaluate(() => { visibility(true); appListeners.pause(); dismissTradeIntro(); visibility(false); appListeners.appStateChange({isActive:true}); });
+    assert.equal(await nativePage.locator('.trade-intro').count(),0, 'Push routing cancels a pending foreground intro');
+    await nativePage.evaluate(() => { openTradeGuide(); visibility(true); appListeners.pause(); visibility(false); appListeners.appStateChange({isActive:true}); });
+    assert.equal(await nativePage.locator('.trade-intro').count(),0, 'Do not cover an already open guide');
+    await nativePage.close();
+    console.log('Trade guide: every cold launch/background return, prompt interruption, skip, timeout, push cancellation, storage independence, manual entry, tabs, copy and layout passed.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode=1; });

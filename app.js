@@ -17770,7 +17770,8 @@ startAccountSessionPolling();
 refreshMessageUnread(true);
 startAppAnalytics();
 
-// One cold-start reminder; push and share-link routing dismiss it immediately.
+// Show on launch; trade-guide also handles returning from the background.
+// Push and share-link routing dismiss it immediately.
 if (!pendingNativePushAction) window.showTradeIntro?.();
 
 function bindDailyPushPreference() {

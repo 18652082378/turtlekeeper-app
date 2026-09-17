@@ -60,5 +60,9 @@
   "scripts/test-edge-preview-layout.js",
   "docs/navigation-cache-fix.md",
   "scripts/package-ios-111-update.cjs",
-  "docs/ios-111-release.md"
+  "docs/ios-111-release.md",
+  "assets/trade-guide.js",
+  "scripts/test-trade-guide.js",
+  "scripts/package-ios-112-update.cjs",
+  "docs/ios-112-release.md"
 ]
