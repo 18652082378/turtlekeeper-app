@@ -143,6 +143,8 @@ const initialState = {
   blockedUsers: [],
   isCommunityAdmin: false,
   communityFriends: [],
+  communityFriendsInitialized: false,
+  communityFriendsError: false,
   communityFollowingUsers: [],
   communityFollowingPosts: [],
   communityFollowingListings: [],
@@ -552,24 +554,30 @@ function forgetCloudToken(phone) {
   }
 }
 
-// A server-side 401 means the saved credential can no longer be used.  Clear
-// every local copy in one place so background polling stops immediately.  The
-// account's current data deliberately stays in `state`: saveState() writes it
-// as an offline recovery copy until the person signs in again, rather than
-// discarding edits merely because a token expired.
-function clearExpiredCloudSession() {
+// Keep unsynced account records in the recovery journal before ending access.
+function clearExpiredCloudSession(reason = {}) {
   const phone = state.loggedInPhone;
-  if (!phone) return;
+  if (!phone || !currentCloudToken()) return;
+  if (accountHasContent(state)) persistPendingCloudData();
   forgetCloudToken(phone);
   cloudHydrationComplete = false;
-  state = {
-    ...state,
-    cloudToken: "",
-    registeredUsers: (state.registeredUsers || []).map(user => (
-      user.phone === phone ? { ...user, cloudToken: "" } : user
-    ))
-  };
-  saveState({ skipCloud: true });
+  if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = null;
+  cloudSyncQueued = false;
+  const notice = reason.code === "ACCOUNT_SESSION_REPLACED"
+    ? "账号已在其他设备登录，请重新登录"
+    : "登录已失效，请重新登录";
+  const registeredUsers = syncRegisteredUsers(state).map(user => (
+    user.phone === phone ? { ...user, cloudToken: "" } : user
+  ));
+  setState({
+    ...emptyAccountData(), registeredUsers, loggedInPhone: "", cloudToken: "",
+    accountName: "未登录用户", accountAvatar: "", isCommunityAdmin: false,
+    blockedUsers: [], policyConsentRequired: false, accountMode: "login",
+    accountDraftPhone: phone, accountDraftPassword: "", accountDraftConfirmPassword: "",
+    accountSessionNotice: notice, page: "account"
+  }, { skipCloud: true });
+  toast(notice);
 }
 
 function loadState() {
@@ -715,7 +723,9 @@ function normalizeState(next) {
     adminSystemAnnouncements: Array.isArray(base.adminSystemAnnouncements) ? base.adminSystemAnnouncements : [],
     blockedUsers: Array.isArray(base.blockedUsers) ? base.blockedUsers : [],
     isCommunityAdmin: Boolean(base.isCommunityAdmin),
-    communityFriends: Array.isArray(base.communityFriends) ? base.communityFriends : [],
+    communityFriends: loggedInPhone && Array.isArray(base.communityFriends) ? base.communityFriends : [],
+    communityFriendsInitialized: Boolean(loggedInPhone && (base.communityFriendsInitialized || base.communityFriends?.length)),
+    communityFriendsError: false,
     communityFollowingUsers: Array.isArray(base.communityFollowingUsers) ? base.communityFollowingUsers : [],
     communityFollowingPosts: Array.isArray(base.communityFollowingPosts) ? base.communityFollowingPosts : [],
     communityFollowingListings: Array.isArray(base.communityFollowingListings) ? base.communityFollowingListings : [],
@@ -842,6 +852,7 @@ function saveState(options = {}) {
       accountName: state.accountName,
       accountAvatar: state.accountAvatar,
       accountMode: state.accountMode,
+      accountSessionNotice: state.accountSessionNotice || "",
       loggedInPhone: state.loggedInPhone,
       cloudToken: activeCloudToken,
       cloudAccountUpdatedAt: state.cloudAccountUpdatedAt || "",
@@ -855,10 +866,18 @@ function saveState(options = {}) {
       accountCodeCooldownUntil: state.accountCodeCooldownUntil,
       communityPosts: state.communityPosts || [],
       communityFriends: state.communityFriends || [],
+      communityFriendsInitialized: Boolean(state.communityFriendsInitialized),
       communityNotifications: state.communityNotifications || [],
       communityNotificationSummary: state.communityNotificationSummary || null,
       communityFollowedCircleIds: state.communityFollowedCircleIds || [],
       communityFollowingUsers: state.communityFollowingUsers || [],
+      communityFollowingPosts: state.communityFollowingPosts || [],
+      communityFollowingListings: state.communityFollowingListings || [],
+      followingInitialized: Boolean(state.followingInitialized),
+      publicReviews: state.publicReviews || [],
+      publicReviewsInitialized: Boolean(state.publicReviewsInitialized),
+      publicFeedbackItems: state.publicFeedbackItems || [],
+      publicFeedbackInitialized: Boolean(state.publicFeedbackInitialized),
       messageUnreadCount: Number(state.messageUnreadCount || 0),
       marketListings: state.marketListings || [],
       themeColor: state.themeColor || accountData.themeColor
@@ -878,7 +897,50 @@ function saveState(options = {}) {
   return !localBackupFailed;
 }
 
+function captureVisibleFormInputs() {
+  return [...$app.querySelectorAll("form")].map((form, formIndex) => ({
+    id: form.id, formIndex,
+    inputs: [...form.querySelectorAll("input, textarea, select")].map((input, index) => ({
+      index, name: input.name, type: input.type, value: input.type === "file" ? "" : input.value,
+      checked: input.checked, selected: input.multiple ? [...input.selectedOptions].map(option => option.value) : null,
+      focused: input === document.activeElement, start: input.selectionStart, end: input.selectionEnd
+    })).filter(input => input.type !== "file")
+  }));
+}
+
+function restoreVisibleFormInputs(forms) {
+  const visible = [...$app.querySelectorAll("form")];
+  for (const saved of forms || []) {
+    const form = saved.id ? visible.find(item => item.id === saved.id) : visible[saved.formIndex];
+    if (!form) continue;
+    const inputs = [...form.querySelectorAll("input, textarea, select")];
+    for (const field of saved.inputs) {
+      const input = inputs[field.index];
+      if (!input || input.name !== field.name || input.type !== field.type) continue;
+      if (field.selected) [...input.options].forEach(option => { option.selected = field.selected.includes(option.value); });
+      else input.value = field.value;
+      if (field.checked !== undefined) input.checked = field.checked;
+      if (field.focused) {
+        input.focus({ preventScroll: true });
+        if (typeof field.start === "number") { try { input.setSelectionRange(field.start, field.end); } catch {} }
+      }
+    }
+  }
+}
+
 function setState(patch, options = {}) {
+  const visibleDataChanged = navigationDataKeys(state.page).some(key => Object.hasOwn(patch, key) && patch[key] !== state[key]);
+  if (Object.hasOwn(patch, "loggedInPhone") && patch.loggedInPhone !== state.loggedInPhone) {
+    patch = { ...patch, ...accountModuleCache(patch.loggedInPhone), ...messageCacheForAccount(patch.loggedInPhone) };
+    communityLastLoadedAt = 0;
+    messageUnreadLastLoadedAt = 0;
+    marketLastLoadedAt = followingLastLoadedAt = publicReviewsLastLoadedAt = publicFeedbackLastLoadedAt = 0;
+    communityUserProfileLoadedKey = "";
+    // Back-navigation snapshots can also contain the previous account's data.
+    edgeBackSnapshots.length = 0;
+    preservedMessageSnapshotActive = false;
+    options = { ...options, skipEdgeSnapshot: true, forceRender: true };
+  }
   if ((patch.page && patch.page !== "home") || (patch.loggedInPhone !== undefined && patch.loggedInPhone !== state.loggedInPhone)) ledgerDashboardPicker = null;
   const pageChanged = Object.prototype.hasOwnProperty.call(patch, "page") && patch.page && patch.page !== state.page;
   if (pageChanged) {
@@ -910,6 +972,7 @@ function setState(patch, options = {}) {
       const liveSnapshot = detachNavigationSnapshotDom();
       edgeBackSnapshots.push({
         page: state.page,
+        dataSignature: navigationDataSignature(state.page),
         html: pageHtml,
         previewHtml: buildEdgeBackPreviewHtml(pageHtml),
         liveDom: liveSnapshot.dom,
@@ -940,7 +1003,11 @@ function setState(patch, options = {}) {
   }
   state = { ...state, ...patch };
   const locallySaved = options.skipSave ? !localBackupFailed : saveState(options);
-  if (!pageChanged && !options.forceRender && state.page === "messages" && preservedMessageSnapshotActive) {
+  if (!pageChanged && options.renderPages && !options.renderPages.includes(state.page)) {
+    syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
+    return locallySaved;
+  }
+  if (!pageChanged && !visibleDataChanged && !options.forceRender && state.page === "messages" && preservedMessageSnapshotActive) {
     // Keep the previously visible message list completely still on return
     // from chat. The state (including unread counts) is still current, and
     // the persistent bottom tab can update without rebuilding the list.
@@ -950,8 +1017,19 @@ function setState(patch, options = {}) {
   // The visible page may be the exact DOM that was just handed back from an
   // edge-swipe preview. Let that hand-off settle before a late unread/polling
   // response replaces it with a freshly rendered copy.
-  if (!pageChanged && !options.forceRender && !options.skipSave && Date.now() < restoredSnapshotRenderHoldUntil) return;
+  if (!pageChanged && !visibleDataChanged && !options.forceRender && !options.skipSave && Date.now() < restoredSnapshotRenderHoldUntil) {
+    const page = state.page, phone = state.loggedInPhone;
+    window.setTimeout(() => {
+      if (state.page === page && state.loggedInPhone === phone) {
+        setState({}, { forceRender: true, skipCloud: true, preserveInputValues: true });
+      }
+    }, Math.max(0, restoredSnapshotRenderHoldUntil - Date.now()) + 1);
+    return locallySaved;
+  }
+  if (visibleDataChanged) preservedMessageSnapshotActive = false;
+  const formInputs = !pageChanged && options.preserveInputValues ? captureVisibleFormInputs() : null;
   render();
+  if (formInputs) restoreVisibleFormInputs(formInputs);
   refreshCareReminderTimers();
   // Report a route change immediately. The server settles the time spent in
   // the previous module before switching this session to the new one.
@@ -2690,6 +2768,54 @@ async function loadCommunityActivity() {
   }
 }
 
+function accountModuleCache(phone) {
+  if (phone && phone === state.loggedInPhone) return {};
+  const keys = ["communityPosts", "communityFeedInitialized", "communityFeedNextOffset", "communityFeedHasMore", "communityFeedLoadingMore",
+    "communityProfileStats", "communityFollowedCircleIds", "communityFollowingUsers", "communityFollowingPosts", "communityFollowingListings",
+    "selectedFollowingUserId", "selectedCommunityUserId", "selectedCommunityUser", "communityUserPosts", "communityUserListings",
+    "publicReviews", "publicFeedbackItems", "marketListings", "myMarketListings", "selectedMarketListingId", "selectedMarketSellerId",
+    "marketFeedInitialized", "marketFeedSessionId", "marketFeedOrderIds", "marketFeedNextOffset", "marketFeedHasMore", "marketFeedLoadingMore",
+    "contentReports", "adminSystemAnnouncements", "operationsOverview"];
+  const patch = Object.fromEntries(keys.map(key => {
+    const value = initialState[key];
+    return [key, value && typeof value === "object" ? JSON.parse(JSON.stringify(value)) : value];
+  }));
+  return { ...patch, marketFeedGeneration: (state.marketFeedGeneration || 0) + 1,
+    communityFeedError: "", marketFeedError: "", followingInitialized: false, followingError: false,
+    publicReviewsInitialized: false, publicReviewsError: false, publicFeedbackInitialized: false, publicFeedbackError: false };
+}
+
+function remoteListEmptyMarkup(initialized, failed, emptyText, helpText) {
+  const loading = hasCloudSession() && !initialized;
+  return `<div class="empty small-empty" role="status"><div><strong>${loading ? (failed ? "加载失败，请稍后重试" : "正在加载…") : emptyText}</strong><br>${loading ? "已有内容加载完成后会显示在这里" : helpText}</div></div>`;
+}
+
+function messageCacheForAccount(phone) {
+  const sameAccount = Boolean(phone && phone === state.loggedInPhone);
+  return {
+    communityFriends: sameAccount ? state.communityFriends || [] : [],
+    communityFriendsInitialized: sameAccount && Boolean(state.communityFriendsInitialized || state.communityFriends?.length),
+    communityFriendsError: sameAccount && Boolean(state.communityFriendsError),
+    communityNotifications: sameAccount ? state.communityNotifications || [] : [],
+    communityNotificationSummary: sameAccount ? state.communityNotificationSummary || null : null,
+    messageUnreadCount: sameAccount ? Number(state.messageUnreadCount || 0) : 0,
+    communityChatMessages: sameAccount ? state.communityChatMessages || [] : [],
+    communityChatListing: sameAccount ? state.communityChatListing || null : null,
+    selectedCommunityFriendId: sameAccount ? state.selectedCommunityFriendId || "" : "",
+    selectedCommunityFriend: sameAccount ? state.selectedCommunityFriend || null : null,
+    communityActivityItems: sameAccount ? state.communityActivityItems || [] : []
+  };
+}
+
+function messageListEmptyMarkup() {
+  if (hasCloudSession() && !state.communityFriendsInitialized) {
+    return state.communityFriendsError
+      ? `<div class="message-empty" role="status"><strong>消息加载失败</strong><span>请检查网络，稍后会自动重试</span></div>`
+      : `<div class="message-empty" role="status" aria-busy="true"><strong>正在加载消息…</strong><span>正在获取你的会话列表</span></div>`;
+  }
+  return `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`;
+}
+
 function pageMessages() {
   const chatPreview = latestCommunityMessagePreview(state.communityChatMessages || []);
   const friends = (() => {
@@ -2710,7 +2836,7 @@ function pageMessages() {
     <main class="content page-fresh message-page">
       <section class="message-activity-summary" data-message-activity-summary>${messageActivitySummaryRows()}</section>
       <section class="message-list-heading"><strong>聊天消息</strong></section>
-      <section class="message-friend-list">${friends.map(friend => `<article class="message-friend-swipe" data-conversation-id="${escapeHtml(friend.id)}"><button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div class="message-friend-copy"><strong>${escapeHtml(friend.name || "壳友")}${platformAdminBadge(friend)}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><span class="message-friend-meta">${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></span></button><div class="message-friend-actions"><button type="button" data-toggle-conversation-pin="${escapeHtml(friend.id)}">${friend.pinned ? "取消置顶" : "置顶"}</button><button class="delete" type="button" data-delete-conversation="${escapeHtml(friend.id)}">删除</button></div></article>`).join("") || `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`}</section>
+      <section class="message-friend-list">${friends.map(friend => `<article class="message-friend-swipe" data-conversation-id="${escapeHtml(friend.id)}"><button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div class="message-friend-copy"><strong>${escapeHtml(friend.name || "壳友")}${platformAdminBadge(friend)}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><span class="message-friend-meta">${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></span></button><div class="message-friend-actions"><button type="button" data-toggle-conversation-pin="${escapeHtml(friend.id)}">${friend.pinned ? "取消置顶" : "置顶"}</button><button class="delete" type="button" data-delete-conversation="${escapeHtml(friend.id)}">删除</button></div></article>`).join("") || messageListEmptyMarkup()}</section>
     </main>
     ${guestLoginSlot()}
     ${bottomNav()}
@@ -3556,6 +3682,44 @@ function pageCommunityChat() {
   `;
 }
 
+// Keep detached pages only while the data they display is unchanged.
+function navigationDataKeys(page) {
+  const business = ["turtles", "keptSpecies", "customSpecies", "ledgerRecords", "breedingRecords", "memos", "turtlePools", "activityLogs"];
+  const community = ["communityPosts", "communityProfileStats", "communityFollowedCircleIds", "communityFollowingUsers", "blockedUsers"];
+  const market = ["marketListings", "myMarketListings", "marketFavoriteIds", "marketHistoryIds", "selectedMarketListing", "selectedMarketSeller"];
+  const messages = ["communityFriends", "communityFriendsInitialized", "communityFriendsError", "communityNotifications", "communityNotificationSummary", "communityActivityItems", "messageUnreadCount"];
+  const groups = {
+    mine: [...business, ...community, ...market, ...messages],
+    messages, communityActivity: messages, communityFriends: messages,
+    community, communityPostDetail: community, communityProfile: [...community, "selectedCommunityUser", "communityUserPosts", "communityUserListings"],
+    communityChat: [...messages, "communityChatMessages", "selectedCommunityFriend"],
+    following: ["communityFollowingUsers", "communityFollowingPosts", "communityFollowingListings", "followingInitialized", "followingError"],
+    followingProfile: ["selectedFollowingUserId", "selectedCommunityUser", "communityUserPosts", "communityUserListings", ...community],
+    market, marketMy: market, marketFavorites: market, marketHistory: market, marketDetail: market, marketSeller: market,
+    satisfaction: ["publicReviews", "publicReviewsInitialized", "publicReviewsError"],
+    feedback: ["publicFeedbackItems", "publicFeedbackInitialized", "publicFeedbackError"],
+    feedbackDetail: ["publicFeedbackItems"], moderation: ["contentReports"], announcements: ["adminSystemAnnouncements", "systemAnnouncements"], operations: ["operationsOverview"]
+  };
+  return ["loggedInPhone", "accountName", "accountAvatar", "themeColor", ...(groups[page] || business)];
+}
+
+function navigationDataSignature(page) {
+  // Two independent 32-bit hashes avoid retaining duplicate photo strings in
+  // the three-level navigation cache. This is a UI change detector, not auth.
+  const text = JSON.stringify(navigationDataKeys(page).map(key => state[key]));
+  let a = 2166136261, b = 5381;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    a = Math.imul(a ^ c, 16777619);
+    b = Math.imul(b, 33) ^ c;
+  }
+  return `${text.length}:${a >>> 0}:${b >>> 0}`;
+}
+
+function navigationSnapshotIsCurrent(snapshot) {
+  return snapshot?.dataSignature === navigationDataSignature(snapshot.page) && snapshot.page !== "team";
+}
+
 function backNavigationState() {
   return {
     page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" || state.page === "communityProfile" ? "community" : state.page === "communityActivity" || state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "mine" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
@@ -3662,8 +3826,9 @@ function navigateBack(options = {}) {
   const snapshot = edgeBackSnapshots.pop();
   const fallback = backNavigationState();
   const nextState = snapshot?.page ? { ...fallback, page: snapshot.page } : fallback;
-  if (snapshot && restoreLiveNavigationSnapshot(snapshot, nextState, options)) return;
-  if (snapshot?.html) {
+  const snapshotCurrent = snapshot && navigationSnapshotIsCurrent(snapshot);
+  if (snapshotCurrent && restoreLiveNavigationSnapshot(snapshot, nextState, options)) return;
+  if (snapshotCurrent && snapshot?.html) {
     if (options.fromEdgeGesture) document.querySelector(".edge-back-preview")?.classList.add("is-restoring");
     // Hand the exact frozen page to the real app before removing the preview.
     // This is intentionally not render(): recreating a long list (especially
@@ -3719,7 +3884,7 @@ function pageFollowing() {
     <main class="content page-fresh following-page">
       <section class="section-title"><span>关注的壳友</span><small>${users.length} 人</small></section>
       <section class="following-user-list">
-        ${users.map(user => `<button class="following-user-card fresh-card" type="button" data-view-following-user="${user.id}">${communityAvatar(user, "following-user-avatar")}<div><strong>${escapeHtml(user.name || "壳友")}${platformAdminBadge(user)}</strong><span>${Number(user.postCount || 0)} 条动态 · ${Number(user.listingCount || 0)} 件在售</span></div><b>›</b></button>`).join("") || `<div class="empty small-empty"><div><strong>${followingLoading ? "正在加载关注" : "还没有关注壳友"}</strong><br>可以在壳友圈或商品详情中关注对方</div></div>`}
+        ${users.map(user => `<button class="following-user-card fresh-card" type="button" data-view-following-user="${user.id}">${communityAvatar(user, "following-user-avatar")}<div><strong>${escapeHtml(user.name || "壳友")}${platformAdminBadge(user)}</strong><span>${Number(user.postCount || 0)} 条动态 · ${Number(user.listingCount || 0)} 件在售</span></div><b>›</b></button>`).join("") || remoteListEmptyMarkup(state.followingInitialized, state.followingError, "还没有关注壳友", "可以在壳友圈或商品详情中关注对方")}
       </section>
     </main>
     ${bottomNav()}
@@ -6590,6 +6755,7 @@ function breedingRow(record) {
         <div><span>受精</span><strong>${record.fertileCount || 0}<em>枚</em></strong></div>
         <div><span>孵化</span><strong>${record.hatchCount || 0}<em>只</em></strong></div>
       </div>
+      ${record.incubationClosed === true ? `<div class="breeding-complete-footer"><span class="breeding-complete-badge">✓ 孵化完成</span></div>` : ""}
       <button class="more-btn breeding-more-btn" data-toggle-breeding-menu="${record.id}" aria-label="繁殖记录操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
       ${menuOpen ? `
         <div class="breeding-actions-menu" role="menu" aria-label="${escapeHtml(record.motherName || "繁殖记录")}操作">
@@ -6646,7 +6812,11 @@ function pageBreedingDetail() {
           <label><span>孵化日期</span><input class="field" name="hatchDate" type="date" value="${formatDate(new Date())}" max="${formatDate(new Date())}"></label>
           <label><span>幼龟品种</span><select class="select" name="hatchSpeciesCode"><option value="">请选择品种</option>${accountSpeciesList().map(species => `<option value="${species.code}" ${state.turtles.find(t => t.id === record.motherId)?.speciesCode === species.code ? "selected" : ""}>${escapeHtml(species.name)}</option>`).join("")}</select></label>
           <p>每次确认在看板生成一条孵化批次，饲养天数从所选孵化日期计算。累计孵化数量不能超过产蛋数。</p>
-          <button class="primary" type="button" data-confirm-breeding-hatch>确认孵化并关联看板</button>
+          <div class="breeding-hatch-actions">
+            <button class="secondary" type="button" data-complete-breeding-hatch>${record.incubationClosed === true ? '重新开启孵化' : '孵化完成'}</button>
+            <button class="primary" type="button" data-confirm-breeding-hatch ${record.incubationClosed === true ? 'disabled' : ''}>确认孵化</button>
+          </div>
+          <p>${record.incubationClosed === true ? '本窝已标记孵化完成，计入团队最终孵化率。如需继续记录，可重新开启孵化。' : '确认孵化只记录本次出壳并关联看板。整窝结束后，请点击“孵化完成”，再计入团队最终孵化率。'}</p>
           ${hatchProgress.unlinked ? `<p>旧版已记录的孵化中，有 ${hatchProgress.unlinked} 只尚未关联看板。选择上方的孵化日期和幼龟品种后，可补关联，累计孵化数量不会增加。</p><button class="secondary" type="button" data-link-legacy-hatch>关联历史已记录的 ${hatchProgress.unlinked} 只</button>` : ""}
         </div>
       </form>
@@ -6759,7 +6929,7 @@ function pageSatisfaction() {
           <p>${item.comment}</p>
           <small>${formatTime(item.createdAt)}</small>
         </article>
-      `).join("") || `<div class="empty small-empty"><div><strong>还没有评价</strong><br>提交后会显示在这里</div></div>`}
+      `).join("") || remoteListEmptyMarkup(state.publicReviewsInitialized, state.publicReviewsError, "还没有评价", "提交后会显示在这里")}
     </main>
     ${bottomNav()}
   `;
@@ -6886,7 +7056,7 @@ function pageFeedback() {
       </section>
       <section class="section-title"><span>反馈记录</span><small>${items.length} 条</small></section>
       <section class="feedback-feed">
-        ${items.map(item => publicFeedbackCard(item)).join("") || `<div class="empty small-empty"><div><strong>还没有反馈</strong><br>发布后会显示在这里</div></div>`}
+        ${items.map(item => publicFeedbackCard(item)).join("") || remoteListEmptyMarkup(state.publicFeedbackInitialized, state.publicFeedbackError, "还没有反馈", "发布后会显示在这里")}
       </section>
     </main>
     ${bottomNav()}
@@ -6997,6 +7167,7 @@ function pageAccount() {
           <button class="tab ${state.accountMode === "login" ? "active" : ""}" data-account-mode="login">登录</button>
           <button class="tab ${state.accountMode === "register" ? "active" : ""}" data-account-mode="register">注册</button>
         </section>
+        ${state.accountSessionNotice ? `<p class="fresh-card settings-card" role="alert">${escapeHtml(state.accountSessionNotice)}</p>` : ""}
         <form class="fresh-card survey-form" id="accountForm" data-auth-form="${state.accountMode}">
           <label class="survey-field"><span>手机号</span><input class="field" name="phone" inputmode="tel" maxlength="11" placeholder="请输入 11 位手机号" value="${state.accountDraftPhone || ""}" required></label>
           <label class="survey-field"><span>${state.accountMode === "register" ? "创建密码" : "登录密码"}</span><input class="field" name="password" type="password" minlength="6" placeholder="至少 6 位密码" value="${state.accountDraftPassword || ""}" required></label>
@@ -8164,6 +8335,7 @@ function bindEvents() {
     setState({ breedingEditPhoto: "__CLEAR__" });
   });
   document.querySelector("#breedingDetailForm")?.addEventListener("submit", submitBreedingDetail);
+  document.querySelector("[data-complete-breeding-hatch]")?.addEventListener("click", completeBreedingHatch);
   document.querySelector("[data-confirm-breeding-hatch]")?.addEventListener("click", confirmBreedingHatch);
   document.querySelector("[data-link-legacy-hatch]")?.addEventListener("click", () => confirmBreedingHatch(null, true));
   bindBreedingSpeciesPicker();
@@ -8975,16 +9147,22 @@ function canUsePublicReviews() {
 async function refreshPublicReviews(force = false) {
   if (!CONFIGURED_SMS_BACKEND || publicReviewsLoading) return;
   if (!state.loggedInPhone || !currentCloudToken()) {
-    if ((state.publicReviews || []).length) setState({ publicReviews: [] }, { skipCloud: true });
+    if ((state.publicReviews || []).length) setState({ publicReviews: [] }, { skipCloud: true, preserveInputValues: true, renderPages: ["satisfaction"] });
     return;
   }
-  if (!force && Date.now() - publicReviewsLastLoadedAt < 10000 && (state.publicReviews || []).length) return;
+  if (!force && Date.now() - publicReviewsLastLoadedAt < 10000) return;
   publicReviewsLoading = true;
+  const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
+  const isCurrent = () => requestPhone === state.loggedInPhone && requestToken === currentCloudToken();
   try {
     const result = await apiPost("/api/reviews/list", reviewAuthPayload());
+    if (!isCurrent()) return;
     publicReviewsLastLoadedAt = Date.now();
-    setState({ publicReviews: Array.isArray(result.reviews) ? result.reviews : [] }, { skipCloud: true });
+    setState({ publicReviewsInitialized: true, publicReviewsError: false, publicReviews: Array.isArray(result.reviews) ? result.reviews : [] }, { skipCloud: true, preserveInputValues: true, renderPages: ["satisfaction"] });
   } catch (error) {
+    if (!isCurrent()) return;
+    publicReviewsLastLoadedAt = Date.now();
+    setState({ publicReviewsError: true }, { skipCloud: true, preserveInputValues: true, renderPages: ["satisfaction"] });
     console.warn(error.message || "公共评价读取失败");
   } finally {
     publicReviewsLoading = false;
@@ -9193,7 +9371,7 @@ async function refreshMarket(force = false) {
       const retainedListings = (state.marketListings || []).filter(item => item.id !== sharedListing.id);
       marketLastLoadedAt = Date.now();
       incomingMarketShareLoading = false;
-      setState({ marketListings: [sharedListing, ...retainedListings] }, { skipCloud: true });
+      setState({ marketListings: [sharedListing, ...retainedListings] }, { skipCloud: true, preserveInputValues: true, renderPages: ["market","marketDetail","marketSeller","marketMy","marketFavorites","marketHistory","following","followingProfile","mine"] });
       return;
     }
     const result = await apiPost("/api/market/list", marketAuthPayload(isMarketFeed ? {
@@ -9239,11 +9417,11 @@ async function refreshMarket(force = false) {
       // The detail request may complete long after back navigation. Preserve
       // the restored list for its entire lifetime, not just a timed grace period.
       state = { ...state, ...nextMarketState };
-      saveState({ skipCloud: true });
+      saveState({ skipCloud: true, preserveInputValues: true, renderPages: ["market","marketDetail","marketSeller","marketMy","marketFavorites","marketHistory","following","followingProfile","mine"] });
       patchMarketSnapshotDetails();
       syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
     } else {
-      setState(nextMarketState, { skipCloud: true });
+      setState(nextMarketState, { skipCloud: true, preserveInputValues: true, renderPages: ["market","marketDetail","marketSeller","marketMy","marketFavorites","marketHistory","following","followingProfile","mine"] });
     }
   } catch (error) {
     if (incomingMarketShareListingId && incomingMarketShareListingId === String(state.selectedMarketListingId || "")) {
@@ -11055,11 +11233,15 @@ function confirmBlockUser({ targetType = "community", targetId = "", userId = ""
 
 async function refreshBlockedUsers(showToast = false) {
   if (!canUseCommunity()) return;
+  const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
+  const isCurrent = () => requestPhone === state.loggedInPhone && requestToken === currentCloudToken();
   try {
     const result = await apiPost("/api/users/blocked", communityAuthPayload());
+    if (!isCurrent()) return;
     setState({ blockedUsers: Array.isArray(result.blockedUsers) ? result.blockedUsers : [] }, { skipCloud: true });
     if (showToast) toast("屏蔽名单已更新");
   } catch (error) {
+    if (!isCurrent()) return;
     toast(error.message || "无法读取屏蔽名单");
   }
 }
@@ -11173,11 +11355,13 @@ async function refreshCommunity(force = false) {
   if (!force && Date.now() - communityLastLoadedAt < 10000) return;
   communityLoading = true;
   const requestPhone = state.loggedInPhone;
+  const requestToken = currentCloudToken();
   try {
     const result = await apiPost("/api/community/list", communityAuthPayload({ offset: 0, limit: 10, sort: "latest" }));
-    if (state.loggedInPhone !== requestPhone) return;
+    if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
     communityLastLoadedAt = Date.now();
-    const friends = mergeCommunityFriends(Array.isArray(result.friends) ? result.friends : []);
+    const hasFriends = Array.isArray(result.friends);
+    const friends = hasFriends ? mergeCommunityFriends(result.friends) : (state.communityFriends || []);
     const messageUnreadCount = friends.reduce((sum, friend) => sum + Math.max(0, Number(friend.unreadCount || 0)), 0);
     const profileStats = result.profileStats && typeof result.profileStats === "object"
       ? {
@@ -11198,6 +11382,8 @@ async function refreshCommunity(force = false) {
       communityFollowedCircleIds: Array.isArray(result.followedCircleIds) ? result.followedCircleIds : state.communityFollowedCircleIds,
       isCommunityAdmin: Boolean(result.isAdmin),
       communityFriends: friends,
+      communityFriendsInitialized: hasFriends || state.communityFriendsInitialized,
+      communityFriendsError: hasFriends ? false : state.communityFriendsError,
       messageUnreadCount
     };
     if (state.page === "community") {
@@ -11207,7 +11393,7 @@ async function refreshCommunity(force = false) {
       // that page mounted and update only its feed; setState would reconstruct
       // the entire page and produced the visible render/flicker the user saw.
       state = { ...state, ...nextCommunityState };
-      saveState({ skipCloud: true });
+      saveState({ skipCloud: true, preserveInputValues: true, renderPages: ["community","messages","communityFriends","communityProfile","mine"] });
       if (feedChanged || $app.querySelector(".community-feed.is-initial-loading, .community-feed [data-feed-retry]")) {
         $app.querySelector(".community-feed")?.classList.remove("is-initial-loading");
         // Empty success must replace the loading/error notice too.
@@ -11217,11 +11403,11 @@ async function refreshCommunity(force = false) {
       }
       syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
     } else {
-      setState(nextCommunityState, { skipCloud: true });
+      setState(nextCommunityState, { skipCloud: true, preserveInputValues: true, renderPages: ["community","messages","communityFriends","communityProfile","mine"] });
     }
   } catch (error) {
     console.warn(error.message || "壳友圈读取失败");
-    if (state.loggedInPhone === requestPhone) {
+    if (state.loggedInPhone === requestPhone && currentCloudToken() === requestToken) {
       communityLastLoadedAt = Date.now();
       state = { ...state, communityFeedError: "load_failed" };
       if (state.page === "community") render();
@@ -11233,6 +11419,8 @@ async function refreshCommunity(force = false) {
 
 async function loadMoreCommunityPosts() {
   if (!hasCloudSession() || state.page !== "community" || communityLoading || state.communityFeedLoadingMore || !state.communityFeedHasMore) return;
+  const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
+  const isCurrent = () => requestPhone === state.loggedInPhone && requestToken === currentCloudToken();
   communityLoading = true;
   state = { ...state, communityFeedLoadingMore: true };
   saveState({ skipCloud: true });
@@ -11244,6 +11432,7 @@ async function loadMoreCommunityPosts() {
       limit: 10,
       sort: "latest"
     }));
+    if (!isCurrent() || state.page !== "community") return;
     const incoming = normalizeCommunityPosts(result.posts || []);
     const existingPosts = state.communityPosts || [];
     const existingIds = new Set(existingPosts.map(post => String(post.id)));
@@ -11260,11 +11449,15 @@ async function loadMoreCommunityPosts() {
     saveState({ skipCloud: true });
     patchVisibleCommunityFeed(communityPosts, existingPosts);
   } catch (error) {
+    if (!isCurrent()) return;
     state = { ...state, communityFeedLoadingMore: false };
     saveState({ skipCloud: true });
     console.warn(error.message || "加载更多壳友圈动态失败");
   } finally {
     communityLoading = false;
+    if (!isCurrent()) return;
+    state.communityFeedLoadingMore = false;
+    if (state.page !== "community") return;
     const nextStatus = $app.querySelector("[data-community-load-sentinel]");
     if (nextStatus) nextStatus.textContent = state.communityFeedHasMore ? "继续上滑，加载更多" : "已经到底了";
     setupCommunityInfiniteScroll();
@@ -11377,11 +11570,15 @@ async function refreshContentReports(force = false) {
   if (!CONFIGURED_SMS_BACKEND || contentReportsLoading || !state.isCommunityAdmin || !state.loggedInPhone || !currentCloudToken()) return;
   if (!force && Date.now() - contentReportsLastLoadedAt < 10000) return;
   contentReportsLoading = true;
+  const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
+  const isCurrent = () => requestPhone === state.loggedInPhone && requestToken === currentCloudToken();
   try {
     const result = await apiPost("/api/content-reports/list", communityAuthPayload({ force: Boolean(force) }));
+    if (!isCurrent()) return;
     contentReportsLastLoadedAt = Date.now();
     setState({ contentReports: Array.isArray(result.reports) ? result.reports : [] }, { skipCloud: true });
   } catch (error) {
+    if (!isCurrent()) return;
     if (error.status !== 403) console.warn(error.message || "举报列表读取失败");
   } finally {
     contentReportsLoading = false;
@@ -11394,11 +11591,15 @@ async function refreshOperationsOverview(force = false) {
   if (!CONFIGURED_SMS_BACKEND || operationsOverviewLoading || !state.isCommunityAdmin || !state.loggedInPhone || !currentCloudToken()) return;
   if (!force && Date.now() - operationsOverviewLastLoadedAt < 15000) return;
   operationsOverviewLoading = true;
+  const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
+  const isCurrent = () => requestPhone === state.loggedInPhone && requestToken === currentCloudToken();
   try {
     const result = await apiPost("/api/admin/operations/overview", communityAuthPayload({ date: state.operationsDate || "" }));
+    if (!isCurrent()) return;
     operationsOverviewLastLoadedAt = Date.now();
     setState({ operationsOverview: { analytics: result.analytics || null, growthMonthly: Array.isArray(result.growthMonthly) ? result.growthMonthly : [], userUsage: Array.isArray(result.userUsage) ? result.userUsage : [], market: result.market || {}, feedback: result.feedback || {}, safety: result.safety || {}, health: result.health || {}, conversations: Array.isArray(result.conversations) ? result.conversations : [] } }, { skipCloud: true, pageScroll: "preserve" });
   } catch (error) {
+    if (!isCurrent()) return;
     if (error.status !== 403) console.warn(error.message || "运营数据读取失败");
   } finally {
     operationsOverviewLoading = false;
@@ -11429,8 +11630,11 @@ async function refreshSystemAnnouncements(force = false) {
   if (!CONFIGURED_SMS_BACKEND || systemAnnouncementsLoading) return;
   if (!force && Date.now() - systemAnnouncementsLastLoadedAt < 30000) return;
   systemAnnouncementsLoading = true;
+  const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
+  const isCurrent = () => requestPhone === state.loggedInPhone && requestToken === currentCloudToken();
   try {
     const result = await apiPost("/api/announcements/list", hasCloudSession() ? communityAuthPayload() : {});
+    if (!isCurrent()) return;
     systemAnnouncementsLastLoadedAt = Date.now();
     const patch = {
       systemAnnouncements: Array.isArray(result.announcements) ? result.announcements : []
@@ -11445,6 +11649,7 @@ async function refreshSystemAnnouncements(force = false) {
     if (Object.entries(patch).every(([key, value]) => JSON.stringify(state[key]) === JSON.stringify(value))) return;
     setState(patch, { skipCloud: true, pageScroll: "preserve" });
   } catch (error) {
+    if (!isCurrent()) return;
     if (error.status !== 401) console.warn(error.message || "系统公告读取失败");
   } finally {
     systemAnnouncementsLoading = false;
@@ -11510,15 +11715,21 @@ async function refreshFollowing(force = false) {
   if (!CONFIGURED_SMS_BACKEND || followingLoading || !state.loggedInPhone || !currentCloudToken()) return;
   if (!force && Date.now() - followingLastLoadedAt < 10000) return;
   followingLoading = true;
+  const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
+  const isCurrent = () => requestPhone === state.loggedInPhone && requestToken === currentCloudToken();
   try {
     const result = await apiPost("/api/community/following/list", communityAuthPayload());
+    if (!isCurrent()) return;
     followingLastLoadedAt = Date.now();
-    setState({
+    setState({ followingInitialized: true, followingError: false,
       communityFollowingUsers: Array.isArray(result.following) ? result.following : [],
       communityFollowingPosts: normalizeCommunityPosts(result.posts || []),
       communityFollowingListings: normalizeMarketListings(result.listings || [])
-    }, { skipCloud: true });
+    }, { skipCloud: true, preserveInputValues: true, renderPages: ["mine","following","followingProfile"] });
   } catch (error) {
+    if (!isCurrent()) return;
+    followingLastLoadedAt = Date.now();
+    setState({ followingError: true }, { skipCloud: true, preserveInputValues: true, renderPages: ["mine","following","followingProfile"] });
     if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "关注列表读取失败");
   } finally {
     followingLoading = false;
@@ -11569,9 +11780,12 @@ async function refreshCommunityUserProfile(force = false) {
   if (!userId || !hasCloudSession() || communityUserProfileLoading) return;
   const loadedKey = `${userId}:${Math.floor(Date.now() / 10000)}`;
   if (!force && communityUserProfileLoadedKey === loadedKey) return;
+  const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
+  const isCurrent = () => requestPhone === state.loggedInPhone && requestToken === currentCloudToken() && userId === state.selectedCommunityUserId;
   communityUserProfileLoading = true;
   try {
     const result = await apiPost("/api/community/user/profile", communityAuthPayload({ userId }));
+    if (!isCurrent()) return;
     communityUserProfileLoadedKey = loadedKey;
     setState({
       selectedCommunityUser: result.user || communityUserSnapshot(userId),
@@ -11579,9 +11793,11 @@ async function refreshCommunityUserProfile(force = false) {
       communityUserListings: normalizeMarketListings(result.listings || [])
     }, { skipCloud: true });
   } catch (error) {
+    if (!isCurrent()) return;
     if (error.status !== 404) console.warn(error.message || "壳友主页读取失败");
   } finally {
     communityUserProfileLoading = false;
+    if (state.page === "communityProfile" && state.selectedCommunityUserId && !isCurrent() && hasCloudSession()) void refreshCommunityUserProfile(true);
   }
 }
 
@@ -12269,6 +12485,7 @@ function mergeCommunityFriends(incomingFriends = []) {
 
 async function openCommunityChat(userId) {
   if (!canUseCommunity()) return;
+  const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
   marketChatDraft = "";
   communityChatLoadedKey = "";
   const previousFriend = (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId);
@@ -12305,6 +12522,7 @@ async function openCommunityChat(userId) {
   patchStoredMessageLists(locallyReadFriends);
   try {
     const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
+    if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
     communityChatLoadedKey = `${userId}:${Math.floor(Date.now() / 10000)}`;
     const friend = result.friend || previousFriend;
     // Message media reserves a stable fallback aspect ratio in CSS. Do not
@@ -12337,6 +12555,7 @@ async function openCommunityChat(userId) {
     refreshMessageUnread(true);
     refreshCommunity(true);
   } catch (error) {
+    if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
     communityChatOpening = false;
     if (state.page === "communityChat" && state.selectedCommunityFriendId === userId) {
       $app.classList.remove("community-chat-enter-motion");
@@ -12442,9 +12661,9 @@ async function refreshMessageUnread(force = false, options = {}) {
   }
   if (!force && Date.now() - messageUnreadLastLoadedAt < 10000) return;
   messageUnreadLoading = true;
+  const phone = state.loggedInPhone;
+  const token = currentCloudToken();
   try {
-    const phone = state.loggedInPhone;
-    const token = currentCloudToken();
     const readRevision = communityNotificationReadRevision;
     const result = await apiPost("/api/community/unread", communityAuthPayload());
     if (phone !== state.loggedInPhone || token !== currentCloudToken()) return;
@@ -12462,10 +12681,14 @@ async function refreshMessageUnread(force = false, options = {}) {
     // block will run one follow-up request instead of creating a refresh loop.
     const shouldRenderMessages = Boolean(messageUnreadRenderRequested);
     messageUnreadRenderRequested = false;
-    if (unreadCount !== Number(state.messageUnreadCount || 0) || friendSignature(friends) !== friendSignature(state.communityFriends) || notificationsChanged) {
+    const hasFriends = Array.isArray(result.friends);
+    const loadStateChanged = hasFriends && (!state.communityFriendsInitialized || state.communityFriendsError);
+    if (loadStateChanged || unreadCount !== Number(state.messageUnreadCount || 0) || friendSignature(friends) !== friendSignature(state.communityFriends) || notificationsChanged) {
       if (deferMessageListRefreshWhileDragging()) return;
-      const patch = { messageUnreadCount: unreadCount, communityFriends: friends, communityNotifications: notifications, communityNotificationSummary: notificationSummary };
-      if (["communityChat", "communityActivity", "community", "market"].includes(state.page) || (state.page === "messages" && patchVisibleMessageList(friends))) {
+      const patch = { messageUnreadCount: unreadCount, communityFriends: friends, communityNotifications: notifications, communityNotificationSummary: notificationSummary,
+        communityFriendsInitialized: hasFriends || state.communityFriendsInitialized,
+        communityFriendsError: hasFriends ? false : state.communityFriendsError };
+      if (state.page !== "messages" || (friends.length > 0 && patchVisibleMessageList(friends))) {
         state = { ...state, ...patch };
         saveState({ skipCloud: true });
         patchMessageActivitySummary();
@@ -12480,6 +12703,10 @@ async function refreshMessageUnread(force = false, options = {}) {
     // is not a transient unread-message error and must not keep filling the
     // console every polling interval.
     if (error.status !== 401 && error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "未读消息读取失败");
+    if (phone === state.loggedInPhone && token === currentCloudToken() && !state.communityFriendsInitialized) {
+      state = { ...state, communityFriendsError: true };
+      if (state.page === "messages") render();
+    }
   } finally {
     messageUnreadLoading = false;
     if (messageUnreadRenderRequested) {
@@ -12550,6 +12777,22 @@ function patchMessageListInRoot(root, friends) {
     }
   });
   return true;
+}
+
+function startAccountSessionPolling() {
+  let checking = false;
+  const check = async () => {
+    if (checking || document.hidden || navigator.onLine === false || !hasCloudSession()) return;
+    checking = true;
+    try { await apiPost("/api/account/session", { phone: state.loggedInPhone, token: currentCloudToken() }); }
+    catch { /* apiPost handles an authenticated 401; network failures keep the session. */ }
+    finally { checking = false; }
+  };
+  window.setInterval(check, 5000);
+  document.addEventListener("visibilitychange", check);
+  window.addEventListener("focus", check);
+  window.addEventListener("online", check);
+  void check();
 }
 
 function startMessageUnreadPolling() {
@@ -12636,6 +12879,7 @@ function scheduleDeferredMessageListRefresh() {
 async function refreshCommunityChat(force = false, options = {}) {
   const userId = state.selectedCommunityFriendId;
   if (!userId || !hasCloudSession()) return;
+  const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
   if (communityChatLoading) {
     if (force) communityChatRefreshPending = true;
     return;
@@ -12645,6 +12889,7 @@ async function refreshCommunityChat(force = false, options = {}) {
   communityChatLoading = true;
   try {
     const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
+    if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
     communityChatLoadedKey = key;
     const friend = result.friend || state.selectedCommunityFriend;
     const messages = mergeCommunityChatMessages(state.selectedCommunityFriendId === userId ? state.communityChatMessages : [], result.messages || []);
@@ -12678,6 +12923,7 @@ async function refreshCommunityChat(force = false, options = {}) {
     }
     refreshMessageUnread(true);
   } catch (error) {
+    if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
     if (!options.silent) toast(error.message || "聊天记录读取失败");
   } finally {
     communityChatLoading = false;
@@ -13066,16 +13312,22 @@ async function deleteCommunityPost(postId) {
 async function refreshPublicFeedback(force = false) {
   if (!CONFIGURED_SMS_BACKEND || publicFeedbackLoading) return;
   if (!state.loggedInPhone || !currentCloudToken()) {
-    if ((state.publicFeedbackItems || []).length) setState({ publicFeedbackItems: [] }, { skipCloud: true });
+    if ((state.publicFeedbackItems || []).length) setState({ publicFeedbackItems: [] }, { skipCloud: true, preserveInputValues: true, renderPages: ["feedback","feedbackDetail"] });
     return;
   }
-  if (!force && Date.now() - publicFeedbackLastLoadedAt < 10000 && (state.publicFeedbackItems || []).length) return;
+  if (!force && Date.now() - publicFeedbackLastLoadedAt < 10000) return;
   publicFeedbackLoading = true;
+  const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
+  const isCurrent = () => requestPhone === state.loggedInPhone && requestToken === currentCloudToken();
   try {
     const result = await apiPost("/api/feedback/list", feedbackAuthPayload());
+    if (!isCurrent()) return;
     publicFeedbackLastLoadedAt = Date.now();
-    setState({ publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : [] }, { skipCloud: true });
+    setState({ publicFeedbackInitialized: true, publicFeedbackError: false, publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : [] }, { skipCloud: true, preserveInputValues: true, renderPages: ["feedback","feedbackDetail"] });
   } catch (error) {
+    if (!isCurrent()) return;
+    publicFeedbackLastLoadedAt = Date.now();
+    setState({ publicFeedbackError: true }, { skipCloud: true, preserveInputValues: true, renderPages: ["feedback","feedbackDetail"] });
     console.warn(error.message || "反馈读取失败");
   } finally {
     publicFeedbackLoading = false;
@@ -13741,7 +13993,7 @@ async function apiPost(path, payload) {
   const base = window.TURTLE_API_BASE_URL || "";
   const accountSync = /^\/api\/account\/(load|save)$/.test(path);
   const feedRead = /^\/api\/(market\/(list|detail)|community\/list)$/.test(path);
-  const controller = accountSync || feedRead ? new AbortController() : null;
+  const controller = accountSync || feedRead || path === "/api/account/session" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), accountSync ? 20000 : 15000) : null;
   let response, data;
   try {
@@ -13770,7 +14022,7 @@ async function apiPost(path, payload) {
     throw error;
   } finally { if (timer) clearTimeout(timer); }
   if (response.status === 401 && payload?.phone === state.loggedInPhone && payload?.token && payload.token === currentCloudToken()) {
-    clearExpiredCloudSession();
+    clearExpiredCloudSession(data);
   }
   if (path === "/api/upload/image" && response.status === 401) {
     throw new Error("登录状态已过期，请重新登录后再上传图片");
@@ -13880,18 +14132,19 @@ async function apiUploadMediaFile(file, duration = 0, options = {}) {
       if (typeof options.onProgress === "function") {
         return await uploadMediaFileRequest(`${base}/api/upload/media`, file, { contentType, duration, onProgress: options.onProgress });
       }
+      const phone = state.loggedInPhone, token = currentCloudToken();
       const response = await fetch(`${base}/api/upload/media`, {
         method: "POST",
         headers: {
           "Content-Type": contentType,
-          "X-Auth-Phone": state.loggedInPhone,
-          "X-Auth-Token": currentCloudToken(),
+          "X-Auth-Phone": phone,
+          "X-Auth-Token": token,
           "X-Media-Duration": String(Math.max(0, Number(duration || 0)))
         },
         body: file
       });
       const data = await response.json().catch(() => ({}));
-      if (response.status === 401) clearExpiredCloudSession();
+      if (response.status === 401 && phone === state.loggedInPhone && token === currentCloudToken()) clearExpiredCloudSession(data);
       if (!response.ok || data.ok === false) {
         const error = new Error(data.message || "视频上传失败");
         error.status = response.status;
@@ -13910,12 +14163,13 @@ async function apiUploadMediaFile(file, duration = 0, options = {}) {
 
 function uploadMediaFileRequest(url, file, { contentType, duration = 0, onProgress } = {}) {
   return new Promise((resolve, reject) => {
+    const phone = state.loggedInPhone, token = currentCloudToken();
     const request = new XMLHttpRequest();
     request.open("POST", url, true);
     request.responseType = "text";
     request.setRequestHeader("Content-Type", contentType || "application/octet-stream");
-    request.setRequestHeader("X-Auth-Phone", state.loggedInPhone || "");
-    request.setRequestHeader("X-Auth-Token", currentCloudToken() || "");
+    request.setRequestHeader("X-Auth-Phone", phone || "");
+    request.setRequestHeader("X-Auth-Token", token || "");
     request.setRequestHeader("X-Media-Duration", String(Math.max(0, Number(duration || 0))));
     request.upload.onprogress = event => {
       if (!event.lengthComputable) return;
@@ -13928,7 +14182,7 @@ function uploadMediaFileRequest(url, file, { contentType, duration = 0, onProgre
     request.onload = () => {
       let data = {};
       try { data = JSON.parse(request.responseText || "{}"); } catch {}
-      if (request.status === 401) clearExpiredCloudSession();
+      if (request.status === 401 && phone === state.loggedInPhone && token === currentCloudToken()) clearExpiredCloudSession(data);
       if (request.status < 200 || request.status >= 300 || data.ok === false) {
         const error = new Error(data.message || "媒体上传失败");
         error.status = request.status;
@@ -14003,19 +14257,14 @@ function applyCloudUser(user, activityText = "", options = {}) {
     : accountData.activityLogs;
   setState({
     ...accountData,
-    communityPosts: [],
-    communityFriends: [],
+    ...accountModuleCache(localUser.phone),
+    ...messageCacheForAccount(localUser.phone),
     blockedUsers: localUser.blockedUsers,
-    communityChatMessages: [],
-    messageUnreadCount: 0,
-    marketListings: [],
-    selectedMarketListingId: "",
-    selectedCommunityFriendId: "",
-    selectedCommunityFriend: null,
     activityLogs,
     registeredUsers: [localUser, ...(state.registeredUsers || []).filter(item => item.phone !== localUser.phone)],
     loggedInPhone: localUser.phone,
     cloudToken: localUser.cloudToken,
+    accountSessionNotice: "",
     cloudAccountUpdatedAt: user.updatedAt || "",
     cloudAccountDataRevision: user.dataRevision || "",
     cloudSyncConflict: null,
@@ -14033,7 +14282,7 @@ function applyCloudUser(user, activityText = "", options = {}) {
     authCodeExpiresAt: "",
     accountCodeCooldownUntil: "",
     page: destinationPage
-  }, options);
+  }, { preserveInputValues: localUser.phone === state.loggedInPhone, ...options });
   if (!options.skipMigration && CONFIGURED_SMS_BACKEND && localUser.cloudToken) {
     scheduleCloudImageMigration(600);
   }
@@ -14229,6 +14478,7 @@ async function pushCloudDataNow(throwOnError = false) {
   }
   cloudSyncInFlight = true;
   const savingPhone = state.loggedInPhone;
+  const savingToken = currentCloudToken();
   const pendingAtStart = readPendingCloudData();
   try {
     const result = await apiPost("/api/account/save", {
@@ -14242,7 +14492,7 @@ async function pushCloudDataNow(throwOnError = false) {
       data: accountDataSnapshot(state)
     });
     const pendingNow = readPendingCloudData();
-    if (state.loggedInPhone === savingPhone) {
+    if (state.loggedInPhone === savingPhone && currentCloudToken() === savingToken) {
       setCloudAccountRevision(result.user || {});
       cloudAutoMergeAttempts = 0;
       if (!accountHasEmbeddedImages(state) && JSON.stringify(pendingNow) === JSON.stringify(pendingAtStart)) clearPendingCloudData(savingPhone);
@@ -14254,15 +14504,15 @@ async function pushCloudDataNow(throwOnError = false) {
     // Never retry a rejected stale-history write automatically: doing so can
     // turn a recoverable multi-device conflict into repeated overwrites.  The
     // local journal stays intact, and the person gets a clear instruction.
-    if (state.loggedInPhone !== savingPhone) return;
+    if (state.loggedInPhone !== savingPhone || currentCloudToken() !== savingToken) return;
     if (error?.code === "ACCOUNT_DATA_CONFLICT") {
       try {
         const latest = await apiPost("/api/account/load", { phone: savingPhone, token: currentCloudToken(), termsVersion: POLICY_VERSION });
-        if (state.loggedInPhone !== savingPhone) return;
+        if (state.loggedInPhone !== savingPhone || currentCloudToken() !== savingToken) return;
         if (acknowledgeIdenticalCloudUser(latest.user)) return;
         if (tryAutomaticCloudMerge(latest.user)) return;
       } catch { /* Keep the journal while offline. */ }
-      if (state.loggedInPhone !== savingPhone) return;
+      if (state.loggedInPhone !== savingPhone || currentCloudToken() !== savingToken) return;
       pauseCloudSync(error.code);
     } else if (error?.code === "GROWTH_HISTORY_CONFLICT") {
       pauseCloudSync(error.code);
@@ -14280,6 +14530,7 @@ async function pushCloudDataNow(throwOnError = false) {
 async function refreshCloudAccountFromServer(options = {}) {
   if (!CONFIGURED_SMS_BACKEND || !state.loggedInPhone || !currentCloudToken()) return;
   const loadingPhone = state.loggedInPhone;
+  const loadingToken = currentCloudToken();
   const pendingBeforeLoad = readPendingCloudData();
   if (options.background && (cloudSyncInFlight || cloudImageMigrationInFlight || pendingBeforeLoad?.phone === loadingPhone)) return false;
   try {
@@ -14291,7 +14542,7 @@ async function refreshCloudAccountFromServer(options = {}) {
     // Keep the route that is already on screen. During boot this is "home";
     // during a normal refresh it is the page the person is currently using.
     if (result.user) {
-      if (state.loggedInPhone !== loadingPhone || result.user.phone !== loadingPhone) return false;
+      if (state.loggedInPhone !== loadingPhone || currentCloudToken() !== loadingToken || result.user.phone !== loadingPhone) return false;
       // The request may have been in flight while the person edited their
       // profile. Read the journal after the response arrives; using a snapshot
       // captured before the request would miss that edit and let the older
@@ -15717,6 +15968,7 @@ function buildBreedingHatchPlan(record, count, species, turtles, ledgerRecords, 
   if (record.date && hatchDate < record.date) throw new Error("孵化日期不能早于产蛋日期");
   const { linked, events, previousCount, unlinked } = breedingHatchProgress(record, turtles, ledgerRecords);
   if (events.some(event => event.id === eventId)) return { added: [], hatchArchiveIds: [...linked], hatchEvents: events, hatchCount: previousCount };
+  if (record.incubationClosed === true && !linkHistorical) throw new Error("本窝孵化已完成，请先重新开启孵化");
   if (linkHistorical && count > unlinked) throw new Error(`仅有 ${unlinked} 只历史孵化尚未关联，不能重复关联`);
   const hatchCount = linkHistorical ? previousCount : previousCount + count;
   if (!Number.isSafeInteger(Number(record.eggCount)) || hatchCount > Number(record.eggCount)) throw new Error(`已累计孵化 ${previousCount} 只，本次 ${count} 只，合计不能超过产蛋 ${record.eggCount} 枚`);
@@ -15759,7 +16011,17 @@ function confirmBreedingHatch(event, linkHistorical = false) {
   });
 }
 
-function submitBreedingDetail(event, hatch = null) {
+function completeBreedingHatch() {
+  const form = document.querySelector("#breedingDetailForm");
+  const record = (state.breedingRecords || []).find(item => item.id === state.selectedBreedingId);
+  if (!form || !record || !requireLogin() || !form.reportValidity()) return;
+  if (record.incubationClosed !== true && Number(new FormData(form).get("successfulHatchCount")) > 0) {
+    return toast("请先点击“确认孵化”保存本次数量，再标记孵化完成");
+  }
+  submitBreedingDetail({ preventDefault() {}, currentTarget: form }, null, { incubationClosed: record.incubationClosed !== true });
+}
+
+function submitBreedingDetail(event, hatch = null, completion = null) {
   event.preventDefault();
   if (event.currentTarget.__breedingDetailSaved) return;
   if (!requireLogin()) return;
@@ -15797,6 +16059,7 @@ function submitBreedingDetail(event, hatch = null) {
       eggCount: record.eggCount,
       fertileCount: record.fertileCount,
       hatchCount: record.hatchCount || 0,
+      incubationClosed: record.incubationClosed === true,
       poolId: record.poolId || "",
       poolName: record.poolName || turtlePoolName(record.poolId),
       note: record.note || ""
@@ -15828,6 +16091,11 @@ function submitBreedingDetail(event, hatch = null) {
     updatedAt: historyItem.updatedAt,
     editHistory: [historyItem, ...(record.editHistory || [])]
   };
+  if (completion) {
+    updated.incubationClosed = completion.incubationClosed === true;
+    updated.incubationClosedAt = updated.incubationClosed ? historyItem.updatedAt : "";
+  }
+  historyItem.newSnapshot.incubationClosed = updated.incubationClosed === true;
   let hatchPatch = {};
   let addedCount = 0;
   if (hatch) {
@@ -15859,9 +16127,9 @@ function submitBreedingDetail(event, hatch = null) {
     breedingRecords: (state.breedingRecords || []).map(item => item.id === record.id ? updated : item),
     breedingEditPhoto: "",
     page: hatch ? "home" : "breedingDetail",
-    activityLogs: logActivity(hatch ? `记录孵化：${updated.motherName}，孵化日期 ${hatch.date}，本次 ${addedCount} 只，累计 ${updated.hatchCount} 只` : `修改繁殖记录：${updated.motherName}，产蛋 ${eggCount} 枚，受精 ${fertileCount} 枚，孵化 ${hatchCount} 只`, "繁殖")
+    activityLogs: logActivity(completion ? `${updated.incubationClosed ? "孵化完成" : "重新开启孵化"}：${updated.motherName}` : hatch ? `记录孵化：${updated.motherName}，孵化日期 ${hatch.date}，本次 ${addedCount} 只，累计 ${updated.hatchCount} 只` : `修改繁殖记录：${updated.motherName}，产蛋 ${eggCount} 枚，受精 ${fertileCount} 枚，孵化 ${hatchCount} 只`, "繁殖")
   }, [photo, historyItem.newPhoto]);
-  toast(hatch ? (addedCount ? `孵化成功，已将 ${addedCount} 只幼龟关联至看板` : "这些幼龟已关联看板，未重复创建") : "繁殖记录已更新");
+  toast(completion ? (updated.incubationClosed ? "已标记孵化完成" : "已重新开启孵化") : hatch ? (addedCount ? `孵化成功，已将 ${addedCount} 只幼龟关联至看板` : "这些幼龟已关联看板，未重复创建") : "繁殖记录已更新");
 }
 
 function submitBreedingRecord(event) {
@@ -17498,6 +17766,7 @@ startCloudSessionHydration();
 startCloudAccountRefresh();
 setupNativePushNotifications();
 startMessageUnreadPolling();
+startAccountSessionPolling();
 refreshMessageUnread(true);
 startAppAnalytics();
 

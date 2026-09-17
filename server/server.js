@@ -297,6 +297,13 @@ function cacheBustMediaUrls(value) {
 }
 
 function sendJson(res, status, body) {
+  if (status === 401) {
+    const auth = res.req?.accountAuth || { phone: res.req?.headers?.["x-auth-phone"], token: res.req?.headers?.["x-auth-token"] };
+    const user = auth.phone && auth.token ? readDatabase().users[String(auth.phone).trim()] : null;
+    if (user?.replacedSessions?.some(item => item.hash === hashValue(String(auth.token)))) {
+      body = { ...body, code: "ACCOUNT_SESSION_REPLACED", message: "账号已在其他设备登录，请重新登录" };
+    }
+  }
   // Capture this response before another request mutates shared records. A
   // successful API response must wait for the queued database commit.
   const payload = JSON.stringify(cacheBustMediaUrls(body));
@@ -344,7 +351,9 @@ function readJson(req) {
         // A UTF-8 character may span TCP chunks. Decode only after joining
         // the bytes; coercing each chunk to text corrupts Chinese and emoji.
         const raw = Buffer.concat(chunks, bytes).toString("utf8");
-        resolve(raw ? JSON.parse(raw) : {});
+        const body = raw ? JSON.parse(raw) : {};
+        req.accountAuth = { phone: body?.phone, token: body?.token };
+        resolve(body);
       } catch {
         reject(new Error("请求格式不正确"));
       }
@@ -1521,17 +1530,16 @@ function addAccountSession(user, token, body, now) {
   const deviceId = String(body.deviceId || "");
   const platform = String(body.devicePlatform || "");
   const identified = /^[A-Za-z0-9_-]{16,128}$/.test(deviceId) && ["ios", "android", "web"].includes(platform);
-  const group = identified ? (platform === "web" ? "web" : "mobile") : "legacy";
   const deviceHash = identified ? hashValue(`session-device:${user.phone}:${deviceId}`) : "";
-  const sessionGroup = item => item.deviceHash ? (item.platform === "web" ? "web" : "mobile") : "legacy";
   const current = (Array.isArray(user.tokens) ? user.tokens : []).filter(item => item?.hash);
-  const other = current.filter(item => sessionGroup(item) !== group);
-  const same = current.filter(item => sessionGroup(item) === group && (!deviceHash || item.deviceHash !== deviceHash));
-  same.push({ hash: hashValue(token), createdAt: now, ...(identified ? { deviceHash, platform } : {}) });
-  // Known phones occupy installation slots, not login-attempt slots. Keep
-  // legacy clients in their existing five-token pool until they can identify
-  // their installation; a login from Android must not evict a legacy iPhone.
-  user.tokens = [...other, ...same.slice(group === "mobile" ? -3 : -5)];
+  // A successful login replaces every previous credential, including legacy
+  // clients without installation IDs. Wrong-password attempts never reach here.
+  user.replacedSessions = [...(Array.isArray(user.replacedSessions) ? user.replacedSessions : []),
+    ...current.map(item => ({ hash: item.hash, replacedAt: now }))].slice(-32);
+  user.tokens = [{ hash: hashValue(token), createdAt: now, ...(identified ? { deviceHash, platform } : {}) }];
+  // The newly signed-in installation registers its notification token again.
+  // Stop future private notifications to installations that just lost access.
+  user.pushDevices = [];
 }
 
 async function handleRegister(req, res) {
@@ -1621,6 +1629,13 @@ async function handleLogout(req, res) {
     user.tokens = user.tokens.filter(item => item.hash !== hashValue(token));
     writeDatabase(db);
   }
+  return sendJson(res, 200, { ok: true });
+}
+
+async function handleAccountSession(req, res) {
+  const body = await readJson(req);
+  const user = authenticate(readDatabase(), String(body.phone || "").trim(), String(body.token || ""));
+  if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
   return sendJson(res, 200, { ok: true });
 }
 
@@ -4899,6 +4914,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/account/register") return await handleRegister(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/login") return await handleLogin(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/logout") return await handleLogout(req, res);
+    if (req.method === "POST" && url.pathname === "/api/account/session") return await handleAccountSession(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/load") return await handleLoadAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/species/create") return await handleCreateCustomSpecies(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/save") return await handleSaveAccount(req, res);

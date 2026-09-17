@@ -191,31 +191,32 @@ async function main() {
       });
       return { phone: devices.phone, token: result.json.user.token };
     };
-    const iphoneA = await deviceLogin('iphone-a', 'ios');
-    const iphoneB = await deviceLogin('iphone-b', 'ios');
-    let android = await deviceLogin('android', 'android');
-    let web = await deviceLogin('desktop', 'web');
-    for (let i = 0; i < 7; i++) android = await deviceLogin('android', 'android');
-    for (const user of [devices, iphoneA, iphoneB, android, web]) {
-      await request('/api/account/load', auth(user));
-      await request('/api/market/list', auth(user));
-      await request('/api/community/list', auth(user));
+    let active = devices;
+    for (const [id, platform] of [['iphone-a', 'ios'], ['iphone-b', 'ios'], ['android', 'android'], ['desktop', 'web'], [null, null], ['iphone-b', 'ios']]) {
+      const previous = active;
+      active = await deviceLogin(id, platform);
+      for (const route of ['/api/account/load', '/api/account/session', '/api/community/unread', '/api/account/save', '/api/team']) {
+        const denied = await request(route, auth(previous), { status: 401 });
+        assert.equal(denied.json.code, 'ACCOUNT_SESSION_REPLACED', route);
+        assert.match(denied.json.message, /其他设备登录/);
+      }
+      await request('/api/account/session', auth(active));
+      await request('/api/account/load', auth(active));
+      await request('/api/account/login', { phone: devices.phone, password: 'wrong-password', termsAccepted: true }, { status: 401 });
+      await request('/api/account/session', auth(active));
+      await request('/api/account/logout', auth(previous));
+      await request('/api/account/session', auth(active));
     }
-    // Legacy logins and desktop refreshes cannot use up native phone slots.
-    for (let i = 0; i < 6; i++) {
-      await deviceLogin();
-      web = await deviceLogin(`desktop-${i}`, 'web');
-    }
-    for (const user of [iphoneA, iphoneB, android]) await request('/api/account/load', auth(user));
-    const fourth = await deviceLogin('fourth-phone', 'android');
-    await request('/api/account/load', auth(iphoneA), { status: 401 });
-    for (const user of [iphoneB, android, fourth, web]) await request('/api/account/load', auth(user));
     await request('/api/account/logout', { phone: devices.phone, token: buyer.token });
-    await request('/api/account/load', auth(fourth));
-    await request('/api/account/logout', auth(android));
-    await request('/api/account/logout', auth(android));
-    await request('/api/account/load', auth(android), { status: 401 });
-    for (const user of [iphoneB, fourth, web]) await request('/api/account/load', auth(user));
+    await request('/api/account/session', auth(active));
+    const concurrent = await Promise.all([deviceLogin('race-a', 'ios'), deviceLogin('race-b', 'android')]);
+    const results = await Promise.all(concurrent.map(u => request('/api/account/session', auth(u), { status: undefined }).then(() => true, () => false)));
+    assert.equal(results.filter(Boolean).length, 1, 'only the final successful login remains valid');
+    const winner = concurrent[results.indexOf(true)];
+    await request('/api/account/logout', auth(winner));
+    await request('/api/account/logout', auth(winner));
+    await request('/api/account/session', auth(winner), { status: 401 });
+    await request('/api/account/load', auth(buyer));
     }
 
     // 1.0.7 removes a lost turtle but retains the original purchase and the

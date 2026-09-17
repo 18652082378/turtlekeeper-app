@@ -19655,3 +19655,11 @@ html[data-theme-color="dark"] .turtle-batch-detail .breeding-form { color-scheme
 .sync-settings-page .mine-row { width: 100%; text-align: left; }
 .sync-settings-page button:disabled { opacity: .6; cursor: wait; }
 @media (max-width: 600px) { .sync-conflict-options { grid-template-columns: 1fr; } }
+
+/* Explicit clutch completion, separate from recording a hatch batch. */
+.breeding-hatch-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+.breeding-hatch-actions > button { width: 100%; min-height: 48px; min-width: 0; }
+.breeding-hatch-actions > button:disabled { opacity: .5; cursor: default; }
+.breeding-complete-footer { display: flex; justify-content: flex-end; margin-top: 8px; }
+.breeding-complete-badge { display: inline-flex; align-items: center; border-radius: 6px; padding: 4px 9px; font-size: 12px; line-height: 1.4; font-weight: 700; color: #1d7862; background: #e8f5ee; }
+html[data-theme-color="dark"] .breeding-complete-badge { color: #b2e7ca; background: #244337; }

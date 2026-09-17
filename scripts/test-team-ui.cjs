@@ -92,7 +92,8 @@ async function main() {
     assert(!(await page.locator('.ts-history-list').textContent()).includes('黄缘成体售出'));
     await page.screenshot({ path: path.join(output, 'ledger-linked-history.png'), fullPage: true });
     await page.locator('[data-ts="close"]').click();
-    await page.locator('[data-tab="breeding"]').first().click();
+    await page.locator('[data-tab="hatching"]').first().click();
+    assert.equal(await page.locator('[data-ts="tab"][data-tab="breeding"]').count(), 0);
     assert((await page.locator('.ts-breeding-analysis').textContent()).includes('最终孵化率'));
     await page.locator('[data-breed-filter="species"]').selectOption('黄缘闭壳龟');
     assert.equal(await page.locator('.ts-nest').count(), 1);
@@ -120,7 +121,7 @@ async function main() {
     const results = [];
     for (const width of [320, 390, 768, 1100]) {
       await page.setViewportSize({ width, height: 880 });
-      for (const tab of ['overview', 'ledger', 'reports', 'breeding', 'hatching', 'care', 'tasks', 'members', 'logs', 'approvals', 'settings']) {
+      for (const tab of ['overview', 'ledger', 'reports', 'hatching', 'care', 'tasks', 'members', 'logs', 'approvals', 'settings']) {
         await page.locator(`[data-ts="tab"][data-tab="${tab}"]`).first().click();
         const dimensions = await page.evaluate(() => ({ viewport: innerWidth, doc: document.documentElement.scrollWidth }));
         assert(dimensions.doc <= width + 1, `${tab} overflow at ${width}: ${dimensions.doc}`);
@@ -145,7 +146,7 @@ async function main() {
             await page.locator('[data-ts="finance.back"]').click();
           }
         }
-        if (width === 390 && ['overview', 'reports', 'members', 'breeding', 'hatching'].includes(tab)) {
+        if (width === 390 && ['overview', 'reports', 'members', 'hatching'].includes(tab)) {
           await page.evaluate(() => scrollTo(0, 0));
           await page.screenshot({ path: path.join(output, `${tab}-mobile.png`), fullPage: true });
         }
@@ -223,7 +224,7 @@ async function main() {
     await page.locator('[data-ts="turtle-detail"]').first().click();
     assert(await page.getByText('成长记录', { exact: true }).count());
     await page.locator('[data-ts="close"]').click();
-    await page.locator('[data-tab="breeding"]').first().click();
+    await page.locator('[data-tab="hatching"]').first().click();
     await page.locator('[data-ts="breeding"]').first().click();
     await page.locator('[name="motherName"]').fill('页面测试种母');
     await page.locator('[name="eggCount"]').fill('10');
@@ -320,7 +321,7 @@ async function main() {
     await page.waitForSelector('.ts-empty');
     assert(await page.getByText('账本未开放').count());
     assert.equal(await page.locator('[data-ts="ledger"]').count(), 0);
-    await page.locator('[data-tab="breeding"]').first().click();
+    await page.locator('[data-tab="hatching"]').first().click();
     await page.getByText('繁殖与孵化未开放', { exact: true }).waitFor();
     assert.equal(await page.locator('.ts-nest').count(), 0);
     // New owners must see an explicit blocked state, then gain a real create path.
@@ -359,7 +360,7 @@ async function main() {
     assert(!await page.locator('.ts-workhead').count());
     assert.deepEqual(errors, []);
     fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ results, errors }, null, 2));
-    console.log('PASS: 44 viewport/module combinations, all-history ledger, care/growth, per-member dates, scoped data, breeding/hatch rates, task/invitation flows, account isolation and dark mode. Screenshots: ' + output);
+    console.log('PASS: 40 viewport/module combinations, all-history ledger, care/growth, per-member dates, scoped data, breeding/hatch rates, task/invitation flows, account isolation and dark mode. Screenshots: ' + output);
   } catch (e) {
     const failedPage = browser?.contexts()[0]?.pages()[0];
     if (failedPage) {

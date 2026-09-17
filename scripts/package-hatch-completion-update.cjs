@@ -1,0 +1,31 @@
+const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
+const root = path.resolve(__dirname, '..'), output = path.join(root, 'output');
+const previous = path.join(output, 'turtlekeeper-single-device-v11');
+const base = JSON.parse(fs.readFileSync(path.join(previous, 'manifest.json'), 'utf8'));
+const name = 'turtlekeeper-hatch-completion-v12', folder = path.join(output, name);
+const read = file => fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+const hash = s => crypto.createHash('sha256').update(s.replace(/\r\n/g, '\n')).digest('hex');
+const write = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
+const manifest = { source: 'Reviewed v11 + explicit hatch completion and unified team hatching', files: {}, dependencies: base.dependencies };
+for (const [file, info] of Object.entries(base.files)) {
+  let data = read(path.join(previous, 'files', file));
+  if (hash(data) !== info.target) throw Error('Reviewed v11 changed: ' + file);
+  if (['app.js', 'assets/team-space.js'].includes(file)) data = read(path.join(root, file));
+  manifest.files[file] = { ...info, bases: [...new Set([...(info.bases || []), info.target])], target: hash(data) };
+  write(path.join(folder, 'files', file), data);
+}
+const oldStyles = execFileSync('git', ['show', 'HEAD:styles.css'], { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+const styles = read(path.join(root, 'styles.css'));
+manifest.files['styles.css'] = { base: hash(oldStyles), bases: [hash(read(path.join(output, 'team-live-merged-v10/styles.css')))], target: hash(styles) };
+write(path.join(folder, 'files/styles.css'), styles);
+write(path.join(folder, 'manifest.json'), JSON.stringify(manifest, null, 2));
+write(path.join(folder, 'deploy.cjs'), read(path.join(previous, 'deploy.cjs')).replace('const files = [', "const files = ['styles.css', ").replace('SUCCESS: single-device login is active.', 'SUCCESS: hatch completion, unified hatching and single-device login are active.'));
+write(path.join(folder, 'test-access.cjs'), read(path.join(previous, 'test-access.cjs')));
+write(path.join(folder, 'README.md'), read(path.join(root, 'docs/hatch-completion.md')));
+const tar = process.platform === 'win32' ? 'tar.exe' : 'tar', archive = path.join(output, name + '.tar.gz');
+execFileSync(tar, ['-czf', archive, '-C', output, name]);
+const actual = execFileSync(tar, ['-tzf', archive], { encoding: 'utf8' }).trim().split(/\r?\n/).filter(f => !f.endsWith('/')).sort();
+const expected = [...Object.keys(manifest.files).map(f => `${name}/files/${f}`), ...['manifest.json', 'deploy.cjs', 'test-access.cjs', 'README.md'].map(f => `${name}/${f}`)].sort();
+if (JSON.stringify(actual) !== JSON.stringify(expected)) throw Error('Unexpected archive contents');
+console.log(archive);

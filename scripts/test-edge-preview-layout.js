@@ -22,6 +22,7 @@ const extract = (start,end) => source.slice(source.indexOf(start),source.indexOf
       function render(){renderCount++;$app.innerHTML='<div class="topbar"><div class="nav-title"><h1>'+state.page+'</h1></div></div>'+
         (state.page==='child'?'<main class="test-detail">DETAIL</main>':'<main class="test-content">'+Array.from({length:24},(_,i)=>'<div class="test-card" data-card="'+i+'">'+i+'</div>').join('')+'</main>')+
         '<nav class="bottom-nav"><button>看板</button><button>账本</button><button>龟集市</button><button>壳友圈</button></nav>';if(pendingPageScrollReset){scrollTo(0,0);pendingPageScrollReset=false;}}
+      ${extract('function navigationDataKeys(', 'function backNavigationState(')}
       ${extract('function setState(', 'function requireLogin(')}
       ${extract('function backNavigationState(', 'function pageFollowing(')}
       ${extract('function buildEdgeBackPreviewHtml(', '\nrestorePendingCloudData();')}

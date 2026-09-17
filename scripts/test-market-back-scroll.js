@@ -34,6 +34,7 @@ async function main() {
         bindEvents();
       }
       ${extract('function releaseMarketDetailVideo(', 'function syncCommunityPublishButton(')}
+      ${extract('function navigationDataKeys(', 'function backNavigationState(')}
       ${extract('function setState(', 'function requireLogin(')}
       ${extract('function backNavigationState(', 'function pageFollowing(')}
       ${extract('function buildEdgeBackPreviewHtml(', 'function setupEdgeBackAndConversationSwipe(')}

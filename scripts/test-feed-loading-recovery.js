@@ -29,6 +29,7 @@ async function main() {
   const ctx = { console: { warn() {} }, Date, Map, Set,
     CONFIGURED_SMS_BACKEND: true, state: { page: 'market', loggedInPhone: 'test', cloudToken: '', marketListings: [] },
     hasCloudSession: () => Boolean(ctx.state.cloudToken),
+    currentCloudToken: () => ctx.state.cloudToken,
     marketLoading: false, marketLastLoadedAt: 0, incomingMarketShareLoading: false, incomingMarketShareListingId: '',
     marketFeedRequestKey: () => 'key', savedMarketListingIds: () => [], marketFeedRequestOptions: () => ({}),
     marketAuthPayload: x => x, normalizeMarketListings: x => x, normalizeAccountData: x => x,

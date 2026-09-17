@@ -8,6 +8,7 @@ vm.createContext(ctx);
 vm.runInContext(app.slice(app.indexOf('function breedingHatchProgress('), app.indexOf('function confirmBreedingHatch(')), ctx);
 const species = { code: 'TEST', name: '测试龟' };
 const record = { id: 'clutch', eggCount: 5, motherName: '种母', date: '2026-09-09' };
+assert.throws(() => ctx.buildBreedingHatchPlan({ ...record, incubationClosed: true }, 1, species, [], [], '2026-09-09'), /已完成/);
 const first = ctx.buildBreedingHatchPlan(record, 2, species, [], [], '2026-09-09', 'first');
 assert.equal(first.added.length, 2);
 assert.equal(new Set(first.added.map(t => t.id)).size, 2);

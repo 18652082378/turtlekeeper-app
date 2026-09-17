@@ -14,7 +14,7 @@ async function main(){
       var $app=document.querySelector('#app'), originalGrid=document.querySelector('.market-grid'), originalImage=document.querySelector('img');
       var state={page:'market',marketFavoriteIds:['one'],marketListings:[{id:'one',title:'最新商品信息',price:88,status:'sold',wantCount:3}],systemAnnouncements:[]};
       var CONFIGURED_SMS_BACKEND=true,systemAnnouncementsLoading=false,systemAnnouncementsLastLoadedAt=0;
-      function money(v){return Number(v||0).toFixed(2)} function saveState(){} function hasCloudSession(){return false}
+      function money(v){return Number(v||0).toFixed(2)} function saveState(){} function hasCloudSession(){return false} function currentCloudToken(){return ''}
       function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
       function formatTime(v){return v} function render(){throw new Error('Unexpected full render')}
       function setState(){throw new Error('Unexpected state-driven full render')}

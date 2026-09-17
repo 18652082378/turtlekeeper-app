@@ -37,6 +37,29 @@ async function main() {
   assert.equal(cleared, 0, 'Late old requests, another account, or a wrong password cannot clear the current session');
   await assert.rejects(ctx.apiPost('/api/community/list', { phone: 'same-account', token: 'new-token' }));
   assert.equal(cleared, 1, 'A genuinely expired active credential is still cleared');
-  console.log('Device identity and login-race regression passed.');
+  // Media uploads must check the credentials captured when the upload began.
+  let activeToken = 'old-upload-token', release;
+  const uploadContext = { window: { TURTLE_API_BASE_URL: '' }, state: { loggedInPhone: 'same-account' },
+    currentCloudToken: () => activeToken, clearExpiredCloudSession: () => cleared++,
+    localMediaFileKind: () => 'image', localMediaUploadMimeType: () => 'image/png',
+    isRetryableMediaUploadError: () => false,
+    fetch: () => new Promise(resolve => { release = () => resolve({ status: 401, ok: false, json: async () => ({ ok: false, code: 'ACCOUNT_SESSION_REPLACED' }) }); }) };
+  vm.createContext(uploadContext);
+  vm.runInContext(extract('async function apiUploadMediaFile(', 'function uploadMediaFileRequest('), uploadContext);
+  const upload = uploadContext.apiUploadMediaFile({});
+  activeToken = 'new-login-token'; release();
+  await assert.rejects(upload);
+  assert.equal(cleared, 1, 'an upload started before re-login cannot clear the new credential');
+  const xhrs = [];
+  uploadContext.XMLHttpRequest = function () {
+    this.upload = {}; this.open = () => {}; this.setRequestHeader = () => {}; this.send = () => {}; xhrs.push(this);
+  };
+  vm.runInContext(extract('function uploadMediaFileRequest(', 'function currentCloudToken('), uploadContext);
+  const xhrUpload = uploadContext.uploadMediaFileRequest('/api/upload/media', {}, { contentType: 'image/png' });
+  activeToken = 'even-newer-token';
+  xhrs[0].status = 401; xhrs[0].responseText = '{"ok":false,"code":"ACCOUNT_SESSION_REPLACED"}'; xhrs[0].onload();
+  await assert.rejects(xhrUpload);
+  assert.equal(cleared, 1, 'delayed XHR upload cannot clear the new login');
+  console.log('Device identity and login/upload-race regression passed.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
