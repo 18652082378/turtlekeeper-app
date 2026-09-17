@@ -59,6 +59,20 @@ async function main() {
       state.page = 'team'; render();
     });
     await page.waitForSelector('[data-team-workspace]');
+    // Clicking the right-hand modules must not reset the horizontally scrolled navigation.
+    const nav = page.locator('[data-team-workspace]');
+    const navOffset = await nav.evaluate(el => { el.scrollLeft = el.scrollWidth; return el.scrollLeft; });
+    assert(navOffset > 0, 'mobile module navigation overflows horizontally');
+    for (const key of ['members', 'logs', 'approvals', 'settings']) {
+      await nav.locator(`[data-tab="${key}"]`).click();
+      assert(Math.abs(await nav.evaluate(el => el.scrollLeft) - navOffset) <= 1, `${key}: navigation keeps its horizontal position`);
+      assert.equal(await nav.locator('[aria-current="page"]').getAttribute('data-tab'), key);
+    }
+    await page.evaluate(() => render());
+    assert(Math.abs(await nav.evaluate(el => el.scrollLeft) - navOffset) <= 1, 'host repaint preserves navigation position');
+    await refreshTeam();
+    assert(Math.abs(await nav.evaluate(el => el.scrollLeft) - navOffset) <= 1, 'API refresh preserves navigation position');
+    await page.screenshot({ path: path.join(output, 'team-tabs-position.png'), fullPage: true });
     await page.locator('[data-tab="settings"]').first().click();
     assert.equal(await page.locator('.ts-workhead h1').textContent(), '青禾龟场');
     assert((await page.locator('.ts-sync-state').textContent()).includes('最近同步'));

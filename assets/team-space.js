@@ -20,6 +20,7 @@
   let ledgerMonth = '', turtleLimit = 120, ledgerKind = '', reportKind = '';
   let membershipPage = false, previewKind = '', previewClosed = false;
   let teamInfoOpen = true;
+  let tabsScrollLeft = 0;
   const moduleTabs = [['overview', 'grid', '概览'], ['ledger', 'book', '账本'], ['reports', 'chart', '报表'], ['hatching', 'egg', '孵化'], ['care', 'check', '护理'], ['tasks', 'check', '任务'], ['members', 'users', '成员'], ['logs', 'clock', '记录'], ['approvals', 'shield', '审批'], ['settings', 'card', '设置']];
   const isPreview = () => !membershipPage && !team?.active && !canCreate;
   function native() {
@@ -31,6 +32,7 @@
   function auth() { return host.auth(); }
   function repaint() { if (host?.page() === 'team') host.render(); }
   function reset() {
+    tabsScrollLeft = 0;
     teamInfoOpen = true;
     membershipPage = false; previewKind = ''; previewClosed = false;
     sessionGeneration++; refreshVersion++; species = ''; tab = 'overview';
@@ -491,6 +493,11 @@
   }
   function bind() {
     const root = document.querySelector('.team-space'); if (!root) return;
+    const tabs = root.querySelector('.ts-tabs');
+    if (tabs) {
+      tabs.scrollLeft = tabsScrollLeft;
+      tabs.addEventListener('scroll', () => { if (tabs.isConnected) tabsScrollLeft = tabs.scrollLeft; }, { passive: true });
+    }
     root.querySelector('.ts-team-info')?.addEventListener('toggle', e => { if (e.currentTarget.isConnected) teamInfoOpen = e.currentTarget.open; });
     // Host notifications can re-render the page while a form is being edited.
     const form = root.querySelector('#ts-form');
@@ -612,6 +619,11 @@
       host = context;
       const a = auth(), key = `${a.phone}:${a.token}`;
       if (session !== key) { session = key; reset(); }
+      else {
+        // The host replaces the page DOM on tab changes and background updates.
+        const tabs = document.querySelector('.team-space .ts-tabs');
+        if (tabs) tabsScrollLeft = tabs.scrollLeft;
+      }
       if (!loaded && !loading && a.phone) { loading = true; queueMicrotask(() => { loading = false; refresh(); }); }
       if (!productLoaded && a.phone) queueMicrotask(preparePurchase);
       return `${host.topbar('团队空间', true)}<main class="team-space"><div class="ts-container">${error ? `<div class="ts-error" role="alert">${E(error)} ${button('refresh', '重试')}</div>` : ''}${loading && !loaded ? '<div class="ts-loading" role="status"><span></span>正在连接团队空间…</div>' : ''}${membershipPage ? landing() : isPreview() ? previewWorkspace() : team ? workspace() : landing()}</div>${modal()}</main>`;
