@@ -28,6 +28,13 @@ async function main() {
     for (let i = 0; i < 100; i++) { try { if ((await fetch(origin + '/api/app/version')).ok) break; } catch {} await new Promise(r => setTimeout(r, 100)); }
     browser = await chromium.launch({ headless: true, channel: 'msedge' });
     const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+    const refreshTeam = async () => {
+      const previous = await page.locator('[data-team-workspace] [aria-current="page"]').getAttribute('data-tab');
+      await page.locator('[data-team-workspace] [data-tab="settings"]').click();
+      await page.locator('.ts-workhead [data-ts="refresh"]').click();
+      await page.waitForFunction(() => !document.querySelector('.ts-workhead [data-ts="refresh"]')?.disabled);
+      if (await page.locator('[data-team-workspace]').count()) await page.locator('[data-team-workspace] [data-tab="' + previous + '"]').click();
+    };
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     page.on('response', async r => { if (r.url().endsWith('/api/team') && r.status() >= 400) console.log('Team request:', r.status(), await r.text()); });
     let failLedgerOnce = false, delayedGet = null;
@@ -51,9 +58,11 @@ async function main() {
       window.dismissTradeIntro?.(); state.loggedInPhone = '13900000001'; state.cloudToken = 'team-test-token'; state.policyConsentRequired = false;
       state.page = 'team'; render();
     });
-    await page.waitForSelector('.ts-workhead');
+    await page.waitForSelector('[data-team-workspace]');
+    await page.locator('[data-tab="settings"]').first().click();
     assert.equal(await page.locator('.ts-workhead h1').textContent(), '青禾龟场');
     assert((await page.locator('.ts-sync-state').textContent()).includes('最近同步'));
+    await page.locator('[data-tab="overview"]').first().click();
     // Apply a second custom period before the first API response arrives.
     await page.locator('[data-tab="reports"]').first().click();
     await page.locator('[data-period-mode="report"]').selectOption('custom');
@@ -110,7 +119,7 @@ async function main() {
     await teamCall('13900000001', 'settings', { revision: latest.team.revision, approvalRequired: true });
     latest = await teamCall('13900000002', 'get');
     await teamCall('13900000002', 'ledger', { revision: latest.team.revision, kind: 'edit', id: 'e1', amount: 160, note: '等待核对', recordDate: seed.users['13900000001'].data.ledgerRecords.find(r => r.id === 'e1').recordDate });
-    await page.locator('.ts-workhead [data-ts="refresh"]').click();
+    await refreshTeam();
     await page.locator('.ts-sync-state').filter({ hasText: '发现团队更新' }).waitFor();
     await page.locator('[data-tab="approvals"]').first().click();
     await page.locator('[data-ts="reject"]').click();
@@ -122,7 +131,10 @@ async function main() {
     for (const width of [320, 390, 768, 1100]) {
       await page.setViewportSize({ width, height: 880 });
       for (const tab of ['overview', 'ledger', 'reports', 'hatching', 'care', 'tasks', 'members', 'logs', 'approvals', 'settings']) {
+        // Team-wide descriptive text belongs exclusively to settings.
         await page.locator(`[data-ts="tab"][data-tab="${tab}"]`).first().click();
+        assert.equal(await page.locator('.ts-team-info').count(), tab === 'settings' ? 1 : 0, `${tab}: team information is only shown in settings`);
+        assert.equal(await page.locator('.ts-workhead').count(), tab === 'settings' ? 1 : 0, `${tab}: team heading is only shown in settings`);
         const dimensions = await page.evaluate(() => ({ viewport: innerWidth, doc: document.documentElement.scrollWidth }));
         assert(dimensions.doc <= width + 1, `${tab} overflow at ${width}: ${dimensions.doc}`);
         results.push({ width, tab, ...dimensions });
@@ -285,8 +297,8 @@ async function main() {
     await page.locator('[data-ts="close"]').click();
     await page.locator('[data-tab="settings"]').first().click();
     await page.locator('[data-ts="membership"]').click();
-    await page.locator('[data-ts="refresh"]').click();
-    await page.waitForSelector('.ts-workhead');
+    await page.locator('[data-ts="preview.back"]').click();
+    await page.waitForSelector('[data-team-workspace]');
     await page.evaluate(() => { state.themeColor = 'dark'; render(); });
     await page.locator('[data-tab="reports"]').first().click();
     await page.waitForSelector('.toast', { state: 'hidden' });
@@ -300,12 +312,28 @@ async function main() {
     await page.locator('#ts-form button[type="submit"]').click();
     await page.waitForSelector('.ts-dialog', { state: 'detached' });
     await page.evaluate(() => { state.loggedInPhone = '13900000002'; render(); });
+    await page.locator('[data-team-workspace]').waitFor();
+    await page.locator('[data-tab="settings"]').first().click();
+    await page.locator('.ts-team-summary strong').filter({ hasText: '2025-06-09' }).waitFor();
     await page.locator('.ts-data-scope strong').filter({ hasText: '2025-06-09' }).waitFor();
     assert((await page.locator('.ts-permission-preview').textContent()).includes('2025-06-09'));
+    await page.screenshot({ path: path.join(output, 'team-context-settings.png'), fullPage: true });
     await page.locator('[data-tab="overview"]').first().click();
+    await page.waitForSelector('.toast', { state: 'hidden' });
+    for (const width of [375, 390, 430]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.evaluate(() => scrollTo(0, 0));
+      assert.equal(await page.locator('.ts-team-info, .ts-workhead, .ts-data-scope, .ts-test-status, .ts-permission-preview').count(), 0, 'Team context only appears in settings');
+      const metrics = await page.locator('.ts-metrics').first().boundingBox();
+      assert(metrics.y < 360 && metrics.y + metrics.height < 700, 'Overview totals are visible on the first screen');
+      await page.screenshot({ path: path.join(output, `compact-team-overview-${width}.png`) });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
     assert((await page.locator('.ts-attention').textContent()).includes('我的待办'));
     assert((await page.locator('.ts-attention').textContent()).includes('请补充支出凭证'));
     await page.locator('[data-tab="ledger"]').first().click();
+    await page.evaluate(() => scrollTo(0, 0));
+    await page.screenshot({ path: path.join(output, 'compact-team-ledger.png') });
     assert.equal(await page.getByText('2025年历史购入', { exact: true }).count(), 0);
     await page.locator('[data-period-mode="ledger"]').selectOption('all');
     assert.equal(await page.getByText('2025年历史购入', { exact: true }).count(), 0, 'all dates cannot bypass server scope');
@@ -316,7 +344,7 @@ async function main() {
     await page.screenshot({ path: path.join(output, 'member-scoped-care.png'), fullPage: true });
     // Account switch must discard the owner's cached finance and permissions.
     await page.evaluate(() => { state.loggedInPhone = '13900000003'; render(); });
-    await page.waitForSelector('.ts-workhead');
+    await page.waitForSelector('[data-team-workspace]');
     await page.locator('[data-tab="ledger"]').first().click();
     await page.waitForSelector('.ts-empty');
     assert(await page.getByText('账本未开放').count());
@@ -338,6 +366,37 @@ async function main() {
     });
     await page.locator('[data-ts="purchase"]:enabled').first().waitFor();
     await page.waitForSelector('.toast', { state: 'hidden' });
+    const previewWrites = [];
+    const trackPreviewWrites = request => {
+      if (request.url().endsWith('/api/team') && request.method() === 'POST') {
+        const action = request.postDataJSON()?.action;
+        if (!['list', 'get'].includes(action)) previewWrites.push(action);
+      }
+    };
+    page.on('request', trackPreviewWrites);
+    for (const module of ['overview', 'ledger', 'reports', 'hatching', 'care', 'tasks', 'members', 'logs', 'approvals', 'settings']) {
+      await page.locator(`[data-ts="preview.tab"][data-tab="${module}"]`).click();
+      await page.locator(`[data-preview-module="${module}"]`).waitFor();
+      assert((await page.locator('.ts-preview-notice').textContent()).includes('示例数据'));
+      assert.equal(await page.locator('.ts-preview-subscription [data-ts="purchase"]').count(), 2);
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      if (module === 'ledger' || module === 'reports') {
+        for (const kind of ['purchase', 'sold', 'loss', 'other']) {
+          await page.locator(`[data-ts="preview.finance"][data-kind="${kind}"]`).click();
+          assert((await page.locator('.ts-preview-details').textContent()).includes('明细'));
+        }
+      }
+      if (module === 'hatching') {
+        await page.locator('[data-ts="preview.hatch"][data-closed="true"]').click();
+        assert((await page.locator('[data-preview-module]').textContent()).includes('80%'));
+      }
+      await page.evaluate(() => scrollTo(0, 0));
+      await page.screenshot({ path: path.join(output, `preview-${module}.png`), fullPage: true });
+    }
+    await page.locator('[data-preview-module] [data-ts="preview.subscribe"]').click();
+    await page.locator('.ts-hero').waitFor();
+    assert.deepEqual(previewWrites, [], 'Browsing preview must never write or create a team');
+    page.off('request', trackPreviewWrites);
     for (const [width, height] of [[375, 667], [390, 844], [430, 932]]) {
       await page.setViewportSize({ width, height });
       await page.evaluate(() => scrollTo(0, 0));
@@ -368,7 +427,9 @@ async function main() {
     await page.screenshot({ path: path.join(output, 'member-setup-ready.png'), fullPage: true });
     await page.locator('[data-ts="create"]').click();
     await page.locator('[data-ts="invite"]').waitFor();
+    await page.locator('[data-tab="settings"]').first().click();
     assert(await page.locator('.ts-test-status').count());
+    await page.locator('[data-tab="members"]').first().click();
     await page.locator('[data-ts="invite"]').click();
     await page.locator('[name="memberPhone"]').fill('13900000009');
     await page.locator('[name="ledger"]').selectOption('none');
@@ -379,16 +440,17 @@ async function main() {
     await page.screenshot({ path: path.join(output, 'member-setup-invited.png'), fullPage: true });
     await page.evaluate(() => { state.loggedInPhone = '13900000009'; render(); });
     await page.locator('[data-ts="accept"]').click();
-    await page.waitForSelector('.ts-workhead');
+    await page.waitForSelector('[data-team-workspace]');
     await page.locator('[data-tab="ledger"]').first().click();
     await page.getByText('账本未开放', { exact: true }).waitFor();
     updateAccess(path.join(runtime, 'data/team-test-access.json'), '--revoke', '13900000008');
-    await page.locator('.ts-workhead [data-ts="refresh"]').click();
-    await page.getByText('团队会员已到期', { exact: true }).waitFor();
+    await refreshTeam();
+    await page.getByText('团队会员已到期 · 当前为功能预览', { exact: true }).waitFor();
     await page.evaluate(() => { state.loggedInPhone = ''; state.cloudToken = ''; state.themeColor = 'forest'; render(); });
-    await page.waitForSelector('.ts-hero');
+    await page.waitForSelector('.ts-preview-notice');
     await page.screenshot({ path: path.join(output, 'membership-mobile.png'), fullPage: true });
-    assert(!await page.locator('.ts-workhead').count());
+    assert.equal(await page.locator('.ts-preview-tabs [data-tab]').count(), 10);
+    assert.equal(await page.locator('[data-ts="purchase"]').count(), 0, 'Logged-out preview asks for login');
     assert.deepEqual(errors, []);
     fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ results, errors }, null, 2));
     console.log('PASS: 40 viewport/module combinations, all-history ledger, care/growth, per-member dates, scoped data, breeding/hatch rates, task/invitation flows, account isolation and dark mode. Screenshots: ' + output);

@@ -18,6 +18,10 @@
   let hatchEventId = '', historicalHatch = false, breedingStatus = 'all';
   let ledgerRange = { mode: 'all' }, reportRange = { mode: 'month' };
   let ledgerMonth = '', turtleLimit = 120, ledgerKind = '', reportKind = '';
+  let membershipPage = false, previewKind = '', previewClosed = false;
+  let teamInfoOpen = true;
+  const moduleTabs = [['overview', 'grid', '概览'], ['ledger', 'book', '账本'], ['reports', 'chart', '报表'], ['hatching', 'egg', '孵化'], ['care', 'check', '护理'], ['tasks', 'check', '任务'], ['members', 'users', '成员'], ['logs', 'clock', '记录'], ['approvals', 'shield', '审批'], ['settings', 'card', '设置']];
+  const isPreview = () => !membershipPage && !team?.active && !canCreate;
   function native() {
     const c = window.Capacitor;
     return c?.isNativePlatform?.() && c.getPlatform?.() === 'ios' ? (c.Plugins?.TurtlePurchases || c.registerPlugin?.('TurtlePurchases')) : null;
@@ -27,6 +31,8 @@
   function auth() { return host.auth(); }
   function repaint() { if (host?.page() === 'team') host.render(); }
   function reset() {
+    teamInfoOpen = true;
+    membershipPage = false; previewKind = ''; previewClosed = false;
     sessionGeneration++; refreshVersion++; species = ''; tab = 'overview';
     teams = []; invitations = []; team = null; selected = ''; loaded = loading = busy = false; error = ''; dialog = ''; products = []; purchaseInfo = null; productLoaded = false; purchaseError = ''; canCreate = hasOwn = false; formDraft = null; cardImage = ''; membership = null; syncAt = syncNotice = saveState = ''; linkTarget = {}; breedYear = breedSpecies = breedMother = ''; breedCompare = 'mother'; ledgerRange = { mode: 'all' }; reportRange = { mode: 'month' }; month = today().slice(0, 7); ledgerKind = reportKind = ''; ledgerMonth = ''; turtleLimit = 120; filter = ''; actor = ''; breedingStatus = 'all'; taskFilter = 'all';
   }
@@ -114,6 +120,7 @@
       if (result.cancelled) return;
       if (result.pending) { host.toast('购买等待批准，批准后会自动同步'); return; }
       const verified = await verifyTransaction(result, a);
+      if (verified.active) membershipPage = false;
       host.toast(verified.active ? '团队会员已开通' : '订阅已同步');
       await refresh();
     } catch (e) { host.toast(e.message || '购买未完成，请重试恢复购买'); }
@@ -135,6 +142,32 @@
     } catch (e) { if (explicit) host.toast(e.message); }
   }
   function feature(name, title, sub) { return `<div class="ts-feature"><i>${icon(name)}</i><div><h3>${title}</h3><p>${sub}</p></div></div>`; }
+  function previewWorkspace() {
+    const current = moduleTabs.find(([key]) => key === tab) || moduleTabs[0];
+    const date = today().slice(0, 7);
+    const row = (title, sub, value) => `<div class="ts-preview-row"><div><h3>${title}</h3><p>${sub}</p></div><strong>${value}</strong></div>`;
+    const panel = (title, sub, content, action = '') => `<section class="ts-panel ts-preview-content"><div class="ts-section-title"><div><span class="ts-kicker">示例数据</span><h2>${title}</h2></div>${action ? button('preview.subscribe', action, '', 'ts-primary') : ''}</div><p class="ts-muted">${sub}</p>${content}</section>`;
+    const records = {
+      purchase: [['黄缘闭壳龟 · HY-001', '购入 2 只 · ' + date + '-03 09:30', '−1,200.00']],
+      sold: [['黄缘闭壳龟 · HY-002', '售出 1 只 · ' + date + '-08 14:20', '+1,800.00']],
+      loss: [['草龟 · CG-003', '损耗 1 只 · ' + date + '-10 10:15 · 非现金成本', '−100.00']],
+      other: [['幼龟颗粒粮', '龟粮 · ' + date + '-06 11:00', '−120.00'], ['水温计与过滤棉', '器材 · ' + date + '-07 16:30', '−180.00']]
+    };
+    const finance = () => `<div class="ts-finance-grid">${['purchase', 'sold', 'loss', 'other'].map((kind, i) => `<button type="button" class="ts-finance-card ${kind === 'sold' ? 'is-income' : ''}" data-ts="preview.finance" data-kind="${kind}"><span>${typeName(kind)}${icon('arrow')}</span><strong>¥${['1,200.00', '1,800.00', '100.00', '300.00'][i]}</strong><small>查看示例明细</small></button>`).join('')}</div>${previewKind ? `<div class="ts-preview-details"><h3>${typeName(previewKind)}明细</h3>${records[previewKind].map(r => row(...r)).join('')}</div>` : ''}`;
+    const views = {
+      overview: () => `<div class="ts-metrics">${metric('在养档案', '12', '示例 · 只')}${metric('协作成员', '2 / 6', '示例 · 子账号')}${metric('销售收入', '1,800.00', '示例 · 元', 'ts-positive')}${metric('收支结余', '300.00', '示例 · 元')}</div>` + panel('共享看板', '一个团队共用主账号的记录，按成员设置查看范围。', row('HY-001 · 黄缘闭壳龟', '雌 · 健康 · 种龟池', '320 g') + row('CG-002 · 草龟', '雄 · 健康 · 成长池', '180 g') + `<div class="ts-inline">${button('preview.tab', '查看孵化', 'data-tab="hatching"')}${button('preview.tab', '查看待办任务', 'data-tab="tasks"')}</div>`),
+      ledger: () => panel('每笔往来，都有来处', '收购、售出、损耗和其他支出分别汇总，点击查看明细。', finance(), '记一笔'),
+      reports: () => panel('经营报表', '按月份、近一年或自选日期统计，导出报表用于对账。', `<div class="ts-metrics">${metric('销售收入', '1,800.00', '元', 'ts-positive')}${metric('现金支出', '1,500.00', '元')}${metric('收支结余', '300.00', '元 · 不等于净利润')}${metric('损耗成本', '100.00', '元 · 单独列示')}</div><div class="ts-preview-chart" aria-label="示例近六期收入趋势">${[26, 45, 32, 68, 56, 90].map((v, i) => `<div><i style="height:${v}px"></i><small>第 ${i + 1} 期</small></div>`).join('')}</div>${finance()}<div class="ts-inline">${button('preview.subscribe', '导出月度报表')}${button('preview.subscribe', '导出对账单')}</div>`),
+      hatching: () => panel('孵化管理', '产蛋、受精、分批出壳一窝一档；标记孵化完成后计入最终孵化率。', `<div class="ts-chips">${button('preview.hatch', '进行中', 'data-closed="false"', !previewClosed ? 'selected' : '')}${button('preview.hatch', '已结束 · 最终孵化', 'data-closed="true"', previewClosed ? 'selected' : '')}</div><article class="ts-nest"><div class="ts-nest-title"><h3>黄缘 · 一号种母</h3><span class="ts-tag">${previewClosed ? '孵化完成' : '进行中'}</span></div><p class="ts-muted">${date}-01 · 一号孵化箱</p><div class="ts-nest-counts"><span>产蛋<b>6<em>枚</em></b></span><span>受精<b>5<em>枚</em></b></span><span>出壳<b>${previewClosed ? 4 : 3}<em>只</em></b></span></div><div class="ts-nest-progress"><div><span>${previewClosed ? '最终孵化率' : '当前出壳进度'}</span><strong>${previewClosed ? 80 : 60}%</strong></div><div class="ts-rate-track"><i style="width:${previewClosed ? 80 : 60}%"></i></div></div><details class="ts-hatch-events"><summary>查看分批出壳示例</summary>${row(date + '-12', '第一批出壳', '3 只')}${previewClosed ? row(date + '-15', '第二批出壳', '1 只') : ''}</details></article>`, '记录出壳'),
+      care: () => panel('护理与提醒', '共享换水、喂食和健康检查记录，持续跟进每只龟的状态。', row('一号池换水', date + '-10 09:00 · 每周重复', '换水') + row('黄缘种龟称重', date + '-12 14:00 · 记录体重变化', '称重'), '新增护理'),
+      tasks: () => panel('团队任务', '安排执行人、到期时间和完成状态，让成员清楚今天要做什么。', row('一号池换水，检查水温', '小林 · 今天 09:00', '待完成') + row('幼龟投喂并清理食台', '小周 · 今天 08:30', '已完成'), '新任务'),
+      members: () => panel('成员与子账号', '1 位主账号 + 最多 6 位成员。新成员默认只读，可分别设置数据起始日期和权限。', row('龟场主账号', '管理成员、账目与全部权限', '所有者') + row('小林', '看板、账本、护理、孵化：只读', '成员') + row('小周', '仅查看 ' + date + '-09 起的记录（含当天）', '成员') + '<p class="ts-note">受邀成员使用自己的账号接受邀请，无需另外订阅。</p>', '添加子账号'),
+      logs: () => panel('操作记录', '查看谁在什么时间进行了操作，支持按成员筛选。', `<div class="ts-timeline"><article><i></i><div><strong>小林</strong><p>完成一号池换水任务</p><small>${date}-10 09:20:00</small></div></article><article><i></i><div><strong>主账号</strong><p>记录幼龟出壳 3 只</p><small>${date}-12 10:30:00</small></div></article></div>`),
+      approvals: () => panel('重要操作审批', '开启审批后，成员提交的出售、损耗与账目更正由主账号确认。', row('小林提交 · 黄缘售出', date + '-08 14:20 · ¥1,800.00', '待审批') + `<div class="ts-inline">${button('preview.subscribe', '通过', '', 'ts-primary')}${button('preview.subscribe', '退回')}</div>`),
+      settings: () => panel('龟场品牌与设置', '设置龟场名称、Logo 和联系方式，生成带品牌的分享卡。', `<div class="ts-brand-preview">${icon('card')}<div><h3>青禾龟场 · 示例</h3><p>记录成长，分享照料成果</p></div></div><p class="ts-note">分享卡展示档案与成长信息，不包含成本、账目或内部备注。</p>`, '编辑品牌与审批设置')
+    };
+    return `<div class="ts-workhead"><div><span class="ts-kicker">先了解，再开启协作</span><h1>团队空间 <span class="ts-tag">功能预览</span></h1></div>${button('preview.subscribe', '开通会员', '', 'ts-primary')}</div><div class="ts-preview-notice" role="note">${icon('grid')}<div><strong>${team && !team.active ? '团队会员已到期 · 当前为功能预览' : '功能预览 · 以下均为示例数据'}</strong><p>可自由浏览全部模块，开通后使用真实团队数据。受邀成员无需重复订阅。</p></div></div>${invitations.map(i => `<section class="ts-panel ts-invite"><div><small>你收到的团队邀请</small><h3>${E(i.name)}</h3></div>${button('accept', '加入', `data-id="${E(i.id)}" data-team="${E(i.teamId)}"`, 'ts-primary')}${button('decline', '婉拒', `data-id="${E(i.id)}" data-team="${E(i.teamId)}"`)}</section>`).join('')}<nav class="ts-tabs ts-preview-tabs" aria-label="团队模块">${moduleTabs.map(([key, glyph, label]) => button('preview.tab', icon(glyph) + label, `data-tab="${key}" aria-current="${current[0] === key ? 'page' : 'false'}"`, current[0] === key ? 'selected' : '')).join('')}</nav><div data-preview-module="${current[0]}">${views[current[0]]()}</div><section class="ts-preview-subscription" aria-label="${current[2]}订阅提示"><p class="ts-note">正在预览「${current[2]}」。开通团队会员后，与伙伴一起使用真实数据协作。</p>${purchaseSection()}</section>`;
+  }
   function teamSetup() {
     if (hasOwn) return '';
     const signedIn = Boolean(auth().phone), ready = signedIn && loaded && !error && canCreate;
@@ -157,7 +190,7 @@
     <div class="ts-legal"><a href="./terms.html" target="_blank" rel="noopener">服务条款</a><span>·</span><a href="./privacy.html" target="_blank" rel="noopener">隐私政策</a><span>·</span><a href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/" target="_blank" rel="noopener">Apple 标准使用条款</a></div></section>`;
   }
   function landing() {
-    return `${teams.length ? button('refresh', '← 返回团队空间', '', 'ts-wide') : ''}<section class="ts-hero ts-member-hero"><div class="ts-eyebrow"><span class="ts-spark"></span> 龟友手账 · 团队会员</div><h1>一个团队，一起照顾好龟场。</h1><p>共享记录 · 看清经营 · 跟进孵化</p><div class="ts-people"><span>主</span><span>01</span><span>02</span><span>+4</span><small>1 个主账号 · 6 个子账号</small></div><div class="ts-hero-ring"></div></section>
+    return `${membershipPage ? button('preview.back', '← 返回团队空间', '', 'ts-wide') : ''}<section class="ts-hero ts-member-hero"><div class="ts-eyebrow"><span class="ts-spark"></span> 龟友手账 · 团队会员</div><h1>一个团队，一起照顾好龟场。</h1><p>共享记录 · 看清经营 · 跟进孵化</p><div class="ts-people"><span>主</span><span>01</span><span>02</span><span>+4</span><small>1 个主账号 · 6 个子账号</small></div><div class="ts-hero-ring"></div></section>
     ${canCreate && !hasOwn ? teamSetup() : purchaseSection()}
     ${invitations.map(i => `<section class="ts-panel ts-invite"><div><small>团队邀请</small><h3>${E(i.name)}</h3></div>${button('accept', '加入', `data-id="${E(i.id)}" data-team="${E(i.teamId)}"`, 'ts-primary')}${button('decline', '婉拒', `data-id="${E(i.id)}" data-team="${E(i.teamId)}"`)}</section>`).join('')}
     <section class="ts-panel"><div class="ts-section-title"><div><span class="ts-kicker">为共同经营而设计</span><h2>不止是多几个账号</h2></div>${icon('shield')}</div><div class="ts-features">
@@ -181,8 +214,13 @@
     }).filter(Boolean);
     return `${E(name)}的数据范围：${from ? E(from) + ' 起（含当天）' : '全部历史'}。${groups.map(E).join('；')}。${Object.values(perms || {}).includes('edit') ? '' : '不能新增、修改或删除业务记录。'}成员管理、删除、导出和审批由主账号控制。`;
   }
-  function syncFeedback() {
-    return `<div class="ts-sync-state" role="status" aria-live="polite"><span>${icon('clock')}${loading ? '正在同步…' : syncAt ? '最近同步：' + E(enteredAt(syncAt)) : '等待同步'}</span>${saveState ? `<span class="${saveState.startsWith('保存失败') ? 'ts-save-error' : ''}">${E(saveState)}</span>` : ''}${syncNotice ? `<span>${E(syncNotice)}</span>${button('sync.dismiss', '知道了')}` : ''}</div>`;
+  function syncFeedback(time = true) {
+    if (!time && !saveState && !syncNotice) return '';
+    return `<div class="ts-sync-state" role="status" aria-live="polite">${time ? `<span>${icon('clock')}${loading ? '正在同步…' : syncAt ? '最近同步：' + E(enteredAt(syncAt)) : '等待同步'}</span>` : `${saveState ? `<span class="${saveState.startsWith('保存失败') ? 'ts-save-error' : ''}">${E(saveState)}</span>` : ''}${syncNotice ? `<span>${E(syncNotice)}</span>${button('sync.dismiss', '知道了')}` : ''}`}</div>`;
+  }
+  function teamInfo() {
+    const permission = team.own ? '主账号' : Object.values(team.permissions).includes('edit') ? '部分可编辑' : Object.values(team.permissions).includes('read') ? '只读' : '暂无数据权限';
+    return `<details class="ts-team-info" ${teamInfoOpen ? 'open' : ''}><summary><span class="ts-team-summary">${icon('shield')}<strong>${team.visibleFrom ? E(team.visibleFrom) + ' 起' : '全部历史'}</strong><span class="ts-tag">${permission}</span>${team.testing ? '<span class="ts-tag">试用中</span>' : ''}</span><span class="ts-team-info-toggle">详情 <i aria-hidden="true">⌄</i></span></summary><div class="ts-team-info-body">${syncFeedback()}<div class="ts-data-scope"><div><strong>${team.own ? '共享主账号全部历史业务记录' : team.visibleFrom ? E(team.visibleFrom) + ' 起的数据（含当天）' : '可查看全部历史业务记录'}</strong><p>档案、账本、护理、繁殖与孵化直接读取主账号云端数据。${team.visibleFrom ? '范围外的记录不计入统计；更早产蛋的窝次整体隐藏。' : '在个人页或团队页记录，都会同步显示。'}</p></div></div>${team.testing ? `<div class="ts-test-status">测试协作中 · 有效期至 ${E(team.expiresAt.slice(0, 10))} · 到期自动结束</div>` : ''}${!team.own ? `<div class="ts-permission-preview">${permissionSummary(team.permissions, team.visibleFrom, '你')}</div>` : ''}</div></details>${syncFeedback(false)}`;
   }
   function attentionPanel() {
     const assigned = can('tasks') ? team.tasks.filter(t => !t.done && (team.own || t.assignee === team.selfId)) : [];
@@ -343,13 +381,13 @@
     return `<section class="ts-panel"><span class="ts-kicker">让每次分享，都带上你的名字</span><h2>龟场品牌</h2><div class="ts-brand-preview">${team.branding.logo ? `<img src="${E(team.branding.logo)}" alt="龟场 Logo">` : icon('card')}<div><h3>${E(team.branding.name || team.name)}</h3><p>${E(team.branding.contact || '添加联系方式，让客户找到你')}</p></div></div>${button('settings', '编辑品牌与审批设置', '', 'ts-primary ts-wide')}<p class="ts-note">在共享看板中选择“分享”，可生成品牌档案卡。卡片不包含成本、账目或内部备注。</p></section><section class="ts-panel"><h2>会员与账单</h2><p class="ts-muted">${team.testing ? '测试权限' : '会员'}有效期至 ${E(team.expiresAt.slice(0, 10))}。到期后主账号仍可在个人空间使用原有档案和账本。</p><div class="ts-inline">${button('membership', '查看会员方案')}${native() ? button('restore', '恢复购买') + button('manage', '管理订阅') : ''}</div></section>`;
   }
   function workspace() {
-    const tabs = [['overview', 'grid', '概览'], ['ledger', 'book', '账本'], ['reports', 'chart', '报表'], ['hatching', 'egg', '孵化'], ['care', 'check', '护理'], ['tasks', 'check', '任务'], ['members', 'users', '成员'], ['logs', 'clock', '记录'], ['approvals', 'shield', '审批'], ['settings', 'card', '设置']];
-    return `<div class="ts-workhead"><div><span class="ts-kicker">${team.own ? '主账号空间' : '团队协作空间'}</span><h1>${E(team.name)}</h1></div>${button('refresh', icon('clock') + '同步', loading ? 'disabled' : '')}</div>${syncFeedback()}${teams.length > 1 ? `<select data-team-select aria-label="切换团队">${teams.map(t => `<option value="${E(t.id)}" ${t.id === selected ? 'selected' : ''}>${E(t.name)}</option>`).join('')}</select>` : ''}
-    <div class="ts-data-scope">${icon('shield')}<div><strong>${team.own ? '共享主账号全部历史业务记录' : team.visibleFrom ? E(team.visibleFrom) + ' 起的数据（含当天）' : '可查看全部历史业务记录'}</strong><p>档案、账本、护理、繁殖与孵化直接读取主账号云端数据。${team.visibleFrom ? '范围外的记录不计入统计；更早产蛋的窝次整体隐藏。' : '在个人页或团队页记录，都会同步显示。'}</p></div></div>
-    ${team.testing ? `<div class="ts-test-status">${icon('clock')}测试协作中 · 有效期至 ${E(team.expiresAt.slice(0, 10))} · 到期自动结束</div>` : ''}
-    ${!team.own ? `<div class="ts-permission-preview">${permissionSummary(team.permissions, team.visibleFrom, '你')}</div>` : ''}
+    const tabs = moduleTabs;
+    const settingsContext = `<div class="ts-workhead ts-workhead-compact"><div><h1>${E(team.name)}</h1></div>${button('refresh', icon('clock') + (loading ? '同步中' : '同步'), loading ? 'disabled' : '')}</div>${teams.length > 1 ? `<select data-team-select aria-label="切换团队">${teams.map(t => `<option value="${E(t.id)}" ${t.id === selected ? 'selected' : ''}>${E(t.name)}</option>`).join('')}</select>` : ''}
+    ${teamInfo()}`;
+    return `
     ${team.own && team.active && tab === 'overview' ? button('tab', icon('users') + '添加子账号 / 管理成员', 'data-tab="members"', 'ts-primary ts-wide') : ''}
-    <nav class="ts-tabs" aria-label="团队模块">${tabs.map(([key, glyph, label]) => button('tab', icon(glyph) + label + tabBadge(key), `data-tab="${key}" aria-current="${tab === key ? 'page' : 'false'}"`, tab === key ? 'selected' : '')).join('')}</nav>
+    <nav class="ts-tabs" data-team-workspace aria-label="团队模块">${tabs.map(([key, glyph, label]) => button('tab', icon(glyph) + label + tabBadge(key), `data-tab="${key}" aria-current="${tab === key ? 'page' : 'false'}"`, tab === key ? 'selected' : '')).join('')}</nav>
+    ${tab === 'settings' ? settingsContext : syncFeedback(false)}
     ${!team.active ? `<section class="ts-panel">${empty('团队会员已到期', '成员协作已暂停，主账号个人数据仍然保留。')}${team.own ? button('membership', '查看会员方案', '', 'ts-primary ts-wide') : ''}</section>` : ({ overview, ledger, reports, hatching, care, tasks, members, logs, approvals, settings })[tab]()}`;
   }
   function field(label, name, value = '', type = 'text', extra = '') { return `<label class="ts-field"><span>${label}</span><input name="${name}" type="${type}" value="${E(value)}" ${extra}></label>`; }
@@ -453,6 +491,7 @@
   }
   function bind() {
     const root = document.querySelector('.team-space'); if (!root) return;
+    root.querySelector('.ts-team-info')?.addEventListener('toggle', e => { if (e.currentTarget.isConnected) teamInfoOpen = e.currentTarget.open; });
     // Host notifications can re-render the page while a form is being edited.
     const form = root.querySelector('#ts-form');
     const rememberDraft = () => { formDraft = [...form.elements].filter(el => el.name && el.type !== 'file').map(el => ({ name: el.name, value: el.value, checked: el.checked })); };
@@ -465,6 +504,14 @@
     root.onclick = async event => {
       const b = event.target.closest('[data-ts]'); if (!b || busy) return;
       const action = b.dataset.ts;
+      if (action === 'preview.subscribe') { membershipPage = true; dialog = ''; repaint(); window.scrollTo(0, 0); return; }
+      if (action === 'preview.back') { membershipPage = false; repaint(); window.scrollTo(0, 0); return; }
+      if (isPreview()) {
+        if (action === 'preview.tab' && moduleTabs.some(([key]) => key === b.dataset.tab)) { tab = b.dataset.tab; previewKind = ''; repaint(); window.scrollTo(0, 0); return; }
+        if (action === 'preview.finance' && ['purchase', 'sold', 'loss', 'other'].includes(b.dataset.kind)) { previewKind = b.dataset.kind; repaint(); document.querySelector('.ts-preview-details')?.scrollIntoView({ block: 'center' }); return; }
+        if (action === 'preview.hatch') { previewClosed = b.dataset.closed === 'true'; repaint(); return; }
+        if (!['purchase', 'restore', 'manage', 'prices', 'login', 'refresh', 'accept', 'decline'].includes(action)) return;
+      }
       if (action === 'finance.open' || action === 'finance.back') { const kind = action === 'finance.back' ? '' : b.dataset.kind; if (kind && !financeTypes.includes(kind)) return; if (b.dataset.context === 'report') reportKind = kind; else ledgerKind = kind; repaint(); if (kind) document.querySelector('.ts-finance-detail')?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
       if (action === 'sync.dismiss') { syncNotice = ''; repaint(); return; }
       if (action === 'ledger-links') { if (!can('ledger')) return; linkTarget = { record: b.dataset.record, turtle: b.dataset.turtle }; dialog = 'ledger-links'; formDraft = null; repaint(); return; }
@@ -483,12 +530,12 @@
       if (action === 'refresh') return refresh();
       if (action === 'login') return host.login();
       if (action === 'tab') { tab = b.dataset.tab; filter = ''; repaint(); return; }
-      if (action === 'membership') { team = null; repaint(); return; }
+      if (action === 'membership') { membershipPage = true; repaint(); window.scrollTo(0, 0); return; }
       if (action === 'prices') { productLoaded = false; purchaseError = ''; return preparePurchase(); }
       if (action === 'purchase') return purchase(b.dataset.id);
       if (action === 'restore') return restore();
       if (action === 'manage') { try { await native()?.manage(); } catch (e) { host.toast(e.message); } return; }
-      if (action === 'create') { await mutate('create'); if (team?.own) { tab = 'members'; repaint(); } return; }
+      if (action === 'create') { await mutate('create'); if (team?.own) { membershipPage = false; tab = 'members'; repaint(); } return; }
       if (['accept', 'decline'].includes(action)) return mutate(action, { teamId: b.dataset.team, id: b.dataset.id });
       if (action === 'turtles.more') { turtleLimit += 120; repaint(); return; }
       if (action === 'ledger.all') { ledgerMonth = ''; repaint(); return; }
@@ -567,7 +614,7 @@
       if (session !== key) { session = key; reset(); }
       if (!loaded && !loading && a.phone) { loading = true; queueMicrotask(() => { loading = false; refresh(); }); }
       if (!productLoaded && a.phone) queueMicrotask(preparePurchase);
-      return `${host.topbar('团队空间', true)}<main class="team-space"><div class="ts-container">${error ? `<div class="ts-error" role="alert">${E(error)} ${button('refresh', '重试')}</div>` : ''}${loading && !loaded ? '<div class="ts-loading" role="status"><span></span>正在连接团队空间…</div>' : ''}${team ? workspace() : landing()}</div>${modal()}</main>`;
+      return `${host.topbar('团队空间', true)}<main class="team-space"><div class="ts-container">${error ? `<div class="ts-error" role="alert">${E(error)} ${button('refresh', '重试')}</div>` : ''}${loading && !loaded ? '<div class="ts-loading" role="status"><span></span>正在连接团队空间…</div>' : ''}${membershipPage ? landing() : isPreview() ? previewWorkspace() : team ? workspace() : landing()}</div>${modal()}</main>`;
     }, bind
   };
   setInterval(() => { if (host?.page() === 'team' && team && !dialog && !busy && !loading && !document.hidden) void refresh(); }, 45000);
