@@ -14,6 +14,7 @@ const { reviewHash, advertisingRisk, createDailyCommunityDispatcher } = require(
 const marketRankPage = createMarketRankPager();
 const { createTeamService, recordAccountChange } = require('./team-space');
 const { createApplePurchases } = require('./apple-team-purchases');
+const { createBackupStorage } = require('./backup-storage');
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -51,7 +52,6 @@ const MYSQL_STORAGE_MODE = String(process.env.MYSQL_STORAGE_MODE || "legacy").tr
 const SMS_STATE_FILE = path.resolve(DATA_DIR, "sms-state.json");
 const UPLOAD_DIR = path.resolve(RUNTIME_ROOT, "uploads");
 const BACKUP_DIR = path.resolve(RUNTIME_ROOT, "backups");
-const BACKUP_RETENTION_DAYS = Math.max(7, Math.floor(Number(process.env.BACKUP_RETENTION_DAYS || 30)));
 // Small, per-account recovery snapshots are separate from the daily full
 // backup. They are written only before a record-count reduction, so an
 // accidental client-side wipe can be restored without rolling back anyone
@@ -730,82 +730,25 @@ function backupTimeKey(date = new Date()) {
   return `${backupDateKey(date)}-${String(date.getHours()).padStart(2, "0")}${String(date.getMinutes()).padStart(2, "0")}${String(date.getSeconds()).padStart(2, "0")}`;
 }
 
-function pruneServerBackups() {
-  if (!fs.existsSync(BACKUP_DIR)) return;
-  const expiresAt = Date.now() - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-  fs.readdirSync(BACKUP_DIR, { withFileTypes: true }).forEach(entry => {
-    if (!entry.isDirectory()) return;
-    if (entry.name === path.basename(ACCOUNT_SNAPSHOT_DIR)) return;
-    const target = path.resolve(BACKUP_DIR, entry.name);
-    const stat = fs.statSync(target);
-    if (stat.mtimeMs < expiresAt) fs.rmSync(target, { recursive: true, force: true });
-  });
-}
+const backupStorage = createBackupStorage({
+  directory: BACKUP_DIR,
+  uploads: UPLOAD_DIR,
+  readData: () => MYSQL_ENABLED ? readDatabase() : fs.existsSync(DATA_FILE) ? fs.readFileSync(DATA_FILE, "utf8") : null
+});
 
 function hasBackupForDate(day = backupDateKey()) {
-  if (!fs.existsSync(BACKUP_DIR)) return false;
-  return fs.readdirSync(BACKUP_DIR, { withFileTypes: true })
-    .some(entry => entry.isDirectory() && entry.name.startsWith(`${day}-`));
-}
-
-function copyBackupDirectory(source, target) {
-  if (typeof fs.cpSync === "function") {
-    fs.cpSync(source, target, { recursive: true, force: true });
-    return;
-  }
-  fs.mkdirSync(target, { recursive: true });
-  fs.readdirSync(source, { withFileTypes: true }).forEach(entry => {
-    const from = path.resolve(source, entry.name);
-    const to = path.resolve(target, entry.name);
-    if (entry.isDirectory()) copyBackupDirectory(from, to);
-    else if (entry.isFile()) fs.copyFileSync(from, to);
-  });
-}
-
-function backupFileManifest(root, directory = root) {
-  if (!fs.existsSync(directory)) return [];
-  const rows = [];
-  fs.readdirSync(directory, { withFileTypes: true }).forEach(entry => {
-    if (entry.name === "manifest.json" && directory === root) return;
-    const file = path.resolve(directory, entry.name);
-    if (entry.isDirectory()) {
-      rows.push(...backupFileManifest(root, file));
-      return;
-    }
-    if (!entry.isFile()) return;
-    rows.push({
-      path: path.relative(root, file).split(path.sep).join("/"),
-      bytes: fs.statSync(file).size,
-      sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")
-    });
-  });
-  return rows.sort((a, b) => a.path.localeCompare(b.path));
+  return backupStorage.hasDate(day);
 }
 
 function createServerBackup(reason = "scheduled") {
-  if (!MYSQL_ENABLED && !fs.existsSync(DATA_FILE)) return "";
-  const now = new Date();
-  const safeReason = String(reason || "scheduled").replace(/[^a-z0-9_-]/gi, "").slice(0, 24) || "scheduled";
-  const targetDir = path.resolve(BACKUP_DIR, `${backupTimeKey(now)}-${safeReason}`);
-  fs.mkdirSync(targetDir, { recursive: true });
-  if (MYSQL_ENABLED) fs.writeFileSync(path.resolve(targetDir, "app-data.json"), JSON.stringify(readDatabase(), null, 2), "utf8");
-  else fs.copyFileSync(DATA_FILE, path.resolve(targetDir, "app-data.json"));
-  if (fs.existsSync(UPLOAD_DIR)) copyBackupDirectory(UPLOAD_DIR, path.resolve(targetDir, "uploads"));
-  fs.writeFileSync(path.resolve(targetDir, "manifest.json"), JSON.stringify({
-    createdAt: now.toISOString(),
-    reason: safeReason,
-    includes: ["app-data.json", fs.existsSync(UPLOAD_DIR) ? "uploads" : ""]
-      .filter(Boolean),
-    files: backupFileManifest(targetDir)
-  }, null, 2), "utf8");
-  pruneServerBackups();
-  return targetDir;
+  return backupStorage.create(reason);
 }
 
 function runScheduledBackup() {
   const today = backupDateKey();
   if (today === lastServerBackupDate) return;
   try {
+    backupStorage.maintain();
     if (!hasBackupForDate(today)) createServerBackup("daily");
     lastServerBackupDate = today;
   } catch (error) {
@@ -4819,7 +4762,7 @@ function handleAppVersion(req, res) {
     minimumBuild: MIN_SUPPORTED_APP_BUILD,
     latestBuild: LATEST_APP_BUILD,
     appStoreUrl: IOS_APP_STORE_URL,
-    message: "壳友手账 1.0.8 已正式上线。请前往 App Store 更新，更新后即可继续使用。"
+    message: "壳友手账 1.0.9 已正式上线。请前往 App Store 更新，更新后即可继续使用。"
   });
 }
 
@@ -5041,6 +4984,7 @@ process.on("SIGINT", shutdownDatabaseServer);
 void initializeMysqlDatabase().then(() => {
   void dispatchDueCareReminders();
   try {
+    backupStorage.maintain();
     if (!hasBackupForDate()) createServerBackup("startup");
     lastServerBackupDate = backupDateKey();
   } catch (error) {
