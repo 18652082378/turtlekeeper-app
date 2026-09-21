@@ -7,7 +7,19 @@ const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
 const CLOUD_SYNC_DEBOUNCE_MS = 900;
 const CHINA_TIME_ZONE = "Asia/Shanghai";
 const REVIEW_ADMIN_PHONE = "18652082378";
-const RESERVED_PLATFORM_NICKNAME = "壳友手账";
+const RESERVED_PLATFORM_NICKNAME = "龟友手账";
+// Retain the previous official name to prevent impersonation after the rename.
+const RESERVED_PLATFORM_NICKNAMES = [RESERVED_PLATFORM_NICKNAME, "壳友手账"];
+// Display legacy transaction values with the current brand without rewriting stored records.
+function marketSaleMethodLabel(value) {
+  return value === "壳友手账成交" ? "龟友手账成交" : value;
+}
+function marketLedgerNoteLabel(record) {
+  const note = String(record.note || "");
+  return record.autoMarketRecord
+    ? note.replace(/^成交方式：壳友手账成交；/, "成交方式：龟友手账成交；")
+    : note;
+}
 const DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);
 // Keep this in sync with the server so accepted users are never trapped
 // behind a stale consent overlay.
@@ -1104,17 +1116,37 @@ function requireLogin() {
   return false;
 }
 
+function appUpdatePlatform() {
+  const nativePlatform = window.Capacitor?.getPlatform?.();
+  if (nativePlatform === "ios" || nativePlatform === "android") return nativePlatform;
+  return ["android", "harmony"].includes(window.TURTLE_APP_PLATFORM) ? window.TURTLE_APP_PLATFORM : "web";
+}
+
+function appUpdateChannel() {
+  return appUpdatePlatform() === "android" && window.TURTLE_APP_UPDATE_CHANNEL !== "store" ? "beta" : "store";
+}
+
+function safeAppUpdateUrl(value, platform) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol !== "https:" || url.username || url.password) return "";
+    const apple = /(^|\.)(apple\.com|itunes\.com)$/i.test(url.hostname);
+    if ((platform === "android" && apple) || (platform === "ios" && !apple)) return "";
+    return url.href;
+  } catch { return ""; }
+}
+
 function forceUpdatePage() {
   const latestBuild = Number(forceUpdateState.latestBuild || forceUpdateState.minimumBuild || 0);
   const message = forceUpdateState.message || "为了保障数据安全与使用体验，请先更新到最新版本后再继续使用。";
   return `
     <main class="force-update-screen" role="alertdialog" aria-modal="true" aria-labelledby="forceUpdateTitle">
       <div class="force-update-mark" aria-hidden="true">⇧</div>
-      <p class="force-update-eyebrow">壳友手账有新版本</p>
+      <p class="force-update-eyebrow">龟友手账有新版本</p>
       <h1 id="forceUpdateTitle">需要更新后才能继续使用</h1>
       <p class="force-update-copy">${escapeHtml(message)}</p>
-      <div class="force-update-version"><span>当前构建 ${APP_BUILD || "-"}</span>${latestBuild ? `<i></i><strong>最新构建 ${latestBuild}</strong>` : ""}</div>
-      <button class="primary force-update-primary" type="button" data-open-app-store-update>前往 App Store 更新</button>
+      <div class="force-update-version"><span>当前构建 ${forceUpdateState.currentBuild || APP_BUILD || "-"}</span>${latestBuild ? `<i></i><strong>最新构建 ${latestBuild}</strong>` : ""}</div>
+      <button class="primary force-update-primary" type="button" data-open-app-store-update>${appUpdatePlatform() === "ios" ? "前往 App Store 更新" : appUpdateChannel() === "store" ? "前往安卓应用商店更新" : "下载安卓测试版更新"}</button>
       <button class="force-update-recheck" type="button" data-recheck-app-update>更新完成后，点击重新检查</button>
     </main>
   `;
@@ -1122,7 +1154,10 @@ function forceUpdatePage() {
 
 function bindForceUpdateActions() {
   $app.querySelector("[data-open-app-store-update]")?.addEventListener("click", () => {
-    window.location.href = forceUpdateState.appStoreUrl || APP_STORE_URL;
+    const platform = appUpdatePlatform();
+    const url = safeAppUpdateUrl(forceUpdateState.updateUrl || (platform === "ios" ? APP_STORE_URL : ""), platform);
+    if (url) window.location.href = url;
+    else toast("更新地址暂未配置，请联系客服获取新版");
   });
   $app.querySelector("[data-recheck-app-update]")?.addEventListener("click", () => {
     checkRequiredAppUpdate(true);
@@ -1131,29 +1166,48 @@ function bindForceUpdateActions() {
 
 async function checkRequiredAppUpdate(showFeedback = false) {
   if (!CONFIGURED_SMS_BACKEND || forceUpdateState.checking) return;
+  const platform = appUpdatePlatform();
+  if (platform !== "ios" && platform !== "android") return;
+  const channel = appUpdateChannel();
   forceUpdateState.checking = true;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 5000);
   try {
     const base = window.TURTLE_API_BASE_URL || "";
-    const response = await fetch(`${base}/api/app/version?build=${encodeURIComponent(APP_BUILD)}&t=${Date.now()}`, {
+    let currentBuild = APP_BUILD;
+    // The installed APK's versionCode is authoritative; do not compare it to
+    // the iOS build number copied into older shared web configurations.
+    if (platform === "android" && window.Capacitor?.Plugins?.App?.getInfo) {
+      const info = await Promise.race([
+        window.Capacitor.Plugins.App.getInfo().catch(() => null),
+        new Promise(resolve => window.setTimeout(() => resolve(null), 1000))
+      ]);
+      currentBuild = Math.max(0, Number.parseInt(String(info?.build || APP_BUILD), 10) || 0);
+    }
+    const response = await fetch(`${base}/api/app/version?platform=${platform}&channel=${channel}&build=${encodeURIComponent(currentBuild)}&t=${Date.now()}`, {
       method: "GET",
       cache: "no-store",
       signal: controller.signal
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || result.ok === false) throw new Error(result.message || "检查更新失败");
+    // During a staged rollout the old API may still return the iOS policy.
+    // Android must never use an unscoped, wrong-platform or wrong-channel gate.
+    const matches = platform === "ios" ? (!result.platform || result.platform === "ios")
+      : result.platform === "android" && result.channel === channel;
+    const updateUrl = matches ? safeAppUpdateUrl(result.updateUrl || (platform === "ios" ? result.appStoreUrl || APP_STORE_URL : ""), platform) : "";
     const minimumBuild = Math.max(0, Number.parseInt(String(result.minimumBuild || 0), 10) || 0);
     const latestBuild = Math.max(minimumBuild, Number.parseInt(String(result.latestBuild || 0), 10) || 0);
-    const mustUpdate = minimumBuild > 0 && APP_BUILD > 0 && APP_BUILD < minimumBuild;
+    const mustUpdate = Boolean(matches && updateUrl && minimumBuild > 0 && currentBuild > 0 && currentBuild < minimumBuild);
     if (mustUpdate) {
       forceUpdateState = {
         required: true,
         checking: false,
         minimumBuild,
         latestBuild,
+        currentBuild,
         message: String(result.message || ""),
-        appStoreUrl: String(result.appStoreUrl || "")
+        updateUrl
       };
       render();
       return;
@@ -1162,7 +1216,7 @@ async function checkRequiredAppUpdate(showFeedback = false) {
       forceUpdateState = { required: false, checking: false, minimumBuild: 0, latestBuild: 0, message: "", appStoreUrl: "" };
       render();
     }
-    if (showFeedback) toast("已是最新版本");
+    if (showFeedback) toast(matches && updateUrl ? "当前版本可继续使用" : "当前暂无可用更新地址，请联系客服获取新版");
   } catch (error) {
     if (showFeedback) toast("暂时无法连接更新服务，请检查网络后重试");
   } finally {
@@ -2845,7 +2899,7 @@ function pageMessages() {
 
 function platformAdminBadge(subject = {}) {
   if (!subject.isAdmin && !subject.authorIsAdmin && !subject.sellerIsAdmin && !subject.senderIsAdmin) return "";
-  return `<span class="platform-admin-badge" title="壳友手账官方管理员">官方管理员</span>`;
+  return `<span class="platform-admin-badge" title="龟友手账官方管理员">官方管理员</span>`;
 }
 
 const COMMUNITY_TOPICS = {
@@ -4767,12 +4821,12 @@ function pageMarketDetail() {
         ${isOwn ? "" : `<div class="market-seller-actions"><button class="${item.sellerFollowed ? "active" : ""}" type="button" data-toggle-community-follow="${item.sellerId}">${item.sellerFollowed ? "已关注" : "关注"}</button><button type="button" data-market-contact="${item.id}">聊一聊</button></div>`}
       </section>
       ${state.isCommunityAdmin ? `<section class="market-safe-note"><b>管理员查看</b><p><button type="button" data-admin-seller-phone="${escapeHtml(item.id)}">查看卖家手机号</button></p></section>` : ""}
-      <section class="market-safe-note"><b>交易咨询</b><p>先看近期实拍或视频，再确认健康、尺寸与交付方式；如需购买，请联系平台客服并发送商品咨询码，活体运输责任以双方确认内容为准。</p></section>
+      <section class="market-safe-note"><b>交易咨询</b><p>先看近期实拍或视频，再确认健康、尺寸与交付方式；如需购买，请添加客服微信并发送商品咨询码，沟通购买意向、交付方式与售后约定。</p></section>
     </main>
     <div class="market-detail-actions">
       ${marketFavoriteButton(item, "market-detail-favorite")}
       ${!isOwn ? `<button class="market-contact-action" type="button" data-market-contact="${item.id}">联系卖家</button>` : ""}
-      ${isOwn ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">删除</button><button class="market-sold-action" type="button" data-market-sold="${item.id}">${sold ? "恢复在售" : "标记已售"}</button>` : canDelete ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">管理员删除</button>` : sold ? `<button class="market-sold-disabled" type="button" disabled>该商品已售出</button>` : `<button class="market-want-action" type="button" data-market-platform-service="${item.id}">联系平台客服</button>`}
+      ${isOwn ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">删除</button><button class="market-sold-action" type="button" data-market-sold="${item.id}">${sold ? "恢复在售" : "标记已售"}</button>` : canDelete ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">管理员删除</button>` : sold ? `<button class="market-sold-disabled" type="button" disabled>该商品已售出</button>` : `<button class="market-want-action" type="button" data-market-platform-service="${item.id}">微信咨询购买</button>`}
     </div>
   `;
 }
@@ -4810,7 +4864,7 @@ function pageMarketSeller() {
 function pageHome() {
   const s = stats();
   return `
-    ${topbar("壳友手账", false, "", platformServiceTopButton())}
+    ${topbar("龟友手账", false, "", platformServiceTopButton())}
     <main class="content home-redesign">
       <section class="home-hero">
         <div>
@@ -5180,10 +5234,10 @@ function pageTurtleReward() {
     <main class="content page-fresh reward-page">
       <section class="reward-celebration"><span>✓</span><div><p>${hasGrowth ? `第 ${history.length + 1} 次记录完成` : "建档完成 · 成长旅程已开启"}</p><h2>${hasGrowth ? "这次变化，值得被看见" : `欢迎你，${escapeHtml(turtle.code || "新朋友")}`}</h2><small>${hasGrowth ? "新的成长数据已加入报告" : "第一份成长档案已经保存好了"}</small></div></section>
       <article class="turtle-profile-card" data-reward-card>
-        <header><div><small>壳友手账 · 龟档案</small><h1>${escapeHtml(turtle.code || "未命名龟龟")}</h1><p>${escapeHtml(turtle.speciesName || "品种未填写")}</p></div><b>${turtleKeepingDaysNumber(turtle.acquiredDate)}<small>陪伴天数</small></b></header>
+        <header><div><small>龟友手账 · 龟档案</small><h1>${escapeHtml(turtle.code || "未命名龟龟")}</h1><p>${escapeHtml(turtle.speciesName || "品种未填写")}</p></div><b>${turtleKeepingDaysNumber(turtle.acquiredDate)}<small>陪伴天数</small></b></header>
         <img src="${turtle.photo || defaultPhoto}" alt="${escapeHtml(turtle.code || turtle.speciesName || "乌龟")}的照片" data-reward-photo>
         <div class="reward-card-stats"><span><small>入手日期</small><strong>${escapeHtml(turtle.acquiredDate || "-")}</strong></span><span><small>当前体重</small><strong>${escapeHtml(turtle.weight || "-")} g</strong></span><span><small>背甲长度</small><strong>${escapeHtml(turtle.carapaceLength || "-")} cm</strong></span></div>
-        <footer><span>每一次记录，都在见证生命成长</span><b>壳友手账</b></footer>
+        <footer><span>每一次记录，都在见证生命成长</span><b>龟友手账</b></footer>
       </article>
       <div class="reward-actions"><button class="primary" type="button" data-share-growth-card><span aria-hidden="true">↗</span>${hasGrowth ? "分享成长报告" : "分享档案卡"}</button><button class="secondary" type="button" data-save-growth-card><span aria-hidden="true">↓</span>保存图片</button></div>
       <section class="next-growth-card fresh-card"><div class="next-growth-date"><strong>${nextDate.slice(5, 7)}<small>月</small>${nextDate.slice(8)}<small>日</small></strong><span>${reminderEnabled ? "上午 09:00" : "成长计划"}</span></div><div class="next-growth-copy"><div><small>下一次记录</small><button class="reminder-on ${reminderEnabled ? "is-on" : "is-off"}" type="button" data-toggle-growth-reminder="${escapeHtml(turtle.id)}" aria-pressed="${reminderEnabled ? "true" : "false"}" aria-label="${reminderEnabled ? "关闭成长记录提醒" : "开启成长记录提醒"}"><i></i>${reminderEnabled ? "提醒已开启" : "提醒已关闭"}</button></div><h3>30 天后，再看看它长大多少</h3><p>拍一张新照片，记录体重和背甲，即可生成第一次成长对比。</p></div></section>
@@ -5503,7 +5557,7 @@ function pageTurtleDetail() {
         <button class="primary" type="submit">保存修改</button>
       </form>
       ` : `${turtleReadOnlyDetail(t, species, photo)}${turtleDetailGrowthChart(t)}`}
-      ${t.sharedView ? `<section class="shared-turtle-note">由壳友手账生成 · 仅展示主人选择公开的成长信息</section>` : ""}
+      ${t.sharedView ? `<section class="shared-turtle-note">由龟友手账生成 · 仅展示主人选择公开的成长信息</section>` : ""}
       <section class="section-title"><h3>成长记录</h3></section>
       ${historyList.map((h, index) => `
         <div class="growth-history-entry">
@@ -6599,9 +6653,9 @@ function pageLedgerDetail() {
           <div><span>背高</span><strong>${item.shellHeight || turtle?.shellHeight || "-"}cm</strong></div>
           <div><span>腹甲长</span><strong>${item.plastronLength || turtle?.plastronLength || "-"}cm</strong></div>
           <div><span>记录时间</span><strong>${formatTime(item.createdAt)}</strong></div>
-          ${item.type === "sold" ? `<div><span>成交方式</span><strong>${escapeHtml(item.saleMethod || "未填写")}</strong></div>` : ""}`}
+          ${item.type === "sold" ? `<div><span>成交方式</span><strong>${escapeHtml(marketSaleMethodLabel(item.saleMethod || "未填写"))}</strong></div>` : ""}`}
         </div>
-        ${item.note ? `<p class="detail-note">${item.note}</p>` : ""}
+        ${item.note ? `<p class="detail-note">${escapeHtml(marketLedgerNoteLabel(item))}</p>` : ""}
       </section>
     </main>
   `;
@@ -6898,7 +6952,7 @@ function pageMine() {
         ${state.isCommunityAdmin ? `<button class="mine-row" data-page="moderation"><span>⚑</span><strong>举报审核</strong><em class="mine-row-count">${(state.contentReports || []).filter(item => item.status === "pending").length}</em></button>` : ""}
         ${state.isCommunityAdmin ? `<button class="mine-row" data-page="announcements"><span>◉</span><strong>系统公告</strong></button>` : ""}
         ${state.isCommunityAdmin ? `<button class="mine-row" data-page="operations"><span>▦</span><strong>运营中心</strong></button>` : ""}
-        <button class="mine-row" data-page="about"><span>i</span><strong>关于壳友手账</strong></button>
+        <button class="mine-row" data-page="about"><span>i</span><strong>关于龟友手账</strong></button>
       </section>
     </main>
     ${bottomNav()}
@@ -6911,7 +6965,7 @@ function pageSatisfaction() {
     ${topbar("满意度调查", true)}
     <main class="content page-fresh">
       <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">体验评分</p><h2>给壳友手账打个分</h2><p>你的评价会保存在本机，方便后续继续优化。</p></div>
+        <div><p class="eyebrow dark">体验评分</p><h2>给龟友手账打个分</h2><p>你的评价会保存在本机，方便后续继续优化。</p></div>
       </section>
       <form class="fresh-card survey-form" id="satisfactionForm">
         <div class="settings-title">软件满意度</div>
@@ -6941,7 +6995,7 @@ function pagePublicSatisfaction() {
     ${topbar("满意度调查", true)}
     <main class="content page-fresh">
       <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">体验评分</p><h2>给壳友手账打个分</h2><p>普通用户只查看自己的历史评价，管理员账号可查看全部评价。</p></div>
+        <div><p class="eyebrow dark">体验评分</p><h2>给龟友手账打个分</h2><p>普通用户只查看自己的历史评价，管理员账号可查看全部评价。</p></div>
       </section>
       <form class="fresh-card survey-form" id="satisfactionForm">
         <div class="settings-title">软件满意度</div>
@@ -7293,10 +7347,10 @@ function pageSync() {
 
 function pageAbout() {
   return `
-    ${topbar("关于壳友手账", true)}
+    ${topbar("关于龟友手账", true)}
     <main class="content page-fresh">
       <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">关于</p><h2>壳友手账</h2><p>为养龟、繁殖和日常经营提供清晰可靠的记录工具。</p></div>
+        <div><p class="eyebrow dark">关于</p><h2>龟友手账</h2><p>为养龟、繁殖和日常经营提供清晰可靠的记录工具。</p></div>
       </section>
       <section class="fresh-card settings-card">
         <div class="settings-title">当前能力</div>
@@ -7323,7 +7377,7 @@ function pageRules() {
     ${topbar("平台规则", true)}
     <main class="content page-fresh compliance-page">
       <section class="page-intro compact-intro compliance-intro">
-        <div><p class="eyebrow dark">生效日期：2026 年 9 月 1 日</p><h2>服务、社区与交易规则</h2><p>壳友手账提供养龟记录、公开内容发布和商品信息展示服务。</p></div>
+        <div><p class="eyebrow dark">生效日期：2026 年 9 月 1 日</p><h2>服务、社区与交易规则</h2><p>龟友手账提供养龟记录、公开内容发布和商品信息展示服务。</p></div>
       </section>
       <section class="fresh-card policy-card">
         <h3>一、服务范围</h3>
@@ -7344,7 +7398,7 @@ function pageRules() {
       </section>
       <section class="fresh-card policy-card">
         <h3>五、规则变更与联系我们</h3>
-        <p>涉及收费、交易、争议解决等重大变更会在应用内显著提示并要求重新确认。壳友手账由陈仔健运营；对规则、投诉或数据权利有疑问，可联系平台客服微信：<strong>${PLATFORM_SERVICE_WECHAT}</strong>。</p>
+        <p>涉及收费、交易、争议解决等重大变更会在应用内显著提示并要求重新确认。龟友手账由陈仔健运营；对规则、投诉或数据权利有疑问，可联系平台客服微信：<strong>${PLATFORM_SERVICE_WECHAT}</strong>。</p>
       </section>
       <button class="compliance-link-card" type="button" data-page="privacy"><span>隐私政策</span><b>›</b></button>
     </main>
@@ -7357,7 +7411,7 @@ function pagePrivacy() {
     ${topbar("隐私政策", true)}
     <main class="content page-fresh compliance-page">
       <section class="page-intro compact-intro compliance-intro">
-        <div><p class="eyebrow dark">生效日期：2026 年 9 月 1 日</p><h2>壳友手账隐私政策</h2><p>个人信息处理者：陈仔健。我们按合法、正当、必要原则处理与你使用服务直接相关的信息。</p></div>
+        <div><p class="eyebrow dark">生效日期：2026 年 9 月 1 日</p><h2>龟友手账隐私政策</h2><p>个人信息处理者：陈仔健。我们按合法、正当、必要原则处理与你使用服务直接相关的信息。</p></div>
       </section>
       <section class="fresh-card policy-card">
         <h3>一、我们收集的信息</h3>
@@ -7703,7 +7757,7 @@ function policyConsentGate() {
       <form class="policy-consent-dialog" data-policy-consent-form>
         <p class="policy-consent-kicker">服务协议更新</p>
         <h1 id="policyConsentTitle">请阅读并同意服务协议</h1>
-        <p>为继续使用壳友手账，请阅读最新版《服务与社区规则》和《隐私政策》。本次更新生效日期为 2026 年 9 月 1 日。</p>
+        <p>为继续使用龟友手账，请阅读最新版《服务与社区规则》和《隐私政策》。本次更新生效日期为 2026 年 9 月 1 日。</p>
         <div class="policy-consent-links">
           <a href="https://api.turtleworld.cn/terms.html" target="_blank" rel="noopener noreferrer">查看服务与社区规则 <b>›</b></a>
           <a href="https://api.turtleworld.cn/privacy.html" target="_blank" rel="noopener noreferrer">查看隐私政策 <b>›</b></a>
@@ -7884,7 +7938,7 @@ async function runSyncPageAction(message, action) {
 async function exportLocalAccountBackup() {
   try {
     toast("正在准备完整备份，请在弹出的窗口中选择保存位置");
-    await downloadTextFile(`壳友手账-完整备份-${formatDate(new Date())}.json`, TurtleLocalData.stringify({
+    await downloadTextFile(`龟友手账-完整备份-${formatDate(new Date())}.json`, TurtleLocalData.stringify({
       backupFormat: "turtlekeeper-account-v1", createdAt: new Date().toISOString(),
       accountName: state.accountName, accountAvatar: state.accountAvatar, data: accountDataSnapshot(state)
     }), "application/json;charset=utf-8");
@@ -9071,7 +9125,10 @@ function bindEvents() {
     deletePublicFeedbackComment(feedbackId, commentId);
   }));
   document.querySelector("#accountForm")?.addEventListener("submit", submitAccount);
-  document.querySelectorAll("[data-account-mode]").forEach(btn => btn.addEventListener("click", () => setState({ accountMode: btn.dataset.accountMode, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" })));
+  document.querySelectorAll("[data-account-mode]").forEach(btn => btn.addEventListener("click", () => {
+    if (state.accountMode === btn.dataset.accountMode) return;
+    setState({ accountMode: btn.dataset.accountMode, pendingAuthCode: "", pendingAuthPhone: "", authCodeExpiresAt: "" });
+  }));
   const passwordInput = document.querySelector("#accountForm [name='password']");
   const confirmPasswordInput = document.querySelector("#accountForm [name='confirmPassword']");
   const accountCodeInput = document.querySelector("#accountForm [name='code']");
@@ -10161,7 +10218,7 @@ function isLocationPermissionDenied(error) {
 }
 
 function locationSettingsHint() {
-  return "已拒绝位置权限，请打开 iPhone「设置 > 隐私与安全性 > 定位服务 > 壳友手账」，选择“使用 App 期间”后再试。";
+  return "已拒绝位置权限，请打开 iPhone「设置 > 隐私与安全性 > 定位服务 > 龟友手账」，选择“使用 App 期间”后再试。";
 }
 
 async function getMarketLocationPosition({ requestPermission = true } = {}) {
@@ -10456,7 +10513,7 @@ function requestMarketSaleDetails(listing) {
             <legend>售出方式</legend>
             <div class="market-sale-methods">
               ${["自有客户成交", "闲鱼成交", "壳友手账成交"].map(method => `
-                <label><input type="radio" name="saleMethod" value="${method}"><span>${method}</span></label>
+                <label><input type="radio" name="saleMethod" value="${method}"><span>${marketSaleMethodLabel(method)}</span></label>
               `).join("")}
             </div>
           </fieldset>
@@ -10549,7 +10606,7 @@ function marketLedgerFallbackPatch(listing, status) {
         carapaceWidth: turtle?.carapaceWidth || "",
         shellHeight: turtle?.shellHeight || "",
         plastronLength: turtle?.plastronLength || "",
-        note: `成交方式：${saleMethod}；由龟集市标记已售自动生成`,
+        note: `成交方式：${marketSaleMethodLabel(saleMethod)}；由龟集市标记已售自动生成`,
         saleMethod,
         photo,
         turtleSnapshot: snapshot,
@@ -10567,14 +10624,14 @@ function marketLedgerFallbackPatch(listing, status) {
         ...record,
         amount: soldPrice,
         saleMethod,
-        note: `成交方式：${saleMethod}；由龟集市标记已售自动生成`
+        note: `成交方式：${marketSaleMethodLabel(saleMethod)}；由龟集市标记已售自动生成`
       };
       ledgerRecords = ledgerRecords.map(item => item.id === record.id ? record : item);
     }
     return {
       ledgerRecords,
       turtles: listing.turtleId && turtle ? turtles.filter(item => item.id !== listing.turtleId) : turtles,
-      activityLogs: logActivity(`龟集市已售自动记账：${record.title}，${saleMethod}，成交价 ${money(record.amount)} 元`, "账本")
+      activityLogs: logActivity(`龟集市已售自动记账：${record.title}，${marketSaleMethodLabel(saleMethod)}，成交价 ${money(record.amount)} 元`, "账本")
     };
   }
 
@@ -10933,7 +10990,7 @@ async function shareMarketListing(listingId) {
   // The server uses this same market link to render Open Graph metadata with
   // the listing title and its first photo, so WeChat shows a real product card
   // instead of a generic app-link placeholder.
-  const title = `壳友手账｜${productTitle}`;
+  const title = `龟友手账｜${productTitle}`;
   const text = `${productTitle} · ${money(listing.price)}`;
   try {
     const nativeShare = window.Capacitor?.Plugins?.Share;
@@ -11089,7 +11146,7 @@ function openMarketPlatformService(listingId) {
   overlay.innerHTML = `
     <section class="market-service-dialog" role="dialog" aria-modal="true" aria-labelledby="marketServiceTitle">
       <div class="market-service-head">
-        <div><small>购买前咨询</small><h2 id="marketServiceTitle">联系平台客服</h2></div>
+        <div><small>购买前咨询</small><h2 id="marketServiceTitle">微信咨询购买</h2></div>
         <button type="button" data-market-service-close aria-label="关闭">×</button>
       </div>
       <p class="market-service-product">${escapeHtml(productName)}</p>
@@ -11472,12 +11529,12 @@ function openGeneralServiceDialog() {
   overlay.innerHTML = `
     <section class="market-service-dialog general-service-dialog" role="dialog" aria-modal="true" aria-labelledby="generalServiceTitle">
       <div class="market-service-head">
-        <div><small>壳友手账客服</small><h2 id="generalServiceTitle">联系人工客服</h2></div>
+        <div><small>龟友手账客服</small><h2 id="generalServiceTitle">联系人工客服</h2></div>
         <button type="button" data-market-service-close aria-label="关闭">×</button>
       </div>
       <p class="general-service-intro">对功能有任何意见或建议，或在买卖龟过程中需要咨询、信息核验与交易保障协助，都可以添加客服微信。</p>
       <div class="market-service-wechat"><span>客服微信号</span><strong>${escapeHtml(PLATFORM_SERVICE_WECHAT)}</strong></div>
-      <p class="market-service-tip">客服可协助沟通和核验信息，具体交易及责任以买卖双方确认内容为准。添加时请备注“壳友手账”。</p>
+      <p class="market-service-tip">客服可协助沟通和核验信息，具体交易及责任以买卖双方确认内容为准。添加时请备注“龟友手账”。</p>
       <div class="general-service-actions"><button type="button" data-market-service-close>暂时不用</button><button type="button" data-copy-market-wechat>复制并打开微信</button></div>
     </section>
   `;
@@ -11523,7 +11580,7 @@ function systemAnnouncementOverlay() {
   return `
     <div class="system-announcement-overlay" role="dialog" aria-modal="true" aria-labelledby="systemAnnouncementTitle">
       <section class="system-announcement-dialog">
-        <p>壳友手账 · 系统公告</p>
+        <p>龟友手账 · 系统公告</p>
         <h1 id="systemAnnouncementTitle">${escapeHtml(item.title || "系统公告")}</h1>
         <div>${escapeHtml(item.content || "").replace(/\n/g, "<br>")}</div>
         <small>${item.createdAt ? formatTime(item.createdAt) : ""}</small>
@@ -13538,8 +13595,13 @@ async function submitAccountInner(event) {
   if (!confirmPassword) return toast("请先填写核对密码");
   if (password !== confirmPassword) return toast("密码不一致");
   if (!CONFIGURED_SMS_BACKEND && (state.registeredUsers || []).some(item => item.phone === phone)) return toast("手机号已注册，请直接登录");
-  if (state.pendingAuthPhone !== phone || !Number(state.authCodeExpiresAt || 0)) return toast("请先获取验证码");
-  if (Date.now() > Number(state.authCodeExpiresAt || 0)) return toast("验证码已过期，请重新获取");
+  if (!/^\d{6}$/.test(code)) return toast("请输入 6 位短信验证码");
+  // Real SMS validity belongs to the server. Local UI state may be lost when
+  // switching login tabs or restarting the app after receiving the message.
+  if (!CONFIGURED_SMS_BACKEND) {
+    if (state.pendingAuthPhone !== phone || !Number(state.authCodeExpiresAt || 0)) return toast("请先获取验证码");
+    if (Date.now() > Number(state.authCodeExpiresAt || 0)) return toast("验证码已过期，请重新获取");
+  }
 
   if (CONFIGURED_SMS_BACKEND) {
     try {
@@ -13685,8 +13747,8 @@ function submitProfile(event) {
   if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const nickname = String(form.get("nickname") || "").trim() || maskPhone(state.loggedInPhone);
-  if (nickname.normalize("NFKC") === RESERVED_PLATFORM_NICKNAME && state.loggedInPhone !== REVIEW_ADMIN_PHONE) {
-    toast(`“${RESERVED_PLATFORM_NICKNAME}”仅供壳友手账官方账号使用`);
+  if (RESERVED_PLATFORM_NICKNAMES.includes(nickname.normalize("NFKC")) && state.loggedInPhone !== REVIEW_ADMIN_PHONE) {
+    toast(`“${RESERVED_PLATFORM_NICKNAME}”仅供龟友手账官方账号使用`);
     return;
   }
   const registeredUsers = (state.registeredUsers || []).map(user => user.phone === state.loggedInPhone ? {
@@ -14911,7 +14973,7 @@ async function renderGrowthCardBlob() {
   context.beginPath(); context.arc(960, 130, 260, 0, Math.PI * 2); context.fill();
   context.fillStyle = "#f7f2e7";
   context.font = "500 34px sans-serif";
-  context.fillText("壳友手账 · 龟档案", 76, 86);
+  context.fillText("龟友手账 · 龟档案", 76, 86);
   context.font = "700 74px sans-serif";
   context.fillText(String(turtle.code || "未命名龟龟").slice(0, 12), 76, 180);
   context.font = "400 36px sans-serif";
@@ -14942,7 +15004,7 @@ async function renderGrowthCardBlob() {
   context.fillText(history.length ? `已完成 ${history.length + 1} 次记录 · 成长报告持续更新` : `入手于 ${turtle.acquiredDate || "今天"} · 下一次记录 ${nextGrowthRecordDate(turtle)}`, 76, 1240);
   context.fillStyle = "#d8e9e4"; context.font = "400 30px sans-serif";
   context.fillText("每一次记录，都在见证生命成长", 76, 1340);
-  context.textAlign = "right"; context.font = "700 32px sans-serif"; context.fillText("壳友手账", 1004, 1340);
+  context.textAlign = "right"; context.font = "700 32px sans-serif"; context.fillText("龟友手账", 1004, 1340);
   return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("图片生成失败")), "image/png", 0.95));
 }
 
@@ -14965,7 +15027,7 @@ async function shareGrowthCard() {
     const turtle = state.turtles.find(item => item.id === state.selectedTurtleId);
     const blob = await renderGrowthCardBlob();
     const file = new File([blob], `${turtle?.code || "龟龟"}-成长卡.png`, { type: "image/png" });
-    const text = `${turtle?.code || "我的龟龟"}的成长记录：${turtle?.weight || "-"}g，背甲 ${turtle?.carapaceLength || "-"}cm。来自壳友手账`;
+    const text = `${turtle?.code || "我的龟龟"}的成长记录：${turtle?.weight || "-"}g，背甲 ${turtle?.carapaceLength || "-"}cm。来自龟友手账`;
     if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
       await navigator.share({ title: `${turtle?.code || "龟龟"}的成长卡`, text, files: [file] });
       return;
@@ -15018,12 +15080,12 @@ function exportAccountData(kind = "account") {
     lines.push(["档案", exportNickname(turtle.code || "未命名"), turtle.acquiredDate, turtle.speciesName, turtle.price, turtle.weight, turtle.carapaceLength, turtle.note].map(csvCell).join(","));
   });
   state.ledgerRecords.forEach(record => {
-    lines.push([ledgerTypeText(record.type), exportNickname(record.title), record.recordDate || record.createdAt, "", record.amount, record.weight, record.carapaceLength, record.note].map(csvCell).join(","));
+    lines.push([ledgerTypeText(record.type), exportNickname(record.title), record.recordDate || record.createdAt, "", record.amount, record.weight, record.carapaceLength, marketLedgerNoteLabel(record)].map(csvCell).join(","));
   });
   state.breedingRecords.forEach(record => {
     lines.push(["繁殖", exportNickname(record.motherName), record.date, "", "", "", "", `产蛋${record.eggCount || 0} 受精${record.fertileCount || 0} 孵化${record.hatchCount || 0} ${record.note || ""}`].map(csvCell).join(","));
   });
-  const fileName = kind === "business" ? `壳友手账-经营报表-${formatDate(new Date())}.csv` : `壳友手账-数据导出-${formatDate(new Date())}.csv`;
+  const fileName = kind === "business" ? `龟友手账-经营报表-${formatDate(new Date())}.csv` : `龟友手账-数据导出-${formatDate(new Date())}.csv`;
   downloadTextFile(fileName, lines.join("\n"), "text/csv;charset=utf-8");
 }
 
@@ -15705,7 +15767,7 @@ function appReviewInviteOverlay() {
       <section class="app-review-invite-dialog">
         <div class="app-review-invite-icon" aria-hidden="true">🐢</div>
         <p>已经建立 ${count} 份龟档案</p>
-        <h2 id="appReviewInviteTitle">喜欢壳友手账吗？</h2>
+        <h2 id="appReviewInviteTitle">喜欢龟友手账吗？</h2>
         <span>如果它帮你更轻松地记录陪伴，愿意在 App Store 给我们一个评分吗？</span>
         <div class="app-review-invite-actions">
           <button type="button" data-app-review-later>以后再说</button>

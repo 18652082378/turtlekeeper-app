@@ -27,6 +27,47 @@
     const c = window.Capacitor;
     return c?.isNativePlatform?.() && c.getPlatform?.() === 'ios' ? (c.Plugins?.TurtlePurchases || c.registerPlugin?.('TurtlePurchases')) : null;
   }
+  function androidPay() {
+    const c = window.Capacitor;
+    return c?.isNativePlatform?.() && c.getPlatform?.() === 'android' ? (c.Plugins?.TurtleAlipay || c.registerPlugin?.('TurtleAlipay')) : null;
+  }
+  const sameBuyer = a => `${a.phone}:${a.token}` === session && `${a.phone}:${a.token}` === `${auth().phone}:${auth().token}`;
+  async function syncAlipay(explicit = true) {
+    if (!androidPay() || !auth().phone || !purchaseInfo?.configured) return;
+    const a = auth();
+    try {
+      const r = await host.api('/api/alipay/team/purchases', { ...a, action: 'sync' });
+      if (!sameBuyer(a)) return;
+      if (explicit) host.toast(r.active ? '会员状态已同步' : '尚未查询到已完成付款，请稍后再试');
+      await refresh();
+    } catch (e) { if (sameBuyer(a) && explicit) host.toast(e.message); }
+  }
+  async function purchaseAlipay(plan) {
+    if (busy) return;
+    if (!auth().phone) return host.login();
+    if (!purchaseInfo?.configured) return host.toast('支付宝会员付款暂未开放');
+    const p = products.find(p => p.id === plan); if (!p) return;
+    if (!window.confirm(`购买${plan === 'yearly' ? '年度' : '月度'}团队会员 ${p.displayPrice}（${p.days}天），到期不自动扣款。将调用支付宝支付SDK处理订单、设备及网络信息，详见本页隐私政策。是否继续付款？`)) return;
+    const a = auth(); busy = true; repaint();
+    try {
+      const order = await host.api('/api/alipay/team/purchases', { ...a, action: 'create', plan });
+      if (!sameBuyer(a)) return;
+      if (!order.orderId || !order.orderString) throw Error('暂时无法创建支付订单');
+      const result = await androidPay().pay({ orderString: order.orderString });
+      if (!sameBuyer(a)) return;
+      let verified;
+      for (let i = 0; i < 4; i++) {
+        verified = await host.api('/api/alipay/team/purchases', { ...a, action: 'query', orderId: order.orderId });
+        if (!sameBuyer(a)) return;
+        if (verified.status !== 'pending' || result.resultStatus === '6001') break;
+        if (i < 3) await new Promise(resolve => setTimeout(resolve, 1500));
+      }
+      if (verified.paid) { membershipPage = false; host.toast('团队会员已开通'); }
+      else host.toast(result.resultStatus === '6001' ? '已取消付款；如已扣款，可同步支付结果' : '付款结果尚在确认，请稍后同步支付结果，不必重复付款');
+      await refresh();
+    } catch (e) { if (sameBuyer(a)) host.toast((e.message || '支付暂未完成') + '；如已扣款，请点击同步支付结果'); }
+    finally { if (sameBuyer(a)) { busy = false; repaint(); } }
+  }
   const can = module => team?.active && ['read', 'edit'].includes(team.permissions[module]);
   const canEdit = module => team?.active && team.permissions[module] === 'edit';
   function auth() { return host.auth(); }
@@ -79,6 +120,7 @@
       const result = await api(action, extra);
       if (!current()) return;
       if (result.team) { team = result.team; selected = team.id; }
+      if (action === 'accept' && result.accepted) { selected = extra.teamId; membershipPage = false; tab = 'overview'; }
       dialog = ''; formDraft = null; saveState = result.message || '保存成功'; host.toast(result.message || '已保存'); await refresh();
     } catch (e) {
       if (!current()) return;
@@ -91,6 +133,15 @@
     productLoaded = true;
     const a = auth();
     try {
+      if (androidPay()) {
+        const info = await host.api('/api/alipay/team/purchases', { ...a, action: 'prepare' });
+        if (!sameBuyer(a)) return;
+        purchaseInfo = info; products = info.products || [];
+        if (!info.configured) purchaseError = '支付宝会员付款暂未开放，请稍后再试。';
+        if (info.configured) await syncAlipay(false);
+        return;
+      }
+      if (!native()) return;
       const info = await host.api('/api/apple/purchases', { ...a, action: 'prepare' });
       if (`${a.phone}:${a.token}` !== session) return;
       purchaseInfo = info;
@@ -103,8 +154,8 @@
         if (!products.length) purchaseError = '暂时未能加载订阅价格，请稍后重试。';
         await restore(false);
       }
-    } catch (e) { purchaseError = e.message; }
-    repaint();
+    } catch (e) { if (sameBuyer(a)) purchaseError = e.message; }
+    finally { if (sameBuyer(a)) repaint(); }
   }
   async function verifyTransaction(transaction, a) {
     const result = await host.api('/api/apple/purchases', { ...a, action: 'verify', transactionId: transaction.transactionId, environment: transaction.environment });
@@ -168,7 +219,7 @@
       approvals: () => panel('重要操作审批', '开启审批后，成员提交的出售、损耗与账目更正由主账号确认。', row('小林提交 · 黄缘售出', date + '-08 14:20 · ¥1,800.00', '待审批') + `<div class="ts-inline">${button('preview.subscribe', '通过', '', 'ts-primary')}${button('preview.subscribe', '退回')}</div>`),
       settings: () => panel('龟场品牌与设置', '设置龟场名称、Logo 和联系方式，生成带品牌的分享卡。', `<div class="ts-brand-preview">${icon('card')}<div><h3>青禾龟场 · 示例</h3><p>记录成长，分享照料成果</p></div></div><p class="ts-note">分享卡展示档案与成长信息，不包含成本、账目或内部备注。</p>`, '编辑品牌与审批设置')
     };
-    return `<div class="ts-workhead"><div><span class="ts-kicker">先了解，再开启协作</span><h1>团队空间 <span class="ts-tag">功能预览</span></h1></div>${button('preview.subscribe', '开通会员', '', 'ts-primary')}</div><div class="ts-preview-notice" role="note">${icon('grid')}<div><strong>${team && !team.active ? '团队会员已到期 · 当前为功能预览' : '功能预览 · 以下均为示例数据'}</strong><p>可自由浏览全部模块，开通后使用真实团队数据。受邀成员无需重复订阅。</p></div></div>${invitations.map(i => `<section class="ts-panel ts-invite"><div><small>你收到的团队邀请</small><h3>${E(i.name)}</h3></div>${button('accept', '加入', `data-id="${E(i.id)}" data-team="${E(i.teamId)}"`, 'ts-primary')}${button('decline', '婉拒', `data-id="${E(i.id)}" data-team="${E(i.teamId)}"`)}</section>`).join('')}<nav class="ts-tabs ts-preview-tabs" aria-label="团队模块">${moduleTabs.map(([key, glyph, label]) => button('preview.tab', icon(glyph) + label, `data-tab="${key}" aria-current="${current[0] === key ? 'page' : 'false'}"`, current[0] === key ? 'selected' : '')).join('')}</nav><div data-preview-module="${current[0]}">${views[current[0]]()}</div><section class="ts-preview-subscription" aria-label="${current[2]}订阅提示"><p class="ts-note">正在预览「${current[2]}」。开通团队会员后，与伙伴一起使用真实数据协作。</p>${purchaseSection()}</section>`;
+    return `<div class="ts-workhead"><div><span class="ts-kicker">先了解，再开启协作</span><h1>团队空间 <span class="ts-tag">功能预览</span></h1></div>${button('preview.subscribe', '开通会员', '', 'ts-primary')}</div><div class="ts-preview-notice" role="note">${icon('grid')}<div><strong>${team && !team.active ? '团队会员已到期 · 当前为功能预览' : '功能预览 · 以下均为示例数据'}</strong><p>可自由浏览全部模块，开通后使用真实团队数据。受邀成员无需重复订阅。</p></div></div><nav class="ts-tabs ts-preview-tabs" aria-label="团队模块">${moduleTabs.map(([key, glyph, label]) => button('preview.tab', icon(glyph) + label, `data-tab="${key}" aria-current="${current[0] === key ? 'page' : 'false'}"`, current[0] === key ? 'selected' : '')).join('')}</nav><div data-preview-module="${current[0]}">${views[current[0]]()}</div><section class="ts-preview-subscription" aria-label="${current[2]}订阅提示"><p class="ts-note">正在预览「${current[2]}」。开通团队会员后，与伙伴一起使用真实数据协作。</p>${purchaseSection()}</section>`;
   }
   function teamSetup() {
     if (hasOwn) return '';
@@ -183,18 +234,27 @@
 
   function purchaseSection() {
     const ios = Boolean(native());
+    const android = Boolean(androidPay());
+    const androidPlans = `<div class="ts-plans">${['monthly', 'yearly'].map(period => {
+      const p = products.find(p => p.id === period);
+      return `<div class="ts-plan ${period === 'yearly' ? 'ts-plan-year' : ''}"><small>单次购买 · 手动续费</small><h3>${period === 'yearly' ? '年度会员' : '月度会员'}</h3><strong>${p ? E(p.displayPrice) : '加载价格中'}<em> / ${p ? E(p.days) + '天' : period === 'yearly' ? '年' : '月'}</em></strong>${button('alipay.purchase', busy ? '处理中…' : '支付宝购买', `data-id="${period}" ${!p || busy || !purchaseInfo?.configured ? 'disabled' : ''}`, 'ts-primary ts-wide')}</div>`;
+    }).join('')}</div><p class="ts-fine">由本公司提供团队会员服务。一次付款开通所选时长，到期不自动扣款；支付宝会员续费从现有支付宝会员到期日顺延。付款后由服务器核实并开通。</p><div class="ts-inline">${button('alipay.sync', '同步支付结果', busy ? 'disabled' : '')}</div>`;
     return `<section class="ts-panel ts-purchase" id="team-subscribe" aria-label="开通团队会员"><div class="ts-purchase-heading"><h2>选择你的团队会员</h2><span class="ts-tag">成员无需另付费</span></div>
-    ${!auth().phone ? button('login', '登录后查看团队与会员', '', 'ts-primary ts-wide') : ios ? `<div class="ts-plans">${['monthly', 'yearly'].map(period => {
+    ${!auth().phone ? button('login', '登录后查看团队与会员', '', 'ts-primary ts-wide') : android ? androidPlans : ios ? `<div class="ts-plans">${['monthly', 'yearly'].map(period => {
       const p = products.find(p => p.id.endsWith(period));
       return `<div class="ts-plan ${period === 'yearly' ? 'ts-plan-year' : ''}"><small>${period === 'yearly' ? '安心经营一整年' : '灵活开启协作'}</small><h3>${period === 'yearly' ? '年度会员' : '月度会员'}</h3><strong>${p ? E(p.displayPrice) : '加载价格中'}<em> / ${period === 'yearly' ? '年' : '月'}</em></strong>${button('purchase', busy ? '处理中…' : '订阅' + (period === 'yearly' ? '年度' : '月度') + '会员', `data-id="keyoushouzhang.team.${period}" ${!p || busy || !purchaseInfo?.configured ? 'disabled' : ''}`, 'ts-primary ts-wide')}</div>`;
     }).join('')}</div><p class="ts-fine">自动续期，费用由 Apple 账户扣取。可在 Apple 订阅设置中取消续订；取消后可使用至当前周期结束。</p><div class="ts-inline">${button('restore', '恢复购买')}${button('manage', '管理订阅')}</div>` : `<p class="ts-muted">网页端支持管理已开通的团队和接受邀请。苹果订阅需在支持购买的 iPhone App 中开通，再用同一账号登录这里。</p>${purchaseInfo?.configured === false ? '<p class="ts-note">订阅购买暂未开放。</p>' : ''}`}
     ${purchaseError ? `<p class="ts-error">${E(purchaseError)}</p>${button('prices', '重新加载')}` : ''}
-    <div class="ts-legal"><a href="./terms.html" target="_blank" rel="noopener">服务条款</a><span>·</span><a href="./privacy.html" target="_blank" rel="noopener">隐私政策</a><span>·</span><a href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/" target="_blank" rel="noopener">Apple 标准使用条款</a></div></section>`;
+    <div class="ts-legal"><a href="./terms.html" target="_blank" rel="noopener">服务条款</a><span>·</span><a href="./privacy.html" target="_blank" rel="noopener">隐私政策</a>${ios ? '<span>·</span><a href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/" target="_blank" rel="noopener">Apple 标准使用条款</a>' : ''}</div></section>`;
+  }
+  function invitationPanel() {
+    if (!invitations.length) return '';
+    return `<section aria-label="待处理团队邀请"><div class="ts-section-title"><h2>团队邀请（${invitations.length}）</h2></div>${invitations.map(i => `<section class="ts-panel ts-invite"><div><small>邀请你加入团队</small><h3>${E(i.name)}</h3><p class="ts-note">加入后可切换团队，自己的团队、会员和数据保持不变。</p></div>${button('accept', '加入', `data-id="${E(i.id)}" data-team="${E(i.teamId)}" ${busy ? 'disabled' : ''}`, 'ts-primary')}${button('decline', '婉拒', `data-id="${E(i.id)}" data-team="${E(i.teamId)}" ${busy ? 'disabled' : ''}`)}</section>`).join('')}</section>`;
   }
   function landing() {
     return `${membershipPage ? button('preview.back', '← 返回团队空间', '', 'ts-wide') : ''}<section class="ts-hero ts-member-hero"><div class="ts-eyebrow"><span class="ts-spark"></span> 龟友手账 · 团队会员</div><h1>一个团队，一起照顾好龟场。</h1><p>共享记录 · 看清经营 · 跟进孵化</p><div class="ts-people"><span>主</span><span>01</span><span>02</span><span>+4</span><small>1 个主账号 · 6 个子账号</small></div><div class="ts-hero-ring"></div></section>
     ${canCreate && !hasOwn ? teamSetup() : purchaseSection()}
-    ${invitations.map(i => `<section class="ts-panel ts-invite"><div><small>团队邀请</small><h3>${E(i.name)}</h3></div>${button('accept', '加入', `data-id="${E(i.id)}" data-team="${E(i.teamId)}"`, 'ts-primary')}${button('decline', '婉拒', `data-id="${E(i.id)}" data-team="${E(i.teamId)}"`)}</section>`).join('')}
+    
     <section class="ts-panel"><div class="ts-section-title"><div><span class="ts-kicker">为共同经营而设计</span><h2>不止是多几个账号</h2></div>${icon('shield')}</div><div class="ts-features">
       ${feature('users', '分工清楚，权限有界', '共享看板和账本，逐人设置查看、编辑权限。')}
       ${feature('chart', '经营数据，一目了然', '月度趋势、品种收支与带龟场名称的报表导出。')}
@@ -384,12 +444,12 @@
   }
   function workspace() {
     const tabs = moduleTabs;
-    const settingsContext = `<div class="ts-workhead ts-workhead-compact"><div><h1>${E(team.name)}</h1></div>${button('refresh', icon('clock') + (loading ? '同步中' : '同步'), loading ? 'disabled' : '')}</div>${teams.length > 1 ? `<select data-team-select aria-label="切换团队">${teams.map(t => `<option value="${E(t.id)}" ${t.id === selected ? 'selected' : ''}>${E(t.name)}</option>`).join('')}</select>` : ''}
-    ${teamInfo()}`;
+    const farmHeading = `<div class="ts-workhead ts-workhead-compact"><div class="ts-farm-name${teams.length > 1 ? ' ts-farm-switch' : ''}"><h1 title="${E(team.name)}">${E(team.name)}</h1>${teams.length > 1 ? `<span class="ts-farm-chevron" aria-hidden="true">⌄</span><select data-team-select aria-label="切换龟场，当前：${E(team.name)}" ${loading || busy ? 'disabled' : ''}>${teams.map(t => `<option value="${E(t.id)}" ${t.id === team.id ? 'selected' : ''}>${E(t.name)}${t.own ? '（我的龟场）' : ''}</option>`).join('')}</select>` : ''}</div>${button('refresh', icon('clock') + (loading ? '同步中' : '同步'), loading || busy ? 'disabled' : '')}</div>`;
     return `
+    ${farmHeading}
     ${team.own && team.active && tab === 'overview' ? button('tab', icon('users') + '添加子账号 / 管理成员', 'data-tab="members"', 'ts-primary ts-wide') : ''}
     <nav class="ts-tabs" data-team-workspace aria-label="团队模块">${tabs.map(([key, glyph, label]) => button('tab', icon(glyph) + label + tabBadge(key), `data-tab="${key}" aria-current="${tab === key ? 'page' : 'false'}"`, tab === key ? 'selected' : '')).join('')}</nav>
-    ${tab === 'settings' ? settingsContext : syncFeedback(false)}
+    ${tab === 'settings' ? teamInfo() : syncFeedback(false)}
     ${!team.active ? `<section class="ts-panel">${empty('团队会员已到期', '成员协作已暂停，主账号个人数据仍然保留。')}${team.own ? button('membership', '查看会员方案', '', 'ts-primary ts-wide') : ''}</section>` : ({ overview, ledger, reports, hatching, care, tasks, members, logs, approvals, settings })[tab]()}`;
   }
   function field(label, name, value = '', type = 'text', extra = '') { return `<label class="ts-field"><span>${label}</span><input name="${name}" type="${type}" value="${E(value)}" ${extra}></label>`; }
@@ -540,6 +600,8 @@
       if (action === 'membership') { membershipPage = true; repaint(); window.scrollTo(0, 0); return; }
       if (action === 'prices') { productLoaded = false; purchaseError = ''; return preparePurchase(); }
       if (action === 'purchase') return purchase(b.dataset.id);
+      if (action === 'alipay.purchase') return purchaseAlipay(b.dataset.id);
+      if (action === 'alipay.sync') return syncAlipay();
       if (action === 'restore') return restore();
       if (action === 'manage') { try { await native()?.manage(); } catch (e) { host.toast(e.message); } return; }
       if (action === 'create') { await mutate('create'); if (team?.own) { membershipPage = false; tab = 'members'; repaint(); } return; }
@@ -626,8 +688,13 @@
       }
       if (!loaded && !loading && a.phone) { loading = true; queueMicrotask(() => { loading = false; refresh(); }); }
       if (!productLoaded && a.phone) queueMicrotask(preparePurchase);
-      return `${host.topbar('团队空间', true)}<main class="team-space"><div class="ts-container">${error ? `<div class="ts-error" role="alert">${E(error)} ${button('refresh', '重试')}</div>` : ''}${loading && !loaded ? '<div class="ts-loading" role="status"><span></span>正在连接团队空间…</div>' : ''}${membershipPage ? landing() : isPreview() ? previewWorkspace() : team ? workspace() : landing()}</div>${modal()}</main>`;
+      return `${host.topbar('团队空间', true)}<main class="team-space"><div class="ts-container">${error ? `<div class="ts-error" role="alert">${E(error)} ${button('refresh', '重试')}</div>` : ''}${loading && !loaded ? '<div class="ts-loading" role="status"><span></span>正在连接团队空间…</div>' : ''}${invitationPanel()}${membershipPage ? landing() : isPreview() ? previewWorkspace() : team ? workspace() : landing()}</div>${modal()}</main>`;
     }, bind
   };
-  setInterval(() => { if (host?.page() === 'team' && team && !dialog && !busy && !loading && !document.hidden) void refresh(); }, 45000);
+  function refreshVisibleTeam() {
+    if (host?.page() === 'team' && auth().phone && !dialog && !busy && !loading && !document.hidden) void refresh();
+  }
+  setInterval(refreshVisibleTeam, 45000);
+  window.addEventListener('focus', refreshVisibleTeam);
+  document.addEventListener('visibilitychange', refreshVisibleTeam);
 })();

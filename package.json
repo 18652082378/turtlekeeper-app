@@ -1,6 +1,6 @@
 {
   "name": "turtlekeeper-ios-app",
-  "version": "1.0.9",
+  "version": "1.1.0",
   "private": true,
   "description": "ShellNote iOS cloud build package",
   "scripts": {
@@ -35,7 +35,9 @@
     "@capacitor/network": "^8.0.1",
     "@capacitor/push-notifications": "^8.0.1",
     "ali-oss": "^6.23.0",
-    "mysql2": "^3.14.3"
+    "alipay-sdk": "4.14.0",
+    "mysql2": "^3.14.3",
+    "undici": "7.29.1"
   },
   "devDependencies": {
     "@capacitor/cli": "8.4.0"

@@ -23,7 +23,7 @@
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-modal', 'true');
     panel.setAttribute('aria-label', '交易指南');
-    panel.innerHTML = `<header><button data-close aria-label="关闭交易指南">‹ 返回</button><strong>交易指南</strong><span></span></header><main><div class="trade-guide-hero"><small>壳友手账 · 交易帮助</small><h1>约定清楚，交易更安心</h1><p>了解买卖流程，留好每一份凭证。</p></div><nav aria-label="指南分类"><button data-tab="buyer">我想买龟</button><button data-tab="seller">我想卖龟</button><button data-tab="terms">完整条款</button></nav><div data-content></div></main><footer><div><small>中介微信</small><strong>keyousz001</strong></div><button data-copy>复制微信号</button></footer>`;
+    panel.innerHTML = `<header><button data-close aria-label="关闭交易指南">‹ 返回</button><strong>交易指南</strong><span></span></header><main><div class="trade-guide-hero"><small>龟友手账 · 交易帮助</small><h1>约定清楚，交易更安心</h1><p>了解买卖流程，留好每一份凭证。</p></div><nav aria-label="指南分类"><button data-tab="buyer">我想买龟</button><button data-tab="seller">我想卖龟</button><button data-tab="terms">完整条款</button></nav><div data-content></div></main><footer><div><small>中介微信</small><strong>keyousz001</strong></div><button data-copy>复制微信号</button></footer>`;
     const close = () => {
       document.removeEventListener('keydown', keydown);
       panel.remove();
@@ -55,7 +55,7 @@
       } else {
         const buyer = tab === 'buyer';
         const steps = buyer ? ['确认品种、品相与健康情况', '约定总价、运输风险及售后', '如需中介，联系微信并建群确认', '付款留凭证，发货同步物流', '连续录像开箱，及时反馈验收'] : ['准备近期实拍图片与细节视频', '填写数量、性别、尺寸和体重', '如实说明品相与已知健康问题', '确认费用、运输风险和验收售后', '发货前留存打包与寄件凭证'];
-        content.innerHTML = `<section class="trade-fee"><strong>中介费 0.88% · 最低8.80元</strong><p>交易总价不足1000元收取8.80元，1000元及以上按0.88%收取。仅适用于中介服务；费用承担方请在付款前约定。</p></section><ol>${steps.map(step => `<li>${step}</li>`).join('')}</ol><p class="trade-caption">下方海报为流程摘要，收费及具体规则请查看完整条款。</p><img class="trade-poster" src="assets/trade-guide/${buyer ? 'buyer' : 'seller'}.png" alt="${buyer ? '交易流程须知' : '卖方信息确认清单'}" loading="lazy" decoding="async"><button class="trade-read-terms" data-read-terms>阅读完整交易条款 →</button>`;
+        content.innerHTML = `<section class="trade-fee"><strong>中介费 0.68% · 最低6.80元</strong><p>按交易总价的0.68%收取，每笔最低6.80元；计算不足6.80元的，按6.80元收取。仅适用于中介服务；费用承担方请在付款前约定。</p></section><ol>${steps.map(step => `<li>${step}</li>`).join('')}</ol><p class="trade-caption">下方海报为流程摘要，收费及具体规则请查看完整条款。</p><img class="trade-poster" src="assets/trade-guide/${buyer ? 'buyer' : 'seller'}.png?v=fee068-min680-20260922" alt="${buyer ? '交易流程须知' : '卖方信息确认清单'}" loading="lazy" decoding="async"><button class="trade-read-terms" data-read-terms>阅读完整交易条款 →</button>`;
         content.querySelector('[data-read-terms]').onclick = () => select('terms');
         content.querySelector('img').onclick = () => {
           const zoom = document.createElement('div');
@@ -81,7 +81,7 @@
     if (startupCancelled || document.hidden || closeGuide || location.search || location.hash || document.querySelector('.trade-intro')) return;
     const intro = document.createElement('div');
     intro.className = 'trade-intro';
-    intro.innerHTML = `<div class="trade-intro-brand">壳友手账<small>记录相遇 · 陪伴成长</small></div><button class="trade-intro-skip">跳过</button><button class="trade-intro-content" aria-label="查看交易指南"><img class="trade-intro-art" src="assets/trade-guide/intro-turtle.png" alt="抱着信封的小乌龟" fetchpriority="high"><span class="trade-intro-label">给每一次相遇，多一份安心</span><h1>遇见喜欢的龟<br>也懂怎么交易</h1><p>约定清楚，留好凭证</p><strong>查看交易指南 <i aria-hidden="true">→</i></strong></button><div class="trade-intro-footnote">从壳友相遇，到安心相伴</div>`;
+    intro.innerHTML = `<div class="trade-intro-brand">龟友手账<small>记录相遇 · 陪伴成长</small></div><button class="trade-intro-skip">跳过</button><button class="trade-intro-content" aria-label="查看交易指南"><img class="trade-intro-art" src="assets/trade-guide/intro-turtle.png" alt="抱着信封的小乌龟" fetchpriority="high"><span class="trade-intro-label">给每一次相遇，多一份安心</span><h1>遇见喜欢的龟<br>也懂怎么交易</h1><p>约定清楚，留好凭证</p><strong>查看交易指南 <i aria-hidden="true">→</i></strong></button><div class="trade-intro-footnote">从壳友相遇，到安心相伴</div>`;
     intro.querySelector('.trade-intro-skip').onclick = window.dismissTradeIntro;
     intro.querySelector('.trade-intro-content').onclick = () => window.openTradeGuide();
     document.body.append(intro);

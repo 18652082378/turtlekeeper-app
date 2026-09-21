@@ -12,7 +12,7 @@
 		<string>en</string>
 	</array>
 	<key>CFBundleDisplayName</key>
-        <string>壳友手账</string>
+        <string>龟友手账</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -40,7 +40,7 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>用于获取您所在的城市；龟集市发布商品必须使用当前位置自动获取城市，不能手动填写。</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>用于在您使用壳友手账时获取所在城市；龟集市发布商品必须使用当前位置自动获取城市，不能手动填写；不会用于持续追踪您的位置。</string>
+	<string>用于在您使用龟友手账时获取所在城市；龟集市发布商品必须使用当前位置自动获取城市，不能手动填写；不会用于持续追踪您的位置。</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
