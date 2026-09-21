@@ -1,0 +1,9 @@
+[
+  "config.js",
+  "ios/App/App.xcodeproj/project.pbxproj",
+  "ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png",
+  "scripts/verify-ios-build.js",
+  "scripts/ios-116-release-files.json",
+  "docs/ios-116-release.md",
+  "docs/ios-115-release.md"
+]

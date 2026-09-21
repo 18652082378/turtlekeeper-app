@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 
 const root = path.resolve(__dirname, "..");
 const read = file => fs.readFileSync(path.join(root, file), "utf8");
@@ -8,6 +9,21 @@ const version = JSON.parse(read("package.json")).version;
 const project = read("ios/App/App.xcodeproj/project.pbxproj");
 const versions = [...project.matchAll(/MARKETING_VERSION\s*=\s*([^;]+);/g)].map(match => match[1].trim());
 const builds = [...project.matchAll(/CURRENT_PROJECT_VERSION\s*=\s*(\d+);/g)].map(match => Number(match[1]));
+// The approved artwork reads 龟中介; the installed app name remains 龟友手账.
+// Check the actual Xcode catalog, rather than a separate Android/logo source.
+const iconDir = 'ios/App/App/Assets.xcassets/AppIcon.appiconset';
+const iconCatalog = JSON.parse(read(`${iconDir}/Contents.json`));
+assert.equal(iconCatalog.images.length, 1, 'Review every iOS icon variant before release');
+const iconFile = iconCatalog.images[0].filename;
+assert.equal(iconFile, 'AppIcon-512@2x.png', 'Unexpected iOS icon catalog file');
+const iconBytes = fs.readFileSync(path.join(root, iconDir, iconFile));
+assert.equal(crypto.createHash('sha256').update(iconBytes).digest('hex'),
+  '1ae4a693bc40e73853b1f6c82b214288bf14b3d8b7582fd0de3dadf091c6631d',
+  'iOS icon differs from the visually approved 龟中介 artwork');
+assert.equal(iconBytes.readUInt32BE(16), 1024, 'iOS icon must be 1024px wide');
+assert.equal(iconBytes.readUInt32BE(20), 1024, 'iOS icon must be 1024px high');
+assert.equal(iconBytes[25], 2, 'iOS icon must be RGB without alpha');
+assert.match(read('ios/App/App/Info.plist'), /<key>CFBundleDisplayName<\/key>\s*<string>龟友手账<\/string>/, 'Keep the installed app name 龟友手账');
 assert.ok(versions.length && versions.every(value => value === version), "Debug/Release marketing versions must match package.json");
 assert.ok(builds.length && builds.every(value => value === builds[0]), "Debug/Release build numbers must match");
 for (const file of ["config.js", "www/config.js"]) {
