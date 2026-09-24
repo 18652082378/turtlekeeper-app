@@ -1,0 +1,42 @@
+{
+  "patches": [
+    {
+      "name": "normalizedPushDevices",
+      "before": "d9792a52c8c6b732ff12bb8c84369bbf36744bf40f9c3dc99746c944913fd88e",
+      "after": "function normalizedPushDevices(devices) {\n  const seen = new Set();\n  return (Array.isArray(devices) ? devices : [])\n    .map(item => ({\n      token: normalizeApnsDeviceToken(item?.token || item),\n      platform: item?.platform === \"ios\" ? \"ios\" : \"ios\",\n      updatedAt: String(item?.updatedAt || \"\"),\n      ...(item?.sessionHash ? { sessionHash: String(item.sessionHash) } : {})\n    }))\n    .filter(item => item.token && !seen.has(item.token) && Boolean(seen.add(item.token)))\n    .slice(0, 8);\n}"
+    },
+    {
+      "name": "addAccountSession",
+      "before": "10e78232424e6b51f445b187019a49e173e55bac7d99285f5a08415d3d0e2ba8",
+      "after": "function addAccountSession(user, token, body, now) {\n  const deviceId = String(body.deviceId || \"\");\n  const platform = String(body.devicePlatform || \"\");\n  const identified = /^[A-Za-z0-9_-]{16,128}$/.test(deviceId) && [\"ios\", \"android\", \"web\"].includes(platform);\n  const deviceHash = identified ? hashValue(`session-device:${user.phone}:${deviceId}`) : \"\";\n  const current = (Array.isArray(user.tokens) ? user.tokens : []).filter(item => item?.hash);\n  const limit = isAdminUser(user) ? 3 : 1;\n  // Renewing one installation replaces its credential, not another device's\n  // slot. Legacy clients without an ID each occupy one slot. New logins evict\n  // the oldest login once the account's device limit is reached.\n  const retained = limit > 1 ? current.filter(item => !deviceHash || item.deviceHash !== deviceHash).slice(-(limit - 1)) : [];\n  const retainedHashes = new Set(retained.map(item => item.hash));\n  user.replacedSessions = [...(Array.isArray(user.replacedSessions) ? user.replacedSessions : []),\n    ...current.filter(item => !retainedHashes.has(item.hash)).map(item => ({ hash: item.hash, replacedAt: now }))].slice(-32);\n  user.tokens = [...retained, { hash: hashValue(token), createdAt: now, ...(identified ? { deviceHash, platform } : {}) }];\n  // The newly signed-in installation registers its notification token again.\n  // Keep notifications for retained devices, but stop them for evicted ones.\n  // An unbound legacy push token can only be attributed when there was one login.\n  user.pushDevices = normalizedPushDevices(user.pushDevices)\n    .map(item => ({ ...item, sessionHash: item.sessionHash || (current.length === 1 ? current[0].hash : \"\") }))\n    .filter(item => retainedHashes.has(item.sessionHash));\n}"
+    },
+    {
+      "name": "handleLogout",
+      "before": "3acb321c263e352a1e5e293924223796871fa996e555eea0eacc13ed4ca082a0",
+      "after": "async function handleLogout(req, res) {\n  const body = await readJson(req);\n  const phone = String(body.phone || \"\").trim();\n  const token = String(body.token || \"\");\n  const db = readDatabase();\n  const user = authenticate(db, phone, token);\n  // Idempotent: an already expired credential cannot revoke another session.\n  if (user) {\n    user.tokens = user.tokens.filter(item => item.hash !== hashValue(token));\n    const activeHashes = new Set(user.tokens.map(item => item.hash));\n    user.pushDevices = normalizedPushDevices(user.pushDevices).filter(item => activeHashes.has(item.sessionHash));\n    writeDatabase(db);\n  }\n  return sendJson(res, 200, { ok: true });\n}"
+    },
+    {
+      "name": "handlePushDeviceRegister",
+      "before": "20105b5c9122a2ceda8ca0a1535b2be88d3772ac050c5fa9e3756017198e9a79",
+      "after": "async function handlePushDeviceRegister(req, res) {\n  const body = await readJson(req);\n  const db = readDatabase();\n  const user = requireReviewUser(db, body, res);\n  if (!user) return;\n  const deviceToken = normalizeApnsDeviceToken(body.deviceToken);\n  if (!deviceToken) return sendJson(res, 400, { ok: false, message: \"通知设备信息无效\" });\n  const now = new Date().toISOString();\n  // A physical iPhone may be used by a different account after logout. Keep the\n  // token with exactly one user so messages are never delivered to the old one.\n  Object.values(db.users || {}).forEach(account => {\n    const devices = normalizedPushDevices(account.pushDevices);\n    account.pushDevices = devices.filter(item => item.token !== deviceToken);\n  });\n  user.pushDevices = [\n    ...normalizedPushDevices(user.pushDevices),\n    { token: deviceToken, platform: \"ios\", updatedAt: now, sessionHash: hashValue(String(body.token || \"\")) }\n  ].filter((item, index, list) => list.findIndex(other => other.token === item.token) === index).slice(-8);\n  user.updatedAt = now;\n  writeDatabase(db);\n  // Correct an icon badge left by a previous session as soon as this iPhone\n  // registers again, even before the user opens a conversation.\n  void syncCommunityUnreadBadge(db, user);\n  return sendJson(res, 200, { ok: true, registered: true });\n}"
+    }
+  ],
+  "guards": [
+    {
+      "name": "authenticate",
+      "hash": "faf78e5e96845e72c0ae07c2a4fcfd8960de3ddf87d9165f8054e55889793620"
+    },
+    {
+      "name": "isAdminUser",
+      "hash": "56099c362870e856076a1d708522e4c78ada768feb19bdfb960734574ea85d41"
+    },
+    {
+      "name": "normalizeApnsDeviceToken",
+      "hash": "5ca9a497de15ecaae2b8c7263cc700b648c8254e0cdabbdd9564b00540f0d220"
+    },
+    {
+      "name": "hashValue",
+      "hash": "aac903d12315f6718ce3120dd38ea9271ee6fed02b1294b04009850f4a43992b"
+    }
+  ]
+}
