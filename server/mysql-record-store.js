@@ -59,9 +59,23 @@ function scopes(database) {
   }
   return result;
 }
-function pack(scope, value) {
+const ANALYTICS_SCOPE = '["appAnalytics"]';
+const ANALYTICS_FORMAT = 'sessions-v1';
+const sessionRowId = (path, key) => hash(JSON.stringify(['object', path, key]));
+function pack(scope, value, splitAnalytics = true) {
   const rows = new Map(), layout = [];
+  const analytics = splitAnalytics && scope === ANALYTICS_SCOPE;
   const walk = (value, path) => {
+    if (analytics && path.length === 3 && path[0] === 'days' && path[2] === 'sessions' && value && typeof value === 'object' && !Array.isArray(value)) {
+      const keys = Object.keys(value);
+      const ids = keys.map(key => {
+        const id = sessionRowId(path, key);
+        rows.set(id, JSON.stringify({ value: value[key] }));
+        return id;
+      });
+      layout.push({ path, ids, keys });
+      return {};
+    }
     if (Array.isArray(value)) {
       const occurrences = new Map();
       const ids = value.map((record, index) => {
@@ -79,21 +93,27 @@ function pack(scope, value) {
     return value;
   };
   const shell = walk(value, []);
-  rows.set('0'.repeat(64), JSON.stringify({ scope: JSON.parse(scope), shell, layout }));
+  // Older readers reject this scope/hash mismatch instead of treating session
+  // maps as arrays and silently losing analytics. No business API shape changes.
+  rows.set('0'.repeat(64), JSON.stringify({ scope: analytics ? ['appAnalytics', ANALYTICS_FORMAT] : JSON.parse(scope), shell, layout }));
   return rows;
 }
 function unpack(rows) {
   const metadata = rows.get('0'.repeat(64));
   if (!metadata) throw new Error('分记录存储缺少目录，拒绝以空数据启动');
-  const { scope, shell, layout } = JSON.parse(metadata);
+  let { scope, shell, layout } = JSON.parse(metadata);
+  const analytics = scope?.length === 2 && scope[0] === 'appAnalytics' && scope[1] === ANALYTICS_FORMAT;
+  if (analytics) scope = ['appAnalytics'];
   if (!Array.isArray(scope) || !Array.isArray(layout)) throw new Error('存储目录无效');
   let value = shell;
   const used = new Set(['0'.repeat(64)]);
-  for (const { path, ids } of layout) {
-    const list = ids.map(id => {
+  for (const { path, ids, keys } of layout) {
+    if (keys !== undefined && (!analytics || !Array.isArray(keys) || keys.length !== ids.length || new Set(keys).size !== keys.length || keys.some(key => typeof key !== 'string'))) throw new Error('统计会话目录无效');
+    const entries = ids.map(id => {
       if (!rows.has(id) || used.has(id)) throw new Error('分记录存储缺失或重复，已停止读取');
       used.add(id); return JSON.parse(rows.get(id)).value;
     });
+    const list = keys === undefined ? entries : Object.fromEntries(keys.map((key, index) => [key, entries[index]]));
     if (!path.length) value = list;
     else {
       let parent = value;
@@ -119,7 +139,8 @@ async function load(connection) {
   for (const item of decoded) {
     const key = JSON.stringify(item.scope);
     if (hash(key) !== item.key || packed.has(key)) throw new Error('存储分区校验失败');
-    packed.set(key, pack(key, item.value));
+    const storedScope = JSON.parse(item.rows.get('0'.repeat(64))).scope;
+    packed.set(key, pack(key, item.value, key !== ANALYTICS_SCOPE || storedScope.length === 2));
     if (item.scope.length === 1) assign(database, item.scope[0], item.value);
     else if (item.scope.length === 2 && item.scope[0] === 'users' && database.users) assign(database.users, item.scope[1], item.value);
     else throw new Error('存储分区路径无效');
@@ -135,8 +156,8 @@ function track(database, mark) {
     if (proxies.has(object)) return proxies.get(object);
     const changed = key => {
       const parts = [...path, String(key)];
-      if (parts[0] === 'users' && parts.length >= 2) mark(JSON.stringify(parts.slice(0, 2)));
-      else mark(JSON.stringify(parts.slice(0, 1)));
+      if (parts[0] === 'users' && parts.length >= 2) mark(JSON.stringify(parts.slice(0, 2)), parts);
+      else mark(JSON.stringify(parts.slice(0, 1)), parts);
     };
     const proxy = new Proxy(object, {
       get(target, key, receiver) { return typeof key === 'symbol' ? Reflect.get(target, key, receiver) : wrap(Reflect.get(target, key, receiver), [...path, String(key)]); },
@@ -152,7 +173,13 @@ class MysqlRecordStore {
   constructor(connection, database, packed, revision) {
     this.connection = connection; this.packed = packed; this.revision = Number(revision); this.dirty = new Set();
     this.failure = null; this.queue = Promise.resolve(); this.lastWrite = { scopes: 0, upserts: 0, deletes: 0, bytes: 0 };
-    this.data = track(database, key => this.dirty.add(key));
+    this.analyticsSessions = new Map();
+    this.data = track(database, (key, parts) => {
+      if (key === ANALYTICS_SCOPE && parts.length >= 5 && parts[1] === 'days' && parts[3] === 'sessions') {
+        const path = parts.slice(1, 4), session = parts[4];
+        this.analyticsSessions.set(sessionRowId(path, session), [...path, session]);
+      } else this.dirty.add(key);
+    });
   }
   static async open(connection) {
     await acquireWriter(connection);
@@ -160,7 +187,14 @@ class MysqlRecordStore {
       const metadata = await mode(connection);
       if (metadata?.active_mode !== 'records') throw new Error('分记录存储尚未迁移，请先执行 migrate-mysql-records.js 的校验和切换');
       const { database, packed } = await load(connection);
-      return new MysqlRecordStore(connection, database, packed, metadata.revision);
+      const store = new MysqlRecordStore(connection, database, packed, metadata.revision);
+      const analytics = packed.get(ANALYTICS_SCOPE);
+      if (analytics && JSON.parse(analytics.get('0'.repeat(64))).scope.length === 1) {
+        if (canonical(unpack(pack(ANALYTICS_SCOPE, database.appAnalytics)).value) !== canonical(database.appAnalytics)) throw new Error('统计拆分前后数据不一致，未转换');
+        store.dirty.add(ANALYTICS_SCOPE);
+        await store.write(); // atomic, one-time upgrade before serving requests
+      }
+      return store;
     } catch (error) { await releaseWriter(connection).catch(() => {}); throw error; }
   }
   assertHealthy() { if (this.failure) throw new Error('数据库保存失败，已暂停读写保护数据；请检查数据库后重启服务', { cause: this.failure }); }
@@ -173,13 +207,29 @@ class MysqlRecordStore {
       for (const [field, value] of Object.entries(database)) if (this.data[field] !== value) this.data[field] = value;
     }
     let keys = [...this.dirty]; this.dirty.clear();
+    let analyticsNext;
+    if (this.analyticsSessions.size && !keys.includes(ANALYTICS_SCOPE)) {
+      keys.push(ANALYTICS_SCOPE);
+      const before = this.packed.get(ANALYTICS_SCOPE);
+      analyticsNext = new Map(before);
+      for (const [id, path] of this.analyticsSessions) {
+        let parent = this.data.appAnalytics;
+        for (const part of path.slice(0, -1)) parent = parent?.[part];
+        const key = path[path.length - 1];
+        // New/deleted sessions need a directory change. Existing heartbeats
+        // serialize only their own session, without walking historical sessions.
+        if (!before?.has(id) || !parent || !Object.hasOwn(parent, key)) { analyticsNext = undefined; break; }
+        analyticsNext.set(id, JSON.stringify({ value: parent[key] }));
+      }
+    }
+    this.analyticsSessions.clear();
     if (keys.includes('["users"]')) keys = [...new Set([...keys, ...[...this.packed.keys()].filter(k => JSON.parse(k)[0] === 'users'), ...Object.keys(this.data.users || {}).map(phone => JSON.stringify(['users', phone]))])];
     const changes = [], pending = [];
     for (const scope of keys) {
       const path = JSON.parse(scope);
       const exists = path.length === 1 ? Object.hasOwn(this.data, path[0]) : Object.hasOwn(this.data[path[0]] || {}, path[1]);
       const value = path.length === 1 ? path[0] === 'users' ? {} : this.data[path[0]] : this.data[path[0]]?.[path[1]];
-      const next = exists ? pack(scope, value) : new Map(), before = this.packed.get(scope) || new Map();
+      const next = exists ? scope === ANALYTICS_SCOPE && analyticsNext ? analyticsNext : pack(scope, value) : new Map(), before = this.packed.get(scope) || new Map();
       for (const [id, payload] of next) if (before.get(id) !== payload) changes.push({ scope: hash(scope), id, payload });
       for (const id of before.keys()) if (!next.has(id)) changes.push({ scope: hash(scope), id, payload: null });
       pending.push([scope, next]);

@@ -27,7 +27,7 @@ async function main() {
     for (const mode of ['button', 'gesture', 'html']) for (const item of cases) {
       await page.evaluate(item => {
         state = { ...state, ...emptyAccountData(), loggedInPhone: 'preview', accountName: '测试', cloudToken: '', policyConsentRequired: false,
-          page: item.parent, keptSpecies: ['GHG'], turtleFilter: 'all', turtlePoolFilter: 'all', [item.key]: [item.record] };
+          page: item.parent, careTab: 'reminders', keptSpecies: ['GHG'], turtleFilter: 'all', turtlePoolFilter: 'all', [item.key]: [item.record] };
         edgeBackSnapshots = []; restoredSnapshotRenderHoldUntil = 0; render();
       }, item);
       assert.ok((await page.locator('#app').innerText()).includes(item.before), item.parent + ' displays source data');

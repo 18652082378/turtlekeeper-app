@@ -44,6 +44,7 @@ async function verify(connection, fullFixture) {
   const restarted = await storage.MysqlRecordStore.open(connection);
   assert.equal(storage.canonical(restarted.data), storage.canonical(expected), 'restart preserves additions, deletions and undo without old-table resurrection');
   await restarted.close();
+  await require('./verify-analytics-storage').verifyAnalytics(connection);
   return afterLoss;
 }
 (async () => {

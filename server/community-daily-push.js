@@ -64,7 +64,7 @@ function createDailyCommunityDispatcher({ read, write, send, devices, canReceive
           delivery.attempted[key] = now().toISOString();
           await write(db);
           // Fixed copy prevents an account nickname or title from injecting an ad.
-          const payload = { aps: { alert: { title: '壳友圈有新分享', body: '有壳友分享了新的养龟记录，点击看看吧。' }, sound: 'default' }, route: 'communityDaily', postId: post.id };
+          const payload = { aps: { alert: { title: '龟友圈有新分享', body: '有壳友分享了新的养龟记录，点击看看吧。' }, sound: 'default' }, route: 'communityDaily', postId: post.id };
           await send(device.token, payload);
           // Re-read after each await: do not overwrite newer user/account changes.
           db = read(); delivery = db.communityDailyDeliveries[day];

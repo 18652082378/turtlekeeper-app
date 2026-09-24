@@ -90,6 +90,11 @@ const initialState = {
   turtlePoolFilter: "all",
   turtleSort: "default",
   memoTab: "all",
+  careTab: "care",
+  careDraft: null,
+  carePickerOpen: false,
+  careRecords: [],
+  careCustomItems: [],
   memoDraftOpen: false,
   memoEditingId: "",
   ledgerTab: "all",
@@ -117,6 +122,7 @@ const initialState = {
   selectedFeedbackId: "",
   selectedSpeciesCode: "",
   speciesPickerForAdd: false,
+  speciesPickerForLedger: false,
   openTurtleMenuId: "",
   openLedgerMenuId: "",
   openBreedingMenuId: "",
@@ -263,6 +269,8 @@ const TURTLE_FORM_DRAFT_FIELDS = [
 ];
 
 const LEDGER_FORM_DRAFT_FIELDS = [
+  "count",
+  "gender",
   "turtleId",
   "poolId",
   "purchaseSpeciesCode",
@@ -285,6 +293,8 @@ const LEDGER_FORM_DRAFT_FIELDS = [
 
 function emptyAccountData() {
   return {
+    careRecords: [],
+    careCustomItems: [],
     turtles: [],
     keptSpecies: [],
     customSpecies: [],
@@ -324,6 +334,8 @@ function normalizeAccountData(data = {}) {
     turtles: TurtleBatches.normalizeHatchBatches(Array.isArray(next.turtles) ? next.turtles : []),
     keptSpecies: Array.isArray(next.keptSpecies) ? next.keptSpecies : [],
     customSpecies: normalizeCustomSpecies(next.customSpecies),
+    careRecords: TurtleCare.normalizeRecords(next.careRecords),
+    careCustomItems: TurtleCare.normalizeItems(next.careCustomItems),
     memos: Array.isArray(next.memos) ? next.memos : [],
     ledgerRecords: Array.isArray(next.ledgerRecords) ? next.ledgerRecords : [],
     breedingRecords: Array.isArray(next.breedingRecords) ? next.breedingRecords : [],
@@ -354,6 +366,8 @@ function accountDataSnapshot(source = state) {
     turtles: source.turtles,
     keptSpecies: source.keptSpecies,
     customSpecies: source.customSpecies,
+    careRecords: source.careRecords,
+    careCustomItems: source.careCustomItems,
     memos: source.memos,
     ledgerRecords: source.ledgerRecords,
     breedingRecords: source.breedingRecords,
@@ -798,6 +812,8 @@ function accountHasContent(source = state) {
     (source.turtles || []).length ||
     (source.keptSpecies || []).length ||
     (source.customSpecies || []).length ||
+    (source.careRecords || []).length ||
+    (source.careCustomItems || []).length ||
     (source.memos || []).length ||
     (source.ledgerRecords || []).length ||
     (source.breedingRecords || []).length ||
@@ -943,6 +959,7 @@ function restoreVisibleFormInputs(forms) {
 function setState(patch, options = {}) {
   const visibleDataChanged = navigationDataKeys(state.page).some(key => Object.hasOwn(patch, key) && patch[key] !== state[key]);
   if (Object.hasOwn(patch, "loggedInPhone") && patch.loggedInPhone !== state.loggedInPhone) {
+    patch = { ...patch, careDraft: null, carePickerOpen: false, careTab: "care" };
     patch = { ...patch, ...accountModuleCache(patch.loggedInPhone), ...messageCacheForAccount(patch.loggedInPhone) };
     communityLastLoadedAt = 0;
     messageUnreadLastLoadedAt = 0;
@@ -956,6 +973,9 @@ function setState(patch, options = {}) {
   if ((patch.page && patch.page !== "home") || (patch.loggedInPhone !== undefined && patch.loggedInPhone !== state.loggedInPhone)) ledgerDashboardPicker = null;
   const pageChanged = Object.prototype.hasOwnProperty.call(patch, "page") && patch.page && patch.page !== state.page;
   if (pageChanged) {
+    // Snapshots must never serialize coordinates owned by an interrupted swipe.
+    if (!options.keepEdgeBackPreview) $app.cancelEdgeBackGesture?.();
+    $app.cancelPullRefreshGesture?.();
     if (patch.page !== "market") {
       marketImpressionTimers.forEach(timer => window.clearTimeout(timer));
       marketImpressionTimers.clear();
@@ -1323,7 +1343,7 @@ function applyTheme() {
 }
 
 function accountSpeciesList() {
-  return [...speciesList, ...(state.loggedInPhone ? normalizeCustomSpecies(state.customSpecies) : [])];
+  return [...speciesList, ...(state.loggedInPhone ? normalizeCustomSpecies(state.customSpecies).map(item => /\uFFFD/.test(item.name) ? { ...item, name: `品种待确认（${item.code.slice(-6)}）` } : item) : [])];
 }
 
 function speciesByCode(code) {
@@ -1636,7 +1656,7 @@ function ledgerFormSelected(key, option, fallback = "") {
   return ledgerFormValue(key, fallback) === option ? "selected" : "";
 }
 
-function captureLedgerFormDraft(form = document.querySelector("#ledgerForm")) {
+function captureLedgerFormDraft(form = document.querySelector("#ledgerForm, #turtleBatchMovementForm[data-ledger-batch]")) {
   if (!form) return { ...ledgerFormDraft() };
   const data = new FormData(form);
   return LEDGER_FORM_DRAFT_FIELDS.reduce((draft, key) => {
@@ -1665,9 +1685,15 @@ function finishLedgerDashboardSelection(turtleId = "") {
   const turtle = state.turtles.find(item => item.id === turtleId);
   if (turtleId && !turtle) return toast("这份档案已移出看板，请重新选择");
   const draft = { ...ledgerFormDraft() };
-  if (turtle) draft.turtleId = turtle.id;
+  if (turtle) {
+    if (draft.turtleId !== turtle.id) { draft.count = ""; draft.gender = "all"; draft.poolId = turtle.batchId ? "__ALL__" : turtle.poolId || ""; }
+    draft.turtleId = turtle.id;
+  }
   ledgerDashboardPicker = null;
-  if (turtle?.batchId) return openLedgerForm("sold", turtle.id);
+  if (turtle?.batchId) {
+    setState({ ...picker.filters }, { skipSave: true });
+    return openLedgerForm("sold", turtle.id, draft);
+  }
   setState({
     ...picker.filters, page: "ledger", ledgerDraftForm: draft,
     ledgerDraftTurtleId: draft.turtleId || "",
@@ -2237,7 +2263,7 @@ function bottomNav() {
       <button class="${dashboardPages.includes(state.page) ? "active" : ""}" data-page="home">${tabIcon("home")}看板</button>
       <button class="${ledgerPages.includes(state.page) ? "active" : ""}" data-page="ledger">${tabIcon("ledger")}账本</button>
       <button class="${marketPages.includes(state.page) ? "active" : ""}" data-page="market">${tabIcon("market")}龟集市</button>
-      <button class="${communityPages.includes(state.page) ? "active" : ""}" data-page="community">${tabIcon("community")}壳友圈</button>
+      <button class="${communityPages.includes(state.page) ? "active" : ""}" data-page="community">${tabIcon("community")}龟友圈</button>
       <button class="nav-message-tab ${messagePages.includes(state.page) || minePages.includes(state.page) ? "active" : ""}" data-page="messages">${tabIcon("mine")}${unreadCount ? `<i class="nav-unread-badge">${unreadText}</i>` : ""}空间</button>
     </nav>
   `;
@@ -2321,6 +2347,7 @@ function navigateBottomTab(targetPage) {
 }
 
 function restoreBottomNavAfterForeground() {
+  $app.cancelEdgeBackGesture?.();
   clearEdgeBackPreview();
   $app.style.transition = "";
   $app.style.transform = "";
@@ -3086,7 +3113,7 @@ function communitySearchSuggestionsMarkup() {
 }
 
 function communitySearchMarkup() {
-  return `<section class="community-search-shell"><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input type="search" value="${escapeHtml(communitySearchQuery)}" placeholder="搜索帖子、品种或壳友" autocomplete="off" enterkeyhint="search" aria-label="搜索壳友圈" data-community-search><button type="button" data-community-search-clear aria-label="清除搜索" ${communitySearchQuery ? "" : "hidden"}>×</button></label><div data-community-search-results>${communitySearchSuggestionsMarkup()}</div></section>`;
+  return `<section class="community-search-shell"><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input type="search" value="${escapeHtml(communitySearchQuery)}" placeholder="搜索帖子、品种或壳友" autocomplete="off" enterkeyhint="search" aria-label="搜索龟友圈" data-community-search><button type="button" data-community-search-clear aria-label="清除搜索" ${communitySearchQuery ? "" : "hidden"}>×</button></label><div data-community-search-results>${communitySearchSuggestionsMarkup()}</div></section>`;
 }
 
 function bindCommunitySearchResults(container = document.querySelector("[data-community-search-results]")) {
@@ -3147,7 +3174,7 @@ function pageCommunity() {
   const communityInitialLoading = Boolean(!feedNotice && CONFIGURED_SMS_BACKEND && hasCloudSession() && !state.communityFeedInitialized && !posts.length);
   return `
     ${communityPublishProgressMarkup()}
-    ${topbar("壳友圈", false, `<button class="community-camera-button" type="button" data-community-camera-button aria-label="拍摄或从相册选择"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"></path><circle cx="12" cy="13.5" r="3.5"></circle></svg></button>`, platformServiceTopButton())}
+    ${topbar("龟友圈", false, `<button class="community-camera-button" type="button" data-community-camera-button aria-label="拍摄或从相册选择"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"></path><circle cx="12" cy="13.5" r="3.5"></circle></svg></button>`, platformServiceTopButton())}
     <main class="content page-fresh community-page community-moments-page community-refined-page">
       <input class="hidden-file" type="file" accept="image/jpeg,image/png,image/webp" multiple data-community-quick-media>
       ${communitySearchMarkup()}
@@ -3738,7 +3765,7 @@ function pageCommunityChat() {
 
 // Keep detached pages only while the data they display is unchanged.
 function navigationDataKeys(page) {
-  const business = ["turtles", "keptSpecies", "customSpecies", "ledgerRecords", "breedingRecords", "memos", "turtlePools", "activityLogs"];
+  const business = ["turtles", "keptSpecies", "customSpecies", "ledgerRecords", "breedingRecords", "memos", "careRecords", "careCustomItems", "turtlePools", "activityLogs"];
   const community = ["communityPosts", "communityProfileStats", "communityFollowedCircleIds", "communityFollowingUsers", "blockedUsers"];
   const market = ["marketListings", "myMarketListings", "marketFavoriteIds", "marketHistoryIds", "selectedMarketListing", "selectedMarketSeller"];
   const messages = ["communityFriends", "communityFriendsInitialized", "communityFriendsError", "communityNotifications", "communityNotificationSummary", "communityActivityItems", "messageUnreadCount"];
@@ -3776,7 +3803,7 @@ function navigationSnapshotIsCurrent(snapshot) {
 
 function backNavigationState() {
   return {
-    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" || state.page === "communityProfile" ? "community" : state.page === "communityActivity" || state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "mine" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
+    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForLedger ? "ledger" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" || state.page === "communityProfile" ? "community" : state.page === "communityActivity" || state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "mine" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "",
     editingTurtlePoolId: "", editingMarketListingId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: ""
   };
@@ -3866,16 +3893,23 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
     patchSystemAnnouncementOverlay();
   }
   setupMarketInfiniteScroll();
+  setupCommunityInfiniteScroll();
+  syncMobileKeyboardUI();
   window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
   restoredSnapshotRenderHoldUntil = Date.now() + 520;
   window.requestAnimationFrame(() => {
-    $app.style.transform = "";
-    window.requestAnimationFrame(clearEdgeBackPreview);
+    window.requestAnimationFrame(() => {
+      // A second swipe may already own a new preview. Old return frames must
+      // never clear its transform or remove its underlay.
+      if (document.querySelector(".edge-back-preview") === handoffPreview) clearEdgeBackPreview();
+    });
   });
   return true;
 }
 
 function navigateBack(options = {}) {
+  if (!options.fromEdgeGesture) $app.cancelEdgeBackGesture?.();
+  $app.cancelPullRefreshGesture?.();
   if (ledgerDashboardPicker) return finishLedgerDashboardSelection();
   const snapshot = edgeBackSnapshots.pop();
   const fallback = backNavigationState();
@@ -3883,6 +3917,7 @@ function navigateBack(options = {}) {
   const snapshotCurrent = snapshot && navigationSnapshotIsCurrent(snapshot);
   if (snapshotCurrent && restoreLiveNavigationSnapshot(snapshot, nextState, options)) return;
   if (snapshotCurrent && snapshot?.html) {
+    const handoffPreview = document.querySelector(".edge-back-preview");
     if (options.fromEdgeGesture) document.querySelector(".edge-back-preview")?.classList.add("is-restoring");
     // Hand the exact frozen page to the real app before removing the preview.
     // This is intentionally not render(): recreating a long list (especially
@@ -3906,17 +3941,20 @@ function navigateBack(options = {}) {
       patchSystemAnnouncementOverlay();
     }
     setupMarketInfiniteScroll();
+    setupCommunityInfiniteScroll();
+    syncMobileKeyboardUI();
     window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
     restoredSnapshotRenderHoldUntil = Date.now() + 520;
     window.requestAnimationFrame(() => {
       // The snapshot has now been mounted at the same scroll position as the
       // static preview. Reveal it in one compositor update, then remove the
       // preview on the following frame so there is no visible hand-off jump.
-      $app.style.transform = "";
       hydrateVideoFirstFrames();
       hydrateCommunityPostVideos();
       hydrateMarketDetailVideos();
-      window.requestAnimationFrame(clearEdgeBackPreview);
+      window.requestAnimationFrame(() => {
+        if (document.querySelector(".edge-back-preview") === handoffPreview) clearEdgeBackPreview();
+      });
     });
     return;
   }
@@ -3928,7 +3966,10 @@ function navigateBack(options = {}) {
     keepEdgeBackPreview: true
   });
   window.scrollTo({ top: Math.max(0, Number(snapshot?.scrollY || 0)), left: 0, behavior: "auto" });
-  window.requestAnimationFrame(clearEdgeBackPreview);
+  const handoffPreview = document.querySelector(".edge-back-preview");
+  window.requestAnimationFrame(() => {
+    if (document.querySelector(".edge-back-preview") === handoffPreview) clearEdgeBackPreview();
+  });
 }
 
 function pageFollowing() {
@@ -3938,7 +3979,7 @@ function pageFollowing() {
     <main class="content page-fresh following-page">
       <section class="section-title"><span>关注的壳友</span><small>${users.length} 人</small></section>
       <section class="following-user-list">
-        ${users.map(user => `<button class="following-user-card fresh-card" type="button" data-view-following-user="${user.id}">${communityAvatar(user, "following-user-avatar")}<div><strong>${escapeHtml(user.name || "壳友")}${platformAdminBadge(user)}</strong><span>${Number(user.postCount || 0)} 条动态 · ${Number(user.listingCount || 0)} 件在售</span></div><b>›</b></button>`).join("") || remoteListEmptyMarkup(state.followingInitialized, state.followingError, "还没有关注壳友", "可以在壳友圈或商品详情中关注对方")}
+        ${users.map(user => `<button class="following-user-card fresh-card" type="button" data-view-following-user="${user.id}">${communityAvatar(user, "following-user-avatar")}<div><strong>${escapeHtml(user.name || "壳友")}${platformAdminBadge(user)}</strong><span>${Number(user.postCount || 0)} 条动态 · ${Number(user.listingCount || 0)} 件在售</span></div><b>›</b></button>`).join("") || remoteListEmptyMarkup(state.followingInitialized, state.followingError, "还没有关注壳友", "可以在龟友圈或商品详情中关注对方")}
       </section>
     </main>
     ${bottomNav()}
@@ -3967,7 +4008,7 @@ function pageFollowingProfile() {
 function profileContentTabs(postCount, listingCount, activeTab) {
   return `
     <section class="profile-content-tabs" role="tablist" aria-label="用户主页内容">
-      <button class="${activeTab === "posts" ? "active" : ""}" type="button" role="tab" aria-selected="${activeTab === "posts"}" data-profile-content-tab="posts"><strong>壳友圈</strong><span>${postCount} 条动态</span></button>
+      <button class="${activeTab === "posts" ? "active" : ""}" type="button" role="tab" aria-selected="${activeTab === "posts"}" data-profile-content-tab="posts"><strong>龟友圈</strong><span>${postCount} 条动态</span></button>
       <button class="${activeTab === "listings" ? "active" : ""}" type="button" role="tab" aria-selected="${activeTab === "listings"}" data-profile-content-tab="listings"><strong>出售商品</strong><span>${listingCount} 件在售</span></button>
     </section>
   `;
@@ -4168,7 +4209,9 @@ function renderMarketTitleTemplates(species, autoFill = false) {
   const container = document.querySelector("[data-market-title-templates]");
   if (!titleInput || !container) return;
   container.innerHTML = marketTitleTemplatesMarkup(species);
-  if (autoFill && templates[0]) titleInput.value = templates[0];
+  const previousTemplate = titleInput.dataset.speciesTitleTemplate || "";
+  if (autoFill && templates[0] && (!titleInput.value.trim() || titleInput.value === previousTemplate)) titleInput.value = templates[0];
+  titleInput.dataset.speciesTitleTemplate = templates[0] || "";
   container.querySelectorAll("[data-market-title-template]").forEach(button => {
     button.addEventListener("click", () => {
       titleInput.value = button.dataset.marketTitleValue || "";
@@ -4704,19 +4747,20 @@ function pageMarketAdd() {
   const editingListing = state.editingMarketListingId
     ? ((state.myMarketListings || []).find(item => item.id === state.editingMarketListingId) || (state.marketListings || []).find(item => item.id === state.editingMarketListingId))
     : null;
-  const turtle = (state.turtles || []).find(item => item.id === (state.marketDraftTurtleId || editingListing?.turtleId));
+  const turtle = (state.turtles || []).find(item => item.id === state.marketDraftTurtleId);
   const activeTurtles = (state.turtles || []).filter(item => item.status !== "已转让" && item.status !== "已死亡");
   if (!(state.marketDraftMedia || []).length && editingListing) state.marketDraftMedia = marketListingMediaItems(editingListing).map(media => ({ dataUrl: media.url, posterUrl: media.posterUrl || "", type: media.type || "image" }));
   if (!(state.marketDraftMedia || []).length && turtle?.photo) state.marketDraftMedia = [{ dataUrl: turtle.photo, type: "image" }];
-  const turtleSpeciesCode = editingListing?.speciesCode || turtle?.speciesCode || speciesList.find(item => item.name === turtle?.speciesName)?.code || "";
+  const archiveChanged = Boolean(editingListing && state.marketDraftTurtleId !== String(editingListing.turtleId || ""));
+  const turtleSpeciesCode = (archiveChanged ? turtle?.speciesCode : editingListing?.speciesCode || turtle?.speciesCode) || speciesList.find(item => item.name === turtle?.speciesName)?.code || (!turtle ? editingListing?.speciesCode : "") || "";
   const turtleSpecies = speciesByCode(turtleSpeciesCode);
   const speciesSearchValue = turtleSpecies ? `${turtleSpecies.code} · ${turtleSpecies.name}` : "";
   const speciesPolicyHint = turtleSpecies && isMarketProhibitedSpecies(turtleSpecies)
     ? `<p class="market-species-policy-hint">${marketSpeciesRestrictionMessage()}</p>`
     : "";
   const titleValue = editingListing?.title || (turtle ? `${turtle.code || turtle.speciesName || "乌龟"}诚意出售` : "");
-  const formValue = (field, turtleField = field) => editingListing?.[field] ?? turtle?.[turtleField] ?? "";
-  const descriptionValue = editingListing ? (editingListing.description || "") : (state.marketDraftDescription || "");
+  const formValue = (field, turtleField = field) => (archiveChanged ? turtle?.[turtleField] : editingListing?.[field] ?? turtle?.[turtleField]) ?? "";
+  const descriptionValue = state.marketDraftDescription || "";
   const descriptionTemplate = editingListing ? "" : (state.marketDraftDescriptionTemplate || "");
   const mediaCount = Array.isArray(state.marketDraftMedia) ? state.marketDraftMedia.length : 0;
   return `
@@ -4727,7 +4771,7 @@ function pageMarketAdd() {
           <div class="market-form-heading"><b>从档案带入</b><small>减少重复填写，数据更可信</small></div>
           <select class="select" name="turtleId" data-market-turtle-source data-archive-directory>
             <option value="">不关联档案，从品种库选择</option>
-            ${activeTurtles.map(item => `<option value="${item.id}" ${(state.marketDraftTurtleId || editingListing?.turtleId) === item.id ? "selected" : ""}>${escapeHtml(item.code || "未命名")} · ${escapeHtml(item.speciesName || "未知品种")}</option>`).join("")}
+            ${activeTurtles.map(item => `<option value="${item.id}" ${state.marketDraftTurtleId === item.id ? "selected" : ""}>${escapeHtml(item.code || "未命名")} · ${escapeHtml(item.speciesName || "未知品种")}</option>`).join("")}
           </select>
         </section>
         <section class="market-form-card market-media-card">
@@ -4881,7 +4925,7 @@ function pageHome() {
       </section>
       <section class="action-panel care-action-panel home-module-panel">
         <button class="care-action home-module-action growth-action" data-page="growth"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18.5V5.5"></path><path d="M5 18.5h14"></path><path d="m8.5 14 3-3 2.6 1.7 3.4-4.3"></path><circle cx="8.5" cy="14" r=".7"></circle><circle cx="11.5" cy="11" r=".7"></circle><circle cx="14.1" cy="12.7" r=".7"></circle><circle cx="17.5" cy="8.4" r=".7"></circle></svg></span><strong>成长记录</strong><small>变化与趋势</small></button>
-        <button class="care-action" data-page="memos"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.5 12.5 3.3 3.3 7.7-8.2"></path></svg></span><strong>护理</strong><small>备忘与提醒</small></button>
+        <button class="care-action" data-page="memos"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.5 12.5 3.3 3.3 7.7-8.2"></path></svg></span><strong>日常养护</strong><small>养护与提醒</small></button>
         <button class="care-action home-module-action breeding-action" data-page="breeding"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7.7" r="4.7"></circle><circle cx="8.3" cy="14.1" r="4.7"></circle><circle cx="15.7" cy="14.1" r="4.7"></circle></svg></span><strong>繁殖</strong><small>产蛋、受精与孵化</small></button>
         <button class="care-action home-module-action pool-action" data-page="pools"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 8.3h15v9.2a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2z"></path><path d="M4.5 11.6c2.1 1.4 4.2 1.4 6.3 0 2.1-1.4 4.2-1.4 6.3 0"></path><path d="M7.5 5.5h9"></path></svg></span><strong>龟池</strong><small>数量与尺寸</small></button>
       </section>
@@ -5384,10 +5428,12 @@ function submitTurtleBatchDetail(event, turtle) {
 function submitTurtleBatchMovement(event) {
   event.preventDefault();
   if (event.currentTarget.__batchSaved || !requireLogin()) return;
-  const turtle = state.turtles.find(item => item.id === state.selectedTurtleId);
+  const ledgerContext = event.currentTarget.dataset?.ledgerBatch !== undefined;
+  const targetId = ledgerContext ? event.currentTarget.elements.namedItem("turtleId")?.value : state.selectedTurtleId;
+  const turtle = state.turtles.find(item => item.id === targetId);
   if (!turtle?.batchId) return;
   const form = new FormData(event.currentTarget);
-  const type = String(form.get("type"));
+  const type = ledgerContext ? state.ledgerDraftType : String(form.get("type"));
   const count = Number(form.get("count"));
   const poolId = String(form.get("poolId"));
   const gender = String(form.get("gender"));
@@ -5423,7 +5469,8 @@ function submitTurtleBatchMovement(event) {
   }
   const log = { ...makeActivity(`${turtleBatchLabel(turtle)}：${type === "sold" ? "售出" : "损耗"} ${count} 只，金额 ${money(totalCents / 100)} 元，在养剩余 ${data.turtles.filter(item => item.batchId === turtle.batchId && TurtleBatches.isActive(item)).length} 只`, "账本"), batchId: turtle.batchId };
   event.currentTarget.__batchSaved = true;
-  const locallySaved = saveWithDeferredImages({ ...data, page: remaining ? "turtleDetail" : "home", selectedTurtleId: remaining?.id || "",
+  const locallySaved = saveWithDeferredImages({ ...data, page: ledgerContext ? "ledger" : remaining ? "turtleDetail" : "home", selectedTurtleId: remaining?.id || "",
+    ...(ledgerContext ? { ledgerTab: type, ledgerDraftType: "", ledgerDraftTurtleId: "", ledgerDraftPhoto: "", ledgerDraftForm: {} } : {}),
     updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "",
     activityLogs: [log, ...(state.activityLogs || [])] }, []);
   if (locallySaved === false) return;
@@ -5517,7 +5564,7 @@ function pageTurtleDetail() {
         </div>
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-update-photo-input>
         <div class="breeding-form-grid">
-          <label><span>品种代码</span><select class="select" name="speciesCode" required>${accountSpeciesList().map(item => `<option value="${item.code}" ${item.code === speciesCode ? "selected" : ""}>${item.isCustom ? "自建" : item.code} · ${escapeHtml(item.name)}</option>`).join("")}</select></label>
+          <label><span>品种代码</span><select class="select" name="speciesCode" required>${!speciesByCode(speciesCode) ? `<option value="${escapeHtml(speciesCode || "")}" selected>${escapeHtml(archiveSpeciesName(t))}（原品种）</option>` : ""}${accountSpeciesList().map(item => `<option value="${item.code}" ${item.code === speciesCode ? "selected" : ""}>${item.isCustom ? "自建" : item.code} · ${escapeHtml(item.name)}</option>`).join("")}</select></label>
           <label><span>龟龟昵称</span><input class="field" name="code" value="${nickname || ""}" placeholder="例如：小核桃、黑豆、将军"></label>
           <label><span>龟池</span><select class="select" name="poolId"><option value="">暂不关联龟池</option>${(state.turtlePools || []).map(pool => `<option value="${pool.id}" ${turtleDraftValue(t, "poolId") === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}</select></label>
           <div class="detail-choice-row">
@@ -5657,6 +5704,7 @@ async function submitCustomSpecies(event) {
   if (form.__saving) return;
   const data = new FormData(form);
   const name = String(data.get("name") || "").trim();
+  if (/\uFFFD/.test(name)) return toast("品种名称含乱码，请重新输入");
   if (!name || name.length > 40 || /[<>&"']/.test(name)) return toast("请填写 1 至 40 字的品种名称，不含特殊符号");
   if (accountSpeciesList().some(item => item.name.toLowerCase() === name.toLowerCase())) return toast("已有这个品种，请搜索后加入");
   const auth = { phone: state.loggedInPhone, token: currentCloudToken() };
@@ -5680,10 +5728,10 @@ async function submitCustomSpecies(event) {
     const customSpecies = normalizeCustomSpecies(result.customSpecies);
     const species = customSpecies.find(item => item.code === result.species?.code);
     if (!species) throw new Error("保存结果不完整，请刷新后重试");
-    const pickForAdd = state.speciesPickerForAdd && state.page === "species" && form.isConnected;
+    const pickForForm = state.page === "species" && form.isConnected;
     setState({
       customSpecies, keptSpecies: [...new Set([...state.keptSpecies, species.code])],
-      ...(pickForAdd ? { selectedSpeciesCode: species.code, formDraft: { ...turtleFormDraft(), speciesCode: species.code }, speciesPickerForAdd: false, page: "add", search: "" } : {})
+      ...(pickForForm ? speciesSelectionPatch(species.code) : {})
     });
     toast("自建品种已保存，仅当前账号可用");
   } catch (error) {
@@ -5737,7 +5785,7 @@ function pageSpecies() {
             <article class="species-row fresh-card ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-species-keywords="${item.name.toLowerCase()} ${item.code.toLowerCase()}">
               <img class="species-photo" src="${speciesPhoto(item)}" alt="${item.name}" data-species-img="${item.code}" data-fallback-photo loading="lazy">
               <div><strong>${item.name}</strong><small>${item.isCustom ? "自建 · 仅自己可见" : item.code}</small></div>
-              <button class="species-add ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-add-species="${item.code}">${state.keptSpecies.includes(item.code) ? "取消" : "加入"}</button>
+              <button class="species-add ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-add-species="${item.code}">${state.speciesPickerForAdd || state.speciesPickerForLedger ? "选择" : state.keptSpecies.includes(item.code) ? "取消" : "加入"}</button>
             </article>
           `).join("")}
         </section>
@@ -5894,13 +5942,161 @@ function pageAdd() {
   `;
 }
 
+function careTabs() {
+  return `<div class="care-tabs" role="tablist" aria-label="日常养护">
+    <button type="button" role="tab" aria-selected="${state.careTab !== "reminders"}" data-care-tab="care">养护</button>
+    <button type="button" role="tab" aria-selected="${state.careTab === "reminders"}" data-care-tab="reminders">提醒</button>
+  </div>`;
+}
+
+function careItemPicker(draft) {
+  const choices = [...TurtleCare.builtins, ...(state.careCustomItems || [])];
+  const selected = choices.find(item => item.id === draft.itemId);
+  return `<div class="care-picker">
+    <button class="select care-picker-toggle" type="button" data-care-picker aria-expanded="${Boolean(state.carePickerOpen)}" aria-controls="careItemChoices"><span>${escapeHtml(selected?.title || (draft.itemId === "manual" ? "手动备注" : draft.title || "请选择养护事项"))}</span><span aria-hidden="true">⌄</span></button>
+    ${state.carePickerOpen ? `<div class="care-picker-options" id="careItemChoices" role="group" aria-label="选择养护事项">
+      ${choices.map(item => `<div class="care-choice-row"><button type="button" data-care-choice="${escapeHtml(item.id)}" aria-pressed="${draft.itemId === item.id}"><span>${draft.itemId === item.id ? "✓" : ""}</span>${escapeHtml(item.title)}</button>${TurtleCare.builtins.some(builtin => builtin.id === item.id) ? `<small>固定</small>` : `<button type="button" class="care-choice-delete" data-care-delete-choice="${escapeHtml(item.id)}" aria-label="删除常用事项：${escapeHtml(item.title)}">删除</button>`}</div>`).join("")}
+      <div class="care-choice-row"><button type="button" data-care-choice="manual" aria-pressed="${draft.itemId === "manual"}"><span>${draft.itemId === "manual" ? "✓" : "＋"}</span>手动备注</button></div>
+      <p>删除常用事项不会影响以前的养护记录</p>
+    </div>` : ""}
+  </div>`;
+}
+
+function pageCareRecords() {
+  const draft = state.careDraft;
+  const records = [...(state.careRecords || [])].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+  let previousDate = "";
+  return `${topbar("日常养护", true)}
+    <main class="content page-fresh care-page">
+      ${careTabs()}
+      ${draft ? "" : `<section class="page-intro care-intro"><div><p class="eyebrow dark">日常</p><h2>养护记录</h2><p>记下每一次照料，随时回看。</p></div><button class="round-action" type="button" data-new-care aria-label="新增养护记录">+</button></section>`}
+      ${draft ? `<form class="fresh-card care-form" id="careForm">
+        <div class="form-head"><div><p class="eyebrow dark">${draft.id ? "编辑" : "新增"}</p><h3>记录一次养护</h3></div><button class="danger-link" type="button" data-cancel-care>取消</button></div>
+        <label class="care-field"><span>日期</span><input class="field" type="date" name="date" required max="${formatDate(new Date())}" value="${escapeHtml(draft.date)}"></label>
+        <div class="care-field"><span id="careItemLabel">事项</span><div aria-labelledby="careItemLabel">${careItemPicker(draft)}</div></div>
+        ${draft.itemId === "manual" ? `<label class="care-field"><span>手动备注</span><input class="field" name="manualTitle" required maxlength="40" placeholder="例如：晒背、清洗过滤器" value="${escapeHtml(draft.manualTitle || "")}"></label><p class="care-form-hint">保存后，下次可直接从事项列表选择。</p>` : ""}
+        <label class="care-field"><span>龟池</span><select class="select" name="poolId"><option value="">不关联龟池</option>${draft.poolId && !(state.turtlePools || []).some(pool => pool.id === draft.poolId) ? `<option value="${escapeHtml(draft.poolId)}" selected>${escapeHtml(draft.poolName || "原龟池")}（已删除）</option>` : ""}${(state.turtlePools || []).map(pool => `<option value="${escapeHtml(pool.id)}" ${draft.poolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name)}</option>`).join("")}</select></label>
+        <label class="care-note"><span>补充说明 <small>选填</small></span><textarea name="note" maxlength="1000" placeholder="可填写食物、换水量或其他情况">${escapeHtml(draft.note || "")}</textarea></label>
+        <button class="primary" type="submit">${draft.id ? "保存修改" : "保存养护记录"}</button>
+      </form>` : `<div class="care-quick-actions"><button type="button" data-new-care="feeding"><span aria-hidden="true">＋</span> 记喂食</button><button type="button" data-new-care="water"><span aria-hidden="true">＋</span> 记换水</button><button type="button" data-new-care="manual"><span aria-hidden="true">＋</span> 手动记录</button></div>`}
+      <section class="care-history" aria-label="养护历史"><div class="section-title"><h3>养护历史</h3><span>${records.length} 条</span></div>
+      ${records.map(record => {
+        const heading = record.date !== previousDate ? `<h4 class="care-date">${escapeHtml(record.date)}${record.date === formatDate(new Date()) ? `<span>今天</span>` : ""}</h4>` : "";
+        previousDate = record.date;
+        return `${heading}<article class="fresh-card care-record"><div class="care-record-heading"><strong>${escapeHtml(record.title)}</strong><span>${escapeHtml(record.poolName || "未关联龟池")}</span></div>${record.note ? `<p>${escapeHtml(record.note)}</p>` : ""}<footer><button type="button" data-edit-care="${escapeHtml(record.id)}">编辑</button><button type="button" class="danger-link" data-delete-care="${escapeHtml(record.id)}">删除记录</button></footer></article>`;
+      }).join("") || `<div class="empty"><div><strong>还没有养护记录</strong><p>喂食、换水后记一笔，也可以手动填写其他事项。</p></div></div>`}
+      </section>
+    </main>${bottomNav()}`;
+}
+
+function readCareDraft() {
+  const form = document.querySelector("#careForm");
+  if (!form || !state.careDraft) return state.careDraft;
+  const data = new FormData(form);
+  return { ...state.careDraft, date: String(data.get("date") || ""), poolId: String(data.get("poolId") || ""),
+    note: String(data.get("note") || ""), manualTitle: data.has("manualTitle") ? String(data.get("manualTitle")) : state.careDraft.manualTitle || "" };
+}
+
+function bindCareEvents() {
+  document.querySelectorAll("[data-care-tab]").forEach(button => button.addEventListener("click", () => {
+    setState({ careTab: button.dataset.careTab, careDraft: readCareDraft(), carePickerOpen: false });
+  }));
+  document.querySelectorAll("[data-new-care]").forEach(button => button.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    if (state.careDraft) return document.querySelector("#careForm")?.scrollIntoView({ block: "start", behavior: "smooth" });
+    setState({ carePickerOpen: false, careDraft: { date: formatDate(new Date()), itemId: button.dataset.newCare || "feeding", poolId: "", note: "", manualTitle: "" } });
+  }));
+  document.querySelector("[data-cancel-care]")?.addEventListener("click", () => setState({ careDraft: null, carePickerOpen: false }));
+  document.querySelector("[data-care-picker]")?.addEventListener("click", () => setState({ careDraft: readCareDraft(), carePickerOpen: !state.carePickerOpen }));
+  document.querySelectorAll("[data-care-choice]").forEach(button => button.addEventListener("click", () => {
+    const manual = button.dataset.careChoice === "manual";
+    setState({ careDraft: { ...readCareDraft(), itemId: button.dataset.careChoice, title: "" }, carePickerOpen: false });
+    if (manual) document.querySelector('[name="manualTitle"]')?.focus();
+  }));
+  document.querySelectorAll("[data-care-delete-choice]").forEach(button => button.addEventListener("click", () => deleteCareChoice(button.dataset.careDeleteChoice)));
+  document.querySelector("#careForm")?.addEventListener("input", () => { state.careDraft = readCareDraft(); });
+  document.querySelector("#careForm")?.addEventListener("submit", submitCareRecord);
+  document.querySelector(".care-page")?.addEventListener("click", event => {
+    if (state.carePickerOpen && !event.target.closest(".care-picker")) setState({ careDraft: readCareDraft(), carePickerOpen: false });
+  });
+  document.querySelector("#careForm")?.addEventListener("keydown", event => {
+    if (event.key === "Escape" && state.carePickerOpen) {
+      event.preventDefault();
+      setState({ careDraft: readCareDraft(), carePickerOpen: false });
+      document.querySelector("[data-care-picker]")?.focus();
+    }
+  });
+  document.querySelectorAll("[data-edit-care]").forEach(button => button.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    const record = state.careRecords.find(row => row.id === button.dataset.editCare);
+    if (!record) return;
+    setState({ careDraft: { ...record }, carePickerOpen: false });
+    document.querySelector("#careForm")?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }));
+  document.querySelectorAll("[data-delete-care]").forEach(button => button.addEventListener("click", () => {
+    if (!requireLogin()) return;
+    const record = state.careRecords.find(row => row.id === button.dataset.deleteCare);
+    if (!record || !confirm(`删除 ${record.date} 的「${record.title}」记录？`)) return;
+    setState({ careRecords: state.careRecords.filter(row => row.id !== record.id),
+      careDraft: state.careDraft?.id === record.id ? null : readCareDraft(),
+      activityLogs: logActivity(`删除养护记录：${record.title}`, "养护") });
+  }));
+}
+
+function deleteCareChoice(id) {
+  if (!requireLogin() || TurtleCare.builtins.some(item => item.id === id)) return;
+  const item = (state.careCustomItems || []).find(row => row.id === id);
+  if (!item) return;
+  const draft = readCareDraft();
+  // Keep a selected title as a snapshot too; merely saving this draft must not
+  // silently recreate a suggestion the user explicitly removed.
+  setState({ careCustomItems: state.careCustomItems.filter(row => row.id !== id),
+    careDraft: draft?.itemId === id ? { ...draft, title: item.title } : draft });
+  toast("已从常用事项移除，历史记录不受影响");
+}
+
+function submitCareRecord(event) {
+  event.preventDefault();
+  if (!requireLogin()) return;
+  const draft = readCareDraft();
+  if (!draft) return;
+  if (!TurtleCare.validDate(draft.date) || draft.date > formatDate(new Date())) return toast("请选择今天或之前的有效日期");
+  const now = new Date().toISOString();
+  let items = TurtleCare.normalizeItems(state.careCustomItems);
+  let item = [...TurtleCare.builtins, ...items].find(row => row.id === draft.itemId);
+  if (draft.itemId === "manual") {
+    const title = String(draft.manualTitle || "").trim();
+    if (!title || title.length > 40) return toast("请填写 1 至 40 字的养护事项");
+    item = [...TurtleCare.builtins, ...items].find(row => row.title === title);
+    if (!item) {
+      item = { id: crypto.randomUUID(), title, createdAt: now };
+      items = [item, ...items];
+    }
+  }
+  if (!item && draft.title) item = { id: draft.itemId, title: draft.title };
+  if (!item) return toast("请选择或填写养护事项");
+  const existing = draft.id ? state.careRecords.find(row => row.id === draft.id) : null;
+  if (draft.id && !existing) return toast("这条记录已删除，请重新新增");
+  const pool = (state.turtlePools || []).find(row => row.id === draft.poolId);
+  if (draft.poolId && !pool && draft.poolId !== existing?.poolId) return toast("龟池已不存在，请重新选择");
+  const record = { id: existing?.id || crypto.randomUUID(), date: draft.date, itemId: item.id, title: item.title,
+    poolId: draft.poolId, poolName: pool?.name || (draft.poolId === existing?.poolId ? existing.poolName : ""),
+    note: String(draft.note || "").trim().slice(0, 1000), createdAt: existing?.createdAt || now, updatedAt: now };
+  setState({ careRecords: existing ? state.careRecords.map(row => row.id === existing.id ? record : row) : [record, ...(state.careRecords || [])],
+    careCustomItems: items, careDraft: null, carePickerOpen: false,
+    activityLogs: logActivity(`${existing ? "修改" : "新增"}养护记录：${record.title} · ${record.date}`, "养护") });
+  toast("养护记录已保存");
+}
+
 function pageMemos() {
+  if (state.careTab !== "reminders") return pageCareRecords();
   const list = state.memoTab === "all" ? state.memos : state.memos.filter(m => state.memoTab === "repeat" ? m.repeat : !m.repeat);
   const editingMemo = state.memos.find(m => m.id === state.memoEditingId);
   const selectedWeekdays = memoWeekdays(editingMemo);
   return `
-    ${topbar("护理提醒", true)}
+    ${topbar("日常养护", true)}
     <main class="content page-fresh">
+      ${careTabs()}
       <section class="page-intro">
         <div><p class="eyebrow dark">备忘</p><h2>${state.memos.length} 条护理事项</h2><p>换水、喂食、晒背、复查都可以记录在这里。</p></div>
         <button class="round-action" data-new-memo>+</button>
@@ -5939,6 +6135,7 @@ function pageMemos() {
         </article>
       `).join("") || `<div class="empty"><div><strong>还没有护理提醒</strong><br>点击加号新建一条</div></div>`}
     </main>
+    ${bottomNav()}
   `;
 }
 
@@ -6471,6 +6668,53 @@ function pageGrowth() {
   `;
 }
 
+function ledgerBatchForm(turtle, type) {
+  const members = TurtleBatches.members(turtle, state.turtles);
+  const summary = TurtleBatches.summary(members);
+  const choices = TurtleBatches.group(state.turtles.filter(TurtleBatches.isActive));
+  const draft = ledgerFormDraft();
+  const label = type === "loss" ? "损耗" : "售出";
+  const health = [...new Set(summary.active.map(item => item.health || "未填写"))].join("、");
+  return `<form id="turtleBatchMovementForm" class="breeding-form fresh-card ledger-batch-form" data-ledger-batch>
+    <div class="form-head"><div><p class="eyebrow dark">账本</p><h3>记录${label}</h3></div><button type="button" class="danger-link" data-cancel-ledger>取消</button></div>
+    <input type="hidden" name="type" value="${type}">
+    <label class="ledger-batch-selection"><span>关联批次 / 档案</span><select class="select" name="turtleId" data-archive-directory data-archive-batches>
+      <option value="">不关联档案</option>${type === "sold" ? `<option value="__dashboard__">去看板查找</option>` : ""}
+      ${choices.map(item => `<option value="${escapeHtml(item.id)}" ${item.batchId ? `data-batch-count="${item.batchMembers.length}"` : ""} ${item.id === turtle.id ? "selected" : ""}>${escapeHtml(item.batchId ? `${turtleBatchLabel(item)} · 在养 ${item.batchMembers.length} 只` : `${item.code} · ${item.speciesName}`)}</option>`).join("")}
+    </select></label>
+    <section class="ledger-batch-summary" aria-label="已选批次信息">
+      <div class="ledger-batch-identity"><img src="${escapeHtml(turtle.photo || defaultPhoto)}" alt="批次照片"><div><small>已选批次</small><strong>${escapeHtml(turtleBatchLabel(turtle))}</strong><span>${escapeHtml(turtle.speciesName || "未填写品种")}</span></div><b>${summary.count}<small>只在养</small></b></div>
+      <dl><div><dt>性别组成</dt><dd>${summary.male} 公 · ${summary.female} 母 · ${summary.unknown} 未知</dd></div><div><dt>所在龟池</dt><dd>${escapeHtml(turtleBatchPoolLabel(summary))}</dd></div><div><dt>健康状态</dt><dd>${escapeHtml(health)}</dd></div><div><dt>在养购入成本</dt><dd>¥ ${money(summary.cost)}</dd></div></dl>
+    </section>
+    <div class="batch-section-heading"><h3>本次${label}信息</h3></div>
+    <div class="breeding-form-grid">
+      <label><span>龟池范围</span><select class="select" name="poolId"><option value="__ALL__">全部在养龟池</option>${summary.pools.map(id => `<option value="${escapeHtml(id)}" ${draft.poolId === id ? "selected" : ""}>${escapeHtml(turtlePoolName(id))}</option>`).join("")}</select></label>
+      <label><span>性别范围</span><select class="select" name="gender"><option value="all">不限性别</option>${["公", "母", "未知"].map(gender => `<option ${draft.gender === gender ? "selected" : ""}>${gender}</option>`).join("")}</select></label>
+      <label><span>本次数量</span><input class="field" name="count" type="number" min="1" max="${summary.count}" step="1" value="${escapeHtml(draft.count || "")}" required></label>
+      <label><span>日期</span><input class="field" name="recordDate" type="date" value="${escapeHtml(draft.recordDate || formatDate(new Date()))}" required></label>
+      <label><span data-batch-amount-label>${label}${type === "sold" ? "总" : ""}金额（元）</span><input class="field" name="amount" type="number" min="0" step="0.01" ${type === "loss" ? "readonly" : "required"} value="${type === "sold" ? escapeHtml(draft.amount || "") : ""}" placeholder="${type === "loss" ? "填写数量后自动计算" : "填写本次售出总金额"}"></label>
+    </div>
+    ${type === "loss" ? `<p class="batch-form-hint">损耗金额按本次数量对应的购入成本自动计算。</p>` : ""}
+    <label class="breeding-note"><span>备注</span><textarea name="note">${escapeHtml(draft.note || "")}</textarea></label>
+    <button class="primary" type="submit">保存${label}记录</button>
+  </form>`;
+}
+
+function refreshBatchLedgerAmount() {
+  const form = document.querySelector("#turtleBatchMovementForm[data-ledger-batch]");
+  if (!form || state.ledgerDraftType !== "loss") return;
+  const data = new FormData(form);
+  const turtle = state.turtles.find(item => item.id === data.get("turtleId"));
+  if (!turtle?.batchId) return;
+  const eligible = TurtleBatches.members(turtle, state.turtles).filter(item => TurtleBatches.isActive(item)
+    && (data.get("poolId") === "__ALL__" || (item.poolId || "") === data.get("poolId"))
+    && (data.get("gender") === "all" || (item.gender || "未知") === data.get("gender")));
+  const count = Number(data.get("count"));
+  form.elements.namedItem("count").max = String(eligible.length);
+  form.elements.namedItem("amount").value = Number.isSafeInteger(count) && count > 0 && count <= eligible.length
+    ? (eligible.slice(0, count).reduce((sum, item) => sum + Math.round(TurtleLossAccounting.purchaseCost(item, state.ledgerRecords) * 100), 0) / 100).toFixed(2) : "";
+}
+
 function ledgerForm() {
   const type = state.ledgerDraftType;
   const isPurchase = type === "purchase";
@@ -6478,6 +6722,7 @@ function ledgerForm() {
   // 收购是新增一只龟，不能关联或覆盖已有档案。
   const draftTurtleId = isPurchase ? "" : ledgerFormValue("turtleId", state.ledgerDraftTurtleId);
   const turtle = state.turtles.find(t => t.id === draftTurtleId);
+  if (turtle?.batchId && ["sold", "loss"].includes(type)) return ledgerBatchForm(turtle, type);
   const today = ledgerFormValue("recordDate", formatDate(new Date()));
   const lockedLoss = type === "loss" && turtle;
   const amountValue = lockedLoss ? TurtleLossAccounting.purchaseCost(turtle, state.ledgerRecords) : ledgerFormValue("amount", "");
@@ -6708,39 +6953,44 @@ function isSuggestedManualBreedingMother(value) {
   return /^\d{8}-\d+$/.test(String(value || ""));
 }
 
-function breedingMotherGroups(turtles = state.turtles) {
-  const groups = new Map();
-  for (const turtle of turtles) {
-    if (turtle.gender !== "母" && turtle.gender !== "未知") continue;
-    const name = String(turtle.speciesName || turtle.speciesCode || "未填写品种").trim();
-    if (!groups.has(name)) groups.set(name, { name, turtles: [] });
-    groups.get(name).turtles.push(turtle);
+function breedingTargetOptions(turtles, selected = "", record = null, catalogue = null) {
+  const rows = new Map();
+  for (const t of turtles) {
+    if (!TurtleBatches.isActive(t)) continue;
+    if (!t.batchId && t.gender !== "母" && t.gender !== "未知") continue;
+    const value = t.batchId ? `batch:${t.batchId}` : t.id;
+    if (!rows.has(value)) rows.set(value, { t, count: 0 });
+    rows.get(value).count++;
   }
-  return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+  // Keep historical associations editable even after the animals leave the stock.
+  let html = selected && !rows.has(selected) && record
+    ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(record.motherName || "原关联档案")}（原关联）</option>` : "";
+  for (const [value, { t, count }] of rows) {
+    const name = archiveSpeciesName(t, catalogue);
+    const title = t.batchId ? turtleBatchLabel({ ...t, speciesName: name, batchName: /\uFFFD/.test(t.batchName || "") ? "" : t.batchName }) : t.code || t.name || "未命名乌龟";
+    html += `<option value="${escapeHtml(value)}" data-archive-turtle-id="${escapeHtml(t.id)}" ${t.batchId ? `data-batch-count="${count}"` : ""} ${selected === value ? "selected" : ""}>${escapeHtml(title)} · ${escapeHtml(name)}${t.batchId ? `（${count}只，整批记录）` : ""}</option>`;
+  }
+  return html;
 }
 
-function bindBreedingSpeciesPicker() {
-  document.querySelector("[data-breeding-species]")?.addEventListener("change", event => {
-    if (!requireLogin()) return;
-    const draft = readBreedingDraft();
-    const manual = event.target.value === "__manual__";
-    setState({
-      ...draft,
-      breedingSpeciesKey: manual ? "" : event.target.value,
-      breedingMotherMode: manual ? "manual" : "archive",
-      breedingMotherValue: manual ? "manual" : "",
-      breedingManualMother: manual ? (draft.breedingManualMother || suggestedManualBreedingMother(draft.breedingDraftDate || formatDate(new Date()))) : draft.breedingManualMother
-    });
-  });
+function breedingTarget(value, record = null) {
+  const batchId = String(value || "").startsWith("batch:") ? String(value).slice(6) : "";
+  const members = batchId ? state.turtles.filter(t => t.batchId === batchId && TurtleBatches.isActive(t)) : [];
+  const turtle = batchId ? members[0] : state.turtles.find(t => t.id === value);
+  if (!turtle && !(record && (batchId ? record.batchId === batchId : record.motherId === value))) return null;
+  const speciesName = turtle ? archiveSpeciesName(turtle) : record.speciesName || "";
+  return {
+    motherId: batchId ? "" : value, batchId,
+    motherName: turtle ? (batchId ? turtleBatchLabel({ ...turtle, speciesName, batchName: /\uFFFD/.test(turtle.batchName || "") ? "" : turtle.batchName }) : turtleLabel({ ...turtle, speciesName })) : record.motherName,
+    speciesCode: turtle?.speciesCode || record?.speciesCode || "", speciesName,
+    poolId: batchId ? (new Set(members.map(t => t.poolId || "")).size === 1 ? members[0]?.poolId || "" : "") : turtle?.poolId || ""
+  };
 }
 
 function pageBreedingAdd() {
   const today = state.breedingDraftDate || formatDate(new Date());
   const manualMotherSelected = state.breedingMotherMode === "manual";
   const manualMotherValue = state.breedingManualMother || suggestedManualBreedingMother(today);
-  const groups = breedingMotherGroups();
-  const selectedSpecies = state.breedingSpeciesKey || groups.find(group => group.turtles.some(t => t.id === state.breedingMotherValue))?.name || "";
-  const females = groups.find(group => group.name === selectedSpecies)?.turtles || [];
   const turtlePools = state.turtlePools || [];
   return `
     ${topbar("新增繁殖", true)}
@@ -6749,7 +6999,7 @@ function pageBreedingAdd() {
         <div>
           <p class="eyebrow dark">新增</p>
           <h2>记录一窝蛋</h2>
-          <p>填写种母、产蛋数量、受精数量，并可上传备注附图。孵化后在详情中确认数量并关联看板。</p>
+          <p>选择单龟或批次，填写产蛋数量、受精数量，并可上传备注附图。批次按整批记录，无需指定种母。</p>
         </div>
       </section>
       <form class="breeding-form fresh-card" id="breedingForm">
@@ -6766,19 +7016,13 @@ function pageBreedingAdd() {
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-breeding-photo-input>
         <div class="breeding-form-grid">
           <label class="breeding-date-field"><span>日期</span><input class="field" name="date" type="date" value="${today}" required></label>
-          <label class="breeding-mother-field"><span>品种</span>
-            <select class="select" data-breeding-species required>
-              <option value="" ${!manualMotherSelected && !selectedSpecies ? "selected" : ""}>先选择品种</option>
-              ${groups.map(group => `<option value="${escapeHtml(group.name)}" ${!manualMotherSelected && selectedSpecies === group.name ? "selected" : ""}>${escapeHtml(group.name)}（${group.turtles.length}只）</option>`).join("")}
-              <option value="__manual__" ${manualMotherSelected ? "selected" : ""}>手动备注（不关联档案）</option>
+          <label class="breeding-mother-field"><span>单龟 / 批次</span>
+            <select class="select" name="mother" data-breeding-mother data-archive-directory required>
+              <option value="" disabled ${!manualMotherSelected && !state.breedingMotherValue ? "selected" : ""}>看图片选择品种、单龟或批次</option>
+              <option value="manual" ${manualMotherSelected ? "selected" : ""}>手动备注（不关联档案）</option>
+              ${breedingTargetOptions(state.turtles, manualMotherSelected ? "" : state.breedingMotherValue)}
             </select>
           </label>
-          ${manualMotherSelected ? `<input type="hidden" name="mother" value="manual">` : `<label class="breeding-mother-field"><span>种母</span>
-            <select class="select" name="mother" data-breeding-mother ${selectedSpecies ? "" : "disabled"} required>
-              <option value="" ${!state.breedingMotherValue ? "selected" : ""}>${selectedSpecies ? "选择该品种的种母" : "请先选择上方品种"}</option>
-              ${females.map(t => `<option value="${escapeHtml(t.id)}" ${state.breedingMotherValue === t.id ? "selected" : ""}>${escapeHtml(t.code || t.name || "未命名乌龟")}</option>`).join("")}
-            </select>
-          </label>`}
           <label class="breeding-pool-field"><span>龟池</span><select class="select" name="poolId"><option value="">暂不关联龟池</option>${turtlePools.map(pool => `<option value="${pool.id}" ${state.breedingPoolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}</select></label>
           ${manualMotherSelected ? `<label class="breeding-manual-mother"><span>手动备注</span><input class="field" name="manualMother" value="${escapeHtml(manualMotherValue)}" placeholder="可自行修改编号" required></label>` : ""}
           <label><span>产蛋数</span><input class="field" name="eggCount" type="number" min="0" step="1" required placeholder="0" value="${state.breedingEggCount || ""}"></label>
@@ -6823,9 +7067,8 @@ function breedingRow(record) {
 function pageBreedingDetail() {
   const record = (state.breedingRecords || []).find(item => item.id === state.selectedBreedingId);
   if (!record) return `${topbar("繁殖详情", true)}<main class="content page-fresh"><div class="empty"><strong>没有找到这条繁殖记录</strong></div></main>${bottomNav()}`;
-  const females = state.turtles.filter(t => t.gender === "母" || t.gender === "未知");
   const currentPhoto = state.breedingEditPhoto === "__CLEAR__" ? "" : state.breedingEditPhoto || record.photo || "";
-  const isManual = !record.motherId || record.motherId === "manual";
+  const isManual = !record.batchId && (!record.motherId || record.motherId === "manual");
   const historyList = [...(record.editHistory || [])].reverse();
   const turtlePools = state.turtlePools || [];
   const hatchProgress = breedingHatchProgress(record, state.turtles, state.ledgerRecords || []);
@@ -6846,14 +7089,14 @@ function pageBreedingDetail() {
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-breeding-edit-photo-input>
         <div class="breeding-form-grid">
           <label class="breeding-date-field"><span>日期</span><input class="field" name="date" type="date" value="${record.date || formatDate(new Date())}" required></label>
-          <label class="breeding-mother-field"><span>种母</span>
+          <label class="breeding-mother-field"><span>单龟 / 批次</span>
             <select class="select" name="mother" data-archive-directory>
               <option value="manual" ${isManual ? "selected" : ""}>手动备注</option>
-              ${females.map(t => `<option value="${t.id}" ${record.motherId === t.id ? "selected" : ""}>${t.code} · ${t.speciesName}</option>`).join("")}
+              ${breedingTargetOptions(state.turtles, record.batchId ? `batch:${record.batchId}` : isManual ? "" : record.motherId, record)}
             </select>
           </label>
           <label class="breeding-pool-field"><span>龟池</span><select class="select" name="poolId"><option value="">暂不关联龟池</option>${turtlePools.map(pool => `<option value="${pool.id}" ${record.poolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}</select></label>
-          <label class="breeding-manual-mother"><span>种母备注</span><input class="field" name="manualMother" value="${isManual ? (record.motherName || "") : ""}" placeholder="可自行修改编号"></label>
+          <label class="breeding-manual-mother"><span>手动记录名称（仅手动备注时填写）</span><input class="field" name="manualMother" value="${isManual ? escapeHtml(record.motherName || "") : ""}" placeholder="关联单龟或批次时无需填写"></label>
           <label><span>产蛋数</span><input class="field" name="eggCount" type="number" min="0" step="1" required value="${record.eggCount || 0}"></label>
           <label><span>受精数</span><input class="field" name="fertileCount" type="number" min="0" step="1" required value="${record.fertileCount || 0}"></label>
         </div>
@@ -6864,7 +7107,7 @@ function pageBreedingDetail() {
           <p>已累计孵化 ${hatchProgress.previousCount} 只，还可新增 ${Math.max(0, Number(record.eggCount || 0) - hatchProgress.previousCount)} 只。下方填写本次数量。</p>
           <label><span>本次孵化成功几只</span><input class="field" name="successfulHatchCount" type="number" min="1" step="1" placeholder="填写本次数量" inputmode="numeric"></label>
           <label><span>孵化日期</span><input class="field" name="hatchDate" type="date" value="${formatDate(new Date())}" max="${formatDate(new Date())}"></label>
-          <label><span>幼龟品种</span><select class="select" name="hatchSpeciesCode"><option value="">请选择品种</option>${accountSpeciesList().map(species => `<option value="${species.code}" ${state.turtles.find(t => t.id === record.motherId)?.speciesCode === species.code ? "selected" : ""}>${escapeHtml(species.name)}</option>`).join("")}</select></label>
+          <label><span>幼龟品种</span><select class="select" name="hatchSpeciesCode"><option value="">请选择品种</option>${accountSpeciesList().map(species => `<option value="${species.code}" ${(record.speciesCode || state.turtles.find(t => t.id === record.motherId)?.speciesCode) === species.code ? "selected" : ""}>${escapeHtml(species.name)}</option>`).join("")}</select></label>
           <p>每次确认在看板生成一条孵化批次，饲养天数从所选孵化日期计算。累计孵化数量不能超过产蛋数。</p>
           <div class="breeding-hatch-actions">
             <button class="secondary" type="button" data-complete-breeding-hatch>${record.incubationClosed === true ? '重新开启孵化' : '孵化完成'}</button>
@@ -6916,7 +7159,7 @@ function pageMine() {
         </button>
         <p class="profile-phone">${profileSub}</p>
         <div class="space-profile-pills">
-          <span>壳友圈获赞 ${receivedLikes}</span>
+          <span>龟友圈获赞 ${receivedLikes}</span>
           <span>${followerCount} 位粉丝</span>
         </div>
       </div>
@@ -7364,7 +7607,7 @@ function pageAbout() {
       </section>
       <section class="fresh-card settings-card about-compliance-card">
         <div class="settings-title">规则与隐私</div>
-        <p class="muted">使用壳友圈和龟集市前，请阅读平台规则、交易提示与隐私政策。</p>
+        <p class="muted">使用龟友圈和龟集市前，请阅读平台规则、交易提示与隐私政策。</p>
         <div><button type="button" data-page="rules">查看平台规则</button><button type="button" data-page="privacy">查看隐私政策</button></div>
       </section>
     </main>
@@ -7381,14 +7624,14 @@ function pageRules() {
       </section>
       <section class="fresh-card policy-card">
         <h3>一、服务范围</h3>
-        <p>平台提供档案记录、壳友圈内容发布、龟集市商品信息展示、关注和聊天咨询功能。龟集市仅用于信息发布与沟通撮合，不提供在线支付、资金托管、担保交易、验货、物流或售后承诺。</p>
+        <p>平台提供档案记录、龟友圈内容发布、龟集市商品信息展示、关注和聊天咨询功能。龟集市仅用于信息发布与沟通撮合，不提供在线支付、资金托管、担保交易、验货、物流或售后承诺。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>二、发布与交易要求</h3>
         <ol><li>发布者应如实填写品种、尺寸、克重、健康状况、照片或视频、交付方式和价格。</li><li>不得发布国家重点保护野生动物、来源或许可不合法的个体，或其他法律法规禁止交易、运输、寄递的内容。</li><li>不得虚假宣传、欺诈、诱导站外付款、发布他人隐私、侵权图片视频或违法联系方式。</li><li>买卖双方应自行核验合法来源、健康状况、运输条件和当地监管要求；交易风险由双方依法律与约定承担。</li></ol>
       </section>
       <section class="fresh-card policy-card">
-        <h3>三、壳友圈与聊天规则</h3>
+        <h3>三、龟友圈与聊天规则</h3>
         <p>不得发布违法、暴力、色情、赌博、诈骗、仇恨、侵权、侮辱诽谤、个人敏感信息或其他损害他人权益的内容。不得骚扰、冒用他人身份或批量营销。</p>
       </section>
       <section class="fresh-card policy-card">
@@ -7415,7 +7658,7 @@ function pagePrivacy() {
       </section>
       <section class="fresh-card policy-card">
         <h3>一、我们收集的信息</h3>
-        <p>注册和登录时收集手机号、密码验证信息与昵称；你主动上传的头像、乌龟档案、龟池、护理、繁殖、账本、壳友圈、商品、聊天和反馈内容会用于提供对应功能。应用会使用随机生成的匿名标识、会话起止时间、主模块停留时长和你主动附带在链接中的推广来源标识统计每日进入次数、独立使用人数、停留时长和推广效果；已登录账号仅以不可逆账号摘要关联到运营统计，不收集设备标识或精确位置。你主动点击定位并授权后，平台仅将所在城市用于商品发布展示。</p>
+        <p>注册和登录时收集手机号、密码验证信息与昵称；你主动上传的头像、乌龟档案、龟池、护理、繁殖、账本、龟友圈、商品、聊天和反馈内容会用于提供对应功能。应用会使用随机生成的匿名标识、会话起止时间、主模块停留时长和你主动附带在链接中的推广来源标识统计每日进入次数、独立使用人数、停留时长和推广效果；已登录账号仅以不可逆账号摘要关联到运营统计，不收集设备标识或精确位置。你主动点击定位并授权后，平台仅将所在城市用于商品发布展示。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>二、使用目的</h3>
@@ -7423,7 +7666,7 @@ function pagePrivacy() {
       </section>
       <section class="fresh-card policy-card">
         <h3>三、存储与共享</h3>
-        <p>数据存储在中国境内服务器。公开发布的壳友圈和龟集市内容会向其他用户展示；聊天内容仅向会话双方，以及为处理投诉、交易纠纷、违规审核、故障排查和服务运营而获得授权的平台人员展示，且遵循最小必要访问控制。除法律法规要求、保护用户权益或获得你的单独同意外，不会向第三方出售个人信息。</p>
+        <p>数据存储在中国境内服务器。公开发布的龟友圈和龟集市内容会向其他用户展示；聊天内容仅向会话双方，以及为处理投诉、交易纠纷、违规审核、故障排查和服务运营而获得授权的平台人员展示，且遵循最小必要访问控制。除法律法规要求、保护用户权益或获得你的单独同意外，不会向第三方出售个人信息。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>四、信息保护与备份</h3>
@@ -7444,7 +7687,7 @@ function pagePrivacy() {
 }
 
 function reportTypeLabel(type) {
-  return type === "market" ? "龟集市商品" : "壳友圈动态";
+  return type === "market" ? "龟集市商品" : "龟友圈动态";
 }
 
 function reportStatusLabel(status) {
@@ -7579,7 +7822,7 @@ function pageOperations() {
         <section class="operations-metric-grid"><article class="fresh-card operations-metric"><span>月进入次数</span><strong>${growthSelected.visitCount || 0}</strong><small>${operationMonthLabel(growthMonth)}</small></article><article class="fresh-card operations-metric"><span>月独立用户</span><strong>${growthSelected.uniqueVisitorCount || 0}</strong><small>按访客去重</small></article><article class="fresh-card operations-metric"><span>月新增注册</span><strong>${growthSelected.registeredCount || 0}</strong><small>注册用户数</small></article><article class="fresh-card operations-metric"><span>月登录活跃</span><strong>${growthSelected.activeAccountCount || 0}</strong><small>按账号去重</small></article><article class="fresh-card operations-metric"><span>月累计停留</span><strong>${formatOperationDuration(growthSelected.totalDwellSeconds)}</strong><small>当月已记录时长</small></article><article class="fresh-card operations-metric"><span>月平均停留</span><strong>${formatOperationDuration(growthSelected.averageDwellSeconds)}</strong><small>每次进入平均时长</small></article></section>
         <section class="fresh-card operations-note"><strong>推广来源</strong><p>${Object.entries(analytics.sources || {}).map(([source, count]) => `${escapeHtml(source)}：${count} 次`).join("　") || "新版部署后开始采集来源数据。"}</p></section>
         <section class="section-title"><span>用户模块停留</span><small>所选日期各用户在六个主模块的已记录时长</small></section>
-        <section class="operations-simple-list">${userUsage.map(item => `<article class="fresh-card operations-usage-row"><header><div><strong>${escapeHtml(item.name || "匿名访客")}</strong><small>${escapeHtml(item.identity || "匿名访问")} · 进入 ${Math.max(0, Number(item.visitCount) || 0)} 次</small></div><b>${formatOperationDuration(item.totalDwellSeconds)}</b></header><div class="operations-module-chips">${Object.entries(item.modules || {}).map(([name, seconds]) => `<span>${escapeHtml(name)} ${formatOperationDuration(seconds)}</span>`).join("")}</div></article>`).join("") || `<div class="fresh-card operations-note"><p>暂无用户停留数据。新版开始采集后会显示在这里。</p></div>`}</section>
+        <section class="operations-simple-list">${userUsage.map(item => `<article class="fresh-card operations-usage-row"><header><div><strong>${escapeHtml(item.name || "匿名访客")}</strong><small>${escapeHtml(item.identity || "匿名访问")} · 进入 ${Math.max(0, Number(item.visitCount) || 0)} 次</small></div><b>${formatOperationDuration(item.totalDwellSeconds)}</b></header><div class="operations-module-chips">${Object.entries(item.modules || {}).map(([name, seconds]) => `<span>${escapeHtml(name === "壳友圈" ? "龟友圈" : name)} ${formatOperationDuration(seconds)}</span>`).join("")}</div></article>`).join("") || `<div class="fresh-card operations-note"><p>暂无用户停留数据。新版开始采集后会显示在这里。</p></div>`}</section>
         <section class="fresh-card operations-note"><strong>统计口径</strong><p>用户每次打开 App 记为一次进入；独立用户按匿名标识去重。页面切换、每分钟心跳、进入后台和回到前台都会结算模块时长。管理员账号不计入运营中心的使用、互动与内容统计。</p></section>
       ` : tab === "market" ? `
         <section class="section-title"><span>单日集市</span><small>${escapeHtml(analytics.date || "所选日期")} 数据</small></section>
@@ -7611,6 +7854,8 @@ function placeholder(title) {
 }
 
 function render() {
+  // A data refresh can replace the page even without changing its route.
+  $app.cancelEdgeBackGesture?.();
   if (state.page === "membership") state.page = "team";
   $app.classList.toggle('team-page', state.page === 'team');
   applyTheme();
@@ -7650,7 +7895,7 @@ function render() {
     ledgerDetail: pageLedgerDetail,
     calendar: pageCalendar,
     mine: pageMine,
-    team: () => TurtleTeam.render({ auth: communityAuthPayload, api: apiPost, topbar, render, page: () => state.page, toast, download: downloadTextFile, login: () => setState({ page: 'account' }) }),
+    team: () => TurtleTeam.render({ auth: communityAuthPayload, api: apiPost, topbar, render, page: () => state.page, toast, download: downloadTextFile, bindArchivePicker: bindArchiveDirectoryPickers, breedingOptions: breedingTargetOptions, login: () => setState({ page: 'account' }) }),
     satisfaction: pagePublicSatisfaction,
     feedback: pageFeedback,
     feedbackAdd: pageFeedbackAdd,
@@ -7720,6 +7965,9 @@ function render() {
   setupMarketInfiniteScroll();
   setupCommunityInfiniteScroll();
   requestAnimationFrame(() => {
+    // setState restores the focused form field after render() returns. Sample
+    // keyboard geometry afterwards so a resized viewport is not the new baseline.
+    syncMobileKeyboardUI();
     hydrateVideoFirstFrames();
     hydrateCommunityPostVideos();
     hydrateMarketDetailVideos();
@@ -7807,106 +8055,252 @@ function startAccountCodeCooldownTimer() {
 
 function bindArchiveDirectoryPickers() {
   document.querySelectorAll("select[data-archive-directory]").forEach(select => {
-    if (select.dataset.directoryBound) return;
-    select.dataset.directoryBound = "true";
+    if (select.__directoryBound) return;
+    select.__directoryBound = true;
+    select.removeAttribute("data-directory-bound");
+    if (select.previousElementSibling?.classList.contains("archive-directory-trigger")) select.previousElementSibling.remove();
     const button = document.createElement("button");
     button.type = "button";
     button.className = "select archive-directory-trigger";
     button.setAttribute("aria-haspopup", "dialog");
     const update = () => {
-      button.textContent = select.selectedOptions[0]?.textContent || "选择关联档案";
+      const option = select.selectedOptions[0];
+      const turtle = (select.__directorySource?.turtles || state.turtles || []).find(t => String(t.id) === (option?.dataset.archiveTurtleId || option?.value));
+      const label = option?.textContent || "选择关联档案";
+      button.textContent = turtle?.speciesName && /\uFFFD/.test(turtle.speciesName) ? label.replaceAll(turtle.speciesName, archiveSpeciesName(turtle, select.__directorySource ? speciesList : null)) : label;
       button.disabled = select.disabled;
     };
     update();
     select.hidden = true;
     select.before(button);
     select.addEventListener("change", update);
+    select.addEventListener("invalid", event => { event.preventDefault(); button.focus(); openArchiveDirectory(select, button); });
     button.addEventListener("click", () => openArchiveDirectory(select, button));
   });
 }
 
+function archiveSpeciesName(turtle, catalogue = null) {
+  const name = String(turtle.speciesName || "").trim();
+  if (name && !/[\uFFFD\u0000]/.test(name)) return name;
+  const known = catalogue ? catalogue.find(s => s.code === turtle.speciesCode) : speciesByCode(turtle.speciesCode);
+  if (known?.name && !/[\uFFFD\u0000]/.test(known.name)) return known.name;
+  return turtle.speciesCode ? `品种待确认（${turtle.speciesCode}）` : "品种待确认";
+}
+
 function openArchiveDirectory(select, trigger) {
   if (document.querySelector(".archive-directory-overlay")) return;
-  const turtles = new Map((state.turtles || []).map(turtle => [String(turtle.id), turtle]));
-  const groups = new Map();
+  const source = select.__directorySource;
+  const turtles = new Map((source ? source.turtles : state.turtles || []).map(turtle => [String(turtle.id), turtle]));
+  const batches = new Map();
+  for (const turtle of turtles.values()) {
+    if (!turtle.batchId || !TurtleBatches.isActive(turtle)) continue;
+    if (!batches.has(turtle.batchId)) batches.set(turtle.batchId, []);
+    batches.get(turtle.batchId).push(turtle);
+  }
+  const entries = [];
+  const memberGroups = new Map();
   const special = [];
   for (const option of select.options) {
     if (option.disabled) continue;
-    const turtle = turtles.get(option.value);
+    const turtle = turtles.get(option.dataset.archiveTurtleId || option.value);
     if (!turtle) { special.push(option); continue; }
-    const name = String(turtle.speciesName || turtle.speciesCode || "未填写品种").trim();
-    if (!groups.has(name)) groups.set(name, []);
-    groups.get(name).push({ option, turtle });
+    const name = archiveSpeciesName(turtle, source ? speciesList : null);
+    const isBatch = option.hasAttribute("data-batch-count");
+    const members = isBatch ? batches.get(turtle.batchId) || [turtle] : [turtle];
+    const entry = { option, turtle, name, isBatch, members,
+      title: isBatch ? turtleBatchLabel({ ...turtle, speciesName: name, batchName: /\uFFFD/.test(turtle.batchName || "") ? "" : turtle.batchName }) : turtle.code || turtle.name || "未命名乌龟",
+      search: [option.textContent, name, turtle.batchId, ...members.flatMap(item => [item.code, item.name, item.batchName, item.speciesCode])].filter(Boolean).join(" ").toLocaleLowerCase() };
+    if (!isBatch && turtle.batchId) {
+      const key = JSON.stringify([turtle.batchId, name]);
+      let group = memberGroups.get(key);
+      if (!group) {
+        group = { ...entry, isBatch: true, requiresMember: true, title: turtleBatchLabel({ ...turtle, speciesName: name, batchName: /\uFFFD/.test(turtle.batchName || "") ? "" : turtle.batchName }), members: [], memberEntries: [], search: "" };
+        memberGroups.set(key, group);
+        entries.push(group);
+      }
+      group.members.push(turtle);
+      group.memberEntries.push(entry);
+      group.search += ` ${entry.search}`;
+    } else entries.push(entry);
   }
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay archive-directory-overlay";
-  overlay.innerHTML = `<section class="archive-directory-dialog" role="dialog" aria-modal="true" aria-label="选择关联档案"><header><button type="button" data-directory-back aria-label="返回品种目录">‹</button><strong data-directory-title>选择品种</strong><button type="button" data-directory-close aria-label="关闭">×</button></header><div class="archive-directory-list"></div></section>`;
+  overlay.innerHTML = `<section class="archive-directory-dialog" role="dialog" aria-modal="true" aria-labelledby="archiveDirectoryTitle">
+    <header><div class="directory-heading"><span>我的龟档案</span><strong id="archiveDirectoryTitle">选择品种与档案</strong><p>找到这次要记录的龟或批次</p></div><button type="button" data-directory-close aria-label="关闭">×</button></header>
+    <div class="directory-controls">
+      <label class="directory-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input type="search" data-directory-search placeholder="搜索品种、昵称、编号或批次" aria-label="搜索品种、昵称、编号或批次"><button type="button" data-directory-clear aria-label="清空搜索" hidden>×</button></label>
+      <div class="directory-filters"><label><span class="sr-only">健康状态</span><select data-directory-health aria-label="健康状态"><option value="">全部健康状态</option><option value="健康">健康</option><option value="生病">生病</option><option value="__unset__">未填写健康状态</option></select></label><label><span class="sr-only">所在龟池</span><select data-directory-pool aria-label="所在龟池"><option value="">全部龟池</option><option value="__none__">未关联龟池</option></select></label></div>
+      <div class="directory-types" role="group" aria-label="档案类型"><button type="button" data-directory-kind="all" aria-pressed="true">全部</button><button type="button" data-directory-kind="single" aria-pressed="false">单龟</button><button type="button" data-directory-kind="batch" aria-pressed="false">批次</button></div>
+    </div>
+    <div class="directory-result-heading"><button type="button" data-directory-back aria-label="返回品种目录" hidden>‹ 全部品种</button><strong data-directory-title>按品种查找</strong><span data-directory-count aria-live="polite"></span></div>
+    <div class="archive-directory-list"></div>
+    <footer class="directory-footer"><div class="directory-special-actions"></div><button type="button" data-directory-more hidden>显示更多</button><p>选择后自动返回，已填写的内容会保留</p></footer>
+  </section>`;
   const list = overlay.querySelector(".archive-directory-list");
   const back = overlay.querySelector("[data-directory-back]");
+  const search = overlay.querySelector("[data-directory-search]");
+  const health = overlay.querySelector("[data-directory-health]");
+  const poolFilter = overlay.querySelector("[data-directory-pool]");
+  const pools = new Map((source ? source.pools : state.turtlePools || []).map(pool => [pool.id, pool.name]));
+  const presentPoolIds = new Set(entries.flatMap(entry => entry.members.map(turtle => turtle.poolId)).filter(Boolean));
+  for (const id of presentPoolIds) {
+    if (pools.has(id)) poolFilter.add(new Option(pools.get(id), id));
+  }
+  const knownHealth = new Set(["健康", "生病"]);
+  for (const value of new Set(entries.flatMap(entry => entry.members.map(turtle => turtle.health)).filter(Boolean))) {
+    if (!knownHealth.has(value)) health.add(new Option(value, value));
+  }
+  let groupName = "", memberGroup = null, kind = "all", limit = 60;
   const previousOverflow = document.body.style.overflow;
+  trigger.setAttribute("aria-expanded", "true");
   const close = () => {
     overlay.remove();
     document.body.style.overflow = previousOverflow;
     document.removeEventListener("keydown", onKey, true);
+    trigger.setAttribute("aria-expanded", "false");
     if (trigger.isConnected) trigger.focus({ preventScroll: true });
   };
   const choose = value => {
     close();
-    if (!select.isConnected || select.value === value) return;
+    if (!select.isConnected || select.disabled || select.value === value || ![...select.options].some(option => option.value === value && !option.disabled)) return;
     select.value = value;
     select.dispatchEvent(new Event("change", { bubbles: true }));
   };
-  const row = (title, detail, action) => {
+  const element = (tag, className, text) => {
+    const node = document.createElement(tag);
+    node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const photo = (entry, species = false) => {
+    const catalogue = source ? speciesList.find(item => item.code === entry.turtle.speciesCode) : speciesByCode(entry.turtle.speciesCode);
+    const fallback = speciesPhoto(catalogue);
+    const image = element("img", "directory-photo");
+    const archivePhoto = entry.members.find(turtle => turtle.photo)?.photo;
+    image.alt = species ? `${entry.name}品种图片` : `${entry.title}档案照片`;
+    image.loading = "lazy";
+    image.referrerPolicy = "no-referrer";
+    image.addEventListener("error", () => {
+      image.addEventListener("error", () => { image.src = defaultPhoto; }, { once: true });
+      image.src = fallback;
+    }, { once: true });
+    image.src = species && catalogue ? fallback : archivePhoto || fallback;
+    return image;
+  };
+  const matches = (entry, ignoreKind = false) => {
+    const query = search.value.trim().toLocaleLowerCase();
+    return (!query || entry.search.includes(query)) && (ignoreKind || kind === "all" || entry.isBatch === (kind === "batch"))
+      && entry.members.some(turtle => (!health.value || (health.value === "__unset__" ? !turtle.health : turtle.health === health.value))
+        && (!poolFilter.value || (poolFilter.value === "__none__" ? !pools.has(turtle.poolId) : turtle.poolId === poolFilter.value)));
+  };
+  const addGroup = (name, rows) => {
     const button = document.createElement("button");
     button.type = "button";
-    const name = document.createElement("span");
-    name.textContent = title;
-    const meta = document.createElement("small");
-    meta.textContent = detail;
-    button.append(name, meta);
-    button.addEventListener("click", action);
+    button.className = "directory-species-card";
+    const imageWrap = element("span", "directory-species-image");
+    const count = rows.reduce((sum, entry) => sum + entry.members.length, 0);
+    imageWrap.append(photo(rows[0], true), element("span", "directory-species-count", `${count} 只`));
+    const copy = element("span", "directory-species-copy");
+    const batchCount = rows.filter(row => row.isBatch).length;
+    copy.append(element("strong", "", name), element("small", "", [rows.length - batchCount ? `${rows.length - batchCount} 只单龟` : "", batchCount ? `${batchCount} 个批次` : ""].filter(Boolean).join(" · ")));
+    button.append(imageWrap, copy, element("span", "directory-card-arrow", "↗"));
+    button.addEventListener("click", () => { groupName = name; limit = 60; renderList(); back.focus(); });
     list.append(button);
-    return button;
   };
-  const showGroup = (name, entries) => {
+  const addArchive = entry => {
+    const { option, turtle, members, isBatch, title, name } = entry;
+    const button = element("button", "directory-archive-card");
+    button.type = "button";
+    const selected = entry.requiresMember ? entry.memberEntries.some(row => row.option.value === select.value) : select.value === option.value;
+    button.setAttribute("aria-pressed", String(selected));
+    const copy = element("span", "directory-archive-copy");
+    const line = element("span", "directory-archive-title");
+    line.append(element("strong", "", title), element("small", "directory-kind-badge", isBatch ? "批次" : "单龟"));
+    copy.append(line, element("span", "directory-archive-subtitle", `${name} · ${isBatch ? `${entry.requiresMember ? "可选" : "在养"} ${members.length} 只` : ["公", "母"].includes(turtle.gender) ? `${turtle.gender}龟` : "性别未知"}`));
+    if (entry.requiresMember) copy.append(element("small", "directory-member-hint", "进入批次选择具体乌龟"));
+    const metadata = element("span", "directory-archive-meta");
+    const statuses = [...new Set(members.map(item => item.health || "未填写"))];
+    const healthText = statuses.length === 1 ? statuses[0] : statuses.includes("生病") ? "含生病" : "多种健康状态";
+    metadata.append(element("small", `directory-health ${statuses.includes("生病") ? "is-sick" : healthText === "健康" ? "is-healthy" : ""}`, healthText));
+    const names = [...new Set(members.map(item => pools.get(item.poolId) || "未关联龟池"))];
+    metadata.append(element("small", "directory-pool-label", names.length > 1 ? `${names.length} 个龟池范围` : names[0]));
+    copy.append(metadata);
+    button.append(photo(entry), copy, element("span", "directory-selection", selected ? "✓" : "›"));
+    button.addEventListener("click", () => {
+      if (!entry.requiresMember) return choose(option.value);
+      memberGroup = entry; groupName = entry.name; limit = 60;
+      renderList(); back.focus();
+    });
+    list.append(button);
+  };
+  const renderList = (keepScroll = false) => {
+    const scrollTop = keepScroll ? list.scrollTop : 0;
     list.replaceChildren();
-    list.scrollTop = 0;
-    back.hidden = false;
-    overlay.querySelector("[data-directory-title]").textContent = name;
-    for (const { option, turtle } of entries) {
-      const selected = select.value === option.value;
-      const isBatch = option.hasAttribute("data-batch-count");
-      const button = row(isBatch ? option.textContent : (turtle.code || turtle.name || "未命名乌龟"), selected ? "已选择 ✓" : isBatch ? "选择批次" : "选择", () => choose(option.value));
-      button.setAttribute("aria-pressed", String(selected));
+    const query = search.value.trim();
+    const showSpecies = !memberGroup && !groupName && !query && kind === "all";
+    const filtered = (memberGroup ? memberGroup.memberEntries : entries).filter(entry => (!groupName || entry.name === groupName) && matches(entry, Boolean(memberGroup)));
+    const filteredGroups = new Map();
+    for (const entry of filtered) {
+      if (!filteredGroups.has(entry.name)) filteredGroups.set(entry.name, []);
+      filteredGroups.get(entry.name).push(entry);
     }
-    back.focus();
-  };
-  const showGroups = () => {
-    list.replaceChildren();
-    list.scrollTop = 0;
-    back.hidden = true;
-    overlay.querySelector("[data-directory-title]").textContent = "选择品种";
-    for (const option of special) row(option.textContent, select.value === option.value ? "✓" : "", () => choose(option.value));
-    for (const [name, entries] of [...groups].sort(([a], [b]) => a.localeCompare(b, "zh-CN"))) {
-      row(name, `${entries.length} ${select.hasAttribute("data-archive-batches") ? "条" : "只"} ›`, () => showGroup(name, entries));
+    const visibleGroups = [...filteredGroups].sort(([a], [b]) => a.localeCompare(b, "zh-CN"));
+    const count = showSpecies ? visibleGroups.length : filtered.length;
+    list.classList.toggle("is-species-grid", showSpecies && count > 0);
+    back.hidden = !groupName && !memberGroup;
+    back.textContent = memberGroup ? "‹ 返回批次列表" : "‹ 全部品种";
+    back.setAttribute("aria-label", memberGroup ? "返回批次列表" : "返回品种目录");
+    overlay.querySelector(".directory-types").hidden = Boolean(memberGroup);
+    overlay.querySelector("[data-directory-title]").textContent = memberGroup?.title || groupName || (query ? "搜索结果" : showSpecies ? "按品种查找" : "可选档案");
+    overlay.querySelector("[data-directory-count]").textContent = showSpecies ? `${count} 个品种` : `${count} 条`;
+    overlay.querySelector("[data-directory-clear]").hidden = !search.value;
+    overlay.querySelectorAll("[data-directory-kind]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.directoryKind === kind)));
+    if (showSpecies) visibleGroups.slice(0, limit).forEach(([name, rows]) => addGroup(name, rows));
+    else filtered.slice(0, limit).forEach(addArchive);
+    if (!count) {
+      const empty = element("div", "directory-empty");
+      empty.append(element("span", "directory-empty-symbol", "⌕"), element("strong", "", entries.length ? "没有找到匹配的档案" : "还没有可选择的档案"),
+        element("p", "", entries.length ? "换个关键词，或清除筛选后再试试。" : "建立龟档案后，就可以在这里查看图片并选择。"));
+      if (entries.length) {
+        const reset = element("button", "", "清除搜索与筛选");
+        reset.type = "button";
+        reset.addEventListener("click", () => { search.value = health.value = poolFilter.value = groupName = ""; memberGroup = null; kind = "all"; limit = 60; renderList(); search.focus(); });
+        empty.append(reset);
+      }
+      list.append(empty);
     }
+    overlay.querySelector("[data-directory-more]").hidden = count <= limit;
+    list.scrollTop = scrollTop;
   };
+  for (const option of special) {
+    const button = element("button", "", option.textContent);
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(select.value === option.value));
+    button.addEventListener("click", () => choose(option.value));
+    overlay.querySelector(".directory-special-actions").append(button);
+  }
   function onKey(event) {
     if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); close(); }
     if (event.key === "Tab") {
-      const buttons = [...overlay.querySelectorAll("button")].filter(button => !button.hidden);
-      const first = buttons[0], last = buttons[buttons.length - 1];
+      const controls = [...overlay.querySelectorAll("button, input, select")].filter(control => !control.disabled && control.getClientRects().length);
+      const first = controls[0], last = controls[controls.length - 1];
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     }
   }
-  back.addEventListener("click", () => { showGroups(); list.querySelector("button")?.focus(); });
+  back.addEventListener("click", () => { if (memberGroup) memberGroup = null; else groupName = ""; limit = 60; renderList(); list.querySelector("button")?.focus(); });
+  search.addEventListener("input", event => { if (!event.isComposing) { limit = 60; renderList(); } });
+  search.addEventListener("compositionend", () => { limit = 60; renderList(); });
+  overlay.querySelector("[data-directory-clear]").addEventListener("click", () => { search.value = ""; limit = 60; renderList(); search.focus(); });
+  [health, poolFilter].forEach(control => control.addEventListener("change", () => { limit = 60; renderList(); }));
+  overlay.querySelectorAll("[data-directory-kind]").forEach(button => button.addEventListener("click", () => { kind = button.dataset.directoryKind; limit = 60; renderList(); }));
+  overlay.querySelector("[data-directory-more]").addEventListener("click", () => { limit += 60; renderList(true); });
   overlay.querySelector("[data-directory-close]").addEventListener("click", close);
   overlay.addEventListener("click", event => { if (event.target === overlay) close(); });
   document.body.append(overlay);
   document.body.style.overflow = "hidden";
   document.addEventListener("keydown", onKey, true);
-  showGroups();
+  renderList();
   overlay.querySelector("[data-directory-close]").focus();
 }
 
@@ -7994,6 +8388,7 @@ function bindSyncPageActions() {
 }
 
 function bindEvents() {
+  bindCareEvents();
   $app.querySelectorAll("[data-feed-retry]").forEach(button => {
     button.onclick = () => {
       const kind = button.dataset.feedRetry;
@@ -8061,6 +8456,7 @@ function bindEvents() {
     if (targetPage === "announcements" && !state.isCommunityAdmin) return toast("仅平台管理员可管理系统公告");
     if (targetPage === "operations" && !state.isCommunityAdmin) return toast("仅平台管理员可查看运营数据");
     const navigationState = { page: targetPage, openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" };
+    if (targetPage === "memos") navigationState.careTab = "care";
     if (targetPage === "poolAdd") navigationState.editingTurtlePoolId = "";
     if (targetPage === "marketAdd") {
       navigationState.editingMarketListingId = "";
@@ -8084,9 +8480,11 @@ function bindEvents() {
     }
     if (targetPage === "species") {
       navigationState.speciesPickerForAdd = state.page === "add";
+      navigationState.speciesPickerForLedger = state.page === "ledger" && state.ledgerDraftType === "purchase";
       if (state.page === "add") navigationState.formDraft = captureTurtleFormDraft();
+      if (navigationState.speciesPickerForLedger) navigationState.ledgerDraftForm = captureLedgerFormDraft();
     }
-      // 壳友圈的内容随后会由接口在原列表中补齐。不要先播放淡入缩放
+      // 龟友圈的内容随后会由接口在原列表中补齐。不要先播放淡入缩放
       // 再补数据，否则在 iPhone 上会像页面重新渲染了一次。
       setState(navigationState, targetPage === "community" ? { pageMotion: "none" } : {});
       if (targetPage === "messages") void refreshMessageUnread(true, { renderMessages: true });
@@ -8208,6 +8606,12 @@ function bindEvents() {
   document.querySelector("[data-update-photo-input]")?.addEventListener("change", readUpdatePhoto);
   document.querySelector("#turtleDetailForm")?.addEventListener("submit", submitTurtleDetail);
   document.querySelector("#turtleBatchMovementForm")?.addEventListener("submit", submitTurtleBatchMovement);
+  const batchLedgerForm = document.querySelector("#turtleBatchMovementForm[data-ledger-batch]");
+  if (batchLedgerForm) {
+    refreshBatchLedgerAmount();
+    batchLedgerForm.addEventListener("input", () => { refreshBatchLedgerAmount(); state.ledgerDraftForm = captureLedgerFormDraft(batchLedgerForm); });
+    batchLedgerForm.addEventListener("change", () => { if (batchLedgerForm.isConnected) { refreshBatchLedgerAmount(); state.ledgerDraftForm = captureLedgerFormDraft(batchLedgerForm); } });
+  }
   document.querySelector("#turtleBatchMovementForm [name='type']")?.addEventListener("change", event => {
     const form = event.currentTarget.form;
     const isLoss = event.currentTarget.value === "loss";
@@ -8344,11 +8748,15 @@ function bindEvents() {
     deleteLedgerRecord(btn.dataset.deleteLedger);
   }));
   document.querySelector("[data-cancel-ledger]")?.addEventListener("click", () => setState({ ledgerDraftType: "", ledgerDraftPhoto: "", ledgerDraftTurtleId: "", ledgerDraftForm: {}, ledgerPurchaseGender: "未知" }));
-  document.querySelector("#ledgerForm [name='turtleId']")?.addEventListener("change", event => {
+  document.querySelector("#ledgerForm [name='turtleId'], #turtleBatchMovementForm[data-ledger-batch] [name='turtleId']")?.addEventListener("change", event => {
     if (!requireLogin()) return;
     if (event.target.value === "__dashboard__") return startLedgerDashboardSelection();
     const turtle = (state.turtles || []).find(item => item.id === event.target.value);
     const draft = captureLedgerFormDraft();
+    if (draft.turtleId !== state.ledgerDraftTurtleId) {
+      draft.count = ""; draft.gender = "all";
+      if (state.ledgerDraftType === "loss") draft.amount = "";
+    }
     if (turtle?.batchId && ["sold", "loss"].includes(state.ledgerDraftType)) return openLedgerForm(state.ledgerDraftType, turtle.id, draft);
     if (turtle?.poolId && ["purchase", "loss"].includes(state.ledgerDraftType)) draft.poolId = turtle.poolId;
     setState({ ledgerDraftTurtleId: event.target.value || "", ledgerDraftForm: draft }, { skipCloud: true });
@@ -8392,19 +8800,19 @@ function bindEvents() {
   document.querySelector("[data-complete-breeding-hatch]")?.addEventListener("click", completeBreedingHatch);
   document.querySelector("[data-confirm-breeding-hatch]")?.addEventListener("click", confirmBreedingHatch);
   document.querySelector("[data-link-legacy-hatch]")?.addEventListener("click", () => confirmBreedingHatch(null, true));
-  bindBreedingSpeciesPicker();
   document.querySelector("[data-breeding-mother]")?.addEventListener("change", e => {
     if (!requireLogin()) return;
     const draft = readBreedingDraft();
     const manual = e.target.value === "manual";
-    const mother = state.turtles.find(t => t.id === e.target.value);
+    const mother = breedingTarget(e.target.value);
     setState({
       ...draft,
       breedingMotherMode: manual ? "manual" : "archive",
       breedingMotherValue: e.target.value,
+      breedingSpeciesKey: mother?.speciesName || "",
       breedingPoolId: manual ? draft.breedingPoolId : (mother?.poolId || ""),
       breedingManualMother: manual ? (draft.breedingManualMother || suggestedManualBreedingMother(draft.breedingDraftDate || state.breedingDraftDate || formatDate(new Date()))) : draft.breedingManualMother
-    });
+    }, { forceRender: true });
   });
   document.querySelectorAll("#breedingForm [name='date'], #breedingForm [name='manualMother'], #breedingForm [name='eggCount'], #breedingForm [name='fertileCount'], #breedingForm [name='note']").forEach(input => {
     input.addEventListener("input", event => {
@@ -8552,8 +8960,10 @@ function bindEvents() {
     if (results) results.innerHTML = "";
   });
   document.querySelector("[data-community-turtle-source]")?.addEventListener("change", event => {
+    const previousTemplate = communityGrowthTemplate((state.turtles || []).find(item => item.id === communityDraftTurtleId));
+    const currentText = document.querySelector("#communityPostForm textarea[name='content']")?.value || communityDraftText;
     communityDraftTurtleId = event.target.value || "";
-    communityDraftText = communityGrowthTemplate((state.turtles || []).find(item => item.id === communityDraftTurtleId));
+    communityDraftText = !currentText.trim() || currentText === previousTemplate ? communityGrowthTemplate((state.turtles || []).find(item => item.id === communityDraftTurtleId)) : currentText;
     render();
   });
   document.querySelector("#communityPostForm textarea[name='content']")?.addEventListener("input", event => {
@@ -9033,6 +9443,12 @@ function bindEvents() {
     }
   }
   document.querySelector("[data-market-turtle-source]")?.addEventListener("change", event => {
+    const form = document.querySelector("#marketListingForm");
+    const draft = new FormData(form);
+    const previousTurtle = (state.turtles || []).find(item => item.id === state.marketDraftTurtleId);
+    const previousTitle = previousTurtle ? `${previousTurtle.code || previousTurtle.speciesName || "乌龟"}诚意出售` : "";
+    const media = state.marketDraftMedia || [];
+    const hasCustomMedia = media.length && !(media.length === 1 && media[0].dataUrl === previousTurtle?.photo);
     const turtle = (state.turtles || []).find(item => item.id === event.target.value);
     const description = document.querySelector("[data-market-description]");
     const currentDescription = String(description?.value || state.marketDraftDescription || "").trim();
@@ -9042,10 +9458,18 @@ function bindEvents() {
     setState({
       marketDraftTurtleId: event.target.value,
       marketDraftPhoto: "",
-      marketDraftMedia: turtle?.photo ? [{ dataUrl: turtle.photo, type: "image" }] : [],
+      marketDraftMedia: hasCustomMedia ? media : turtle?.photo ? [{ dataUrl: turtle.photo, type: "image" }] : [],
       marketDraftDescription: canReplaceDescription ? template : currentDescription,
       marketDraftDescriptionTemplate: canReplaceDescription ? template : ""
-    }, { skipCloud: true });
+    }, { skipCloud: true, forceRender: true });
+    const nextForm = document.querySelector("#marketListingForm");
+    for (const name of ["title", "price", "negotiable", "delivery"]) {
+      if (name === "title" && (!draft.get(name) || draft.get(name) === previousTitle)) continue;
+      const field = nextForm?.elements.namedItem(name);
+      if (!field) continue;
+      if (field.type === "checkbox") field.checked = draft.has(name);
+      else field.value = String(draft.get(name) || "");
+    }
   });
   document.querySelector("[data-market-description]")?.addEventListener("input", event => {
     state.marketDraftDescription = event.target.value;
@@ -9320,7 +9744,7 @@ function communityAuthPayload(extra = {}) {
 
 function canUseCommunity() {
   if (!CONFIGURED_SMS_BACKEND) {
-    toast("壳友圈需要连接云端服务");
+    toast("龟友圈需要连接云端服务");
     return false;
   }
   if (!requireLogin()) return false;
@@ -9816,22 +10240,6 @@ function bindMarketSpeciesPicker() {
     return selectedText && search.value.trim() === selectedText ? "" : search.value;
   };
 
-  const autoSelectClosestMatch = query => {
-    const keyword = String(query || "").trim();
-    const closest = matches[0];
-    if (!keyword || !closest) {
-      value.value = "";
-      return;
-    }
-    const changed = value.value !== closest.code;
-    value.value = closest.code;
-    updateActiveOption(0);
-    if (changed) {
-      renderMarketTitleTemplates(closest, true);
-      renderMarketDescriptionTemplate(closest);
-    }
-  };
-
   const renderOptions = query => {
     matches = findMatches(query);
     activeIndex = -1;
@@ -9856,7 +10264,8 @@ function bindMarketSpeciesPicker() {
   });
   search.addEventListener("input", () => {
     renderOptions(search.value);
-    autoSelectClosestMatch(search.value);
+    value.value = "";
+    if (matches.length) updateActiveOption(0);
   });
   search.addEventListener("keydown", event => {
     if (event.key === "Escape") {
@@ -10323,13 +10732,8 @@ async function submitMarketListing(event) {
   const localMedia = (state.marketDraftMedia || []).length
     ? state.marketDraftMedia.slice(0, 9)
     : turtle?.photo ? [{ dataUrl: turtle.photo, type: "image" }] : [];
-  let speciesCode = String(form.get("speciesCode") || "");
-  let species = speciesByCode(speciesCode);
-  if (!species) {
-    const speciesSearch = event.currentTarget.querySelector("[data-market-species-search]");
-    species = marketSpeciesMatches(speciesSearch?.value || "")[0] || null;
-    speciesCode = species?.code || "";
-  }
+  const speciesCode = String(form.get("speciesCode") || "");
+  const species = speciesByCode(speciesCode);
   if (!species) return toast("请从搜索结果中选择品种");
   if (isMarketProhibitedSpecies(species)) return toast(marketSpeciesRestrictionMessage());
   const payload = {
@@ -11192,7 +11596,7 @@ function openContentReportDialog(targetType, targetId) {
   overlay.className = "content-report-overlay";
   overlay.innerHTML = `
     <section class="content-report-dialog" role="dialog" aria-modal="true" aria-labelledby="contentReportTitle">
-      <div class="content-report-head"><div><small>${type === "market" ? "龟集市商品" : "壳友圈动态"}</small><h2 id="contentReportTitle">举报内容</h2></div><button type="button" data-content-report-close aria-label="关闭">×</button></div>
+      <div class="content-report-head"><div><small>${type === "market" ? "龟集市商品" : "龟友圈动态"}</small><h2 id="contentReportTitle">举报内容</h2></div><button type="button" data-content-report-close aria-label="关闭">×</button></div>
       <p>请如实说明问题。恶意或重复举报可能影响账号使用。</p>
       <form data-content-report-form>
         <input type="hidden" name="targetType" value="${type}">
@@ -11463,7 +11867,7 @@ async function refreshCommunity(force = false) {
       setState(nextCommunityState, { skipCloud: true, preserveInputValues: true, renderPages: ["community","messages","communityFriends","communityProfile","mine"] });
     }
   } catch (error) {
-    console.warn(error.message || "壳友圈读取失败");
+    console.warn(error.message || "龟友圈读取失败");
     if (state.loggedInPhone === requestPhone && currentCloudToken() === requestToken) {
       communityLastLoadedAt = Date.now();
       state = { ...state, communityFeedError: "load_failed" };
@@ -11509,7 +11913,7 @@ async function loadMoreCommunityPosts() {
     if (!isCurrent()) return;
     state = { ...state, communityFeedLoadingMore: false };
     saveState({ skipCloud: true });
-    console.warn(error.message || "加载更多壳友圈动态失败");
+    console.warn(error.message || "加载更多龟友圈动态失败");
   } finally {
     communityLoading = false;
     if (!isCurrent()) return;
@@ -12129,7 +12533,7 @@ async function readCommunityMedia(event) {
   communityDraftText = document.querySelector("#communityPostForm textarea")?.value || communityDraftText;
   event.target.value = "";
   const kinds = files.map(localMediaFileKind);
-  if (kinds.some(kind => kind !== "image")) return toast("壳友圈只支持 JPG、PNG 或 WebP 图片");
+  if (kinds.some(kind => kind !== "image")) return toast("龟友圈只支持 JPG、PNG 或 WebP 图片");
   const remaining = Math.max(0, 9 - communityDraftMediaItems.length);
   if (!remaining) return toast("图片最多可发布 9 张");
   const selectedFiles = files.slice(0, remaining);
@@ -12172,7 +12576,7 @@ async function submitCommunityPost(event) {
   const draftMedia = [...communityDraftMediaItems];
   const titleLength = [...title].length;
   if (titleLength < 5 || titleLength > 31) return toast("帖子标题需为 5–31 个字");
-  if (draftMedia.some(media => media.type !== "image")) return toast("壳友圈只允许发布图片");
+  if (draftMedia.some(media => media.type !== "image")) return toast("龟友圈只允许发布图片");
   const fingerprint = JSON.stringify({
     content,
     title,
@@ -13954,7 +14358,7 @@ function consumePendingNativePushAction() {
   if (!action || action.loading) return;
   if (action.route === "memos") {
     pendingNativePushAction = null;
-    setState({ page: "memos" }, { skipCloud: true });
+    setState({ page: "memos", careTab: "reminders" }, { skipCloud: true });
     return;
   }
   if (!state.loggedInPhone || !currentCloudToken() || !cloudHydrationComplete) {
@@ -14819,21 +15223,23 @@ async function verifyServerSmsCode(phone, code) {
   }
 }
 
+function speciesSelectionPatch(code) {
+  if (state.speciesPickerForLedger) return { ledgerDraftForm: { ...ledgerFormDraft(), purchaseSpeciesCode: code }, speciesPickerForLedger: false, speciesPickerForAdd: false, page: "ledger", search: "" };
+  if (state.speciesPickerForAdd) return { selectedSpeciesCode: code, formDraft: { ...turtleFormDraft(), speciesCode: code }, speciesPickerForAdd: false, speciesPickerForLedger: false, page: "add", search: "" };
+  return {};
+}
+
 function addKeptSpecies(code) {
   if (!requireLogin()) return;
   const species = speciesByCode(code);
   if (!species) return;
-  if (state.keptSpecies.includes(code)) {
+  if (state.keptSpecies.includes(code) && !state.speciesPickerForAdd && !state.speciesPickerForLedger) {
     setState({ keptSpecies: state.keptSpecies.filter(item => item !== code) });
     toast(`${species.name} 已取消`);
     return;
   }
   const keptSpecies = state.keptSpecies.includes(code) ? state.keptSpecies : [...state.keptSpecies, code];
-  if (state.speciesPickerForAdd) {
-    setState({ keptSpecies, selectedSpeciesCode: code, formDraft: { ...turtleFormDraft(), speciesCode: code }, speciesPickerForAdd: false, page: "add", search: "" });
-  } else {
-    setState({ keptSpecies });
-  }
+  setState({ keptSpecies, ...speciesSelectionPatch(code) });
   toast(`${species.name} 已加入常用品种`);
 }
 
@@ -15404,7 +15810,8 @@ function submitTurtleDetail(event) {
   if (!turtle) return;
   if (turtle.batchId) return submitTurtleBatchDetail(event, turtle);
   const form = new FormData(event.currentTarget);
-  const species = speciesByCode(form.get("speciesCode"));
+  const selectedCode = String(form.get("speciesCode") || "");
+  const species = speciesByCode(selectedCode) || (selectedCode && selectedCode === turtle.speciesCode ? { code: selectedCode, name: turtle.speciesName } : null);
   if (!species) return toast("请先选择品种");
   const weight = Number(form.get("weight"));
   const carapaceLength = Number(form.get("carapaceLength"));
@@ -15908,17 +16315,14 @@ function deleteTurtlePool(id) {
 
 function openLedgerForm(type, turtleId = "", draft = null) {
   if (!requireLogin()) return;
-  const batchTurtle = state.turtles.find(item => item.id === turtleId && item.batchId);
+  const selectedBatch = state.turtles.find(item => item.id === turtleId && item.batchId);
+  const batchTurtle = selectedBatch && state.turtles.find(item => item.batchId === selectedBatch.batchId && TurtleBatches.isActive(item));
+  if (selectedBatch && !batchTurtle && ["sold", "loss"].includes(type)) return toast("这个批次已没有在养龟，请重新选择");
   if (batchTurtle && ["sold", "loss"].includes(type)) {
-    setState({ page: "turtleDetail", selectedTurtleId: batchTurtle.id, updatingTurtleId: "", batchMovementType: type, openTurtleMenuId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" });
-    requestAnimationFrame(() => {
-      const form = document.querySelector("#turtleBatchMovementForm");
-      for (const name of ["recordDate", "amount", "note"]) {
-        const input = form?.elements.namedItem(name);
-        if (input && draft?.[name]) input.value = draft[name];
-      }
-      requestAnimationFrame(() => scrollFormBelowTopbar("#turtleBatchMovementForm"));
-    });
+    setState({ page: "ledger", ledgerDraftType: type, ledgerTab: type, ledgerDraftTurtleId: batchTurtle.id,
+      ledgerDraftForm: { ...draft, turtleId: batchTurtle.id, poolId: draft?.poolId || "__ALL__" },
+      updatingTurtleId: "", openTurtleMenuId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" }, { pageScroll: "preserve" });
+    requestAnimationFrame(() => requestAnimationFrame(scrollLedgerFormIntoView));
     return;
   }
   // 收购始终新建档案；只有售出、损耗才可以操作既有档案。
@@ -15930,7 +16334,7 @@ function openLedgerForm(type, turtleId = "", draft = null) {
 }
 
 function scrollLedgerFormIntoView() {
-  scrollFormBelowTopbar("#ledgerForm");
+  scrollFormBelowTopbar("#ledgerForm, #turtleBatchMovementForm[data-ledger-batch]");
 }
 
 function scrollFormBelowTopbar(selector) {
@@ -16091,7 +16495,7 @@ function submitBreedingDetail(event, hatch = null, completion = null) {
   const record = (state.breedingRecords || []).find(item => item.id === state.selectedBreedingId);
   if (!record) return;
   const motherId = String(form.get("mother") || "manual");
-  const mother = state.turtles.find(t => t.id === motherId);
+  const mother = breedingTarget(motherId, record);
   const poolId = (state.turtlePools || []).some(pool => pool.id === String(form.get("poolId") || "")) ? String(form.get("poolId") || "") : "";
   const poolName = turtlePoolName(poolId);
   const manualMother = String(form.get("manualMother") || "").trim();
@@ -16110,7 +16514,8 @@ function submitBreedingDetail(event, hatch = null, completion = null) {
   if (hatchCount < (record.hatchArchiveIds || []).length) return toast("孵化数量不能少于已关联的幼龟档案数");
   if (motherId === "manual" && !manualMother) return toast("请填写种母备注");
   const photo = state.breedingEditPhoto === "__CLEAR__" ? "" : state.breedingEditPhoto || record.photo || "";
-  const nextMotherName = mother ? turtleLabel(mother) : manualMother;
+  if (motherId !== "manual" && !mother) return toast("请选择有效的单龟或批次");
+  const nextMotherName = mother ? mother.motherName : manualMother;
   const historyItem = {
     id: crypto.randomUUID(),
     oldPhoto: record.photo || "",
@@ -16118,6 +16523,8 @@ function submitBreedingDetail(event, hatch = null, completion = null) {
     oldSnapshot: {
       date: record.date,
       motherName: record.motherName,
+      motherId: record.motherId || "",
+      batchId: record.batchId || "",
       eggCount: record.eggCount,
       fertileCount: record.fertileCount,
       hatchCount: record.hatchCount || 0,
@@ -16129,6 +16536,8 @@ function submitBreedingDetail(event, hatch = null, completion = null) {
     newSnapshot: {
       date: form.get("date"),
       motherName: nextMotherName,
+      motherId: mother?.motherId || (motherId === "manual" ? "manual" : ""),
+      batchId: mother?.batchId || "",
       eggCount,
       fertileCount,
       hatchCount,
@@ -16141,7 +16550,10 @@ function submitBreedingDetail(event, hatch = null, completion = null) {
   const updated = {
     ...record,
     date: form.get("date"),
-    motherId,
+    motherId: mother?.motherId || (motherId === "manual" ? "manual" : ""),
+    batchId: mother?.batchId || "",
+    speciesCode: mother?.speciesCode || "",
+    speciesName: mother?.speciesName || "",
     motherName: nextMotherName,
     poolId,
     poolName,
@@ -16200,7 +16612,7 @@ function submitBreedingRecord(event) {
   if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const motherId = form.get("mother");
-  const mother = state.turtles.find(t => t.id === motherId);
+  const mother = breedingTarget(motherId);
   const poolId = (state.turtlePools || []).some(pool => pool.id === String(form.get("poolId") || "")) ? String(form.get("poolId") || "") : "";
   const manualMother = String(form.get("manualMother") || "").trim();
   const eggCount = Number(form.get("eggCount"));
@@ -16215,12 +16627,15 @@ function submitBreedingRecord(event) {
     return;
   }
   if (fertileCount > eggCount) return toast("受精数不能大于产蛋数");
-  if (motherId !== "manual" && !mother) return toast("请选择有效的种母档案");
+  if (motherId !== "manual" && !mother) return toast("请选择有效的单龟或批次");
   const record = {
     id: crypto.randomUUID(),
     date: form.get("date"),
-    motherId,
-    motherName: mother ? turtleLabel(mother) : manualMother,
+    motherId: mother?.motherId || (motherId === "manual" ? "manual" : ""),
+    batchId: mother?.batchId || "",
+    speciesCode: mother?.speciesCode || "",
+    speciesName: mother?.speciesName || "",
+    motherName: mother ? mother.motherName : manualMother,
     poolId,
     poolName: turtlePoolName(poolId),
     eggCount,
@@ -17316,8 +17731,11 @@ function setupUniversalMediaPreview() {
 }
 
 let mobileKeyboardBaseHeight = 0;
+let mobileKeyboardBaseWidth = 0;
 
 function forumComposerViewportState(layoutHeight, viewport, focused, baseHeight = layoutHeight) {
+  // Pinch zoom also shrinks visualViewport; it must not lift the composer.
+  if (viewport?.scale && Math.abs(viewport.scale - 1) > .05) return { bottom: 0, keyboardOpen: false };
   const covered = viewport ? Math.max(0, layoutHeight - viewport.height - (viewport.offsetTop || 0)) : 0;
   // Native resize already moves a fixed footer; only offset the area still covered.
   const keyboardOpen = covered > 80 || (focused && baseHeight - layoutHeight > 80);
@@ -17326,17 +17744,24 @@ function forumComposerViewportState(layoutHeight, viewport, focused, baseHeight 
 
 function syncMobileKeyboardUI() {
   const active = document.activeElement;
-  const editable = active instanceof HTMLElement && active.matches("input, textarea, [contenteditable='true']");
+  const editable = active instanceof HTMLElement && !active.readOnly && !active.disabled &&
+    active.matches("textarea, [contenteditable='true'], input:not([type='checkbox']):not([type='radio']):not([type='button']):not([type='submit']):not([type='file']):not([type='range']):not([type='color']):not([type='date'])");
   const viewport = window.visualViewport;
   const layoutHeight = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0);
-  const coveredHeight = viewport ? layoutHeight - viewport.height : 0;
-  const composerFocused = Boolean(active?.closest?.(".forum-reply-composer"));
-  if (!editable || !mobileKeyboardBaseHeight) mobileKeyboardBaseHeight = layoutHeight;
-  const composerViewport = forumComposerViewportState(layoutHeight, viewport, composerFocused, mobileKeyboardBaseHeight);
+  const layoutWidth = document.documentElement.clientWidth || window.innerWidth;
+  if (!editable || !mobileKeyboardBaseHeight || Math.abs(layoutWidth - mobileKeyboardBaseWidth) > 80) mobileKeyboardBaseHeight = layoutHeight;
+  mobileKeyboardBaseWidth = layoutWidth;
+  const composerViewport = forumComposerViewportState(layoutHeight, viewport, editable, mobileKeyboardBaseHeight);
+  const nativeKeyboard = window.TURTLE_ANDROID_KEYBOARD_VISIBLE;
+  if (typeof nativeKeyboard === "boolean") {
+    composerViewport.keyboardOpen = nativeKeyboard;
+    if (!nativeKeyboard) composerViewport.bottom = 0;
+  }
   document.documentElement.style.setProperty("--forum-keyboard-bottom", composerViewport.bottom + "px");
   document.documentElement.classList.toggle("forum-keyboard-open", composerViewport.keyboardOpen);
-  const touchDevice = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
-  document.documentElement.classList.toggle("keyboard-open", Boolean(editable && (touchDevice || coveredHeight > 120)));
+  // Focus can remain after dismissing the software keyboard or using a physical
+  // keyboard. Hide tabs only while geometry/native state says it is visible.
+  document.documentElement.classList.toggle("keyboard-open", composerViewport.keyboardOpen);
 }
 
 function setupMobileKeyboardGuard() {
@@ -17345,6 +17770,9 @@ function setupMobileKeyboardGuard() {
   window.visualViewport?.addEventListener("resize", syncMobileKeyboardUI);
   window.visualViewport?.addEventListener("scroll", syncMobileKeyboardUI);
   window.addEventListener("resize", syncMobileKeyboardUI);
+  window.addEventListener("pageshow", syncMobileKeyboardUI);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) syncMobileKeyboardUI(); });
+  syncMobileKeyboardUI();
 }
 
 function pullRefreshSupportedPage() {
@@ -17445,10 +17873,20 @@ async function runPullRefresh() {
 function setupPullToRefresh() {
   if (document.body.dataset.pullRefreshBound === "true") return;
   document.body.dataset.pullRefreshBound = "true";
+  $app.cancelPullRefreshGesture = resetPullRefreshIndicator;
+  window.addEventListener("blur", resetPullRefreshIndicator);
+  window.addEventListener("pagehide", resetPullRefreshIndicator);
+  window.addEventListener("resize", resetPullRefreshIndicator);
+  document.addEventListener("visibilitychange", resetPullRefreshIndicator);
 
   document.addEventListener("touchstart", event => {
+    if (event.touches.length !== 1) { resetPullRefreshIndicator(); return; }
     if (pullRefreshState.refreshing || !pullRefreshSupportedPage() || !pageAtTop() || event.touches.length !== 1) return;
-    if (event.target.closest("input, textarea, select, [contenteditable='true'], .image-preview-overlay, .modal-overlay")) return;
+    if (!$app.contains(event.target) || event.target.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [aria-modal='true'], [class*='-overlay']")) return;
+    // A list inside a dialog/card owns its vertical gesture, even at its edge.
+    for (let node = event.target; node && node !== $app; node = node.parentElement) {
+      if (node.scrollHeight > node.clientHeight && /auto|scroll/.test(getComputedStyle(node).overflowY)) return;
+    }
     // A conversation row owns horizontal tracking from the very first touch.
     // Do not initialise pull-to-refresh for that gesture, even if the list is
     // at its top edge.
@@ -17468,6 +17906,7 @@ function setupPullToRefresh() {
   }, { passive: true });
 
   document.addEventListener("touchmove", event => {
+    if (event.touches.length !== 1) { resetPullRefreshIndicator(); return; }
     if (!pullRefreshState.tracking || pullRefreshState.refreshing || event.touches.length !== 1) return;
     const touch = event.touches[0];
     const horizontalDistance = touch.clientX - pullRefreshState.startX;
@@ -17592,6 +18031,9 @@ function setupEdgeBackAndConversationSwipe() {
   let gestureAnimationFrame = 0;
   let edgeSettleTimer = 0;
   let edgeSettleCleanup = null;
+  // Pointer-up ends the drag, but its temporary layer positions still belong
+  // to the settling animation. Keep that owner until completion or cancellation.
+  let settlingGesture = null;
   const rootPages = new Set(["home", "ledger", "market", "messages", "mine"]);
   const edgePinnedProperties = ["position", "top", "left", "right", "bottom", "width", "transform"];
   const pinEdgeFixedLayers = active => {
@@ -17621,7 +18063,8 @@ function setupEdgeBackAndConversationSwipe() {
   };
   const unpinEdgeFixedLayers = active => {
     active?.edgePinnedLayers?.forEach(({ layer, previous }) => {
-      if (!layer?.isConnected) return;
+      // Detached page snapshots can be mounted again. Restore those nodes too.
+      if (!layer) return;
       previous.forEach(({ property, value, priority }) => {
         if (value) layer.style.setProperty(property, value, priority);
         else layer.style.removeProperty(property);
@@ -17640,6 +18083,8 @@ function setupEdgeBackAndConversationSwipe() {
     $app.style.transform = "";
     $app.classList.remove("edge-back-dragging");
     unpinEdgeFixedLayers(gesture);
+    unpinEdgeFixedLayers(settlingGesture);
+    settlingGesture = null;
     clearEdgeBackPreview();
   };
   const releasePointer = active => {
@@ -17650,6 +18095,9 @@ function setupEdgeBackAndConversationSwipe() {
     releasePointer(gesture);
     clearPendingEdgeBack();
     gesture = null;
+  };
+  $app.cancelEdgeBackGesture = () => {
+    if (gesture || settlingGesture) cancelActiveGesture();
   };
   const paintGesture = active => {
     gestureAnimationFrame = 0;
@@ -17672,10 +18120,11 @@ function setupEdgeBackAndConversationSwipe() {
     target?.setPointerCapture?.(active.pointerId);
   };
   document.addEventListener("pointerdown", event => {
-    if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+    if (!event.isPrimary) { if (gesture || settlingGesture) cancelActiveGesture(); return; }
+    if (event.pointerType === "mouse" && event.button !== 0) return;
     // A new touch must never inherit a previous drag or its delayed rebound.
-    if (gesture || edgeSettleTimer) cancelActiveGesture();
-    if (event.target.closest("input, textarea, select, [contenteditable='true'], .modal-overlay, .image-preview-overlay")) return;
+    if (gesture || settlingGesture || edgeSettleTimer) cancelActiveGesture();
+    if (!$app.contains(event.target) || event.target.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [aria-modal='true'], [class*='-overlay']")) return;
     // A native product gallery owns every horizontal gesture except the thin
     // left-edge shield rendered above it. This prevents the page-back path
     // from competing with an image page while the finger is already on it.
@@ -17744,6 +18193,7 @@ function setupEdgeBackAndConversationSwipe() {
     flushGesturePaint(active);
     releasePointer(active);
     if (active.mode === "edge") {
+      settlingGesture = active;
       const width = Math.max(1, window.innerWidth);
       const edgeOffset = Math.max(0, Math.min(width, active.edgeOffset ?? dx));
       const hasForwardFling = active.velocityX > .48 && dx > 26;
@@ -17775,14 +18225,14 @@ function setupEdgeBackAndConversationSwipe() {
         edgeSettleTimer = 0;
         edgeSettleCleanup?.();
         edgeSettleCleanup = null;
+        unpinEdgeFixedLayers(active);
+        if (settlingGesture === active) settlingGesture = null;
         if (shouldComplete && !rootPages.has(state.page)) {
           // navigateBack owns the offscreen-to-previous-page hand-off.
-          unpinEdgeFixedLayers(active);
           navigateBack({ fromEdgeGesture: true });
         } else {
           $app.style.transition = "";
           $app.style.transform = "";
-          unpinEdgeFixedLayers(active);
           clearEdgeBackPreview();
         }
       };
@@ -17801,10 +18251,10 @@ function setupEdgeBackAndConversationSwipe() {
     cancelActiveGesture();
   }, { passive: true });
   window.addEventListener("pagehide", cancelActiveGesture);
+  window.addEventListener("pageshow", cancelActiveGesture);
   window.addEventListener("blur", cancelActiveGesture);
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) cancelActiveGesture();
-  });
+  window.addEventListener("resize", cancelActiveGesture);
+  document.addEventListener("visibilitychange", cancelActiveGesture);
 }
 
 restorePendingCloudData();

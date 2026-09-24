@@ -31,8 +31,11 @@ function rates(eggs, fertile, hatch) {
 function publicRecord(r, data) {
   const p = progress(r, data), eggs = Number(r.eggCount || 0), fertile = Number(r.fertileCount || 0);
   const mother = (data.turtles || []).find(t => t.id === r.motherId);
-  return { id: r.id, date: r.date || '', motherId: r.motherId || 'manual', motherName: r.motherName || '未记录种母', fatherId: r.fatherId || '',
-    speciesCode: r.speciesCode || mother?.speciesCode || '', speciesName: r.speciesName || mother?.speciesName || '未记录品种',
+  const speciesCode = r.speciesCode || mother?.speciesCode || '';
+  const rawSpeciesName = r.speciesName || mother?.speciesName || '';
+  const speciesName = rawSpeciesName && !/\uFFFD/.test(rawSpeciesName) ? rawSpeciesName : speciesOptions(data).find(s => s.code === speciesCode)?.name || '未记录品种';
+  return { id: r.id, date: r.date || '', motherId: r.batchId ? '' : r.motherId || 'manual', batchId: r.batchId || '', motherName: r.motherName || '未记录名称', fatherId: r.fatherId || '',
+    speciesCode, speciesName,
     poolId: r.poolId || '', poolName: r.poolName || '', eggCount: eggs, fertileCount: fertile, hatchCount: p.total,
     photo: r.photo || '', note: r.note || '', incubationClosed: r.incubationClosed === true, unlinked: p.unlinked,
     ...rates(eggs, fertile, p.total), hatchEvents: p.events.map(e => ({ id: e.id, batchId: e.batchId || '', date: e.date, count: e.count, speciesCode: e.speciesCode || '', historicalLink: Boolean(e.historicalLink) })) };
@@ -53,7 +56,7 @@ function speciesOptions(data) {
   const options = new Map();
   for (const t of data.turtles || []) if (t.speciesCode && t.speciesName) options.set(t.speciesCode, { code: t.speciesCode, name: t.speciesName });
   for (const s of [...(data.customSpecies || []), ...catalog]) if (s.code && s.name) options.set(s.code, { code: s.code, name: s.name });
-  return [...options.values()];
+  return [...options.values()].map(item => /\uFFFD/.test(item.name) ? { ...item, name: `品种待确认（${item.code}）` } : item);
 }
 function edit(data, body) {
   const records = data.breedingRecords || (data.breedingRecords = []);
@@ -66,17 +69,21 @@ function edit(data, body) {
   if (eggs < p.total || fertile < p.total) fail('产蛋数和受精数不能少于已累计出壳数');
   const dates = !r ? [] : [...p.events.map(e => e.date), ...(data.turtles || []).filter(t => t.sourceBreedingId === r?.id).map(t => t.acquiredDate), ...(data.ledgerRecords || []).map(row => row.turtleSnapshot).filter(t => t && t.sourceBreedingId === r?.id).map(t => t.acquiredDate)].filter(Boolean);
   if (dates.some(d => layDate > d)) fail('产蛋日期不能晚于已记录的出壳日期');
-  const motherId = text(body.motherId) || 'manual', mother = (data.turtles || []).find(t => t.id === motherId);
-  if (motherId !== 'manual' && !mother && motherId !== r?.motherId) fail('请选择有效种母或手动填写');
-  const motherName = mother ? text(mother.code || mother.name || mother.speciesName) : motherId === r?.motherId && motherId !== 'manual' ? r.motherName : text(body.motherName);
-  if (!motherName) fail('请填写种母名称');
+  const batchId = text(body.batchId, 250), motherId = batchId ? '' : text(body.motherId) || 'manual';
+  const mother = (data.turtles || []).find(t => batchId ? t.batchId === batchId && !['已死亡', '已转让'].includes(t.status) && !t.lossRecordId : t.id === motherId);
+  if (batchId && !mother && batchId !== r?.batchId) fail('请选择有效批次');
+  if (!batchId && motherId !== 'manual' && !mother && motherId !== r?.motherId) fail('请选择有效种母或手动填写');
+  const speciesName = mother && (!mother.speciesName || /\uFFFD/.test(mother.speciesName)) ? speciesOptions(data).find(s => s.code === mother.speciesCode && !/\uFFFD/.test(s.name))?.name || '品种待确认' : mother?.speciesName;
+  const motherName = batchId ? (mother ? text(mother.batchName && !/\uFFFD/.test(mother.batchName) ? mother.batchName : `${speciesName} · ${mother.acquiredDate || '未填写日期'}批次`) : r.motherName)
+    : mother ? text(mother.code || mother.name || speciesName) : motherId === r?.motherId && motherId !== 'manual' ? r.motherName : text(body.motherName);
+  if (!motherName) fail('请填写记录名称');
   const poolId = text(body.poolId), pool = (data.turtlePools || []).find(p => p.id === poolId);
   if (poolId && !pool && poolId !== r?.poolId) fail('养殖池已不存在，请重新选择');
   if (body.photo !== undefined && (typeof body.photo !== 'string' || body.photo.length > 600000 || !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(body.photo))) fail('请上传 400KB 以内的 PNG、JPEG 或 WebP 繁殖照片');
   const updated = { ...(r || { id: crypto.randomUUID(), hatchCount: 0, hatchArchiveIds: [], hatchEvents: [], createdAt: new Date().toISOString(), editHistory: [] }),
-    date: layDate, motherId, motherName, poolId, poolName: pool?.name || (poolId ? r?.poolName || '' : ''), eggCount: eggs, fertileCount: fertile,
+    date: layDate, motherId, batchId, motherName, poolId, poolName: pool?.name || (poolId ? r?.poolName || '' : ''), eggCount: eggs, fertileCount: fertile,
     note: text(body.note, 500), incubationClosed: body.incubationClosed === true, updatedAt: new Date().toISOString() };
-  if (mother?.speciesCode) { updated.speciesCode = mother.speciesCode; updated.speciesName = mother.speciesName || ''; }
+  if (mother?.speciesCode) { updated.speciesCode = mother.speciesCode; updated.speciesName = speciesName || ''; }
   else if (body.speciesCode !== undefined) {
     const species = speciesOptions(data).find(s => s.code === body.speciesCode);
     if (body.speciesCode && !species) fail('请选择有效品种');

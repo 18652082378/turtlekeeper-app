@@ -6,7 +6,7 @@ const deferred = () => { let resolve, reject; const promise = new Promise((a, b)
 function harness() {
   let account = { phone: 'owner', token: 'token' };
   const calls = [], notices = [];
-  const context = vm.createContext({ Intl, Date, console, queueMicrotask() {}, setInterval() {}, document: { querySelectorAll: () => [] }, window: {} });
+  const context = vm.createContext({ Intl, Date, console, queueMicrotask() {}, setInterval() {}, document: { querySelectorAll: () => [], addEventListener() {} }, window: { addEventListener() {} } });
   // Expose closures in this isolated test only; production exports are unchanged.
   vm.runInContext(source.replace('  window.TurtleTeam = {', `  window.audit = {
     refresh, mutate, reset,

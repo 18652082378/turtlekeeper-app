@@ -57,9 +57,9 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await page.locator('.trade-intro').count(),0, 'Push cancellation must suppress this entry');
     await page.evaluate(() => openTradeGuide());
     await page.getByRole('button',{name:'我想卖龟'}).click();
-    assert.match(await page.locator('.trade-poster').getAttribute('src'), /seller.png$/);
+    assert.match(await page.locator('.trade-poster').getAttribute('src'), /seller\.png(?:\?|$)/);
     await page.getByRole('button',{name:'完整条款',exact:true}).click();
-    assert.match(await page.locator('.trade-terms').textContent(), /交易总价1,000元，中介费8.80元/);
+    assert.match(await page.locator('.trade-terms').textContent(), /交易总价1,000元，中介费6.80元/);
     await page.locator('[data-copy]').click();
     assert.equal(await page.evaluate(() => copied),'keyousz001');
     for (const width of [320,390,768]) {

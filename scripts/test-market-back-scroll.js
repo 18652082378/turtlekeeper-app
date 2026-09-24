@@ -21,6 +21,7 @@ async function main() {
       var BOTTOM_NAV_ROOT_PAGES=new Set(['market','messages','home']);
       var marketLoading=false,marketLastLoadedAt=0,incomingMarketShareLoading=false,incomingMarketShareListingId='';
       function saveState(){} function refreshCareReminderTimers(){} function setupMarketInfiniteScroll(){}
+      function setupCommunityInfiniteScroll(){} function syncMobileKeyboardUI(){}
       function syncPersistentBottomNav(){} function hydrateVideoFirstFrames(){} function hydrateCommunityPostVideos(){} function hydrateMarketDetailVideos(){}
       function patchSystemAnnouncementOverlay(){}
       function savedMarketListingIds(){return []} function hasCloudSession(){return true} function marketAuthPayload(x){return x}

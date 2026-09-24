@@ -142,6 +142,12 @@ async function main() {
     assert.equal(health.ok, true);
     assert.equal(health.minimumBuild, 95, "1.0.7 must remain supported when building 1.0.8");
     assert.equal(health.latestBuild, 99, "unreleased builds must not replace the public release in update checks");
+    const androidVersion = await fetch(base + '/api/app/version?platform=android&channel=beta').then(response => response.json());
+    assert.equal(androidVersion.platform, 'android');
+    assert.equal(androidVersion.channel, 'beta');
+    assert.equal(androidVersion.appStoreUrl, '');
+    const legacyAndroidVersion = await fetch(base + '/api/app/version?build=10', { headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 15)' } }).then(response => response.json());
+    assert.equal(legacyAndroidVersion.minimumBuild, 0);
     for (const host of ['invalid host', '%', 'localhost:invalid-port']) {
       // fetch may replace Host with its own authority. Use a real HTTP request
       // to exercise the malformed header received by the server.
@@ -217,6 +223,37 @@ async function main() {
     await request('/api/account/logout', auth(winner));
     await request('/api/account/session', auth(winner), { status: 401 });
     await request('/api/account/load', auth(buyer));
+
+    // ADMIN_PHONE points at the isolated seller account; never use a live admin.
+    const adminLogin = async (id, platform = 'ios') => (await request('/api/account/login', {
+      phone: seller.phone, password, termsAccepted: true,
+      deviceId: `admin-installation-${id}`, devicePlatform: platform
+    })).json.user;
+    const adminA = await adminLogin('a');
+    const adminB = await adminLogin('b', 'android');
+    const adminC = await adminLogin('c', 'web');
+    for (const device of [adminA, adminB, adminC]) {
+      for (const route of ['/api/account/session', '/api/account/load', '/api/community/unread']) await request(route, auth(device));
+      await request('/api/team', auth(device), { status: 404 }); // Auth succeeds; no team has been created yet.
+    }
+    const adminB2 = await adminLogin('b', 'android');
+    const renewed = await request('/api/account/session', auth(adminB), { status: 401 });
+    assert.equal(renewed.json.code, 'ACCOUNT_SESSION_REPLACED');
+    for (const device of [adminA, adminB2, adminC]) await request('/api/account/session', auth(device));
+    const adminD = await adminLogin('d');
+    const evicted = await request('/api/account/session', auth(adminA), { status: 401 });
+    assert.equal(evicted.json.code, 'ACCOUNT_SESSION_REPLACED');
+    await request('/api/account/login', { phone: seller.phone, password: 'wrong-password', termsAccepted: true }, { status: 401 });
+    await request('/api/account/logout', auth(adminA));
+    for (const device of [adminB2, adminC, adminD]) await request('/api/account/session', auth(device));
+    await request('/api/account/logout', auth(adminC));
+    await request('/api/account/session', auth(adminC), { status: 401 });
+    for (const device of [adminB2, adminD]) await request('/api/account/session', auth(device));
+    const adminRace = await Promise.all(['race-a', 'race-b', 'race-c', 'race-d'].map(id => adminLogin(id)));
+    const adminRaceValid = await Promise.all(adminRace.map(device => request('/api/account/session', auth(device)).then(() => true, () => false)));
+    assert.equal(adminRaceValid.filter(Boolean).length, 3, 'concurrent admin logins retain exactly three installations');
+    seller.token = adminRace[adminRaceValid.indexOf(true)].token;
+    console.log('Admin API sessions passed: three devices, same-device renewal, fourth-device eviction, wrong password, logout isolation and concurrent logins.');
     }
 
     // 1.0.7 removes a lost turtle but retains the original purchase and the
@@ -297,6 +334,7 @@ async function main() {
     await request('/api/account/save', { ...auth(upgradeAccount), data: legacyResave });
     assert.deepEqual((await request('/api/account/load', auth(upgradeAccount))).json.user.data, upgradedCloud.data, '1.0.7 ordinary save preserves upgraded batch data');
     await request("/api/account/species/create", { code: privateCode, name: "私有测试品种" }, { status: 401 });
+    await request("/api/account/species/create", { ...auth(seller), code: privateCode, name: "乱码\uFFFD品种" }, { status: 400 });
     const custom = await request("/api/account/species/create", { ...auth(seller), code: privateCode, name: "私有测试品种" });
     assert.equal(custom.json.customSpecies.length, 1);
     assert.equal(custom.json.species.code, privateCode);

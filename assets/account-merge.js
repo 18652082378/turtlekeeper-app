@@ -4,9 +4,9 @@
     : Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
   const canonical = value => JSON.stringify(stable(value));
   const equal = (a, b) => canonical(a) === canonical(b);
-  const recordFields = ['turtles', 'ledgerRecords', 'memos', 'breedingRecords', 'turtlePools', 'activityLogs', 'customSpecies', 'satisfactionReviews', 'feedbackItems'];
+  const recordFields = ['turtles', 'ledgerRecords', 'memos', 'careRecords', 'careCustomItems', 'breedingRecords', 'turtlePools', 'activityLogs', 'customSpecies', 'satisfactionReviews', 'feedbackItems'];
   const setFields = ['keptSpecies', 'marketFavoriteIds', 'marketHistoryIds'];
-  const fieldNames = { turtles: '档案', ledgerRecords: '账本', memos: '护理', breedingRecords: '繁殖', turtlePools: '龟池', activityLogs: '操作记录', customSpecies: '品种', accountName: '昵称', accountAvatar: '头像', themeColor: '主题', professionalOutput: '报表设置', satisfactionRating: '评价' };
+  const fieldNames = { turtles: '档案', ledgerRecords: '账本', memos: '提醒', careRecords: '养护记录', careCustomItems: '养护事项', breedingRecords: '繁殖', turtlePools: '龟池', activityLogs: '操作记录', customSpecies: '品种', accountName: '昵称', accountAvatar: '头像', themeColor: '主题', professionalOutput: '报表设置', satisfactionRating: '评价' };
   const refs = record => [record?.turtleId, ...(record?.turtleIds || []), record?.motherId].filter(id => id && id !== 'manual').map(id => `turtles:${id}`);
   const countMoney = (records, type) => records.filter(r => r.type === type).reduce((sum, r) => sum + Math.round((Number(r.amount) || 0) * 100), 0) / 100;
   function merge(base, local, remote, choices = {}) {
@@ -32,7 +32,7 @@
             add(key, field, id, record, 'record');
             // Logs describe past actions, so keeping them must not reconnect
             // unrelated live transactions or resurrect deleted archives.
-            if (field === 'activityLogs') return;
+            if (field === 'activityLogs' || field === 'careRecords') return;
             for (const ref of refs(record)) connect(key, ref);
             if (record.batchId) connect(key, `batch:${record.batchId}`);
             if (record.sourceBreedingId) connect(key, `breedingRecords:${record.sourceBreedingId}`);
@@ -91,7 +91,7 @@
       // the other device assigns a turtle to it is a real conflict.
       for (const node of group) {
         const record = candidate.get(node.key);
-        if (!record || node.kind !== 'record') continue;
+        if (!record || node.kind !== 'record' || node.field === 'careRecords') continue;
         for (const dependency of [record.poolId ? `turtlePools:${record.poolId}` : '', record.sourceBreedingId ? `breedingRecords:${record.sourceBreedingId}` : ''].filter(Boolean)) {
           if (nodes.has(dependency) && candidate.get(dependency) === undefined
             && !snapshots.slice(1).some((s, side) => equal(node.values[side + 1], record) && nodes.get(dependency).values[side + 1] === undefined)) conflict = true;

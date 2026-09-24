@@ -89,7 +89,9 @@ fs.mkdirSync(output, { recursive: true });
     await page.locator('#turtleBatchMovementForm [name="gender"]').selectOption('公');
     await page.locator('#turtleBatchMovementForm [name="count"]').fill('100');
     await page.locator('#turtleBatchMovementForm [name="amount"]').fill('300');
-    await page.getByRole('button', { name: '记录数量变动', exact: true }).click();
+    assert.equal(await page.evaluate(() => state.page), 'ledger');
+    assert.equal(await page.locator('[data-update-turtle]').count(), 0);
+    await page.getByRole('button', { name: '保存售出记录', exact: true }).click();
     await page.waitForFunction(() => TurtleBatches.summary(state.turtles).count === 388);
     assert.equal(await page.evaluate(() => TurtleBatches.poolCount(state.turtlePools[1], state.turtles)), 388);
     // Reproduce the reported storage failure with one shared embedded image.

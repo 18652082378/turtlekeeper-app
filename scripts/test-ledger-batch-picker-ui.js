@@ -50,7 +50,11 @@ const root = path.resolve(__dirname, '..');
         await page.locator(action === 'update' ? '[data-update-turtle="batch-0"]' : `[data-ledger-for-turtle="${action}:batch-0"]`).click();
         const selector = action === 'update' ? '#turtleDetailForm' : '#turtleBatchMovementForm';
         await assertFormPosition(selector);
-        if (action !== 'update') assert.equal(await page.locator(`${selector} [name="type"]`).inputValue(), action);
+        if (action !== 'update') {
+          assert.equal(await page.locator(`${selector} [name="type"]`).inputValue(), action);
+          assert.equal(await page.evaluate(() => state.page), 'ledger');
+          assert.equal(await page.locator('[data-update-turtle], #turtleDetailForm').count(), 0);
+        }
         else assert.match(await page.locator('.topbar').innerText(), /更新批次/);
         if (width === 390) await page.screenshot({ path: path.join(root, 'output', `batch-navigation-${action}.png`) });
       }
@@ -68,13 +72,22 @@ const root = path.resolve(__dirname, '..');
       assert.equal(await page.locator('.archive-directory-list button').count(), 2, 'One batch and one single turtle, no member expansion');
       await page.locator('.archive-directory-list').screenshot({ path: path.join(root, 'output', `ledger-batch-picker-${type}.png`) });
       await page.locator('.archive-directory-list button').filter({ hasText: '九月果核批次' }).click();
+      assert.equal(await page.evaluate(() => state.page), 'ledger', 'Selecting a batch must stay in bookkeeping');
+      assert.equal(await page.locator('[data-update-turtle], #turtleDetailForm').count(), 0, 'Bookkeeping has no batch editing entry');
+      assert.match(await page.locator('.ledger-batch-summary').innerText(), /九月果核批次/);
       assert.equal(await page.locator('#turtleBatchMovementForm [name="type"]').inputValue(), type);
       await page.waitForFunction(() => document.querySelector('#turtleBatchMovementForm [name="note"]').value === '批次关联备注');
       await assertFormPosition('#turtleBatchMovementForm');
       assert.equal(await page.evaluate(() => TurtleBatches.summary(state.turtles.filter(t => t.batchId === 'batch')).count), active, 'Selecting does not move inventory');
       await page.locator('#turtleBatchMovementForm [name="count"]').fill(String(count));
+      if (type === 'loss') {
+        assert.equal(await page.locator('#turtleBatchMovementForm [name="amount"]').inputValue(), '10.00');
+        assert.equal(await page.locator('#turtleBatchMovementForm [name="amount"]').getAttribute('readonly'), '');
+      }
       if (type === 'sold') assert.equal(await page.locator('#turtleBatchMovementForm [name="amount"]').inputValue(), '15');
-      await page.getByRole('button', { name: '记录数量变动', exact: true }).click();
+      await page.getByRole('button', { name: type === 'loss' ? '保存损耗记录' : '保存售出记录', exact: true }).click();
+      assert.equal(await page.evaluate(() => state.page), 'ledger', 'Saving returns to the ledger');
+      assert.equal(await page.locator('#turtleBatchMovementForm').count(), 0);
       assert.equal(await page.evaluate(() => TurtleBatches.summary(state.turtles.filter(t => t.batchId === 'batch')).count), active - count);
       await page.evaluate(type => setState({ page: 'ledger', ledgerTab: type, ledgerDraftType: '' }, { skipSave: true }), type);
       assert.equal(await page.locator('.ledger-row').count(), 1, 'One row per batch movement');
@@ -118,6 +131,37 @@ const root = path.resolve(__dirname, '..');
     await page.locator('.archive-directory-list button').filter({ hasText: '小果' }).click();
     assert.equal(await page.locator('#ledgerForm [name="turtleId"]').inputValue(), 'single');
     assert.equal(await page.locator('#turtleBatchMovementForm').count(), 0);
+    // Re-selecting an archive stays in the ledger, keeps transaction notes and
+    // date, and resets the old quantity without editing either batch.
+    const extra = { id: 'new-batch-1', batchId: 'new-batch', batchName: '新批次', code: 'NEW-1', speciesCode: 'GHG', speciesName: '果核蛋龟', status: '正常饲养', price: 9, health: '健康' };
+    await page.evaluate(extra => { state.turtles.push(extra); openLedgerForm('loss', 'batch-0'); }, extra);
+    await page.locator('#turtleBatchMovementForm [name="note"]').fill('切换批次保留备注');
+    await page.locator('#turtleBatchMovementForm [name="recordDate"]').fill('2026-09-01');
+    await page.locator('#turtleBatchMovementForm [name="count"]').fill('2');
+    await page.locator('#turtleBatchMovementForm .archive-directory-trigger').click();
+    await page.locator('[data-directory-search]').fill('新批次');
+    await page.locator('.directory-archive-card').click();
+    assert.equal(await page.evaluate(() => state.page), 'ledger');
+    assert.equal(await page.locator('#turtleBatchMovementForm [name="count"]').inputValue(), '');
+    assert.equal(await page.locator('#turtleBatchMovementForm [name="amount"]').inputValue(), '');
+    assert.equal(await page.locator('#turtleBatchMovementForm [name="note"]').inputValue(), '切换批次保留备注');
+    assert.equal(await page.locator('#turtleBatchMovementForm [name="recordDate"]').inputValue(), '2026-09-01');
+    const beforeCancel = await page.evaluate(() => JSON.stringify({ turtles: state.turtles, records: state.ledgerRecords }));
+    await page.locator('[data-cancel-ledger]').click();
+    assert.equal(await page.evaluate(() => JSON.stringify({ turtles: state.turtles, records: state.ledgerRecords })), beforeCancel);
+    assert.equal(await page.locator('#turtleBatchMovementForm').count(), 0);
+    await page.evaluate(() => openLedgerForm('sold', 'batch-0'));
+    await page.locator('#turtleBatchMovementForm [name="count"]').fill('3');
+    await page.locator('#turtleBatchMovementForm [name="amount"]').fill('50');
+    await page.locator('#turtleBatchMovementForm [name="note"]').fill('看板选择保留');
+    await page.locator('#turtleBatchMovementForm .archive-directory-trigger').click();
+    await page.getByRole('button', { name: '去看板查找', exact: true }).click();
+    await page.locator('[data-view-turtle="new-batch-1"]').click();
+    assert.equal(await page.evaluate(() => state.page), 'ledger');
+    assert.equal(await page.locator('#turtleBatchMovementForm [name="turtleId"]').inputValue(), 'new-batch-1');
+    assert.equal(await page.locator('#turtleBatchMovementForm [name="count"]').inputValue(), '');
+    assert.equal(await page.locator('#turtleBatchMovementForm [name="amount"]').inputValue(), '50');
+    assert.equal(await page.locator('#turtleBatchMovementForm [name="note"]').inputValue(), '看板选择保留');
     assert.deepEqual(errors, []);
     console.log('Ledger picker passed: form navigation, collapsed batches and movements, grouped details/totals, separate operations after reload, whole-loss restore, whole-sale delete, drafts and singles.');
   } finally { await browser.close(); }

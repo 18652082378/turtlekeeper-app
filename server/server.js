@@ -8,13 +8,16 @@ const https = require("https");
 const http2 = require("http2");
 const path = require("path");
 const { URL } = require("url");
+const { appUpdatePolicy } = require("./app-update-policy");
 const { createMarketRankPager } = require("./market-ranking");
 const { MysqlRecordStore, assertLegacyMode, acquireWriter } = require("./mysql-record-store");
 const { reviewHash, advertisingRisk, createDailyCommunityDispatcher } = require("./community-daily-push");
 const marketRankPage = createMarketRankPager();
 const { createTeamService, recordAccountChange } = require('./team-space');
 const { createApplePurchases } = require('./apple-team-purchases');
+const { createAlipayPurchases } = require('./alipay-team-purchases');
 const { createBackupStorage } = require('./backup-storage');
+const TurtleCare = require('../assets/care-records');
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -72,7 +75,9 @@ const MEDIA_CDN_BASE_URL = String(process.env.MEDIA_CDN_BASE_URL || "").trim().r
 // image that they cached as a failed request during a temporary outage.
 const MEDIA_CACHE_VERSION = String(process.env.MEDIA_CACHE_VERSION || "20260825.2").trim();
 const REVIEW_ADMIN_PHONE = process.env.ADMIN_PHONE || "18652082378";
-const RESERVED_PLATFORM_NICKNAME = "壳友手账";
+const RESERVED_PLATFORM_NICKNAME = "龟友手账";
+// Retain the previous official name to prevent impersonation after the rename.
+const RESERVED_PLATFORM_NICKNAMES = [RESERVED_PLATFORM_NICKNAME, "壳友手账"];
 const POLICY_VERSION = "2026-09-01";
 const LEGACY_POLICY_VERSION = "2026-08-12";
 const SUPPORTED_POLICY_VERSIONS = new Set([LEGACY_POLICY_VERSION, POLICY_VERSION]);
@@ -90,12 +95,6 @@ function publicUserForPolicyClient(user, token, db, body = {}) {
   if (!String(body.termsVersion || "").trim()) result.termsVersion = LEGACY_POLICY_VERSION;
   return result;
 }
-// 1.0.6 使用 build 90–94；1.0.7 从 build 95 开始。
-// 环境变量仍可在不改代码的情况下提高最低版本和最新构建号。
-const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 95)));
-// App Store 正式上线版本为 1.0.7（99），与开发中的构建号分别维护。
-const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || 99)));
-const IOS_APP_STORE_URL = process.env.IOS_APP_STORE_URL || "https://apps.apple.com/app/id6783481335";
 // Apple Push Notification service (APNs) credentials are configured only on the server.
 const APNS_TEAM_ID = String(process.env.APNS_TEAM_ID || "").trim();
 const APNS_KEY_ID = String(process.env.APNS_KEY_ID || "").trim();
@@ -104,7 +103,7 @@ const APNS_HOST = String(process.env.APNS_HOST || "api.push.apple.com").trim();
 const APNS_KEY_PATH = String(process.env.APNS_KEY_PATH || "").trim();
 const APNS_KEY_BASE64 = String(process.env.APNS_KEY_BASE64 || "").trim();
 const CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || "Asia/Shanghai").trim();
-const MARKET_SALE_METHODS = ["自有客户成交", "闲鱼成交", "壳友手账成交"];
+const MARKET_SALE_METHODS = ["自有客户成交", "闲鱼成交", "壳友手账成交", "龟友手账成交"];
 const DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);
 
 function randomDefaultAccountAvatar() {
@@ -365,6 +364,8 @@ function readJson(req) {
 
 function emptyAccountData() {
   return {
+    careRecords: [],
+    careCustomItems: [],
     turtles: [],
     keptSpecies: [],
     customSpecies: [],
@@ -414,6 +415,8 @@ function normalizeAccountData(data = {}) {
     turtles: Array.isArray(next.turtles) ? next.turtles : [],
     keptSpecies: Array.isArray(next.keptSpecies) ? next.keptSpecies : [],
     customSpecies: normalizeCustomSpecies(next.customSpecies),
+    careRecords: TurtleCare.normalizeRecords(next.careRecords),
+    careCustomItems: TurtleCare.normalizeItems(next.careCustomItems),
     memos: Array.isArray(next.memos) ? next.memos : [],
     ledgerRecords: Array.isArray(next.ledgerRecords) ? next.ledgerRecords : [],
     breedingRecords: Array.isArray(next.breedingRecords) ? next.breedingRecords : [],
@@ -454,6 +457,8 @@ function accountDataHasContent(data = {}) {
     account.turtles,
     account.keptSpecies,
     account.customSpecies,
+    account.careRecords,
+    account.careCustomItems,
     account.memos,
     account.ledgerRecords,
     account.breedingRecords,
@@ -468,7 +473,7 @@ function accountDataHasContent(data = {}) {
 
 function accountRecordCounts(data = {}) {
   const account = normalizeAccountData(data);
-  const fields = ["turtles", "keptSpecies", "memos", "ledgerRecords", "breedingRecords", "turtlePools"];
+  const fields = ["turtles", "keptSpecies", "memos", "careRecords", "ledgerRecords", "breedingRecords", "turtlePools"];
   return Object.fromEntries(fields.map(field => [field, Array.isArray(account[field]) ? account[field].length : 0]));
 }
 
@@ -848,8 +853,8 @@ function validPhone(phone) {
 
 function accountNameForPhone(value, phone, fallback = "") {
   const name = String(value || "").normalize("NFKC").trim();
-  if (name === RESERVED_PLATFORM_NICKNAME && String(phone) !== REVIEW_ADMIN_PHONE) {
-    throw new Error(`“${RESERVED_PLATFORM_NICKNAME}”仅供壳友手账官方账号使用`);
+  if (RESERVED_PLATFORM_NICKNAMES.includes(name) && String(phone) !== REVIEW_ADMIN_PHONE) {
+    throw new Error(`“${RESERVED_PLATFORM_NICKNAME}”仅供龟友手账官方账号使用`);
   }
   return name || fallback;
 }
@@ -940,7 +945,8 @@ function normalizedPushDevices(devices) {
     .map(item => ({
       token: normalizeApnsDeviceToken(item?.token || item),
       platform: item?.platform === "ios" ? "ios" : "ios",
-      updatedAt: String(item?.updatedAt || "")
+      updatedAt: String(item?.updatedAt || ""),
+      ...(item?.sessionHash ? { sessionHash: String(item.sessionHash) } : {})
     }))
     .filter(item => item.token && !seen.has(item.token) && Boolean(seen.add(item.token)))
     .slice(0, 8);
@@ -1197,7 +1203,7 @@ async function notifyCommunityActivity(db, notification) {
       : `${actorName}评论了你的帖子：${notification.preview || "查看新评论"}`;
   const payload = {
     aps: {
-      alert: { title: "壳友圈新互动", body: body.slice(0, 120) },
+      alert: { title: "龟友圈新互动", body: body.slice(0, 120) },
       badge: Math.min(99, Math.max(1, communityTotalUnreadCount(db, recipient))),
       sound: "default"
     },
@@ -1246,7 +1252,7 @@ async function notifyCareReminder(user, memo) {
   const payload = {
     aps: {
       alert: {
-        title: "壳友手账护理提醒",
+        title: "龟友手账护理提醒",
         body: String(memo.title || "护理事项").slice(0, 120)
       },
       sound: "default"
@@ -1475,14 +1481,21 @@ function addAccountSession(user, token, body, now) {
   const identified = /^[A-Za-z0-9_-]{16,128}$/.test(deviceId) && ["ios", "android", "web"].includes(platform);
   const deviceHash = identified ? hashValue(`session-device:${user.phone}:${deviceId}`) : "";
   const current = (Array.isArray(user.tokens) ? user.tokens : []).filter(item => item?.hash);
-  // A successful login replaces every previous credential, including legacy
-  // clients without installation IDs. Wrong-password attempts never reach here.
+  const limit = isAdminUser(user) ? 3 : 1;
+  // Renewing one installation replaces its credential, not another device's
+  // slot. Legacy clients without an ID each occupy one slot. New logins evict
+  // the oldest login once the account's device limit is reached.
+  const retained = limit > 1 ? current.filter(item => !deviceHash || item.deviceHash !== deviceHash).slice(-(limit - 1)) : [];
+  const retainedHashes = new Set(retained.map(item => item.hash));
   user.replacedSessions = [...(Array.isArray(user.replacedSessions) ? user.replacedSessions : []),
-    ...current.map(item => ({ hash: item.hash, replacedAt: now }))].slice(-32);
-  user.tokens = [{ hash: hashValue(token), createdAt: now, ...(identified ? { deviceHash, platform } : {}) }];
+    ...current.filter(item => !retainedHashes.has(item.hash)).map(item => ({ hash: item.hash, replacedAt: now }))].slice(-32);
+  user.tokens = [...retained, { hash: hashValue(token), createdAt: now, ...(identified ? { deviceHash, platform } : {}) }];
   // The newly signed-in installation registers its notification token again.
-  // Stop future private notifications to installations that just lost access.
-  user.pushDevices = [];
+  // Keep notifications for retained devices, but stop them for evicted ones.
+  // An unbound legacy push token can only be attributed when there was one login.
+  user.pushDevices = normalizedPushDevices(user.pushDevices)
+    .map(item => ({ ...item, sessionHash: item.sessionHash || (current.length === 1 ? current[0].hash : "") }))
+    .filter(item => retainedHashes.has(item.sessionHash));
 }
 
 async function handleRegister(req, res) {
@@ -1570,6 +1583,8 @@ async function handleLogout(req, res) {
   // Idempotent: an already expired credential cannot revoke another session.
   if (user) {
     user.tokens = user.tokens.filter(item => item.hash !== hashValue(token));
+    const activeHashes = new Set(user.tokens.map(item => item.hash));
+    user.pushDevices = normalizedPushDevices(user.pushDevices).filter(item => activeHashes.has(item.sessionHash));
     writeDatabase(db);
   }
   return sendJson(res, 200, { ok: true });
@@ -1597,6 +1612,7 @@ async function handleCreateCustomSpecies(req, res) {
   const db = readDatabase();
   const user = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
   if (!user) return sendJson(res, 401, { ok: false, message: "请先登录账号" });
+  if (/\uFFFD/.test(String(body.name || ""))) return sendJson(res, 400, { ok: false, message: "品种名称含乱码，请重新输入" });
   const species = normalizeCustomSpecies([{ code: body.code, name: body.name, photo: body.photo, createdAt: new Date().toISOString() }])[0];
   if (!species) return sendJson(res, 400, { ok: false, message: "请填写有效的品种名称" });
   user.data = normalizeAccountData(user.data || {});
@@ -1631,8 +1647,13 @@ async function handleSaveAccount(req, res) {
   if (staleAccount) {
     return sendJson(res, 409, { ok: false, code: "ACCOUNT_DATA_CONFLICT", message: "其他设备已更新云端，本次保存未覆盖云端数据，请保留本机备份后核对" });
   }
-  const incomingHasContent = accountDataHasContent(incomingData);
   const existingData = normalizeAccountData(user.data || {});
+  // Older app builds do not send these fields. Preserve them without preventing
+  // a new client from deliberately removing a saved picker option.
+  for (const field of ["careRecords", "careCustomItems"]) {
+    if (!Object.prototype.hasOwnProperty.call(body.data || {}, field)) incomingData[field] = existingData[field];
+  }
+  const incomingHasContent = accountDataHasContent(incomingData);
   // Older clients and stale devices must not erase private catalogue entries.
   incomingData.customSpecies = normalizeCustomSpecies([...new Map([
     ...existingData.customSpecies, ...incomingData.customSpecies
@@ -1900,7 +1921,7 @@ async function handlePushDeviceRegister(req, res) {
   });
   user.pushDevices = [
     ...normalizedPushDevices(user.pushDevices),
-    { token: deviceToken, platform: "ios", updatedAt: now }
+    { token: deviceToken, platform: "ios", updatedAt: now, sessionHash: hashValue(String(body.token || "")) }
   ].filter((item, index, list) => list.findIndex(other => other.token === item.token) === index).slice(-8);
   user.updatedAt = now;
   writeDatabase(db);
@@ -1937,7 +1958,7 @@ async function handlePushNotificationTest(req, res) {
   }
   const payload = {
     aps: {
-      alert: { title: "壳友手账", body: "这是一条推送通知实机测试消息。" },
+      alert: { title: "龟友手账", body: "这是一条推送通知实机测试消息。" },
       badge: 1,
       sound: "default"
     },
@@ -1999,7 +2020,7 @@ async function notifySystemAnnouncement(db, announcement) {
   const payload = {
     aps: {
       alert: {
-        title: String(announcement.title || "壳友手账").slice(0, 80),
+        title: String(announcement.title || "龟友手账").slice(0, 80),
         body: String(announcement.content || "您有一条新的系统公告").replace(/\s+/g, " ").slice(0, 120)
       },
       sound: "default"
@@ -3273,7 +3294,7 @@ async function handleCommunityCreate(req, res) {
       type: media?.type === "video" ? "video" : "image"
     }))
     .filter(media => media.url);
-  if (mediaItems.some(media => media.type === "video")) return sendJson(res, 400, { ok: false, message: "壳友圈只允许发布图片" });
+  if (mediaItems.some(media => media.type === "video")) return sendJson(res, 400, { ok: false, message: "龟友圈只允许发布图片" });
   const primaryMedia = mediaItems[0] || null;
   const location = trimPublicText(body.location, 100);
   const mentions = trimPublicText(body.mentions, 200);
@@ -3516,7 +3537,7 @@ function reportedContent(db, targetType, targetId) {
     type,
     id: item.id,
     ownerPhone: item.authorPhoneRaw,
-    title: trimPublicText(item.title || item.content || (item.mediaUrl ? "含图片或视频的壳友圈帖子" : "壳友圈帖子"), 120)
+    title: trimPublicText(item.title || item.content || (item.mediaUrl ? "含图片或视频的龟友圈帖子" : "龟友圈帖子"), 120)
   } : null;
 }
 
@@ -4357,7 +4378,7 @@ function syncMarketListingToLedger(owner, listing, status) {
         carapaceWidth: linkedTurtle?.carapaceWidth || "",
         shellHeight: linkedTurtle?.shellHeight || "",
         plastronLength: linkedTurtle?.plastronLength || "",
-        note: `成交方式：${saleMethod}；由龟集市标记已售自动生成`,
+        note: `成交方式：${saleMethod === "壳友手账成交" ? "龟友手账成交" : saleMethod}；由龟集市标记已售自动生成`,
         saleMethod,
         photo: marketLedgerPhoto(listing) || linkedTurtle?.photo || "",
         turtleSnapshot: snapshot,
@@ -4371,7 +4392,7 @@ function syncMarketListingToLedger(owner, listing, status) {
       if (record.autoMarketRecord) {
         record.amount = soldPrice;
         record.saleMethod = saleMethod;
-        record.note = `成交方式：${saleMethod}；由龟集市标记已售自动生成`;
+        record.note = `成交方式：${saleMethod === "壳友手账成交" ? "龟友手账成交" : saleMethod}；由龟集市标记已售自动生成`;
       }
     }
     listing.ledgerRecordId = record.id;
@@ -4380,7 +4401,7 @@ function syncMarketListingToLedger(owner, listing, status) {
     }
     owner.data.activityLogs = [{
       id: crypto.randomUUID(),
-      text: `龟集市已售自动记账：${record.title}，${saleMethod}，成交价 ${Number(record.amount || 0).toFixed(2)} 元`,
+      text: `龟集市已售自动记账：${record.title}，${saleMethod === "壳友手账成交" ? "龟友手账成交" : saleMethod}，成交价 ${Number(record.amount || 0).toFixed(2)} 元`,
       type: "账本",
       createdAt: new Date().toISOString()
     }, ...(owner.data.activityLogs || [])];
@@ -4668,14 +4689,14 @@ function marketSharePageHtml(req, url, content) {
     || "";
   const imageUrl = absoluteShareMediaUrl(firstImage, origin);
   const productTitle = String(publicListing.title || `${publicListing.speciesName || "乌龟"}诚意出售`).trim();
-  const title = `壳友手账｜${productTitle}`;
+  const title = `龟友手账｜${productTitle}`;
   const description = `${publicListing.speciesName || "龟集市商品"}${publicListing.price ? ` · ¥${Number(publicListing.price).toFixed(2)}` : ""}${publicListing.city ? ` · ${publicListing.city}` : ""}`;
   const canonicalUrl = new URL(url.pathname || "/", origin);
   canonicalUrl.searchParams.set("market", listingId);
   const metadata = [
     `<meta name="description" content="${escapeShareMeta(description)}">`,
     `<meta property="og:type" content="website">`,
-    `<meta property="og:site_name" content="壳友手账">`,
+    `<meta property="og:site_name" content="龟友手账">`,
     `<meta property="og:title" content="${escapeShareMeta(title)}">`,
     `<meta property="og:description" content="${escapeShareMeta(description)}">`,
     `<meta property="og:url" content="${escapeShareMeta(canonicalUrl.toString())}">`,
@@ -4757,13 +4778,8 @@ function serveStatic(req, res, url) {
 }
 
 function handleAppVersion(req, res) {
-  return sendJson(res, 200, {
-    ok: true,
-    minimumBuild: MIN_SUPPORTED_APP_BUILD,
-    latestBuild: LATEST_APP_BUILD,
-    appStoreUrl: IOS_APP_STORE_URL,
-    message: "壳友手账 1.0.9 已正式上线。请前往 App Store 更新，更新后即可继续使用。"
-  });
+  res.setHeader("Cache-Control", "no-store");
+  return sendJson(res, 200, appUpdatePolicy(req));
 }
 
 function serveUpload(req, res, url) {
@@ -4827,6 +4843,18 @@ function serveUpload(req, res, url) {
 
 const teamService = createTeamService({ read: readDatabase, write: writeDatabase, authenticate, normalize: normalizeAccountData });
 const applePurchases = createApplePurchases({ read: readDatabase, write: writeDatabase, authenticate });
+const alipayPurchases = createAlipayPurchases({ read: readDatabase, write: writeDatabase, authenticate });
+async function handleAlipayNotification(req, res) {
+  try {
+    if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/x-www-form-urlencoded')) throw Error('Invalid content type');
+    const chunks = []; let bytes = 0;
+    for await (const chunk of req) { bytes += chunk.length; if (bytes > 65536) throw Error('Notification too large'); chunks.push(chunk); }
+    const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8')), data = Object.create(null);
+    for (const [key, value] of form) { if (Object.hasOwn(data, key)) throw Error('Duplicate notification field'); data[key] = value; }
+    await alipayPurchases.notification(data);
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('success');
+  } catch { res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('failure'); }
+}
 const teamRequestTimes = new Map();
 async function handleTeamRequest(req, res, pathname) {
   const body = await readJson(req);
@@ -4834,15 +4862,16 @@ async function handleTeamRequest(req, res, pathname) {
   if (pathname !== '/api/apple/notifications' && !actor) return sendJson(res, 401, { ok: false, message: '登录已过期，请重新登录' });
   const bucket = `${actor?.phone || req.socket.remoteAddress}:${pathname}`;
   const now = Date.now(), recent = (teamRequestTimes.get(bucket) || []).filter(t => now - t < 60000);
-  if (recent.length >= (pathname.includes('apple') ? 40 : 180)) return sendJson(res, 429, { ok: false, message: '操作较频繁，请稍后重试' });
+  if (recent.length >= (/apple|alipay/.test(pathname) ? 40 : 180)) return sendJson(res, 429, { ok: false, message: '操作较频繁，请稍后重试' });
   recent.push(now); teamRequestTimes.set(bucket, recent);
   try {
     if (pathname === '/api/apple/notifications') { await applePurchases.notification(body); return sendJson(res, 200, { ok: true }); }
-    const result = pathname === '/api/apple/purchases' ? await applePurchases.action(body) : await teamService.action(body);
+    const result = pathname === '/api/alipay/team/purchases' ? await alipayPurchases.action(body) : pathname === '/api/apple/purchases' ? await applePurchases.action(body) : await teamService.action(body);
     return sendJson(res, 200, { ok: true, ...result });
   } catch (error) { return sendJson(res, error.status || 500, { ok: false, message: error.status ? error.message : '服务暂时不可用，请重试' }); }
 }
 setInterval(() => { if (!shuttingDown) applePurchases.refresh().catch(error => console.error('Apple refresh:', error.message)); }, 60000).unref();
+setInterval(() => { if (!shuttingDown) alipayPurchases.refresh().catch(() => console.error('Alipay team reconciliation failed')); }, 60000).unref();
 setInterval(() => teamRequestTimes.clear(), 60000).unref();
 const server = http.createServer(async (req, res) => {
   let url;
@@ -4850,7 +4879,8 @@ const server = http.createServer(async (req, res) => {
   catch { res.writeHead(400); res.end('Bad request'); return; }
   if (req.method === "OPTIONS") return sendJson(res, 200, { ok: true });
   try {
-    if (req.method === 'POST' && ['/api/team', '/api/apple/purchases', '/api/apple/notifications'].includes(url.pathname)) return await handleTeamRequest(req, res, url.pathname);
+    if (req.method === 'POST' && url.pathname === '/api/alipay/team/notify') return await handleAlipayNotification(req, res);
+    if (req.method === 'POST' && ['/api/team', '/api/apple/purchases', '/api/apple/notifications', '/api/alipay/team/purchases'].includes(url.pathname)) return await handleTeamRequest(req, res, url.pathname);
     if (req.method === "GET" && url.pathname === "/api/app/version") return handleAppVersion(req, res);
     if (req.method === "POST" && url.pathname === "/api/sms/send") return await handleSendSms(req, res);
     if (req.method === "POST" && url.pathname === "/api/sms/verify") return await handleVerifySms(req, res);

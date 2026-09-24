@@ -33,10 +33,12 @@ function testAccessFile() {
   return path.resolve(process.env.TURTLE_RUNTIME_DIR || __dirname, 'data/team-test-access.json');
 }
 function access(user, now = Date.now()) {
-  const e = user.teamEntitlement;
-  if (e && e.verified === true && ['apple', 'test'].includes(e.source)
+  const grants = [user.teamEntitlement, user.alipayTeamEntitlement].filter(Boolean);
+  const valid = grants.filter(e => e.verified === true && ['apple', 'alipay', 'test'].includes(e.source)
     && (e.source !== 'test' || process.env.TURTLE_TEAM_TEST === '1') && Date.parse(e.expiresAt) > now && !e.revoked)
-    return { active: true, testing: e.source === 'test', expiresAt: e.expiresAt };
+    .sort((a, b) => Date.parse(b.expiresAt) - Date.parse(a.expiresAt));
+  const e = valid[0] || grants.sort((a,b) => Date.parse(b.expiresAt) - Date.parse(a.expiresAt))[0];
+  if (valid.length) return { active: true, testing: e.source === 'test', expiresAt: e.expiresAt };
   try {
     const grants = JSON.parse(fs.readFileSync(testAccessFile(), 'utf8'));
     const grant = grants.version === 1 && grants.accounts?.[user.phone];
@@ -222,11 +224,11 @@ function createTeamService({ read, write, authenticate, normalize }) {
       owner: { id: 'owner', name: owner.accountName || '主账号' },
       turtles: can('dashboard') ? (data.turtles || []).map(t => publicTurtle(t, can('ledger'))) : [],
       pools: can('dashboard') ? (data.turtlePools || []).map(p => ({ id: p.id, name: p.name, type: p.type, length: p.length, width: p.width, height: p.height, note: p.note || '', count: (data.turtles || []).filter(t => t.poolId === p.id && activeTurtle(t)).length })) : [],
-      ledgerTurtles: can('ledger') && perms.ledger === 'edit' ? (data.turtles || []).filter(activeTurtle).map(t => ({ id: t.id, code: t.code, speciesName: t.speciesName })) : [],
+      ledgerTurtles: can('ledger') && perms.ledger === 'edit' ? (data.turtles || []).filter(activeTurtle).map(t => ({ id: t.id, code: t.code, speciesCode: t.speciesCode, speciesName: t.speciesName, photo: t.photo, batchId: t.batchId, batchName: t.batchName, acquiredDate: t.acquiredDate, gender: t.gender, health: t.health, poolId: t.poolId })) : [],
       ledger: can('ledger') ? ledgerRows(data) : [],
       report: can('ledger') ? report(data, month, '', range) : null,
       breedingRecords, breedingStats: can('breeding') ? breeding.stats(breedingRecords) : null,
-      breedingParents: can('breeding') && perms.breeding === 'edit' ? (data.turtles || []).filter(activeTurtle).map(t => ({ id: t.id, code: t.code, speciesCode: t.speciesCode, speciesName: t.speciesName })) : [],
+      breedingParents: can('breeding') && perms.breeding === 'edit' ? (data.turtles || []).filter(activeTurtle).map(t => ({ id: t.id, code: t.code, speciesCode: t.speciesCode, speciesName: t.speciesName, photo: t.photo, batchId: t.batchId, batchName: t.batchName, acquiredDate: t.acquiredDate, gender: t.gender, health: t.health, poolId: t.poolId })) : [],
       breedingPools: can('breeding') && perms.breeding === 'edit' ? (data.turtlePools || []).map(p => ({ id: p.id, name: p.name })) : [],
       breedingSpecies: can('breeding') && perms.breeding === 'edit' ? breeding.speciesOptions(data) : [],
       memos: can('tasks') ? (data.memos || []).map(m => ({ id: m.id, title: m.title, content: m.content || '', date: visibility.recordDay(m, ['dueDate', 'date', 'recordDate', 'createdAt', 'updatedAt']), remindTime: m.remindTime || '', repeat: Boolean(m.repeat), weekdays: m.weekdays || [], turtleId: m.turtleId || '' })) : [],
