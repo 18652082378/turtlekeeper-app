@@ -56,9 +56,34 @@ fs.mkdirSync(path.join(root, 'output/audit-20260926'), { recursive: true });
       try { await run(); outcomes.push({ name, pass: true }); }
       catch (error) { outcomes.push({ name, pass: false, error: error.message }); }
     }
+    await check('complete care tasks directly and prevent duplicate records', async () => {
+      await page.evaluate(() => { state.memos=[
+        {id:'feed',title:'喂食',content:'少量龟粮',repeat:true,remindTime:'10:00'},
+        {id:'once',title:'清理滤棉',content:'冲洗并检查',repeat:false}
+      ];render(); });
+      const count=await page.evaluate(() => state.careRecords.length);
+      const start=Date.now();
+      await page.locator('[data-start-task="feed"]').evaluate(button=>{button.click();button.click();});
+      const saved=await page.evaluate(() => ({page:state.page,records:state.careRecords,memos:state.memos}));
+      assert.equal(saved.page,'home');
+      assert.equal(saved.records.length,count+1);
+      assert.equal(saved.records[0].itemId,'feeding');
+      assert.equal(saved.records[0].note,'少量龟粮');
+      assert.ok(Date.parse(saved.records[0].createdAt)>=start);
+      assert.equal(await page.locator('[data-start-task="feed"]').count(),0);
+      await page.locator('[data-start-task="once"]').click();
+      assert.equal(await page.evaluate(() => state.careRecords.length),count+2);
+      assert.equal(await page.evaluate(() => state.careRecords[0].title),'清理滤棉');
+      assert.ok(await page.evaluate(() => state.memos.find(m=>m.id==='once').completedAt));
+      assert.equal(await page.evaluate(() => state.careCustomItems.filter(i=>i.title==='清理滤棉').length),1);
+      const persisted=await page.evaluate(() => JSON.parse(localStorage.getItem('turtlekeeper-state-v1')));
+      assert.equal(persisted.careRecords.length,count+2);
+      assert.equal(persisted.careRecords[0].sourceMemoId,'once');
+      assert.equal(await page.evaluate(() => {const tomorrow=new Date();tomorrow.setDate(tomorrow.getDate()+1);return TurtleCare.dueMemos(state.memos,formatDate(tomorrow)).map(m=>m.id).join(',');}),'feed');
+    });
     await check('deleting completion restores pending task', async () => {
       await page.locator('[data-start-task="task"]').click();
-      await page.locator('#careForm [type="submit"]').click();
+      await page.evaluate(() => setState({page:'memos',careTab:'care'}, {pageMotion:'none'}));
       const id=await page.evaluate(() => state.careRecords[0].id);
       if (await page.locator('[data-more-care]').count()) await page.locator('[data-more-care]').click();
       await page.locator('[data-delete-care="'+id+'"]').click();
@@ -66,7 +91,7 @@ fs.mkdirSync(path.join(root, 'output/audit-20260926'), { recursive: true });
     });
     await check('editing completion date updates pending task', async () => {
       await page.locator('[data-start-task="task"]').click();
-      await page.locator('#careForm [type="submit"]').click();
+      await page.evaluate(() => setState({page:'memos',careTab:'care'}, {pageMotion:'none'}));
       const id=await page.evaluate(() => state.careRecords[0].id);
       if (await page.locator('[data-more-care]').count()) await page.locator('[data-more-care]').click();
       await page.locator('[data-edit-care="'+id+'"]').click();

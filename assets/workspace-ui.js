@@ -76,11 +76,35 @@ function saveCarePlan() {
   toast('方案已保存，本次喂食尚未记录');
 }
 
+function completeCareTask(id) {
+  if (!requireLogin()) return;
+  const today = formatDate(new Date());
+  const memo = TurtleCare.dueMemos(state.memos || [], today).find(memo => memo.id === id);
+  // Recheck live state so a second click on the previous DOM cannot duplicate it.
+  if (!memo || memo.growthReminder) return;
+  const now = new Date().toISOString();
+  const title = String(memo.title || '养护提醒').trim().slice(0, 40) || '养护提醒';
+  let items = TurtleCare.normalizeItems(state.careCustomItems);
+  let item = [...TurtleCare.builtins, ...items].find(item => item.title === title);
+  if (!item) {
+    item = { id: crypto.randomUUID(), title, createdAt: now };
+    items = [item, ...items];
+  }
+  const record = { id: crypto.randomUUID(), title, itemId: item.id, date: today,
+    note: String(memo.content || '').trim().slice(0, 1000), sourceMemoId: memo.id,
+    poolId: '', poolName: '', turtleRefs: [], createdAt: now, updatedAt: now };
+  const careRecords = [record, ...(state.careRecords || [])];
+  setState({ careRecords, careCustomItems: items,
+    memos: TurtleCare.reconcileCompletion(state.memos, careRecords, memo.id),
+    activityLogs: logActivity(`完成养护待办：${title} · ${today}`, '养护') });
+  toast(localBackupFailed ? '本机保存失败，请前往同步页面重试保存' : '已完成，可在日常养护的养护历史中查看记录');
+}
+
 function homeTasksMarkup() {
   if (!state.loggedInPhone) return '';
   const tasks = TurtleCare.dueMemos(state.memos || [], formatDate(new Date()));
   if (!tasks.length) return '';
-  const row = memo => `<article class="work-task"><div><strong>${escapeHtml(memo.title || '养护提醒')}</strong><small>${memo.dueDate && memo.dueDate < formatDate(new Date()) ? '已到期 · ' : ''}${escapeHtml(memo.remindTime || '今天待办')}${memo.growthReminder ? ' · 成长记录' : ''}</small></div><button type="button" data-start-task="${escapeHtml(memo.id)}">${memo.growthReminder ? '记录成长' : '去记录'}</button></article>`;
+  const row = memo => `<article class="work-task"><div><strong>${escapeHtml(memo.title || '养护提醒')}</strong><small>${memo.dueDate && memo.dueDate < formatDate(new Date()) ? '已到期 · ' : ''}${escapeHtml(memo.remindTime || '今天待办')}${memo.growthReminder ? ' · 成长记录' : ''}</small></div><button type="button" data-start-task="${escapeHtml(memo.id)}">${memo.growthReminder ? '记录成长' : '已完成'}</button></article>`;
   return `<section class="fresh-card work-tasks"><div class="work-heading"><h3>今日待办</h3><span>${tasks.length} 项</span></div>${tasks.slice(0, 3).map(row).join('')}${tasks.length > 3 ? `<details><summary>查看其余 ${tasks.length - 3} 项</summary><div class="work-scroll">${tasks.slice(3).map(row).join('')}</div></details>` : ''}</section>`;
 }
 
@@ -120,7 +144,11 @@ function accountSaveStatus() {
 }
 
 function updateAccountSaveStatus() {
-  document.querySelectorAll('[data-account-save-status]').forEach(node => { node.textContent = accountSaveStatus(); });
+  const status = accountSaveStatus();
+  document.querySelectorAll('[data-account-save-status]').forEach(node => {
+    node.textContent = status;
+    node.hidden = status === '已同步';
+  });
 }
 
 function bindWorkspaceUI() {
@@ -182,8 +210,7 @@ function bindWorkspaceUI() {
       if (!turtle) return toast('关联档案已不存在，请调整提醒');
       setState({ page: 'turtleDetail', selectedTurtleId: turtle.id, updatingTurtleId: turtle.id, turtleDetailDraftId: turtle.id, turtleDetailDraft: null, growthTaskMemoId: memo.id });
     } else {
-      const builtin = TurtleCare.builtins.find(item => item.title === memo.title);
-      setState({ page: 'memos', careTab: 'care', careDraft: { date: formatDate(new Date()), itemId: builtin?.id || 'manual', manualTitle: builtin ? '' : memo.title, note: memo.content || '', poolId: '', sourceMemoId: memo.id } });
+      completeCareTask(memo.id);
     }
   }));
 }
