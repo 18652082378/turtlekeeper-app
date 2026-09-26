@@ -148,7 +148,8 @@ async function main() {
         // Team-wide descriptive text belongs exclusively to settings.
         await page.locator(`[data-ts="tab"][data-tab="${tab}"]`).first().click();
         assert.equal(await page.locator('.ts-team-info').count(), tab === 'settings' ? 1 : 0, `${tab}: team information is only shown in settings`);
-        assert.equal(await page.locator('.ts-workhead').count(), tab === 'settings' ? 1 : 0, `${tab}: team heading is only shown in settings`);
+        assert.equal(await page.locator('.ts-workhead-compact').count(), 1, `${tab}: compact farm identity and switch remain available`);
+        assert.equal(await page.locator('.ts-workhead-compact h1').textContent(), latest.team.name);
         const dimensions = await page.evaluate(() => ({ viewport: innerWidth, doc: document.documentElement.scrollWidth }));
         assert(dimensions.doc <= width + 1, `${tab} overflow at ${width}: ${dimensions.doc}`);
         results.push({ width, tab, ...dimensions });
@@ -337,7 +338,8 @@ async function main() {
     for (const width of [375, 390, 430]) {
       await page.setViewportSize({ width, height: 844 });
       await page.evaluate(() => scrollTo(0, 0));
-      assert.equal(await page.locator('.ts-team-info, .ts-workhead, .ts-data-scope, .ts-test-status, .ts-permission-preview').count(), 0, 'Team context only appears in settings');
+      assert.equal(await page.locator('.ts-team-info, .ts-data-scope, .ts-test-status, .ts-permission-preview').count(), 0, 'Detailed team context only appears in settings');
+      assert.equal(await page.locator('.ts-workhead-compact').count(), 1, 'Compact farm identity remains visible');
       const metrics = await page.locator('.ts-metrics').first().boundingBox();
       assert(metrics.y < 360 && metrics.y + metrics.height < 700, 'Overview totals are visible on the first screen');
       await page.screenshot({ path: path.join(output, `compact-team-overview-${width}.png`) });

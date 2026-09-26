@@ -29,7 +29,8 @@ assert.ok(builds.length && builds.every(value => value === builds[0]), "Debug/Re
 for (const file of ["config.js", "www/config.js"]) {
   assert.equal(Number(read(file).match(/TURTLE_APP_BUILD\s*=\s*(\d+)/)?.[1]), builds[0], `${file} build number differs from Xcode`);
 }
-for (const file of ["index.html", "app.js", "styles.css", "species-data.js", "assets/account-merge.js", "assets/team-space.js", "assets/team-space.css"]) {
+const bundledSources = ["index.html", "app.js", "styles.css", "species-data.js", "assets/account-merge.js", "assets/team-space.js", "assets/team-space.css", "assets/care-records.js", "assets/care-records.css", "assets/workspace-ui.js", "assets/workspace-ui.css"];
+for (const file of bundledSources) {
   assert.equal(read(`www/${file}`), read(file), `${file} is stale in www`);
 }
 assert.ok(read('index.html').includes('./assets/team-space.js'), 'Team page script is missing from the app');
@@ -43,7 +44,7 @@ assert.ok(read('scripts/configure-ios-local-plugins.js').includes('plugins.add("
 if (process.argv.includes('--native')) {
   const native = JSON.parse(read('ios/App/App/capacitor.config.json'));
   assert.ok(native.packageClassList.includes('TurtlePurchasesPlugin'), 'Synced iOS plugin registration is missing');
-  for (const file of ['index.html', 'app.js', 'config.js', 'assets/team-space.js', 'assets/team-space.css']) {
+  for (const file of [...bundledSources, 'config.js']) {
     assert.equal(read(`ios/App/App/public/${file}`), read(`www/${file}`), `Stale native asset: ${file}`);
   }
 }

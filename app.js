@@ -95,6 +95,7 @@ const initialState = {
   carePickerOpen: false,
   careRecords: [],
   careCustomItems: [],
+  carePlans: [],
   memoDraftOpen: false,
   memoEditingId: "",
   ledgerTab: "all",
@@ -295,6 +296,7 @@ function emptyAccountData() {
   return {
     careRecords: [],
     careCustomItems: [],
+    carePlans: [],
     turtles: [],
     keptSpecies: [],
     customSpecies: [],
@@ -336,6 +338,7 @@ function normalizeAccountData(data = {}) {
     customSpecies: normalizeCustomSpecies(next.customSpecies),
     careRecords: TurtleCare.normalizeRecords(next.careRecords),
     careCustomItems: TurtleCare.normalizeItems(next.careCustomItems),
+    carePlans: TurtleCare.normalizePlans(next.carePlans),
     memos: Array.isArray(next.memos) ? next.memos : [],
     ledgerRecords: Array.isArray(next.ledgerRecords) ? next.ledgerRecords : [],
     breedingRecords: Array.isArray(next.breedingRecords) ? next.breedingRecords : [],
@@ -368,6 +371,7 @@ function accountDataSnapshot(source = state) {
     customSpecies: source.customSpecies,
     careRecords: source.careRecords,
     careCustomItems: source.careCustomItems,
+    carePlans: source.carePlans,
     memos: source.memos,
     ledgerRecords: source.ledgerRecords,
     breedingRecords: source.breedingRecords,
@@ -814,6 +818,7 @@ function accountHasContent(source = state) {
     (source.customSpecies || []).length ||
     (source.careRecords || []).length ||
     (source.careCustomItems || []).length ||
+    (source.carePlans || []).length ||
     (source.memos || []).length ||
     (source.ledgerRecords || []).length ||
     (source.breedingRecords || []).length ||
@@ -922,6 +927,7 @@ function saveState(options = {}) {
     if (persistPendingCloudData()) lastLocalAccountSignature = accountSignature;
     queueCloudSave();
   } else if (options.skipCloud || !cloudSession) lastLocalAccountSignature = accountSignature;
+  updateAccountSaveStatus();
   return !localBackupFailed;
 }
 
@@ -957,9 +963,11 @@ function restoreVisibleFormInputs(forms) {
 }
 
 function setState(patch, options = {}) {
+  const patchChangesState = Object.keys(patch).some(key => !Object.is(state[key], patch[key]));
   const visibleDataChanged = navigationDataKeys(state.page).some(key => Object.hasOwn(patch, key) && patch[key] !== state[key]);
   if (Object.hasOwn(patch, "loggedInPhone") && patch.loggedInPhone !== state.loggedInPhone) {
     patch = { ...patch, careDraft: null, carePickerOpen: false, careTab: "care" };
+    careHistoryFilter = {}; careHistoryLimit = 40;
     patch = { ...patch, ...accountModuleCache(patch.loggedInPhone), ...messageCacheForAccount(patch.loggedInPhone) };
     communityLastLoadedAt = 0;
     messageUnreadLastLoadedAt = 0;
@@ -995,6 +1003,11 @@ function setState(patch, options = {}) {
       // Removing a tall list clamps the document scroll position immediately.
       // Capture it while that page is still mounted, for both back mechanisms.
       const sourceScrollY = window.scrollY || 0;
+      const editorState = state.page === "turtleDetail" && state.updatingTurtleId && !$app.querySelector('#turtleDetailForm')?.__turtleDetailSaved ? {
+        selectedTurtleId: state.selectedTurtleId, updatingTurtleId: state.updatingTurtleId,
+        turtleDetailDraftId: state.selectedTurtleId, turtleDetailDraft: captureTurtleDetailDraft(),
+        updateDraftPhoto: state.updateDraftPhoto, growthTaskMemoId: state.growthTaskMemoId || ""
+      } : null;
       const fixedLayers = captureNavigationFixedLayers($app);
       // Keep the actual page nodes for a real back-navigation hand-off. An
       // HTML string remains only as a recovery fallback; replacing innerHTML
@@ -1004,6 +1017,7 @@ function setState(patch, options = {}) {
       const liveSnapshot = detachNavigationSnapshotDom();
       edgeBackSnapshots.push({
         page: state.page,
+        editorState,
         dataSignature: navigationDataSignature(state.page),
         html: pageHtml,
         previewHtml: buildEdgeBackPreviewHtml(pageHtml),
@@ -1046,16 +1060,12 @@ function setState(patch, options = {}) {
     syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
     return;
   }
-  // The visible page may be the exact DOM that was just handed back from an
-  // edge-swipe preview. Let that hand-off settle before a late unread/polling
-  // response replaces it with a freshly rendered copy.
-  if (!pageChanged && !visibleDataChanged && !options.forceRender && !options.skipSave && Date.now() < restoredSnapshotRenderHoldUntil) {
-    const page = state.page, phone = state.loggedInPhone;
-    window.setTimeout(() => {
-      if (state.page === page && state.loggedInPhone === phone) {
-        setState({}, { forceRender: true, skipCloud: true, preserveInputValues: true });
-      }
-    }, Math.max(0, restoredSnapshotRenderHoldUntil - Date.now()) + 1);
+  // A no-op acknowledgement must not rebuild the page just restored from a
+  // snapshot. Queuing a forced render here caused a visible flash ~520ms
+  // after returning (one full rebuild for every acknowledgement). Local UI
+  // changes, such as opening a form, still render immediately below.
+  if (!pageChanged && !patchChangesState && !options.forceRender && !options.skipSave && Date.now() < restoredSnapshotRenderHoldUntil) {
+    syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
     return locallySaved;
   }
   if (visibleDataChanged) preservedMessageSnapshotActive = false;
@@ -2451,7 +2461,7 @@ function communityCompactCard(item) {
       <button class="community-tile-media" type="button" data-page="community">${communityMedia(item, true)}${primaryMedia?.type === "video" ? `<span class="community-video-mark">▶</span>` : ""}</button>
       <div class="community-tile-body">
         <p>${escapeHtml(item.content || "分享了一条新动态")}</p>
-        <div class="community-tile-author">${communityAvatar(item, "community-mini-avatar")}<span>${escapeHtml(item.authorName || "壳友")}${platformAdminBadge(item)}</span><b>♡ ${item.likeCount || 0}</b></div>
+        <div class="community-tile-author">${communityAvatar(item, "community-mini-avatar")}<span>${escapeHtml(item.authorName || "龟友")}${platformAdminBadge(item)}</span><b>♡ ${item.likeCount || 0}</b></div>
       </div>
     </article>
   `;
@@ -2463,17 +2473,17 @@ function communityFeedCard(item, { allowDetail = false } = {}) {
   const canDelete = isOwn || state.isCommunityAdmin;
   const primaryMedia = communityPostMediaItems(item)[0];
   return `
-    <article class="community-moment" data-community-feed-card="${item.id}" ${allowDetail ? `data-view-community-post="${item.id}" tabindex="0" role="button" aria-label="查看${escapeHtml(item.authorName || "壳友")}发布的动态"` : ""}>
-      <button class="community-profile-avatar-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item)}</button>
+    <article class="community-moment" data-community-feed-card="${item.id}" ${allowDetail ? `data-view-community-post="${item.id}" tabindex="0" role="button" aria-label="查看${escapeHtml(item.authorName || "龟友")}发布的动态"` : ""}>
+      <button class="community-profile-avatar-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "龟友")}的主页">${communityAvatar(item)}</button>
       <div class="community-moment-main">
-        <div class="community-moment-author"><span class="community-profile-name">${escapeHtml(item.authorName || "壳友")}${platformAdminBadge(item)}</span>${!isOwn ? `<span class="community-author-actions"><button class="community-follow-button ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></span>` : ""}</div>
+        <div class="community-moment-author"><span class="community-profile-name">${escapeHtml(item.authorName || "龟友")}${platformAdminBadge(item)}</span>${!isOwn ? `<span class="community-author-actions"><button class="community-follow-button ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></span>` : ""}</div>
         ${communityPostTopicMarkup(item)}
         ${item.content ? `<p class="community-post-copy">${escapeHtml(item.content)}</p>` : ""}
         ${primaryMedia ? `<div class="community-post-media ${primaryMedia.type === "video" ? "is-video" : ""}">${communityFeedMedia(item)}</div>` : ""}
         ${communityPostQuestionMarkup(item)}
         ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
         <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${canDelete ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? communityMomentActionMenu(item, isOwn) : ""}</div></div>
-        ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "壳友")}${platformAdminBadge(comment)}</strong>：${escapeHtml(comment.content)}${communityCommentDeleteMarkup(comment, item.id)}</p>`).join("")}</div>` : ""}
+        ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "龟友")}${platformAdminBadge(comment)}</strong>：${escapeHtml(comment.content)}${communityCommentDeleteMarkup(comment, item.id)}</p>`).join("")}</div>` : ""}
         ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="${item.question ? "分享你的经验" : "评论"}" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
       </div>
     </article>
@@ -2600,7 +2610,7 @@ function bindCommunityCommentDeletes(root = document) {
 
 function bindCommunityCommentInteractions() {
   const beginCommunityReply = target => {
-    communityReplyTarget = { postId: target.dataset.postId, commentId: target.dataset.replyCommunityComment, name: target.dataset.replyAuthor || "壳友" };
+    communityReplyTarget = { postId: target.dataset.postId, commentId: target.dataset.replyCommunityComment, name: target.dataset.replyAuthor || "龟友" };
     render();
     const input = document.querySelector(".forum-reply-composer input");
     input?.focus({ preventScroll: true });
@@ -2635,7 +2645,7 @@ function bindCommunityCommentInteractions() {
 }
 
 function communityCommentRowMarkup(comment, postId, floorNumber = 0, nested = false) {
-  const author = escapeHtml(comment.authorName || "壳友");
+  const author = escapeHtml(comment.authorName || "龟友");
   const profileLink = comment.authorId ? `data-view-community-user="${escapeHtml(comment.authorId)}"` : "";
   const avatar = profileLink
     ? `<button class="forum-comment-avatar-link" type="button" ${profileLink} aria-label="查看${author}的主页">${communityAvatar(comment, "forum-reply-avatar")}</button>`
@@ -2693,8 +2703,8 @@ function pageCommunityPostDetail() {
   const replyTarget = communityReplyTarget?.postId === item.id ? communityReplyTarget : null;
   const circleContext = `<div class="forum-detail-context"><span>${circle.icon}</span><div><b>${circle.name}</b><small>${item.isPinned ? "置顶 · " : ""}${item.isFeatured ? "精华 · " : ""}${comments.length} 条回复</small></div></div>`;
   const authorHeader = `<header class="community-detail-head">
-          <button class="community-profile-avatar-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item)}</button>
-          <button class="community-detail-author-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}"><strong>${escapeHtml(item.authorName || "壳友")}${platformAdminBadge(item)}</strong><span>${formatTime(item.createdAt)}</span></button>
+          <button class="community-profile-avatar-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "龟友")}的主页">${communityAvatar(item)}</button>
+          <button class="community-detail-author-button" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}"><strong>${escapeHtml(item.authorName || "龟友")}${platformAdminBadge(item)}</strong><span>${formatTime(item.createdAt)}</span></button>
           ${!isOwn ? `<div class="community-author-actions"><button class="${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${item.authorId}">${item.followed ? "已关注" : "关注"}</button><button type="button" data-open-community-chat="${item.authorId}">聊天</button></div>` : ""}
         </header>`;
   const detailActions = `<div class="community-detail-actions">
@@ -2741,7 +2751,7 @@ function communityNotificationRow(item = {}) {
   const thumbnail = apiAssetUrl(item.postThumbnail || "");
   return `<button class="message-notification-row ${item.read ? "" : "is-unread"}" type="button" data-open-community-notification="${escapeHtml(item.id || "")}" data-notification-target="${target}" data-notification-user-id="${escapeHtml(item.actorId || "")}" data-notification-post-id="${escapeHtml(item.postId || "")}">
     <span class="message-notification-avatar">${communityAvatar({ authorAvatar: item.actorAvatar, authorName: item.actorName })}<i class="message-notification-type ${escapeHtml(item.type || "comment")}" aria-hidden="true">${item.type === "like" ? "赞" : item.type === "follow" ? "+" : "评"}</i></span>
-    <span class="message-notification-copy"><strong>${escapeHtml(item.actorName || "壳友")}${platformAdminBadge({ isAdmin: item.actorIsAdmin })}</strong><span>${escapeHtml(copy.action)} <time datetime="${escapeHtml(item.createdAt || "")}">${formatMessagePreviewTime(item.createdAt)}</time></span><small>${escapeHtml(copy.detail)}</small></span>
+    <span class="message-notification-copy"><strong>${escapeHtml(item.actorName || "龟友")}${platformAdminBadge({ isAdmin: item.actorIsAdmin })}</strong><span>${escapeHtml(copy.action)} <time datetime="${escapeHtml(item.createdAt || "")}">${formatMessagePreviewTime(item.createdAt)}</time></span><small>${escapeHtml(copy.detail)}</small></span>
     ${thumbnail ? `<img class="message-notification-thumbnail" src="${escapeHtml(thumbnail)}" alt="帖子图片" loading="lazy">` : `<span class="message-notification-target-icon" aria-hidden="true">›</span>`}
   </button>`;
 }
@@ -2761,7 +2771,7 @@ function messageActivitySummaryRows() {
     const summary = messageActivitySummary(group);
     if (group === "follows" && !summary.total) return "";
     const latest = summary.latest;
-    const preview = latest ? `${latest.actorName || "壳友"} ${communityNotificationCopy(latest).action}` : "收到的点赞和评论都会在这里";
+    const preview = latest ? `${latest.actorName || "龟友"} ${communityNotificationCopy(latest).action}` : "收到的点赞和评论都会在这里";
     const icon = group === "follows"
       ? `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="currentColor"/><path d="M4 22v-3a8 8 0 0 1 16 0v3" fill="currentColor"/></svg>`
       : `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="m3 21 11-13 6 6 9-5-11 14-6-6z" fill="currentColor"/></svg>`;
@@ -2917,7 +2927,7 @@ function pageMessages() {
     <main class="content page-fresh message-page">
       <section class="message-activity-summary" data-message-activity-summary>${messageActivitySummaryRows()}</section>
       <section class="message-list-heading"><strong>聊天消息</strong></section>
-      <section class="message-friend-list">${friends.map(friend => `<article class="message-friend-swipe" data-conversation-id="${escapeHtml(friend.id)}"><button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div class="message-friend-copy"><strong>${escapeHtml(friend.name || "壳友")}${platformAdminBadge(friend)}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><span class="message-friend-meta">${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></span></button><div class="message-friend-actions"><button type="button" data-toggle-conversation-pin="${escapeHtml(friend.id)}">${friend.pinned ? "取消置顶" : "置顶"}</button><button class="delete" type="button" data-delete-conversation="${escapeHtml(friend.id)}">删除</button></div></article>`).join("") || messageListEmptyMarkup()}</section>
+      <section class="message-friend-list">${friends.map(friend => `<article class="message-friend-swipe" data-conversation-id="${escapeHtml(friend.id)}"><button class="message-friend-row" type="button" data-open-community-chat="${friend.id}"><span class="message-friend-avatar-wrap">${communityAvatar(friend)}${friend.unreadCount ? `<i>${friend.unreadCount > 99 ? "99+" : friend.unreadCount}</i>` : ""}</span><div class="message-friend-copy"><strong>${escapeHtml(friend.name || "龟友")}${platformAdminBadge(friend)}</strong><span>${escapeHtml(friend.lastMessage || "暂无消息")}</span></div><span class="message-friend-meta">${friend.lastMessageAt ? `<time class="message-friend-time" datetime="${escapeHtml(friend.lastMessageAt)}">${formatMessagePreviewTime(friend.lastMessageAt)}</time>` : ""}<b>›</b></span></button><div class="message-friend-actions"><button type="button" data-toggle-conversation-pin="${escapeHtml(friend.id)}">${friend.pinned ? "取消置顶" : "置顶"}</button><button class="delete" type="button" data-delete-conversation="${escapeHtml(friend.id)}">删除</button></div></article>`).join("") || messageListEmptyMarkup()}</section>
     </main>
     ${guestLoginSlot()}
     ${bottomNav()}
@@ -3071,7 +3081,7 @@ function communityForumCard(item) {
   const body = String(item.content || item.question || "").replace(/\s+/g, " ").trim();
   const excerpt = body === String(title).trim() ? "" : body.slice(0, 180);
   return `<article class="forum-thread-card ${item.isPinned ? "is-pinned" : ""}" data-community-feed-card="${escapeHtml(item.id)}" data-view-community-post="${escapeHtml(item.id)}" tabindex="0" role="button" aria-label="查看帖子：${escapeHtml(communityPostTitle(item))}">
-    <header class="forum-thread-author"><button type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "壳友")}的主页">${communityAvatar(item, "forum-thread-avatar")}</button><div class="forum-thread-author-copy"><button class="forum-thread-author-name" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}"><strong>${escapeHtml(item.authorName || "壳友")}</strong>${platformAdminBadge(item)}</button><span>${formatCommunityCommentTime(item.createdAt)} · ${circle.name}</span></div>${!isOwn ? `<button class="forum-thread-follow ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${escapeHtml(item.authorId || "")}">${item.followed ? "已关注" : "+ 关注"}</button>` : ""}<div class="community-moment-action-wrap forum-thread-more-wrap"><button class="forum-thread-more" type="button" data-community-more="${escapeHtml(item.id)}" aria-label="更多操作">•••</button></div></header>
+    <header class="forum-thread-author"><button type="button" data-view-community-user="${escapeHtml(item.authorId || "")}" aria-label="查看${escapeHtml(item.authorName || "龟友")}的主页">${communityAvatar(item, "forum-thread-avatar")}</button><div class="forum-thread-author-copy"><button class="forum-thread-author-name" type="button" data-view-community-user="${escapeHtml(item.authorId || "")}"><strong>${escapeHtml(item.authorName || "龟友")}</strong>${platformAdminBadge(item)}</button><span>${formatCommunityCommentTime(item.createdAt)} · ${circle.name}</span></div>${!isOwn ? `<button class="forum-thread-follow ${item.followed ? "active" : ""}" type="button" data-toggle-community-follow="${escapeHtml(item.authorId || "")}">${item.followed ? "已关注" : "+ 关注"}</button>` : ""}<div class="community-moment-action-wrap forum-thread-more-wrap"><button class="forum-thread-more" type="button" data-community-more="${escapeHtml(item.id)}" aria-label="更多操作">•••</button></div></header>
     <div class="forum-thread-main"><div class="forum-thread-badges">${item.isPinned ? "<b>置顶</b>" : ""}${item.isFeatured ? "<b class=\"featured\">精华</b>" : ""}${item.isOwn && item.visibility !== "public" ? `<span class="visibility">${communityVisibilityOption(item.visibility).label}</span>` : ""}${item.speciesName ? `<span>${escapeHtml(item.speciesName)}</span>` : ""}</div><h3>${escapeHtml(communityPostTitle(item))}</h3>${excerpt ? `<p>${escapeHtml(excerpt)}</p>` : ""}${mediaItems.length ? `<div class="forum-thread-media ${mediaItems.length === 1 ? "is-single" : "is-grid"}">${communityFeedMedia(item)}</div>` : ""}</div>
     <footer class="forum-thread-actions"><button class="${item.liked ? "active" : ""}" type="button" data-like-community-post="${escapeHtml(item.id)}" aria-label="点赞"><span class="forum-action-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10H4V10h3Zm3 10V9l4-6c1.7.7 2 2.2 1.3 4.3L15 9h4.2c1.3 0 2 1.1 1.7 2.3l-1.6 6.5c-.3 1.3-1.2 2.2-2.6 2.2H10Z"></path></svg><span>${Number(item.likeCount || 0) || "赞"}</span></span></button><button type="button" data-open-community-comments="${escapeHtml(item.id)}" aria-label="查看回复"><span class="forum-action-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 4V5Z"></path></svg><span>${replies || "评论"}</span></span></button><button type="button" data-share-community-post="${escapeHtml(item.id)}" aria-label="分享帖子"><span class="forum-action-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 8l5-5 5 5M5 12v8h14v-8"></path></svg><span>分享</span></span></button></footer>
   </article>`;
@@ -3088,7 +3098,7 @@ async function shareCommunityPost(postId) {
   const post = findCommunityPost(postId);
   if (!post) return toast("帖子不存在");
   const title = communityPostTitle(post);
-  const text = String(post.content || post.question || `${post.authorName || "壳友"}发布了一篇帖子`).slice(0, 100);
+  const text = String(post.content || post.question || `${post.authorName || "龟友"}发布了一篇帖子`).slice(0, 100);
   const url = communityShareUrl(post);
   try {
     const nativeShare = window.Capacitor?.Plugins?.Share;
@@ -3108,12 +3118,12 @@ function communitySearchSuggestionsMarkup() {
   return `<div class="community-search-suggestions" role="listbox" aria-label="相关帖子">${communitySearchResults.slice(0, 5).map(post => {
     const media = communityPostMediaItems(post)[0];
     const summary = String(post.content || post.question || communityCircle(communityPostCircleId(post)).name || "壳友交流").replace(/\s+/g, " ").slice(0, 64);
-    return `<button type="button" role="option" data-community-search-post="${escapeHtml(post.id)}"><span class="community-search-result-copy"><strong>${escapeHtml(communityPostTitle(post))}</strong><small>${escapeHtml(post.authorName || "壳友")} · ${escapeHtml(summary)}</small></span>${media?.url ? `<img src="${escapeHtml(media.url)}" alt="" loading="lazy">` : `<i aria-hidden="true">帖</i>`}</button>`;
+    return `<button type="button" role="option" data-community-search-post="${escapeHtml(post.id)}"><span class="community-search-result-copy"><strong>${escapeHtml(communityPostTitle(post))}</strong><small>${escapeHtml(post.authorName || "龟友")} · ${escapeHtml(summary)}</small></span>${media?.url ? `<img src="${escapeHtml(media.url)}" alt="" loading="lazy">` : `<i aria-hidden="true">帖</i>`}</button>`;
   }).join("")}</div>`;
 }
 
 function communitySearchMarkup() {
-  return `<section class="community-search-shell"><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input type="search" value="${escapeHtml(communitySearchQuery)}" placeholder="搜索帖子、品种或壳友" autocomplete="off" enterkeyhint="search" aria-label="搜索龟友圈" data-community-search><button type="button" data-community-search-clear aria-label="清除搜索" ${communitySearchQuery ? "" : "hidden"}>×</button></label><div data-community-search-results>${communitySearchSuggestionsMarkup()}</div></section>`;
+  return `<section class="community-search-shell"><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input type="search" value="${escapeHtml(communitySearchQuery)}" placeholder="搜索帖子、品种或龟友" autocomplete="off" enterkeyhint="search" aria-label="搜索龟友圈" data-community-search><button type="button" data-community-search-clear aria-label="清除搜索" ${communitySearchQuery ? "" : "hidden"}>×</button></label><div data-community-search-results>${communitySearchSuggestionsMarkup()}</div></section>`;
 }
 
 function bindCommunitySearchResults(container = document.querySelector("[data-community-search-results]")) {
@@ -3425,7 +3435,7 @@ function pageCommunityFriends() {
     ${topbar("消息联系人", true)}
     <main class="content page-fresh community-page">
       <section class="section-title"><span>联系人</span><small>${friends.length} 位</small></section>
-      <section class="community-friend-list">${friends.map(friend => `<article class="community-friend-row fresh-card">${communityAvatar(friend)}<div><strong>${escapeHtml(friend.name || "壳友")}${platformAdminBadge(friend)}</strong><small>${escapeHtml(friend.phone || "")}</small></div><button type="button" data-open-community-chat="${friend.id}">聊天</button></article>`).join("") || `<div class="empty small-empty"><div><strong>还没有联系人</strong><br>在龟集市联系卖家后即可继续聊天</div></div>`}</section>
+      <section class="community-friend-list">${friends.map(friend => `<article class="community-friend-row fresh-card">${communityAvatar(friend)}<div><strong>${escapeHtml(friend.name || "龟友")}${platformAdminBadge(friend)}</strong><small>${escapeHtml(friend.phone || "")}</small></div><button type="button" data-open-community-chat="${friend.id}">聊天</button></article>`).join("") || `<div class="empty small-empty"><div><strong>还没有联系人</strong><br>在龟集市联系卖家后即可继续聊天</div></div>`}</section>
     </main>
     ${bottomNav()}
   `;
@@ -3718,7 +3728,7 @@ function pageCommunityChat() {
         : `<button class="community-message-media" style="--community-media-ratio:${communityMessageAspectRatio(message, mediaType)}" type="button" data-preview-chat-media="${escapeHtml(mediaUrl)}" data-chat-media-poster="${escapeHtml(mediaPosterUrl)}" data-chat-media-type="${mediaType}" aria-label="查看聊天图片"><img src="${escapeHtml(mediaUrl)}" alt="聊天图片"></button>`)
       : "";
     const showTime = shouldShowCommunityMessageTime(visibleMessages, index);
-    const sender = { id: message.senderId || friend?.id || state.selectedCommunityFriendId, avatar: message.senderAvatar || friend?.avatar || "", name: friend?.name || "壳友", isAdmin: Boolean(message.senderIsAdmin || friend?.isAdmin) };
+    const sender = { id: message.senderId || friend?.id || state.selectedCommunityFriendId, avatar: message.senderAvatar || friend?.avatar || "", name: friend?.name || "龟友", isAdmin: Boolean(message.senderIsAdmin || friend?.isAdmin) };
     const senderMark = !message.mine
       ? (showTime
         ? `<button class="community-chat-message-avatar" type="button" data-view-community-user="${escapeHtml(sender.id)}" aria-label="查看${escapeHtml(sender.name)}的主页">${communityAvatar(sender, "community-chat-avatar")}</button>`
@@ -3765,7 +3775,7 @@ function pageCommunityChat() {
 
 // Keep detached pages only while the data they display is unchanged.
 function navigationDataKeys(page) {
-  const business = ["turtles", "keptSpecies", "customSpecies", "ledgerRecords", "breedingRecords", "memos", "careRecords", "careCustomItems", "turtlePools", "activityLogs"];
+  const business = ["turtles", "keptSpecies", "customSpecies", "ledgerRecords", "breedingRecords", "memos", "careRecords", "careCustomItems", "carePlans", "turtlePools", "activityLogs"];
   const community = ["communityPosts", "communityProfileStats", "communityFollowedCircleIds", "communityFollowingUsers", "blockedUsers"];
   const market = ["marketListings", "myMarketListings", "marketFavoriteIds", "marketHistoryIds", "selectedMarketListing", "selectedMarketSeller"];
   const messages = ["communityFriends", "communityFriendsInitialized", "communityFriendsError", "communityNotifications", "communityNotificationSummary", "communityActivityItems", "messageUnreadCount"];
@@ -3805,7 +3815,7 @@ function backNavigationState() {
   return {
     page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForLedger ? "ledger" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" || state.page === "communityProfile" ? "community" : state.page === "communityActivity" || state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "mine" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "",
-    editingTurtlePoolId: "", editingMarketListingId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: ""
+    editingTurtlePoolId: "", editingMarketListingId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "", growthTaskMemoId: ""
   };
 }
 
@@ -3894,6 +3904,7 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
   }
   setupMarketInfiniteScroll();
   setupCommunityInfiniteScroll();
+  updateAccountSaveStatus();
   syncMobileKeyboardUI();
   window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
   restoredSnapshotRenderHoldUntil = Date.now() + 520;
@@ -3911,9 +3922,10 @@ function navigateBack(options = {}) {
   if (!options.fromEdgeGesture) $app.cancelEdgeBackGesture?.();
   $app.cancelPullRefreshGesture?.();
   if (ledgerDashboardPicker) return finishLedgerDashboardSelection();
+  if (!options.fromEdgeGesture && !canLeaveRecordPage()) return;
   const snapshot = edgeBackSnapshots.pop();
   const fallback = backNavigationState();
-  const nextState = snapshot?.page ? { ...fallback, page: snapshot.page } : fallback;
+  const nextState = snapshot?.page ? { ...fallback, ...snapshot.editorState, page: snapshot.page } : fallback;
   const snapshotCurrent = snapshot && navigationSnapshotIsCurrent(snapshot);
   if (snapshotCurrent && restoreLiveNavigationSnapshot(snapshot, nextState, options)) return;
   if (snapshotCurrent && snapshot?.html) {
@@ -3958,7 +3970,7 @@ function navigateBack(options = {}) {
     });
     return;
   }
-  setState(snapshot?.page ? { ...fallback, page: snapshot.page } : fallback, {
+  setState(nextState, {
     skipSave: state.page === "turtleDetail",
     pageMotion: "none",
     pageScroll: "preserve",
@@ -3979,7 +3991,7 @@ function pageFollowing() {
     <main class="content page-fresh following-page">
       <section class="section-title"><span>关注的壳友</span><small>${users.length} 人</small></section>
       <section class="following-user-list">
-        ${users.map(user => `<button class="following-user-card fresh-card" type="button" data-view-following-user="${user.id}">${communityAvatar(user, "following-user-avatar")}<div><strong>${escapeHtml(user.name || "壳友")}${platformAdminBadge(user)}</strong><span>${Number(user.postCount || 0)} 条动态 · ${Number(user.listingCount || 0)} 件在售</span></div><b>›</b></button>`).join("") || remoteListEmptyMarkup(state.followingInitialized, state.followingError, "还没有关注壳友", "可以在龟友圈或商品详情中关注对方")}
+        ${users.map(user => `<button class="following-user-card fresh-card" type="button" data-view-following-user="${user.id}">${communityAvatar(user, "following-user-avatar")}<div><strong>${escapeHtml(user.name || "龟友")}${platformAdminBadge(user)}</strong><span>${Number(user.postCount || 0)} 条动态 · ${Number(user.listingCount || 0)} 件在售</span></div><b>›</b></button>`).join("") || remoteListEmptyMarkup(state.followingInitialized, state.followingError, "还没有关注壳友", "可以在龟友圈或商品详情中关注对方")}
       </section>
     </main>
     ${bottomNav()}
@@ -3995,7 +4007,7 @@ function pageFollowingProfile() {
   return `
     ${topbar(user.name || "关注详情", true)}
     <main class="content page-fresh following-profile-page">
-      <section class="following-profile-head fresh-card">${communityAvatar(user, "following-profile-avatar")}<div><h2>${escapeHtml(user.name || "壳友")}${platformAdminBadge(user)}</h2><p>${posts.length} 条动态 · ${listings.length} 件在售商品</p></div><button class="active" type="button" data-toggle-community-follow="${user.id}">已关注</button></section>
+      <section class="following-profile-head fresh-card">${communityAvatar(user, "following-profile-avatar")}<div><h2>${escapeHtml(user.name || "龟友")}${platformAdminBadge(user)}</h2><p>${posts.length} 条动态 · ${listings.length} 件在售商品</p></div><button class="active" type="button" data-toggle-community-follow="${user.id}">已关注</button></section>
       ${profileContentTabs(posts.length, listings.length, activeTab)}
       <section class="profile-content-panel ${activeTab === "posts" ? "is-posts" : "is-listings"}">${activeTab === "posts"
         ? `<section class="community-feed following-posts">${posts.map(item => communityFeedCard(item, { allowDetail: true })).join("") || `<div class="empty small-empty"><div><strong>暂时没有动态</strong></div></div>`}</section>`
@@ -4023,7 +4035,7 @@ function pageCommunityProfile() {
   return `
     ${topbar(user.name || "壳友主页", true)}
     <main class="content page-fresh following-profile-page community-profile-page">
-      <section class="following-profile-head fresh-card">${communityAvatar(user, "following-profile-avatar")}<div><h2>${escapeHtml(user.name || "壳友")}${platformAdminBadge(user)}</h2><p>${Number(user.postCount ?? posts.length)} 条动态 · ${Number(user.listingCount ?? listings.length)} 件在售商品</p></div>${user.isOwn ? "" : `<button class="${user.followed ? "active" : ""}" type="button" data-toggle-community-follow="${user.id}">${user.followed ? "已关注" : "关注"}</button>`}</section>
+      <section class="following-profile-head fresh-card">${communityAvatar(user, "following-profile-avatar")}<div><h2>${escapeHtml(user.name || "龟友")}${platformAdminBadge(user)}</h2><p>${Number(user.postCount ?? posts.length)} 条动态 · ${Number(user.listingCount ?? listings.length)} 件在售商品</p></div>${user.isOwn ? "" : `<button class="${user.followed ? "active" : ""}" type="button" data-toggle-community-follow="${user.id}">${user.followed ? "已关注" : "关注"}</button>`}</section>
       ${profileContentTabs(posts.length, listings.length, activeTab)}
       <section class="profile-content-panel ${activeTab === "posts" ? "is-posts" : "is-listings"}">${activeTab === "posts"
         ? `<section class="community-feed following-posts">${posts.map(item => communityFeedCard(item, { allowDetail: true })).join("") || `<div class="empty small-empty"><div><strong>暂时没有动态</strong></div></div>`}</section>`
@@ -4929,6 +4941,7 @@ function pageHome() {
         <button class="care-action home-module-action breeding-action" data-page="breeding"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7.7" r="4.7"></circle><circle cx="8.3" cy="14.1" r="4.7"></circle><circle cx="15.7" cy="14.1" r="4.7"></circle></svg></span><strong>繁殖</strong><small>产蛋、受精与孵化</small></button>
         <button class="care-action home-module-action pool-action" data-page="pools"><span class="home-module-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 8.3h15v9.2a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2z"></path><path d="M4.5 11.6c2.1 1.4 4.2 1.4 6.3 0 2.1-1.4 4.2-1.4 6.3 0"></path><path d="M7.5 5.5h9"></path></svg></span><strong>龟池</strong><small>数量与尺寸</small></button>
       </section>
+      ${homeTasksMarkup()}
       ${archiveDashboardSection()}
     </main>
     ${bottomNav()}
@@ -5381,6 +5394,7 @@ function pageTurtleBatchDetail(t) {
       </div><p class="batch-form-hint">损耗金额按所选数量的购入成本自动计算，无需手动填写。</p>
       <label class="breeding-note"><span>备注</span><textarea name="note"></textarea></label><button class="primary" type="submit">记录数量变动</button>
     </form>` : ""}
+    ${!editing ? archiveTimeline(t) : ""}
     <section class="section-title batch-history-heading"><h3>批次更新记录</h3><span>${histories.length} 条</span></section>${histories.map(log => `<article class="history-card fresh-card"><p>${escapeHtml(log.text || log.title || log.content || "批次已更新")}</p><small>${formatTime(log.createdAt)}</small></article>`).join("") || `<div class="empty small-empty batch-history-empty"><strong>暂无批次更新</strong><span>更新资料、记录售出或损耗后，会在这里留下记录</span></div>`}
     </main>${bottomNav()}`;
 }
@@ -5411,15 +5425,21 @@ function submitTurtleBatchDetail(event, turtle) {
   }
   const now = new Date().toISOString();
   const log = { ...makeActivity(`更新批次：${name}，在养 ${summary.count} 只（${counts[0]} 公 ${counts[1]} 母 ${counts[2]} 未知），龟池 ${turtleBatchPoolLabel(summary)} → ${poolId === "__KEEP__" ? "保留各自龟池" : turtlePoolName(poolId)}`, "档案"), batchId: turtle.batchId };
+  const growthMemo = (state.memos || []).find(memo => memo.id === state.growthTaskMemoId && memo.growthReminder && members.some(member => member.id === memo.turtleId));
+  const nextGrowth = new Date();
+  nextGrowth.setDate(nextGrowth.getDate() + 30);
+  const nextGrowthAt = formatDate(nextGrowth);
   event.currentTarget.__turtleDetailSaved = true;
   saveWithDeferredImages({
+    ...(growthMemo ? { memos: state.memos.map(memo => memo.id === growthMemo.id ? { ...memo, dueDate: nextGrowthAt, completedAt: "", lastCompletedDate: formatDate(new Date()), updatedAt: now } : memo) } : {}),
     turtles: state.turtles.map(item => item.batchId !== turtle.batchId ? item : {
       ...item, batchName: name,
       ...(TurtleBatches.isActive(item) ? { stage, gender: genders.get(item.id), poolId: poolId === "__KEEP__" ? item.poolId : poolId,
+        ...(growthMemo ? { nextGrowthAt } : {}),
         health: health === "__KEEP__" ? item.health : health, note: String(form.get("note") || ""),
         photo: state.updateDraftPhoto === "__CLEAR__" ? "" : state.updateDraftPhoto || item.photo, updatedAt: now } : {})
     }),
-    updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "",
+    updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "", growthTaskMemoId: "",
     activityLogs: [log, ...(state.activityLogs || [])]
   }, [state.updateDraftPhoto === "__CLEAR__" ? "" : state.updateDraftPhoto]);
   toast(`批次已更新，在养 ${summary.count} 只，龟池数量已同步`);
@@ -5538,8 +5558,8 @@ function pageTurtleDetail() {
       <section class="page-intro compact-intro detail-summary-card ${menuOpen ? "menu-open" : ""}">
         <div>
           <p class="eyebrow dark">明细</p>
-          <h2>${nickname || "未命名档案"}</h2>
-          <p>${species.name || t.speciesName} · ${turtleDraftValue(t, "status") || t.status} · ${turtleDraftValue(t, "health") || t.health}</p>
+          <h2>${escapeHtml(nickname || "未命名档案")}</h2>
+          <p>${escapeHtml(species.name || t.speciesName)} · ${escapeHtml(turtleDraftValue(t, "status") || t.status)} · ${escapeHtml(turtleDraftValue(t, "health") || t.health)}</p>
         </div>
         ${t.sharedView ? `<span class="shared-turtle-badge">公开分享</span>` : `<button class="detail-more" data-toggle-turtle-menu="${t.id}" aria-label="档案操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>`}
         ${menuOpen ? `
@@ -5556,7 +5576,7 @@ function pageTurtleDetail() {
       ${isEditing ? `
       <form class="breeding-form fresh-card turtle-detail-edit-form" id="turtleDetailForm">
         <div class="photo-uploader breeding-photo-box">
-          <img src="${photo}" alt="${species.name || t.speciesName}">
+          <img src="${escapeHtml(photo)}" alt="${escapeHtml(species.name || t.speciesName)}">
           <div>
             <button class="secondary" type="button" data-update-photo-button>龟龟最新照片</button>
             <button class="danger-link" type="button" data-clear-update-photo>清除图片</button>
@@ -5565,12 +5585,12 @@ function pageTurtleDetail() {
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-update-photo-input>
         <div class="breeding-form-grid">
           <label><span>品种代码</span><select class="select" name="speciesCode" required>${!speciesByCode(speciesCode) ? `<option value="${escapeHtml(speciesCode || "")}" selected>${escapeHtml(archiveSpeciesName(t))}（原品种）</option>` : ""}${accountSpeciesList().map(item => `<option value="${item.code}" ${item.code === speciesCode ? "selected" : ""}>${item.isCustom ? "自建" : item.code} · ${escapeHtml(item.name)}</option>`).join("")}</select></label>
-          <label><span>龟龟昵称</span><input class="field" name="code" value="${nickname || ""}" placeholder="例如：小核桃、黑豆、将军"></label>
+          <label><span>龟龟昵称</span><input class="field" name="code" value="${escapeHtml(nickname || "")}" placeholder="例如：小核桃、黑豆、将军"></label>
           <label><span>龟池</span><select class="select" name="poolId"><option value="">暂不关联龟池</option>${(state.turtlePools || []).map(pool => `<option value="${pool.id}" ${turtleDraftValue(t, "poolId") === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}</select></label>
           <div class="detail-choice-row">
             <span>性别</span>
             <div>
-              <input type="hidden" name="gender" value="${turtleDraftValue(t, "gender") || "未知"}">
+              <input type="hidden" name="gender" value="${escapeHtml(turtleDraftValue(t, "gender") || "未知")}">
               <div class="radio-row">
                 ${["公", "母", "未知"].map(value => `<button class="choice ${turtleDraftValue(t, "gender") === value ? "active" : ""}" type="button" data-detail-choice="gender" data-choice-value="${value}">${value}</button>`).join("")}
               </div>
@@ -5579,15 +5599,15 @@ function pageTurtleDetail() {
           <div class="detail-choice-row health-choice-row">
             <span>健康状态</span>
             <div>
-              <input type="hidden" name="health" value="${turtleDraftValue(t, "health") || "健康"}">
+              <input type="hidden" name="health" value="${escapeHtml(turtleDraftValue(t, "health") || "健康")}">
               <div class="radio-row">
                 ${["健康", "生病"].map(value => `<button class="choice ${turtleDraftValue(t, "health") === value ? "active" : ""}" type="button" data-detail-choice="health" data-choice-value="${value}">${value}</button>`).join("")}
               </div>
             </div>
           </div>
           <div class="detail-measure-pair">
-          <label><span>当前体重(g)</span><input class="field" name="weight" type="number" min="0" step="0.01" inputmode="decimal" required value="${turtleDraftValue(t, "weight")}"></label>
-          <label><span>背甲长度(cm)</span><input class="field" name="carapaceLength" type="number" min="0" step="0.01" inputmode="decimal" required value="${turtleDraftValue(t, "carapaceLength")}"></label>
+          <label><span>当前体重(g)</span><input class="field" name="weight" type="number" min="0" step="0.01" inputmode="decimal" required value="${escapeHtml(turtleDraftValue(t, "weight"))}"></label>
+          <label><span>背甲长度(cm)</span><input class="field" name="carapaceLength" type="number" min="0" step="0.01" inputmode="decimal" required value="${escapeHtml(turtleDraftValue(t, "carapaceLength"))}"></label>
           </div>
           <label><span>购入价格(元)</span><input class="field" name="price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="填写购入价格" value="${escapeHtml(String(turtleDraftValue(t, "price")))}"></label>
           <label><span>治疗花费(元)</span><input class="field" name="medicalExpense" type="number" min="0" step="0.01" inputmode="decimal" placeholder="未填写则不记账" value="${escapeHtml(String(state.turtleDetailDraftId === t.id ? state.turtleDetailDraft?.medicalExpense || "" : ""))}"></label>
@@ -5595,15 +5615,15 @@ function pageTurtleDetail() {
           <label class="breeding-date-field"><span>出生日期<br>（选填）</span><input class="field" name="birthDate" type="date" value="${escapeHtml(String(turtleDraftValue(t, "birthDate")))}"></label>
           <details class="measure-extra">
             <summary><span>更多体测数据</span><small>背甲宽度、背高、腹甲长度</small></summary>
-            <label><span>背甲宽度(cm)</span><input class="field" name="carapaceWidth" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "carapaceWidth")}"></label>
-            <label><span>背高(cm)</span><input class="field" name="shellHeight" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "shellHeight")}"></label>
-            <label><span>腹甲长度(cm)</span><input class="field" name="plastronLength" type="number" min="0" step="0.1" value="${turtleDraftValue(t, "plastronLength")}"></label>
+            <label><span>背甲宽度(cm)</span><input class="field" name="carapaceWidth" type="number" min="0" step="0.1" value="${escapeHtml(turtleDraftValue(t, "carapaceWidth"))}"></label>
+            <label><span>背高(cm)</span><input class="field" name="shellHeight" type="number" min="0" step="0.1" value="${escapeHtml(turtleDraftValue(t, "shellHeight"))}"></label>
+            <label><span>腹甲长度(cm)</span><input class="field" name="plastronLength" type="number" min="0" step="0.1" value="${escapeHtml(turtleDraftValue(t, "plastronLength"))}"></label>
           </details>
         </div>
-        <label class="breeding-note"><span>备注</span><textarea name="note" placeholder="性格、饮食、状态变化、到家表现等">${turtleDraftValue(t, "note") || ""}</textarea></label>
+        <label class="breeding-note"><span>备注</span><textarea name="note" placeholder="性格、饮食、状态变化、到家表现等">${escapeHtml(turtleDraftValue(t, "note") || "")}</textarea></label>
         <button class="primary" type="submit">保存修改</button>
       </form>
-      ` : `${turtleReadOnlyDetail(t, species, photo)}${turtleDetailGrowthChart(t)}`}
+      ` : `${turtleReadOnlyDetail(t, species, photo)}${archiveTimeline(t)}${turtleDetailGrowthChart(t)}`}
       ${t.sharedView ? `<section class="shared-turtle-note">由龟友手账生成 · 仅展示主人选择公开的成长信息</section>` : ""}
       <section class="section-title"><h3>成长记录</h3></section>
       ${historyList.map((h, index) => `
@@ -5631,29 +5651,29 @@ function turtleReadOnlyDetail(t, species, photo) {
   const medicalCost = t.sharedView ? 0 : turtleMedicalCost(t);
   return `
     <section class="turtle-detail-hero fresh-card detail-photo-card">
-      <img class="growth-preview-photo" src="${photo}" alt="${species.name || t.speciesName}" data-growth-photo-preview role="button" tabindex="0" title="点击放大">
+      <img class="growth-preview-photo" src="${escapeHtml(photo)}" alt="${escapeHtml(species.name || t.speciesName)}" data-growth-photo-preview role="button" tabindex="0" title="点击放大">
       <div>
-        <h2>${t.code || "未命名档案"}</h2>
-        <p>${species.name || t.speciesName || "-"}</p>
-        <small>${t.status || "-"} · ${t.health || "-"}</small>
+        <h2>${escapeHtml(t.code || "未命名档案")}</h2>
+        <p>${escapeHtml(species.name || t.speciesName || "-")}</p>
+        <small>${escapeHtml(t.status || "-")} · ${escapeHtml(t.health || "-")}</small>
       </div>
     </section>
     <section class="detail-grid-card fresh-card">
-      <div class="detail-grid-wide"><span>性别</span><strong>${t.gender || "-"}</strong></div>
+      <div class="detail-grid-wide"><span>性别</span><strong>${escapeHtml(t.gender || "-")}</strong></div>
       ${["hatchling", "juvenile", "adult"].includes(t.stage) ? `<div class="detail-grid-wide"><span>阶段</span><strong>${({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[t.stage]}</strong></div>` : ""}
-      <div><span>体重</span><strong>${t.weight || "-"}g</strong></div>
-      <div><span>背甲长</span><strong>${t.carapaceLength || "-"}cm</strong></div>
+      <div><span>体重</span><strong>${escapeHtml(t.weight || "-")}g</strong></div>
+      <div><span>背甲长</span><strong>${escapeHtml(t.carapaceLength || "-")}cm</strong></div>
       ${[["背甲宽", t.carapaceWidth], ["背高", t.shellHeight], ["腹甲长", t.plastronLength]]
         .filter(([, value]) => String(value ?? "").trim() !== "")
         .map(([label, value]) => `<div><span>${label}</span><strong>${escapeHtml(String(value))}cm</strong></div>`).join("")}
-      <div class="detail-grid-wide"><span>入手日期</span><strong>${t.acquiredDate || "-"}</strong></div>
+      <div class="detail-grid-wide"><span>入手日期</span><strong>${escapeHtml(t.acquiredDate || "-")}</strong></div>
       ${t.birthDate ? `<div class="detail-grid-wide"><span>出生日期</span><strong>${escapeHtml(t.birthDate)}</strong></div>` : ""}
-      <div><span>来源</span><strong>${t.source || "-"}</strong></div>
+      <div><span>来源</span><strong>${escapeHtml(t.source || "-")}</strong></div>
       <div class="detail-grid-wide"><span>购入价</span><strong>${t.price !== "" && t.price != null ? `¥${money(t.price)}` : "-"}</strong></div>
       ${medicalCost > 0 ? `<div><span>累计看病花费</span><strong>¥${money(medicalCost)}</strong></div><div><span>总成本</span><strong>¥${money(turtleTotalCost(t))}</strong></div>` : ""}
       <div><span>龟池</span><strong>${escapeHtml(turtlePoolName(t.poolId))}</strong></div>
     </section>
-    ${t.note ? `<section class="fresh-card note-card">${t.note}</section>` : ""}
+    ${t.note ? `<section class="fresh-card note-card">${escapeHtml(t.note)}</section>` : ""}
   `;
 }
 
@@ -5962,30 +5982,80 @@ function careItemPicker(draft) {
   </div>`;
 }
 
+function careTurtleSpeciesSummary(refs) {
+  const groups = new Map();
+  for (const ref of refs) {
+    const name = ref.speciesName || "未填写品种";
+    groups.set(name, (groups.get(name) || 0) + 1);
+  }
+  return [...groups].slice(0, 3).map(([name, count]) => `${name} ${count} 只`).join("、")
+    + (groups.size > 3 ? ` 等 ${groups.size} 个品种` : "");
+}
+
+function careRecordTurtles(refs) {
+  if (!refs.length) return "";
+  const label = ref => escapeHtml([ref.code, ref.speciesName].filter(Boolean).join(" · ") || "原乌龟");
+  if (refs.length <= 3) return `<p class="care-record-turtles">关联 ${refs.length} 只：${refs.map(label).join("、")}</p>`;
+  return `<div class="care-record-turtles care-turtle-summary"><strong>关联 ${refs.length} 只乌龟</strong><p>${escapeHtml(careTurtleSpeciesSummary(refs))}</p></div>`;
+}
+
+function careRecordTime(record) {
+  const date = new Date(record.createdAt || "");
+  if (!/\d{2}:\d{2}/.test(record.createdAt || "") || !Number.isFinite(date.getTime())) return '<span class="care-record-time">记录时间未保存</span>';
+  const time = new Intl.DateTimeFormat("zh-CN", { timeZone: CHINA_TIME_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date);
+  const createdDate = formatDate(date);
+  return `<time class="care-record-time" datetime="${escapeHtml(record.createdAt)}" title="${escapeHtml(formatTime(record.createdAt))}">记录于 ${createdDate !== record.date ? `${createdDate} ` : ""}${time}</time>`;
+}
+
+function careTurtlePicker(draft) {
+  const refs = TurtleCare.normalizeTurtleRefs(draft.turtleRefs);
+  const selected = new Set(refs.map(ref => ref.id));
+  const available = (state.turtles || []).filter(turtle => TurtleBatches.isActive(turtle) || selected.has(String(turtle.id)));
+  const missing = refs.filter(ref => !available.some(turtle => String(turtle.id) === ref.id));
+  const chip = ref => `<button type="button" data-care-remove-turtle="${escapeHtml(ref.id)}" aria-label="移除关联：${escapeHtml(ref.code || ref.speciesName || "原乌龟")}">${escapeHtml(ref.code || ref.speciesName || "原乌龟")} <span aria-hidden="true">×</span></button>`;
+  return `<div class="care-field"><span>关联乌龟</span><select class="select" name="careTurtleIds" multiple data-archive-directory aria-label="关联乌龟，可多选">
+    ${available.map(turtle => `<option value="${escapeHtml(turtle.id)}" ${selected.has(String(turtle.id)) ? "selected" : ""}>${escapeHtml(turtle.code || turtle.name || "未命名乌龟")} · ${escapeHtml(archiveSpeciesName(turtle))}</option>`).join("")}
+    ${missing.map(ref => `<option value="${escapeHtml(ref.id)}" selected disabled>${escapeHtml(ref.code || ref.speciesName || "原乌龟")}（档案已删除）</option>`).join("")}
+  </select></div><p class="care-form-hint">可跨品种多选；不选择时仅记录本次喂食。</p>
+  ${refs.length > 3 ? `<p class="care-selection-summary">${escapeHtml(careTurtleSpeciesSummary(refs))}</p>` : ""}
+  ${refs.length ? `<div class="care-selected-turtles" aria-label="已关联乌龟">${refs.slice(0, 3).map(chip).join("")}</div>` : ""}
+  ${refs.length > 3 ? `<details class="care-turtle-details care-selection-details" ${draft.turtlesExpanded ? "open" : ""}><summary><span class="care-expand-label">展开其余 ${refs.length - 3} 只</span><span class="care-collapse-label">收起名单</span></summary><div class="care-selected-turtles care-turtle-scroll">${refs.slice(3).map(chip).join("")}</div></details>` : ""}`;
+}
+
 function pageCareRecords() {
   const draft = state.careDraft;
-  const records = [...(state.careRecords || [])].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+  const records = TurtleCare.filterRecords(state.careRecords || [], careHistoryFilter);
   let previousDate = "";
   return `${topbar("日常养护", true)}
     <main class="content page-fresh care-page">
       ${careTabs()}
       ${draft ? "" : `<section class="page-intro care-intro"><div><p class="eyebrow dark">日常</p><h2>养护记录</h2><p>记下每一次照料，随时回看。</p></div><button class="round-action" type="button" data-new-care aria-label="新增养护记录">+</button></section>`}
+      ${!draft ? carePlansMarkup() : ""}
       ${draft ? `<form class="fresh-card care-form" id="careForm">
         <div class="form-head"><div><p class="eyebrow dark">${draft.id ? "编辑" : "新增"}</p><h3>记录一次养护</h3></div><button class="danger-link" type="button" data-cancel-care>取消</button></div>
+        ${draft.planNotice ? `<p class="work-hint">${escapeHtml(draft.planNotice)}</p>` : ""}
         <label class="care-field"><span>日期</span><input class="field" type="date" name="date" required max="${formatDate(new Date())}" value="${escapeHtml(draft.date)}"></label>
         <div class="care-field"><span id="careItemLabel">事项</span><div aria-labelledby="careItemLabel">${careItemPicker(draft)}</div></div>
         ${draft.itemId === "manual" ? `<label class="care-field"><span>手动备注</span><input class="field" name="manualTitle" required maxlength="40" placeholder="例如：晒背、清洗过滤器" value="${escapeHtml(draft.manualTitle || "")}"></label><p class="care-form-hint">保存后，下次可直接从事项列表选择。</p>` : ""}
         <label class="care-field"><span>龟池</span><select class="select" name="poolId"><option value="">不关联龟池</option>${draft.poolId && !(state.turtlePools || []).some(pool => pool.id === draft.poolId) ? `<option value="${escapeHtml(draft.poolId)}" selected>${escapeHtml(draft.poolName || "原龟池")}（已删除）</option>` : ""}${(state.turtlePools || []).map(pool => `<option value="${escapeHtml(pool.id)}" ${draft.poolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name)}</option>`).join("")}</select></label>
+        ${draft.itemId === "feeding" ? careTurtlePicker(draft) : ""}
         <label class="care-note"><span>补充说明 <small>选填</small></span><textarea name="note" maxlength="1000" placeholder="可填写食物、换水量或其他情况">${escapeHtml(draft.note || "")}</textarea></label>
+        ${draft.itemId === "feeding" ? `<details class="care-plan-save"><summary>存为常用喂食方案</summary><label class="care-field"><span>方案名称</span><input class="field" name="planName" maxlength="40" value="${escapeHtml(draft.planName || "")}" placeholder="例如：种龟晚餐"></label><button class="secondary" type="button" data-save-care-plan>保存方案</button></details>` : ""}
         <button class="primary" type="submit">${draft.id ? "保存修改" : "保存养护记录"}</button>
       </form>` : `<div class="care-quick-actions"><button type="button" data-new-care="feeding"><span aria-hidden="true">＋</span> 记喂食</button><button type="button" data-new-care="water"><span aria-hidden="true">＋</span> 记换水</button><button type="button" data-new-care="manual"><span aria-hidden="true">＋</span> 手动记录</button></div>`}
+      ${careFilterMarkup()}
       <section class="care-history" aria-label="养护历史"><div class="section-title"><h3>养护历史</h3><span>${records.length} 条</span></div>
-      ${records.map(record => {
+      ${records.slice(0, careHistoryLimit).map(record => {
         const heading = record.date !== previousDate ? `<h4 class="care-date">${escapeHtml(record.date)}${record.date === formatDate(new Date()) ? `<span>今天</span>` : ""}</h4>` : "";
         previousDate = record.date;
-        return `${heading}<article class="fresh-card care-record"><div class="care-record-heading"><strong>${escapeHtml(record.title)}</strong><span>${escapeHtml(record.poolName || "未关联龟池")}</span></div>${record.note ? `<p>${escapeHtml(record.note)}</p>` : ""}<footer><button type="button" data-edit-care="${escapeHtml(record.id)}">编辑</button><button type="button" class="danger-link" data-delete-care="${escapeHtml(record.id)}">删除记录</button></footer></article>`;
-      }).join("") || `<div class="empty"><div><strong>还没有养护记录</strong><p>喂食、换水后记一笔，也可以手动填写其他事项。</p></div></div>`}
-      </section>
+        const refs = TurtleCare.normalizeTurtleRefs(record.turtleRefs);
+        return `${heading}<article class="fresh-card care-record"><div class="care-record-heading"><div class="care-record-title"><strong>${escapeHtml(record.title)}</strong>${careRecordTime(record)}</div><span>${escapeHtml(record.poolName || "未关联龟池")}</span></div>
+          ${refs.length || record.itemId === "feeding" ? `<div class="care-record-body"><div>${careRecordTurtles(refs)}</div>${record.itemId === "feeding" ? `<button type="button" data-repeat-care="${escapeHtml(record.id)}">再记一次</button>` : ""}</div>` : ""}
+          ${record.note ? `<p>${escapeHtml(record.note)}</p>` : ""}
+          <footer>${refs.length > 3 ? `<button type="button" class="care-view-turtles" data-care-view="${escapeHtml(record.id)}" aria-expanded="false" aria-controls="care-turtles-${escapeHtml(record.id)}">查看全部关联乌龟</button>` : ""}<button type="button" data-edit-care="${escapeHtml(record.id)}">编辑</button><button type="button" class="danger-link" data-delete-care="${escapeHtml(record.id)}">删除记录</button></footer>
+          ${refs.length > 3 ? `<div class="care-record-turtle-list" id="care-turtles-${escapeHtml(record.id)}" hidden></div>` : ""}</article>`;
+      }).join("") || `<div class="empty"><div><strong>${(state.careRecords || []).length ? "没有符合筛选的记录" : "还没有养护记录"}</strong><p>${(state.careRecords || []).length ? "调整筛选条件或点击重置。" : "喂食、换水后记一笔，也可以手动填写其他事项。"}</p></div></div>`}
+      ${records.length > careHistoryLimit ? `<button class="secondary work-more" type="button" data-more-care>继续查看（还有 ${records.length - careHistoryLimit} 条）</button>` : ""}</section>
     </main>${bottomNav()}`;
 }
 
@@ -5994,10 +6064,32 @@ function readCareDraft() {
   if (!form || !state.careDraft) return state.careDraft;
   const data = new FormData(form);
   return { ...state.careDraft, date: String(data.get("date") || ""), poolId: String(data.get("poolId") || ""),
-    note: String(data.get("note") || ""), manualTitle: data.has("manualTitle") ? String(data.get("manualTitle")) : state.careDraft.manualTitle || "" };
+    turtlesExpanded: Boolean(form.querySelector(".care-selection-details")?.open),
+    planName: String(data.get("planName") || ""), note: String(data.get("note") || ""), manualTitle: data.has("manualTitle") ? String(data.get("manualTitle")) : state.careDraft.manualTitle || "" };
 }
 
 function bindCareEvents() {
+  document.querySelectorAll("[data-care-view]").forEach(button => button.addEventListener("click", () => {
+    const panel = button.closest(".care-record")?.querySelector(".care-record-turtle-list");
+    const record = state.careRecords.find(row => row.id === button.dataset.careView);
+    if (!panel || !record) return;
+    const opening = panel.hidden;
+    if (opening && !panel.children.length) panel.innerHTML = `<ul class="care-turtle-scroll">${TurtleCare.normalizeTurtleRefs(record.turtleRefs).map(ref => `<li>${escapeHtml([ref.code, ref.speciesName].filter(Boolean).join(" · ") || "原乌龟")}</li>`).join("")}</ul>`;
+    panel.hidden = !opening;
+    button.setAttribute("aria-expanded", String(opening));
+    button.textContent = opening ? "收起关联乌龟" : "查看全部关联乌龟";
+  }));
+  document.querySelectorAll("[data-repeat-care]").forEach(button => button.addEventListener("click", () => {
+    if (!button.isConnected || !requireLogin()) return;
+    const source = state.careRecords.find(row => row.id === button.dataset.repeatCare);
+    if (!source || source.itemId !== "feeding") return;
+    const now = new Date();
+    const record = TurtleCare.normalizeRecords([{ ...source, id: crypto.randomUUID(), date: formatDate(now), createdAt: now.toISOString(), updatedAt: now.toISOString() }])[0];
+    if (!record) return;
+    setState({ careRecords: [record, ...state.careRecords], memos: TurtleCare.reconcileCompletion(state.memos, [record, ...state.careRecords], record.sourceMemoId), careDraft: readCareDraft(),
+      activityLogs: logActivity(`再次记录喂食：${record.date}`, "养护") });
+    toast("已新增一条相同的喂食记录");
+  }));
   document.querySelectorAll("[data-care-tab]").forEach(button => button.addEventListener("click", () => {
     setState({ careTab: button.dataset.careTab, careDraft: readCareDraft(), carePickerOpen: false });
   }));
@@ -6016,6 +6108,21 @@ function bindCareEvents() {
   document.querySelectorAll("[data-care-delete-choice]").forEach(button => button.addEventListener("click", () => deleteCareChoice(button.dataset.careDeleteChoice)));
   document.querySelector("#careForm")?.addEventListener("input", () => { state.careDraft = readCareDraft(); });
   document.querySelector("#careForm")?.addEventListener("submit", submitCareRecord);
+  document.querySelector('[name="careTurtleIds"]')?.addEventListener("change", event => {
+    const draft = readCareDraft();
+    const old = new Map((draft.turtleRefs || []).map(ref => [ref.id, ref]));
+    const turtles = new Map((state.turtles || []).map(turtle => [String(turtle.id), turtle]));
+    const turtleRefs = [...event.target.selectedOptions].map(option => {
+      if (old.has(option.value)) return old.get(option.value);
+      const turtle = turtles.get(option.value);
+      return { id: option.value, code: turtle?.code || turtle?.name || "未命名乌龟", speciesName: turtle ? archiveSpeciesName(turtle) : "" };
+    });
+    setState({ careDraft: { ...draft, turtleRefs }, carePickerOpen: false });
+  });
+  document.querySelectorAll("[data-care-remove-turtle]").forEach(button => button.addEventListener("click", () => {
+    const draft = readCareDraft();
+    setState({ careDraft: { ...draft, turtleRefs: (draft.turtleRefs || []).filter(ref => ref.id !== button.dataset.careRemoveTurtle) } });
+  }));
   document.querySelector(".care-page")?.addEventListener("click", event => {
     if (state.carePickerOpen && !event.target.closest(".care-picker")) setState({ careDraft: readCareDraft(), carePickerOpen: false });
   });
@@ -6037,7 +6144,8 @@ function bindCareEvents() {
     if (!requireLogin()) return;
     const record = state.careRecords.find(row => row.id === button.dataset.deleteCare);
     if (!record || !confirm(`删除 ${record.date} 的「${record.title}」记录？`)) return;
-    setState({ careRecords: state.careRecords.filter(row => row.id !== record.id),
+    const careRecords = state.careRecords.filter(row => row.id !== record.id);
+    setState({ careRecords, memos: TurtleCare.reconcileCompletion(state.memos, careRecords, record.sourceMemoId),
       careDraft: state.careDraft?.id === record.id ? null : readCareDraft(),
       activityLogs: logActivity(`删除养护记录：${record.title}`, "养护") });
   }));
@@ -6077,12 +6185,19 @@ function submitCareRecord(event) {
   if (!item) return toast("请选择或填写养护事项");
   const existing = draft.id ? state.careRecords.find(row => row.id === draft.id) : null;
   if (draft.id && !existing) return toast("这条记录已删除，请重新新增");
+  const turtleRefs = item.id === "feeding" ? TurtleCare.normalizeTurtleRefs(draft.turtleRefs) : [];
+  const activeIds = new Set((state.turtles || []).filter(TurtleBatches.isActive).map(turtle => String(turtle.id)));
+  const historicalIds = new Set((existing?.turtleRefs || []).map(ref => ref.id));
+  if (turtleRefs.some(ref => !activeIds.has(ref.id) && !historicalIds.has(ref.id))) return toast("部分乌龟已不在养，请重新选择关联乌龟");
   const pool = (state.turtlePools || []).find(row => row.id === draft.poolId);
   if (draft.poolId && !pool && draft.poolId !== existing?.poolId) return toast("龟池已不存在，请重新选择");
   const record = { id: existing?.id || crypto.randomUUID(), date: draft.date, itemId: item.id, title: item.title,
     poolId: draft.poolId, poolName: pool?.name || (draft.poolId === existing?.poolId ? existing.poolName : ""),
-    note: String(draft.note || "").trim().slice(0, 1000), createdAt: existing?.createdAt || now, updatedAt: now };
-  setState({ careRecords: existing ? state.careRecords.map(row => row.id === existing.id ? record : row) : [record, ...(state.careRecords || [])],
+    turtleRefs, sourceMemoId: draft.sourceMemoId || "",
+    note: String(draft.note || "").trim().slice(0, 1000), createdAt: existing ? existing.createdAt || "" : now, updatedAt: now };
+  const careRecords = existing ? state.careRecords.map(row => row.id === existing.id ? record : row) : [record, ...(state.careRecords || [])];
+  setState({ careRecords,
+    memos: TurtleCare.reconcileCompletion(state.memos, careRecords, record.sourceMemoId),
     careCustomItems: items, careDraft: null, carePickerOpen: false,
     activityLogs: logActivity(`${existing ? "修改" : "新增"}养护记录：${record.title} · ${record.date}`, "养护") });
   toast("养护记录已保存");
@@ -6098,12 +6213,12 @@ function pageMemos() {
     <main class="content page-fresh">
       ${careTabs()}
       <section class="page-intro">
-        <div><p class="eyebrow dark">备忘</p><h2>${state.memos.length} 条护理事项</h2><p>换水、喂食、晒背、复查都可以记录在这里。</p></div>
+        <div><p class="eyebrow dark">备忘</p><h2>${state.memos.length} 条养护提醒</h2><p>换水、喂食、晒背、复查都可以记录在这里。</p></div>
         <button class="round-action" data-new-memo>+</button>
       </section>
       ${state.memoDraftOpen ? `
         <form class="memo-form fresh-card" id="memoForm">
-          <div class="form-head"><div><p class="eyebrow dark">${editingMemo ? "调整护理" : "新增护理"}</p><h3>${editingMemo ? "更新这条护理事项" : "记下一件要照看的事"}</h3></div><button type="button" class="danger-link" data-cancel-memo>取消</button></div>
+          <div class="form-head"><div><p class="eyebrow dark">${editingMemo ? "调整提醒" : "新增提醒"}</p><h3>${editingMemo ? "更新这条养护提醒" : "记下一件要照看的事"}</h3></div><button type="button" class="danger-link" data-cancel-memo>取消</button></div>
           <label><span>事项名称</span><input class="field" name="title" required placeholder="例如：换水、喂食、晒背" value="${escapeHtml(editingMemo?.title || "")}"></label>
           <label><span>设定时间</span><input class="field" name="remindTime" type="time" value="${escapeHtml(editingMemo?.remindTime || "")}"></label>
           <label><span>重复</span><select class="select" name="repeat"><option value="false" ${!editingMemo?.repeat ? "selected" : ""}>只执行一次</option><option value="true" ${editingMemo?.repeat ? "selected" : ""}>重复执行</option></select></label>
@@ -6119,7 +6234,7 @@ function pageMemos() {
             </div>
           </div>
           <label><span>补充说明</span><textarea name="content" placeholder="可以写频率、用量、注意事项">${escapeHtml(editingMemo?.content || "")}</textarea></label>
-          <button class="primary" type="submit">${editingMemo ? "保存调整" : "添加护理"}</button>
+          <button class="primary" type="submit">${editingMemo ? "保存调整" : "添加提醒"}</button>
         </form>
       ` : ""}
       <section class="memo-tabs">
@@ -6130,10 +6245,10 @@ function pageMemos() {
       </section>
       ${list.map(m => `
         <article class="card memo-row">
-          <div><strong>${m.title}</strong><p>${m.content || "无备注"}</p><small class="muted">${m.dueDate ? `${m.dueDate} · ` : `上次操作 ${formatTime(m.updatedAt)} · `}${m.remindTime || "未设时间"} · ${m.repeat ? "重复执行" : "只执行一次"}</small></div>
+          <div><strong>${escapeHtml(m.title)}</strong><p>${escapeHtml(m.content || "无备注")}</p><small class="muted">${m.dueDate ? `${escapeHtml(m.dueDate)} · ` : `上次操作 ${formatTime(m.updatedAt)} · `}${escapeHtml(m.remindTime || "未设时间")} · ${m.repeat ? "重复执行" : "只执行一次"}</small></div>
           <div><button class="text-green" data-edit-memo="${m.id}">调整</button><button class="danger-link" data-delete-memo="${m.id}">移除</button></div>
         </article>
-      `).join("") || `<div class="empty"><div><strong>还没有护理提醒</strong><br>点击加号新建一条</div></div>`}
+      `).join("") || `<div class="empty"><div><strong>还没有养护提醒</strong><br>点击加号新建一条</div></div>`}
     </main>
     ${bottomNav()}
   `;
@@ -6886,7 +7001,7 @@ function pageLedgerDetail() {
       <section class="ledger-detail-hero">${photo ? `<img src="${escapeHtml(photo)}" alt="${typeText}照片">` : `<div class="ledger-detail-empty">${typeText}</div>`}</section>
       <section class="fresh-card ledger-detail-card">
         <div class="ledger-detail-head"><span class="ledger-inline-type ${item.type}">${typeText}</span><strong class="${item.type !== "sold" ? "danger-text" : ""}">${amountPrefix}${money(item.amount)}</strong></div>
-        <h2>${item.movementRecords ? escapeHtml(ledgerMovementLabel(item)) : isOther ? escapeHtml(item.title || "未命名支出") : (turtle ? `${turtle.code} · ${turtle.speciesName}` : (item.title || "未关联档案"))}</h2>
+        <h2>${item.movementRecords ? escapeHtml(ledgerMovementLabel(item)) : isOther ? escapeHtml(item.title || "未命名支出") : escapeHtml(turtle ? `${turtle.code} · ${turtle.speciesName}` : (item.title || "未关联档案"))}</h2>
         <p class="muted">${item.recordDate || formatDate(item.createdAt)}</p>
         <div class="detail-grid">
           ${item.movementRecords ? `<div><span>本次${typeText}数量</span><strong>${item.movementRecords.length} 只</strong></div><div><span>品种</span><strong>${escapeHtml(turtle?.speciesName || "未填写品种")}</strong></div><div><span>记录时间</span><strong>${formatTime(item.createdAt)}</strong></div>` : isOther ? `<div><span>支出分类</span><strong>${escapeHtml(item.category || "其他")}</strong></div><div><span>凭证</span><strong>${item.photo ? "已上传" : "未上传"}</strong></div>` : `
@@ -6914,7 +7029,7 @@ function pageCalendar() {
       <section class="page-intro compact-intro"><div><p class="eyebrow dark">记录</p><h2>${logs.length} 条操作动态</h2><p>购买、收购、售出、损耗、删除和护理调整都会自动留在这里。</p></div></section>
       <section class="activity-list">
         ${logs.map(log => `
-          <article class="activity-row fresh-card"><span class="activity-dot"></span><div><strong>${log.type || "操作"}</strong><p>${log.text}</p><small>${formatTime(log.createdAt)}</small></div></article>
+          <article class="activity-row fresh-card"><span class="activity-dot"></span><div><strong>${escapeHtml(log.type || "操作")}</strong><p>${escapeHtml(log.text)}</p><small>${formatTime(log.createdAt)}</small></div></article>
         `).join("") || `<div class="empty small-empty"><div><strong>暂时还没有操作记录</strong><br>新增、购买、售出或损耗后会自动显示在这里</div></div>`}
       </section>
     </main>
@@ -6926,14 +7041,14 @@ function pageBreeding() {
   const records = state.breedingRecords || [];
   return `
     ${topbar("繁殖记录", true)}
-    <main class="content page-fresh">
+    <main class="content page-fresh breeding-workspace">
       <section class="page-intro breeding-intro">
         <div>
           <p class="eyebrow dark">繁殖</p>
           <h2>${records.length} 条产蛋记录</h2>
-        <p>记录日期、种母、产蛋数、受精数、孵化数、备注和现场附图。</p>
+        <p>从第一枚蛋，记录到每一次出壳。</p>
         </div>
-        <button class="round-action" data-page="breedingAdd">+</button>
+        <button class="round-action" data-page="breedingAdd" aria-label="新增繁殖记录">+</button>
       </section>
       <section class="section-title"><span>繁殖明细</span></section>
       <section class="breeding-list">
@@ -6994,17 +7109,10 @@ function pageBreedingAdd() {
   const turtlePools = state.turtlePools || [];
   return `
     ${topbar("新增繁殖", true)}
-    <main class="content page-fresh">
-      <section class="page-intro breeding-intro compact-intro">
-        <div>
-          <p class="eyebrow dark">新增</p>
-          <h2>记录一窝蛋</h2>
-          <p>选择单龟或批次，填写产蛋数量、受精数量，并可上传备注附图。批次按整批记录，无需指定种母。</p>
-        </div>
-      </section>
+    <main class="content page-fresh breeding-workspace">
       <form class="breeding-form fresh-card" id="breedingForm">
         <div class="form-head">
-          <div><p class="eyebrow dark">新增</p><h3>记录一窝蛋</h3></div>
+          <div><h3>记录一窝蛋</h3><p class="breeding-hint">选择单龟或整个批次，记下本次产蛋情况。</p></div>
         </div>
         <div class="photo-uploader breeding-photo-box">
           ${state.breedingDraftPhoto ? `<img src="${state.breedingDraftPhoto}" alt="繁殖备注附图">` : `<span>附图</span>`}
@@ -7014,7 +7122,7 @@ function pageBreedingAdd() {
           </div>
         </div>
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-breeding-photo-input>
-        <div class="breeding-form-grid">
+        <div class="breeding-form-grid breeding-fields">
           <label class="breeding-date-field"><span>日期</span><input class="field" name="date" type="date" value="${today}" required></label>
           <label class="breeding-mother-field"><span>单龟 / 批次</span>
             <select class="select" name="mother" data-breeding-mother data-archive-directory required>
@@ -7024,11 +7132,11 @@ function pageBreedingAdd() {
             </select>
           </label>
           <label class="breeding-pool-field"><span>龟池</span><select class="select" name="poolId"><option value="">暂不关联龟池</option>${turtlePools.map(pool => `<option value="${pool.id}" ${state.breedingPoolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}</select></label>
-          ${manualMotherSelected ? `<label class="breeding-manual-mother"><span>手动备注</span><input class="field" name="manualMother" value="${escapeHtml(manualMotherValue)}" placeholder="可自行修改编号" required></label>` : ""}
+          ${manualMotherSelected ? `<label class="breeding-manual-mother"><span>记录名称</span><input class="field" name="manualMother" value="${escapeHtml(manualMotherValue)}" placeholder="可自行修改编号" required></label>` : ""}
           <label><span>产蛋数</span><input class="field" name="eggCount" type="number" min="0" step="1" required placeholder="0" value="${state.breedingEggCount || ""}"></label>
           <label><span>受精数</span><input class="field" name="fertileCount" type="number" min="0" step="1" required placeholder="0" value="${state.breedingFertileCount || ""}"></label>
         </div>
-        <label class="breeding-note"><span>备注</span><textarea name="note" placeholder="产蛋位置、状态、孵化盒编号、温度等">${state.breedingNote || ""}</textarea></label>
+        <label class="breeding-note"><span>备注 <small>选填</small></span><textarea name="note" placeholder="产蛋位置、孵化盒编号、温度等">${escapeHtml(state.breedingNote || "")}</textarea></label>
         <button class="primary" type="submit">保存繁殖记录</button>
       </form>
     </main>
@@ -7072,22 +7180,30 @@ function pageBreedingDetail() {
   const historyList = [...(record.editHistory || [])].reverse();
   const turtlePools = state.turtlePools || [];
   const hatchProgress = breedingHatchProgress(record, state.turtles, state.ledgerRecords || []);
+  const closed = record.incubationClosed === true;
+  const remaining = Math.max(0, Number(record.eggCount || 0) - hatchProgress.previousCount);
+  const progress = Number(record.eggCount) > 0 ? Math.min(100, Math.round(hatchProgress.previousCount / Number(record.eggCount) * 100)) : 0;
   return `
     ${topbar("繁殖详情", true)}
-    <main class="content page-fresh">
-      <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">明细</p><h2>${record.motherName || "未填写种母"}</h2><p>${record.date || "-"} · 产蛋 ${record.eggCount || 0} 枚 · 受精 ${record.fertileCount || 0} 枚 · 孵化 ${record.hatchCount || 0} 只</p></div>
+    <main class="content page-fresh breeding-workspace breeding-detail-page">
+      <section class="fresh-card breeding-overview">
+        <div class="breeding-overview-top"><span>产蛋记录 · ${escapeHtml(record.date || "未填写日期")}</span><span class="breeding-status ${closed ? "is-complete" : ""}">${closed ? "孵化完成" : "孵化中"}</span></div>
+        <h2>${escapeHtml(record.motherName || "未填写名称")}</h2>
+        <p>${record.batchId ? "批次繁殖" : isManual ? "手动记录" : "单龟繁殖"} · ${escapeHtml(record.poolName || turtlePoolName(record.poolId))}</p>
+        <div class="breeding-overview-stats"><div><span>产蛋</span><strong>${Number(record.eggCount) || 0}<small>枚</small></strong></div><div><span>受精</span><strong>${Number(record.fertileCount) || 0}<small>枚</small></strong></div><div><span>已孵化</span><strong>${hatchProgress.previousCount}<small>只</small></strong></div></div>
       </section>
-      <form class="breeding-form fresh-card" id="breedingDetailForm">
+      <form class="breeding-form breeding-editor" id="breedingDetailForm">
+        <section class="fresh-card breeding-section">
+        <div class="breeding-section-heading"><h3>基本资料</h3><span>产蛋信息</span></div>
         <div class="photo-uploader breeding-photo-box">
           ${currentPhoto ? `<img src="${currentPhoto}" alt="繁殖备注附图">` : `<span>附图</span>`}
           <div>
-            <button class="secondary" type="button" data-breeding-edit-photo-button>更换附图</button>
-            <button class="danger-link" type="button" data-clear-breeding-edit-photo>清除图片</button>
+            <button class="secondary" type="button" data-breeding-edit-photo-button>${currentPhoto ? "更换附图" : "添加附图"}</button>
+            ${currentPhoto ? `<button class="danger-link" type="button" data-clear-breeding-edit-photo>移除</button>` : `<small class="breeding-hint">产蛋现场、蛋盒或标记卡</small>`}
           </div>
         </div>
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-breeding-edit-photo-input>
-        <div class="breeding-form-grid">
+        <div class="breeding-form-grid breeding-fields">
           <label class="breeding-date-field"><span>日期</span><input class="field" name="date" type="date" value="${record.date || formatDate(new Date())}" required></label>
           <label class="breeding-mother-field"><span>单龟 / 批次</span>
             <select class="select" name="mother" data-archive-directory>
@@ -7096,28 +7212,32 @@ function pageBreedingDetail() {
             </select>
           </label>
           <label class="breeding-pool-field"><span>龟池</span><select class="select" name="poolId"><option value="">暂不关联龟池</option>${turtlePools.map(pool => `<option value="${pool.id}" ${record.poolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}</select></label>
-          <label class="breeding-manual-mother"><span>手动记录名称（仅手动备注时填写）</span><input class="field" name="manualMother" value="${isManual ? escapeHtml(record.motherName || "") : ""}" placeholder="关联单龟或批次时无需填写"></label>
+          <label class="breeding-manual-mother" ${isManual ? "" : "hidden"}><span>记录名称</span><input class="field" name="manualMother" value="${isManual ? escapeHtml(record.motherName || "") : ""}" placeholder="例如：一号池第一窝"></label>
           <label><span>产蛋数</span><input class="field" name="eggCount" type="number" min="0" step="1" required value="${record.eggCount || 0}"></label>
           <label><span>受精数</span><input class="field" name="fertileCount" type="number" min="0" step="1" required value="${record.fertileCount || 0}"></label>
         </div>
-        <label class="breeding-note"><span>备注</span><textarea name="note" placeholder="产蛋位置、状态、孵化盒编号、温度等">${record.note || ""}</textarea></label>
+        <label class="breeding-note"><span>备注 <small>选填</small></span><textarea name="note" placeholder="产蛋位置、孵化盒编号、温度等">${escapeHtml(record.note || "")}</textarea></label>
         <div class="breeding-detail-actions"><button class="primary" type="submit">保存修改</button></div>
-        <div class="breeding-hatch-panel" id="breedingHatchPanel">
+        </section>
+        <section class="fresh-card breeding-section breeding-hatch-panel" id="breedingHatchPanel">
+          <div class="breeding-section-heading"><h3>孵化进度</h3><span>${closed ? "本窝已结束" : "记录每一次出壳"}</span></div>
+          <div class="breeding-progress-copy"><strong>累计 ${hatchProgress.previousCount} 只</strong><span>${closed ? "已完成记录" : `还可记录 ${remaining} 只`}</span></div>
+          <progress class="breeding-progress" value="${progress}" max="100" aria-label="累计孵化占产蛋数量">${progress}%</progress>
           <input type="hidden" name="hatchEventId" value="${crypto.randomUUID()}">
-          <p>已累计孵化 ${hatchProgress.previousCount} 只，还可新增 ${Math.max(0, Number(record.eggCount || 0) - hatchProgress.previousCount)} 只。下方填写本次数量。</p>
-          <label><span>本次孵化成功几只</span><input class="field" name="successfulHatchCount" type="number" min="1" step="1" placeholder="填写本次数量" inputmode="numeric"></label>
+          <div class="breeding-fields breeding-hatch-fields" ${closed && !hatchProgress.unlinked ? "hidden" : ""}>
+          <label><span>本次出壳 <small>只</small></span><input class="field" name="successfulHatchCount" type="number" min="1" step="1" placeholder="填写数量" inputmode="numeric" ${closed ? "disabled" : ""}></label>
           <label><span>孵化日期</span><input class="field" name="hatchDate" type="date" value="${formatDate(new Date())}" max="${formatDate(new Date())}"></label>
-          <label><span>幼龟品种</span><select class="select" name="hatchSpeciesCode"><option value="">请选择品种</option>${accountSpeciesList().map(species => `<option value="${species.code}" ${(record.speciesCode || state.turtles.find(t => t.id === record.motherId)?.speciesCode) === species.code ? "selected" : ""}>${escapeHtml(species.name)}</option>`).join("")}</select></label>
-          <p>每次确认在看板生成一条孵化批次，饲养天数从所选孵化日期计算。累计孵化数量不能超过产蛋数。</p>
+          <label class="breeding-field-wide"><span>幼龟品种</span><select class="select" name="hatchSpeciesCode"><option value="">请选择品种</option>${accountSpeciesList().map(species => `<option value="${species.code}" ${(record.speciesCode || state.turtles.find(t => t.id === record.motherId)?.speciesCode) === species.code ? "selected" : ""}>${escapeHtml(species.name)}</option>`).join("")}</select></label>
+          </div>
+          <p class="breeding-hint">${closed ? "本窝已计入最终孵化率。需要补记出壳时，可重新开启。" : "确认后生成独立幼龟批次；饲养天数从孵化日期计算。整窝结束后再标记完成。"}</p>
           <div class="breeding-hatch-actions">
             <button class="secondary" type="button" data-complete-breeding-hatch>${record.incubationClosed === true ? '重新开启孵化' : '孵化完成'}</button>
-            <button class="primary" type="button" data-confirm-breeding-hatch ${record.incubationClosed === true ? 'disabled' : ''}>确认孵化</button>
+            <button class="primary" type="button" data-confirm-breeding-hatch ${closed ? 'disabled hidden' : ''}>确认孵化</button>
           </div>
-          <p>${record.incubationClosed === true ? '本窝已标记孵化完成，计入团队最终孵化率。如需继续记录，可重新开启孵化。' : '确认孵化只记录本次出壳并关联看板。整窝结束后，请点击“孵化完成”，再计入团队最终孵化率。'}</p>
           ${hatchProgress.unlinked ? `<p>旧版已记录的孵化中，有 ${hatchProgress.unlinked} 只尚未关联看板。选择上方的孵化日期和幼龟品种后，可补关联，累计孵化数量不会增加。</p><button class="secondary" type="button" data-link-legacy-hatch>关联历史已记录的 ${hatchProgress.unlinked} 只</button>` : ""}
-        </div>
+        </section>
       </form>
-      <section class="section-title"><h3>繁殖记录</h3></section>
+      <details class="breeding-history"><summary>修改历史 <span>${historyList.length} 次更新</span></summary>
       ${historyList.map((item, index) => `
         <div class="growth-history-entry">
           <article class="history-card growth-history-card fresh-card">
@@ -7133,7 +7253,8 @@ function pageBreedingDetail() {
           </article>
           ${index < historyList.length - 1 ? `<div class="growth-down-arrow" aria-hidden="true"><span>↓</span><small>继续记录</small></div>` : ""}
         </div>
-      `).join("") || `<div class="empty small-empty"><div><strong>暂时还没有繁殖记录</strong></div></div>`}
+      `).join("") || `<p class="breeding-hint">暂无修改，保存调整后会保留前后记录。</p>`}
+      </details>
     </main>
     ${bottomNav()}
   `;
@@ -7255,7 +7376,7 @@ function pagePublicSatisfaction() {
           <div class="review-head">
             <div>
               <strong class="review-stars">${ratingStars(item.rating)}</strong>
-              <p class="review-author">${escapeHtml(item.authorName || "壳友")} · ${escapeHtml(item.authorPhone || "")}</p>
+              <p class="review-author">${escapeHtml(item.authorName || "龟友")} · ${escapeHtml(item.authorPhone || "")}</p>
             </div>
             ${item.canDelete ? `<button class="danger-link review-delete" type="button" data-delete-review="${item.id}">删除</button>` : ""}
           </div>
@@ -7304,7 +7425,7 @@ function publicFeedbackCard(item, options = {}) {
         ${feedbackAvatarMarkup(item)}
         <div class="feedback-post-main">
           <div class="feedback-author-line">
-            <strong>${escapeHtml(item.authorName || "壳友")}</strong>
+            <strong>${escapeHtml(item.authorName || "龟友")}</strong>
             <span>${escapeHtml(item.authorPhone || "")}</span>
           </div>
           <button class="feedback-body-button" type="button" data-view-feedback="${item.id}">
@@ -7329,7 +7450,7 @@ function publicFeedbackCard(item, options = {}) {
             <div class="feedback-comment-list">
               ${previewComments.map(comment => `
                 <div class="feedback-comment-row">
-                  <span><strong>${escapeHtml(comment.authorName || "壳友")}</strong>：${escapeHtml(comment.content)}</span>
+                  <span><strong>${escapeHtml(comment.authorName || "龟友")}</strong>：${escapeHtml(comment.content)}</span>
                   ${comment.canDelete ? `<button type="button" data-delete-feedback-comment="${item.id}:${comment.id}">删除</button>` : ""}
                 </div>
               `).join("")}
@@ -7437,7 +7558,7 @@ function pageAccount() {
             <em>${(state.blockedUsers || []).length} 人</em>
           </button>
           <div class="blocked-user-list">
-            ${(state.blockedUsers || []).map(user => `<div class="blocked-user-row">${communityAvatar(user, "blocked-user-avatar")}<span><strong>${escapeHtml(user.name || "壳友")}</strong><small>${user.type === "blacklist" ? "已拉黑" : "已屏蔽"}</small></span><button type="button" data-unblock-user="${escapeHtml(user.id || "")}">${user.type === "blacklist" ? "解除拉黑" : "解除屏蔽"}</button></div>`).join("") || `<p class="muted blocked-user-empty">暂无已屏蔽或拉黑的用户</p>`}
+            ${(state.blockedUsers || []).map(user => `<div class="blocked-user-row">${communityAvatar(user, "blocked-user-avatar")}<span><strong>${escapeHtml(user.name || "龟友")}</strong><small>${user.type === "blacklist" ? "已拉黑" : "已屏蔽"}</small></span><button type="button" data-unblock-user="${escapeHtml(user.id || "")}">${user.type === "blacklist" ? "解除拉黑" : "解除屏蔽"}</button></div>`).join("") || `<p class="muted blocked-user-empty">暂无已屏蔽或拉黑的用户</p>`}
           </div>
         </section>
         <section class="fresh-card settings-card"><div class="settings-title">每日新帖提醒</div><p class="muted">每天最多一篇无广告的壳友分享，可单独关闭，不影响私聊和其他通知。</p><button class="secondary" type="button" data-daily-push-preference disabled>正在读取设置…</button></section>
@@ -7832,7 +7953,7 @@ function pageOperations() {
         <section class="section-title"><span>热度商品</span><small>曝光、浏览、意向和咨询综合排序</small></section><section class="operations-simple-list">${(market.topListings || []).map(item => `<article class="fresh-card operations-simple-row"><strong>${escapeHtml(item.title || item.speciesName || "龟集市商品")}</strong><span>曝光 ${item.impressionCount || 0} · 浏览 ${item.viewCount || 0} · 想要 ${item.wantCount || 0} · 咨询 ${item.chatCount || 0}</span></article>`).join("") || `<div class="empty small-empty"><div><strong>暂无商品数据</strong></div></div>`}</section>
         <section class="section-title"><span>低关注提醒</span><small>发布满 3 天且没有曝光、浏览、意向或咨询</small></section><section class="operations-simple-list">${(market.lowInterestListings || []).map(item => `<article class="fresh-card operations-simple-row"><strong>${escapeHtml(item.title || item.speciesName || "龟集市商品")}</strong><span>${escapeHtml(item.sellerName || "卖家")} · ${item.createdAt ? formatTime(item.createdAt) : ""}</span></article>`).join("") || `<div class="fresh-card operations-note"><p>暂无需要关注的商品。</p></div>`}</section>
       ` : tab === "feedback" ? `
-        <section class="fresh-card operations-note"><strong>待处理反馈 ${feedback.pendingCount || 0} 条</strong><p>在这里标记处理状态并回复用户；回复会在该用户的反馈详情中展示。</p></section><section class="operations-simple-list">${(feedback.items || []).map(item => `<article class="fresh-card operations-feedback-card"><strong>${escapeHtml(item.type || "反馈")} · ${escapeHtml(item.authorName || "壳友")}</strong><p>${escapeHtml(item.content || "")}</p><small>${item.createdAt ? formatTime(item.createdAt) : ""}</small><form data-admin-feedback-form="${item.id}"><select class="select" name="status"><option value="pending" ${item.status === "pending" ? "selected" : ""}>待处理</option><option value="processing" ${item.status === "processing" ? "selected" : ""}>处理中</option><option value="resolved" ${item.status === "resolved" ? "selected" : ""}>已解决</option><option value="declined" ${item.status === "declined" ? "selected" : ""}>不处理</option></select><textarea name="reply" maxlength="600" placeholder="给用户的回复（可选）">${escapeHtml(item.reply || "")}</textarea><button class="secondary" type="submit">保存处理结果</button></form></article>`).join("") || `<div class="empty small-empty"><div><strong>暂无用户反馈</strong></div></div>`}</section>
+        <section class="fresh-card operations-note"><strong>待处理反馈 ${feedback.pendingCount || 0} 条</strong><p>在这里标记处理状态并回复用户；回复会在该用户的反馈详情中展示。</p></section><section class="operations-simple-list">${(feedback.items || []).map(item => `<article class="fresh-card operations-feedback-card"><strong>${escapeHtml(item.type || "反馈")} · ${escapeHtml(item.authorName || "龟友")}</strong><p>${escapeHtml(item.content || "")}</p><small>${item.createdAt ? formatTime(item.createdAt) : ""}</small><form data-admin-feedback-form="${item.id}"><select class="select" name="status"><option value="pending" ${item.status === "pending" ? "selected" : ""}>待处理</option><option value="processing" ${item.status === "processing" ? "selected" : ""}>处理中</option><option value="resolved" ${item.status === "resolved" ? "selected" : ""}>已解决</option><option value="declined" ${item.status === "declined" ? "selected" : ""}>不处理</option></select><textarea name="reply" maxlength="600" placeholder="给用户的回复（可选）">${escapeHtml(item.reply || "")}</textarea><button class="secondary" type="submit">保存处理结果</button></form></article>`).join("") || `<div class="empty small-empty"><div><strong>暂无用户反馈</strong></div></div>`}</section>
       ` : tab === "safety" ? `
         <section class="operations-metric-grid"><article class="fresh-card operations-metric"><span>待审核举报</span><strong>${safety.pendingReportCount || 0}</strong><small>全部举报 ${safety.totalReportCount || 0}</small></article></section><section class="fresh-card operations-note"><strong>聊天访问审计</strong><p>每次查看运营中心、处理举报或反馈都会留下管理员操作记录；仅用于账号安全和内部追溯。</p></section><section class="operations-simple-list">${(safety.auditLogs || []).map(item => `<article class="fresh-card operations-simple-row"><strong>${escapeHtml(item.action || "管理员操作")}</strong><span>${escapeHtml(item.detail || "")} · ${item.createdAt ? formatTime(item.createdAt) : ""}</span></article>`).join("") || `<div class="fresh-card operations-note"><p>暂无操作记录。</p></div>`}</section>
       ` : tab === "health" ? `
@@ -7840,7 +7961,7 @@ function pageOperations() {
       ` : `
         <section class="operations-chat-list">${conversations.map(conversation => {
           const products = Array.isArray(conversation.marketListings) && conversation.marketListings.length ? conversation.marketListings : (conversation.marketListing ? [conversation.marketListing] : []);
-          const names = (conversation.users || []).map(user => user.name || "壳友").join(" · ");
+          const names = (conversation.users || []).map(user => user.name || "龟友").join(" · ");
           return `<article class="fresh-card operations-chat-card"><header><div><strong>${escapeHtml(names || "用户聊天")}</strong><small>${conversation.messageCount || 0} 条消息 · ${conversation.latestAt ? formatTime(conversation.latestAt) : ""}</small></div></header>${products.length ? products.map(product => `<section class="operations-product"><b>关联商品</b><strong>${escapeHtml(product.title || product.speciesName || "龟集市商品")}</strong><span>¥${money(product.price)} · ${escapeHtml([product.city, product.delivery].filter(Boolean).join(" · ") || "商品信息")}</span></section>`).join("") : `<p class="operations-no-product">此会话没有关联商品</p>`}<div class="operations-chat-thread">${(conversation.messages || []).map(adminChatMessageMarkup).join("") || `<p class="muted">暂无可显示消息</p>`}</div></article>`;
         }).join("") || `<div class="empty small-empty"><div><strong>暂无用户聊天</strong><br>用户从龟集市联系卖家后，聊天会显示在这里。</div></div>`}</section>
       `}
@@ -7854,6 +7975,7 @@ function placeholder(title) {
 }
 
 function render() {
+  rememberRecordFormBaselines();
   // A data refresh can replace the page even without changing its route.
   $app.cancelEdgeBackGesture?.();
   if (state.page === "membership") state.page = "team";
@@ -8064,6 +8186,11 @@ function bindArchiveDirectoryPickers() {
     button.className = "select archive-directory-trigger";
     button.setAttribute("aria-haspopup", "dialog");
     const update = () => {
+      if (select.multiple) {
+        button.textContent = select.selectedOptions.length ? `已选择 ${select.selectedOptions.length} 只乌龟 · 点击修改` : "选择乌龟（可多选）";
+        button.disabled = select.disabled;
+        return;
+      }
       const option = select.selectedOptions[0];
       const turtle = (select.__directorySource?.turtles || state.turtles || []).find(t => String(t.id) === (option?.dataset.archiveTurtleId || option?.value));
       const label = option?.textContent || "选择关联档案";
@@ -8089,6 +8216,8 @@ function archiveSpeciesName(turtle, catalogue = null) {
 
 function openArchiveDirectory(select, trigger) {
   if (document.querySelector(".archive-directory-overlay")) return;
+  const multiple = select.multiple;
+  const pending = new Set([...select.selectedOptions].map(option => option.value));
   const source = select.__directorySource;
   const turtles = new Map((source ? source.turtles : state.turtles || []).map(turtle => [String(turtle.id), turtle]));
   const batches = new Map();
@@ -8137,6 +8266,34 @@ function openArchiveDirectory(select, trigger) {
     <footer class="directory-footer"><div class="directory-special-actions"></div><button type="button" data-directory-more hidden>显示更多</button><p>选择后自动返回，已填写的内容会保留</p></footer>
   </section>`;
   const list = overlay.querySelector(".archive-directory-list");
+  let bulkSelection = null, bulkValues = [];
+  if (multiple) {
+    bulkSelection = document.createElement("div");
+    bulkSelection.className = "directory-bulk-selection";
+    bulkSelection.hidden = true;
+    bulkSelection.innerHTML = '<span data-directory-bulk-summary aria-live="polite"></span><button type="button" data-directory-select-all>全选</button>';
+    list.before(bulkSelection);
+    bulkSelection.querySelector("button").addEventListener("click", () => {
+      const clear = bulkValues.length > 0 && bulkValues.every(value => pending.has(value));
+      for (const value of bulkValues) {
+        if (clear) pending.delete(value); else pending.add(value);
+      }
+      renderList(true);
+    });
+    overlay.querySelector("#archiveDirectoryTitle").textContent = "选择喂食的乌龟";
+    overlay.querySelector(".directory-heading p").textContent = "可跨品种多选，选好后点击确认";
+    overlay.querySelector(".directory-footer > p").textContent = "切换搜索或筛选会保留勾选；关闭窗口取消本次选择";
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.dataset.directoryConfirm = "";
+    overlay.querySelector(".directory-footer").prepend(confirm);
+    confirm.addEventListener("click", () => {
+      close();
+      if (!select.isConnected || select.disabled) return;
+      for (const option of select.options) option.selected = pending.has(option.value);
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
   const back = overlay.querySelector("[data-directory-back]");
   const search = overlay.querySelector("[data-directory-search]");
   const health = overlay.querySelector("[data-directory-health]");
@@ -8161,6 +8318,11 @@ function openArchiveDirectory(select, trigger) {
     if (trigger.isConnected) trigger.focus({ preventScroll: true });
   };
   const choose = value => {
+    if (multiple) {
+      if (pending.has(value)) pending.delete(value); else pending.add(value);
+      renderList(true);
+      return;
+    }
     close();
     if (!select.isConnected || select.disabled || select.value === value || ![...select.options].some(option => option.value === value && !option.disabled)) return;
     select.value = value;
@@ -8211,7 +8373,8 @@ function openArchiveDirectory(select, trigger) {
     const { option, turtle, members, isBatch, title, name } = entry;
     const button = element("button", "directory-archive-card");
     button.type = "button";
-    const selected = entry.requiresMember ? entry.memberEntries.some(row => row.option.value === select.value) : select.value === option.value;
+    const isSelected = value => multiple ? pending.has(value) : select.value === value;
+    const selected = entry.requiresMember ? entry.memberEntries.some(row => isSelected(row.option.value)) : isSelected(option.value);
     button.setAttribute("aria-pressed", String(selected));
     const copy = element("span", "directory-archive-copy");
     const line = element("span", "directory-archive-title");
@@ -8225,13 +8388,18 @@ function openArchiveDirectory(select, trigger) {
     const names = [...new Set(members.map(item => pools.get(item.poolId) || "未关联龟池"))];
     metadata.append(element("small", "directory-pool-label", names.length > 1 ? `${names.length} 个龟池范围` : names[0]));
     copy.append(metadata);
-    button.append(photo(entry), copy, element("span", "directory-selection", selected ? "✓" : "›"));
+    button.append(photo(entry), copy, element("span", "directory-selection", selected ? "✓" : multiple && !entry.requiresMember ? "○" : "›"));
     button.addEventListener("click", () => {
-      if (!entry.requiresMember) return choose(option.value);
+      if (!entry.requiresMember) {
+        choose(option.value);
+        if (multiple) [...list.querySelectorAll(".directory-archive-card")].find(card => card.dataset.directoryValue === option.value)?.focus({ preventScroll: true });
+        return;
+      }
       memberGroup = entry; groupName = entry.name; limit = 60;
       renderList(); back.focus();
     });
     list.append(button);
+    button.dataset.directoryValue = option.value;
   };
   const renderList = (keepScroll = false) => {
     const scrollTop = keepScroll ? list.scrollTop : 0;
@@ -8239,6 +8407,21 @@ function openArchiveDirectory(select, trigger) {
     const query = search.value.trim();
     const showSpecies = !memberGroup && !groupName && !query && kind === "all";
     const filtered = (memberGroup ? memberGroup.memberEntries : entries).filter(entry => (!groupName || entry.name === groupName) && matches(entry, Boolean(memberGroup)));
+    if (bulkSelection) {
+      // Include every matching turtle, including unrendered pages and members
+      // of collapsed batches. Filters must also match each individual member.
+      bulkValues = [...new Set(filtered.flatMap(entry => entry.requiresMember
+        ? entry.memberEntries.filter(member => matches(member, true)).map(member => member.option.value)
+        : [entry.option.value]))];
+      bulkSelection.hidden = !groupName;
+      const selectedCount = bulkValues.filter(value => pending.has(value)).length;
+      const button = bulkSelection.querySelector("button");
+      button.disabled = !bulkValues.length;
+      const allSelected = bulkValues.length > 0 && selectedCount === bulkValues.length;
+      button.textContent = allSelected ? "取消全选" : "全选";
+      button.setAttribute("aria-pressed", String(allSelected));
+      bulkSelection.querySelector("[data-directory-bulk-summary]").textContent = `当前范围 ${bulkValues.length} 只 · 已选 ${selectedCount} 只`;
+    }
     const filteredGroups = new Map();
     for (const entry of filtered) {
       if (!filteredGroups.has(entry.name)) filteredGroups.set(entry.name, []);
@@ -8270,6 +8453,7 @@ function openArchiveDirectory(select, trigger) {
       list.append(empty);
     }
     overlay.querySelector("[data-directory-more]").hidden = count <= limit;
+    if (multiple) overlay.querySelector("[data-directory-confirm]").textContent = `确认选择（${pending.size} 只）`;
     list.scrollTop = scrollTop;
   };
   for (const option of special) {
@@ -8389,6 +8573,7 @@ function bindSyncPageActions() {
 
 function bindEvents() {
   bindCareEvents();
+  bindWorkspaceUI();
   $app.querySelectorAll("[data-feed-retry]").forEach(button => {
     button.onclick = () => {
       const kind = button.dataset.feedRetry;
@@ -8797,6 +8982,10 @@ function bindEvents() {
     setState({ breedingEditPhoto: "__CLEAR__" });
   });
   document.querySelector("#breedingDetailForm")?.addEventListener("submit", submitBreedingDetail);
+  document.querySelector('#breedingDetailForm [name="mother"]')?.addEventListener("change", event => {
+    const manualField = document.querySelector("#breedingDetailForm .breeding-manual-mother");
+    if (manualField) manualField.hidden = event.target.value !== "manual";
+  });
   document.querySelector("[data-complete-breeding-hatch]")?.addEventListener("click", completeBreedingHatch);
   document.querySelector("[data-confirm-breeding-hatch]")?.addEventListener("click", confirmBreedingHatch);
   document.querySelector("[data-link-legacy-hatch]")?.addEventListener("click", () => confirmBreedingHatch(null, true));
@@ -11794,7 +11983,7 @@ function normalizeCommunityPosts(posts = []) {
     return {
       ...item,
       visibility: COMMUNITY_VISIBILITY_OPTIONS[item.visibility] ? item.visibility : "public",
-      authorName: item.authorName || "壳友",
+      authorName: item.authorName || "龟友",
       // Built-in avatars live inside the iOS app bundle.  Do not turn their
       // relative asset path into an API URL, otherwise every tiny avatar waits
       // for the public server and makes the feed appear to load slowly.
@@ -12209,10 +12398,10 @@ function communityUserSnapshot(userId) {
     ? state.selectedCommunityUser
     : null;
   if (user) return user;
-  if (!post && !friend && !listing) return { id, name: "壳友", avatar: "" };
+  if (!post && !friend && !listing) return { id, name: "龟友", avatar: "" };
   return {
     id,
-    name: post?.authorName || friend?.name || listing?.sellerName || "壳友",
+    name: post?.authorName || friend?.name || listing?.sellerName || "龟友",
     avatar: post?.authorAvatar || friend?.avatar || listing?.sellerAvatar || "",
     isAdmin: Boolean(post?.authorIsAdmin || friend?.isAdmin || listing?.sellerIsAdmin),
     followed: Boolean(post?.followed || listing?.sellerFollowed),
@@ -12682,7 +12871,7 @@ async function submitCommunityPost(event) {
         speciesName: linkedTurtle?.speciesName || "",
         visibility,
         authorId: state.loggedInPhone,
-        authorName: state.accountName || "壳友",
+        authorName: state.accountName || "龟友",
         authorAvatar: state.accountAvatar || "",
         createdAt: new Date().toISOString(),
         likeCount: 0,
@@ -12811,7 +13000,7 @@ async function submitCommunityComment(event) {
       const comment = {
         id: `local-comment-${Date.now()}`,
         content,
-        authorName: state.accountName || "壳友",
+        authorName: state.accountName || "龟友",
         authorAvatar: state.accountAvatar || "",
         likeCount: 0,
         liked: false,
@@ -13218,7 +13407,7 @@ function patchMessageListInRoot(root, friends) {
     const copy = row.querySelector(".message-friend-copy");
     const title = copy?.querySelector("strong");
     const preview = copy?.querySelector("span");
-    if (title) title.textContent = friend.name || "壳友";
+    if (title) title.textContent = friend.name || "龟友";
     if (preview) preview.textContent = friend.lastMessage || "暂无消息";
     const avatarWrap = row.querySelector(".message-friend-avatar-wrap");
     let badge = avatarWrap?.querySelector(":scope > i");
@@ -14943,6 +15132,7 @@ async function pushCloudDataNow(throwOnError = false) {
     return;
   }
   cloudSyncInFlight = true;
+  updateAccountSaveStatus();
   const savingPhone = state.loggedInPhone;
   const savingToken = currentCloudToken();
   const pendingAtStart = readPendingCloudData();
@@ -14986,6 +15176,7 @@ async function pushCloudDataNow(throwOnError = false) {
     if (throwOnError) throw error;
   } finally {
     cloudSyncInFlight = false;
+    updateAccountSaveStatus();
     if (cloudSyncQueued) {
       cloudSyncQueued = false;
       queueCloudSave();
@@ -15827,6 +16018,7 @@ function submitTurtleDetail(event) {
   const medicalExpense = Number(medicalText || 0);
   const health = ["健康", "生病"].includes(String(form.get("health") || "")) ? String(form.get("health")) : (turtle.health || "健康");
   const sameHealth = health === (turtle.health || "健康");
+  const recordingGrowthTask = (state.memos || []).some(memo => memo.id === state.growthTaskMemoId && memo.growthReminder && memo.turtleId === turtle.id);
   const updated = {
     ...turtle,
     code: String(form.get("code") || "").trim() || turtle.code,
@@ -15864,13 +16056,13 @@ function submitTurtleDetail(event) {
     }, ...priceUpdate.ledgerRecords];
   }
   const medicalLog = medicalExpense > 0 ? `，看病支出 ${money(medicalExpense)} 元（已记账）` : "";
-  if (sameWeight && sameCarapaceLength && sameHealth) {
+  if (sameWeight && sameCarapaceLength && sameHealth && !recordingGrowthTask) {
     if (!priceChanged && !medicalExpense && Object.keys(updated).every(key => updated[key] === turtle[key])) return toast("档案信息未变化");
     event.currentTarget.__turtleDetailSaved = true;
     saveWithDeferredImages({
       ...priceUpdate,
       keptSpecies: state.keptSpecies.includes(species.code) ? state.keptSpecies : [...state.keptSpecies, species.code],
-      updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "",
+      updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "", growthTaskMemoId: "",
       activityLogs: logActivity(`更新档案：${turtleLabel(updated)}${priceChanged ? `，购入价格 ${money(turtle.price || 0)} → ${money(price || 0)} 元` : ""}${medicalLog}`, "档案")
     }, [updated.photo]);
     return toast(medicalExpense > 0 ? "档案已更新，看病花费已单独记账" : "档案已更新");
@@ -15908,6 +16100,7 @@ function submitTurtleDetail(event) {
   const existingGrowthMemo = (state.memos || []).find(memo => memo.turtleId === turtle.id && memo.growthReminder);
   const growthMemo = {
     ...(existingGrowthMemo || {}),
+    completedAt: "", lastCompletedDate: formatDate(new Date()),
     id: existingGrowthMemo?.id || crypto.randomUUID(),
     turtleId: turtle.id,
     growthReminder: true,
@@ -15935,6 +16128,7 @@ function submitTurtleDetail(event) {
     turtleDetailDraft: null,
     updateDraftPhoto: "",
     page: "turtleReward",
+    growthTaskMemoId: "",
     activityLogs: logActivity(`更新档案：${turtleLabel(updated)}，背甲 ${historyItem.oldLength}cm → ${carapaceLength}cm${sameHealth ? "" : `，健康 ${turtle.health || "健康"} → ${health}`}${state.updateDraftPhoto ? "，并更换照片" : ""}${medicalLog}`, "档案")
   }, [updated.photo, historyItem.newPhoto]);
   activateCareReminder(growthMemo);
@@ -16220,7 +16414,7 @@ function submitMemoForm(event) {
   if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const title = String(form.get("title") || "").trim();
-  if (!title) return toast("先写一个护理事项名称");
+  if (!title) return toast("先写一个养护提醒名称");
   const content = String(form.get("content") || "").trim();
   const remindTime = String(form.get("remindTime") || "").trim();
   const repeat = form.get("repeat") === "true";
@@ -16228,7 +16422,7 @@ function submitMemoForm(event) {
   const now = new Date().toISOString();
   const editingMemo = state.memos.find(m => m.id === state.memoEditingId);
   const savedMemo = editingMemo
-    ? { ...editingMemo, title, content, remindTime, repeat, weekdays, updatedAt: now }
+    ? { ...editingMemo, title, content, remindTime, repeat, weekdays, completedAt: "", lastCompletedDate: "", updatedAt: now }
     : { id: crypto.randomUUID(), title, content, remindTime, repeat, weekdays, updatedAt: now };
   const nextMemos = editingMemo
     ? state.memos.map(m => m.id === editingMemo.id ? savedMemo : m)
@@ -16237,7 +16431,7 @@ function submitMemoForm(event) {
     memos: nextMemos,
     memoDraftOpen: false,
     memoEditingId: "",
-    activityLogs: logActivity(`${editingMemo ? "调整护理" : "新增护理"}：${title}`, "护理")
+    activityLogs: logActivity(`${editingMemo ? "调整提醒" : "新增提醒"}：${title}`, "护理")
   });
   activateCareReminder(savedMemo);
 }
@@ -16245,9 +16439,9 @@ function submitMemoForm(event) {
 function deleteMemo(id) {
   if (!requireLogin()) return;
   const memo = state.memos.find(m => m.id === id);
-  if (!memo || !confirm("要删除这条护理提醒吗？")) return;
+  if (!memo || !confirm("要删除这条养护提醒吗？")) return;
   cancelNativeCareReminder(memo);
-  setState({ memos: state.memos.filter(m => m.id !== id), activityLogs: logActivity(`删除护理：${memo.title}`, "护理") });
+  setState({ memos: state.memos.filter(m => m.id !== id), activityLogs: logActivity(`删除提醒：${memo.title}`, "护理") });
 }
 
 function submitTurtlePool(event) {
@@ -18197,7 +18391,7 @@ function setupEdgeBackAndConversationSwipe() {
       const width = Math.max(1, window.innerWidth);
       const edgeOffset = Math.max(0, Math.min(width, active.edgeOffset ?? dx));
       const hasForwardFling = active.velocityX > .48 && dx > 26;
-      const shouldComplete = (dx > Math.max(78, width * .18) || hasForwardFling) && Math.abs(dx) > Math.abs(dy);
+      const shouldComplete = (dx > Math.max(78, width * .18) || hasForwardFling) && Math.abs(dx) > Math.abs(dy) && canLeaveRecordPage();
       // A UIKit interactive-pop transition continues with the release
       // velocity. Keep the same principle here: the final leg is calculated
       // from distance and finger speed instead of one fixed, mechanical time.

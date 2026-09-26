@@ -17,7 +17,7 @@ function device() {
     normalizeAccountData: data => clone(data), hasCloudSession: () => true, render() {},
     currentCloudToken: () => 'token', accountHasEmbeddedImages: () => false,
     accountDataSnapshot: state => ({ ledgerRecords: clone(state.ledgerRecords) }),
-    saveState() {}, queueCloudSave() {}, toast() {}, console,
+    saveState() {}, queueCloudSave() {}, updateAccountSaveStatus() {}, toast() {}, console,
   };
   ctx.readPendingCloudData = () => ctx.pending;
   ctx.clearPendingCloudData = () => { ctx.pending = null; };

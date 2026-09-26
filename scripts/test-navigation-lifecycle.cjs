@@ -49,6 +49,33 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       await page.mouse.move(5, 220); await page.mouse.down(); await page.mouse.move(205, 221, { steps: 5 });
       if (release) await page.mouse.up();
     }
+    for (const mode of ['button', 'gesture', 'html']) await check(`${mode} return does not schedule redundant page replacements`, async page => {
+      await secondary(page);
+      await page.evaluate(mode => {
+        if (mode === 'html') edgeBackSnapshots.at(-1).liveDom = null;
+        if (mode === 'gesture') showEdgeBackPreview(edgeBackSnapshots.at(-1));
+        navigateBack({ fromEdgeGesture: mode === 'gesture' });
+        window.returnedContent = $app.querySelector('main');
+        // Repeated acknowledgements arrive after navigation, but change no UI.
+        setState({}, { skipCloud: true });
+        setState({ messageUnreadCount: state.messageUnreadCount }, { skipCloud: true });
+        setState({}, { skipCloud: true });
+      }, mode);
+      await page.waitForTimeout(750);
+      assert.equal(await page.evaluate(() => returnedContent === $app.querySelector('main')), true, 'unchanged return must keep its DOM after the settle window');
+    });
+    await check('user opens a care draft immediately after return without delayed rerender', async page => {
+      await page.evaluate(() => {
+        setState({ page: 'memos', careTab: 'care', careDraft: null }, { skipSave: true, pageMotion: 'none' });
+        setState({ page: 'about' }, { skipSave: true, pageMotion: 'none' });
+        navigateBack();
+        document.querySelector('[data-new-care="feeding"]').click();
+      });
+      assert.equal(await page.locator('#careForm').count(), 1, 'local UI changes render immediately');
+      await page.locator('[name="note"]').fill('返回后填写的内容');
+      await page.waitForTimeout(750);
+      assert.equal(await page.locator('[name="note"]').inputValue(), '返回后填写的内容');
+    });
     await check('back during settling returns only one level', async page => {
       await secondary(page); await swipe(page);
       await page.evaluate(() => navigateBack());

@@ -1,0 +1,65 @@
+/* Shared record forms; marketplace, chat, authentication and native gestures
+   keep their own interaction surfaces. */
+:is(#turtleForm, #turtleDetailForm, #ledgerForm, #turtleBatchMovementForm, #careForm, #memoForm, #turtlePoolForm) {
+  --work-border: var(--line); --work-field: var(--section-bg);
+  min-width: 0;
+}
+html[data-theme-color="dark"] :is(#turtleForm, #turtleDetailForm, #ledgerForm, #turtleBatchMovementForm, #careForm, #memoForm, #turtlePoolForm, .work-filters, .work-plans, .work-tasks, .work-timeline) { --work-border: #343a37; --work-field: #1c201e; color-scheme: dark; }
+:is(#turtleDetailForm, #turtleBatchMovementForm, #careForm, #memoForm, #turtlePoolForm).fresh-card,
+#ledgerForm .fresh-card, #turtleForm .fresh-card { border-radius: 18px !important; padding: 20px; box-shadow: none !important; }
+:is(#turtleForm, #turtleDetailForm, #ledgerForm, #turtleBatchMovementForm, #careForm, #memoForm, #turtlePoolForm) label:not(.weekday-chip):not(.radio):not(.checkbox):has(> .field, > .select, > textarea),
+#careForm .care-field {
+  display: flex !important; flex-direction: column; align-items: stretch !important;
+  gap: 8px !important; grid-template-columns: none !important; min-width: 0; text-align: left;
+}
+:is(#turtleForm, #turtleDetailForm, #ledgerForm, #turtleBatchMovementForm, #careForm, #memoForm, #turtlePoolForm) label > span {
+  white-space: normal !important; font-size: 12px !important; color: var(--muted); line-height: 1.5;
+}
+:is(#turtleForm, #turtleDetailForm, #ledgerForm, #turtleBatchMovementForm, #careForm, #memoForm, #turtlePoolForm) :is(.field, .select, textarea) {
+  box-sizing: border-box; width: 100% !important; min-width: 0 !important; max-width: 100%;
+  min-height: 46px; border-radius: 10px !important; border: 1px solid var(--work-border) !important;
+  padding: 10px 12px !important; background: var(--work-field) !important; color: var(--text) !important;
+  text-align: left !important; font-size: 16px !important; line-height: 1.5; margin: 0 !important; box-shadow: none !important;
+}
+:is(#turtleForm, #turtleDetailForm, #ledgerForm, #turtleBatchMovementForm, #careForm, #memoForm, #turtlePoolForm) textarea { min-height: 88px; }
+:is(#turtleForm, #turtleDetailForm, #ledgerForm, #turtleBatchMovementForm, #careForm, #memoForm, #turtlePoolForm) input[type="date"] { appearance: none; -webkit-appearance: none; }
+:is(#turtleForm, #turtleDetailForm, #ledgerForm, #turtleBatchMovementForm, #careForm, #memoForm, #turtlePoolForm) input::-webkit-date-and-time-value { text-align: left; }
+:is(#turtleForm, #turtleDetailForm, #ledgerForm, #turtleBatchMovementForm, #careForm, #memoForm, #turtlePoolForm) :is(.primary, .secondary) { min-height: 46px; border-radius: 11px; box-shadow: none !important; }
+#careForm .care-form-hint { margin-left: 0; }
+#careForm .care-selected-turtles { margin-top: 0; }
+.work-filters, .work-plans { padding: 12px 16px; margin: 0 0 16px; background: var(--card-bg); border: 1px solid var(--work-border, var(--line)); border-radius: 14px; }
+:is(.work-filters, .work-plans, .work-tasks, .work-timeline, .care-plan-save) summary { cursor: pointer; font-size: 13px; padding: 10px 0; color: var(--green); }
+.work-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; padding: 12px 0 4px; }
+.work-fields label { display: grid; gap: 7px; min-width: 0; font-size: 12px; color: var(--muted); }
+.work-fields :is(input, select, .archive-directory-trigger) { box-sizing: border-box; width: 100%; min-width: 0; min-height: 46px; margin: 0; font-size: 16px; color: var(--text); border: 1px solid var(--work-border, var(--line)); border-radius: 10px; background: var(--work-field, var(--section-bg)); padding: 10px; }
+.work-fields select[hidden] { display: none !important; }
+.work-wide { grid-column: 1 / -1; }
+.work-actions { display: flex; gap: 10px; }
+.work-actions button { flex: 1; min-height: 44px; }
+.work-hint { color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; margin: 6px 0 12px; }
+.work-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.work-heading h3 { font-size: 17px; margin: 0; }
+.work-heading > span, .work-plans summary small { font-size: 12px; color: var(--muted); }
+.work-tasks.fresh-card, .work-timeline.fresh-card { padding: 18px; margin: 0 0 18px; border: 1px solid var(--work-border, var(--line)); border-radius: 18px !important; box-shadow: none; }
+.work-plan, .work-task { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+.work-plan + .work-plan, .work-task + .work-task { border-top: 1px solid var(--work-border, var(--line)); }
+:is(.work-plan, .work-task) > div { flex: 1; min-width: 0; }
+:is(.work-plan, .work-task) strong { font-size: 14px; overflow-wrap: anywhere; }
+:is(.work-plan, .work-task) small { display: block; font-size: 11px; margin-top: 5px; color: var(--muted); }
+:is(.work-plan, .work-task) button { flex-shrink: 0; color: var(--green); background: transparent; border: 0; min-height: 44px; padding: 4px; font-size: 13px; }
+.work-plan [data-delete-care-plan] { color: var(--muted); }
+.care-plan-save { border-top: 1px solid var(--work-border, var(--line)); margin: 0 0 18px; }
+.care-plan-save .secondary { width: 100%; }
+.work-more { width: 100%; margin: 14px 0; }
+.work-scroll { max-height: 320px; overflow-y: auto; overscroll-behavior: contain; }
+.work-timeline ol { list-style: none; padding: 0; margin: 0; }
+.work-timeline li { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 10px; padding: 12px 0; border-top: 1px solid var(--work-border, var(--line)); }
+.work-timeline time { font-size: 11px; color: var(--muted); padding-top: 3px; }
+.work-timeline strong { font-size: 14px; }
+.work-timeline p { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 4px 0 0; overflow-wrap: anywhere; }
+.work-save-status { display: block; width: 100%; height: 30px; margin: -4px 0 8px; padding: 0; text-align: right; border: 0; background: transparent; color: var(--muted); font-size: 11px; }
+:is(#turtleForm, #turtleDetailForm, #ledgerForm, #turtleBatchMovementForm, #careForm, #memoForm, #turtlePoolForm) [hidden] { display: none !important; }
+@media (max-width: 360px) {
+  :is(#turtleDetailForm, #turtleBatchMovementForm, #careForm, #memoForm, #turtlePoolForm).fresh-card, #ledgerForm .fresh-card, #turtleForm .fresh-card { padding: 16px; }
+  .work-fields { grid-template-columns: minmax(0, 1fr); }
+}

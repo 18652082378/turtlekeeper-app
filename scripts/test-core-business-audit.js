@@ -22,6 +22,7 @@ const ctx = { crypto, TurtleBatches, TurtleLossAccounting,
   setState: patch => { saves++; Object.assign(ctx.state, patch); return true; }
 };
 vm.createContext(ctx);
+vm.runInContext(source.slice(source.indexOf('function breedingTarget('), source.indexOf('function pageBreedingAdd(')), ctx);
 for (const [start, end] of [
   ['function submitTurtle(event)', 'function appReviewStorageKey('],
   ['function submitTurtlePool(', 'function openLedgerForm('],

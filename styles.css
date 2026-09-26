@@ -19751,3 +19751,72 @@ html[data-theme-color="dark"] .turtle-batch-detail .breeding-form { color-scheme
 .breeding-complete-footer { display: flex; justify-content: flex-end; margin-top: 8px; }
 .breeding-complete-badge { display: inline-flex; align-items: center; border-radius: 6px; padding: 4px 9px; font-size: 12px; line-height: 1.4; font-weight: 700; color: #1d7862; background: #e8f5ee; }
 html[data-theme-color="dark"] .breeding-complete-badge { color: #b2e7ca; background: #244337; }
+
+/* Breeding workspace: scoped to breeding screens, not archive/ledger forms. */
+.breeding-workspace { --breeding-accent: var(--green); }
+.breeding-workspace .breeding-overview, .breeding-workspace .breeding-section, .breeding-workspace #breedingForm { border: 1px solid var(--line); border-radius: 18px !important; background: var(--card-bg); padding: 20px; box-shadow: none; margin: 0 0 16px; }
+.breeding-overview-top, .breeding-section-heading, .breeding-progress-copy { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.breeding-overview-top { font-size: 12px; color: var(--muted); }
+.breeding-status { flex-shrink: 0; border-radius: 20px; padding: 5px 10px; color: var(--green); background: var(--raised-bg); font-size: 11px; }
+.breeding-workspace .breeding-overview h2 { margin: 16px 0 7px; font-size: 22px; line-height: 1.4; letter-spacing: -.4px; overflow-wrap: anywhere; }
+.breeding-overview > p { color: var(--muted); font-size: 12px; margin: 0; line-height: 1.6; }
+.breeding-overview-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.breeding-overview-stats > div { display: grid; gap: 5px; padding-left: 16px; border-left: 1px solid var(--line); }
+.breeding-overview-stats > div:first-child { padding-left: 0; border-left: 0; }
+.breeding-overview-stats span { font-size: 12px; color: var(--muted); }
+.breeding-overview-stats strong { font-size: 27px; font-weight: 650; line-height: 1.3; color: var(--text); }
+.breeding-overview-stats > div:last-child strong { color: var(--green); }
+.breeding-overview-stats small { margin-left: 5px; font-size: 11px; font-weight: 400; color: var(--muted); }
+.breeding-workspace #breedingDetailForm.breeding-editor { padding: 0 !important; margin: 0 !important; border: 0 !important; background: transparent !important; box-shadow: none !important; }
+.breeding-section-heading { margin-bottom: 18px; }
+.breeding-section-heading h3, .breeding-workspace .form-head h3 { margin: 0; font-size: 17px; color: var(--text); }
+.breeding-section-heading > span { font-size: 11px !important; color: var(--muted); }
+.breeding-workspace .form-head { margin-bottom: 18px; }
+.breeding-workspace .breeding-photo-box { padding: 12px; margin: 0 0 20px; display: flex; align-items: center; gap: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--section-bg); }
+.breeding-workspace .breeding-photo-box > img, .breeding-workspace .breeding-photo-box > span { width: 64px; height: 64px; flex: 0 0 64px; border-radius: 10px; object-fit: cover; }
+.breeding-workspace .breeding-photo-box > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; }
+.breeding-workspace .breeding-photo-box button { min-height: 40px; margin: 0; font-size: 13px; padding: 8px 10px; }
+.breeding-workspace .breeding-photo-box p, .breeding-workspace .breeding-photo-box small { flex-basis: 100%; margin: 0; font-size: 11px; line-height: 1.5; }
+.breeding-workspace :is(#breedingDetailForm, #breedingForm) .breeding-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; }
+.breeding-workspace :is(#breedingDetailForm, #breedingForm) .breeding-fields > label, .breeding-workspace .breeding-note { display: flex !important; flex-direction: column; align-items: stretch !important; grid-template-columns: none !important; min-width: 0; margin: 0; padding: 0; gap: 8px !important; border: 0; }
+.breeding-workspace :is(#breedingDetailForm, #breedingForm) .breeding-fields > :is(.breeding-date-field, .breeding-mother-field, .breeding-pool-field, .breeding-manual-mother, .breeding-field-wide) { grid-column: 1 / -1 !important; }
+.breeding-workspace :is(#breedingDetailForm, #breedingForm) label > span { color: var(--muted) !important; font-size: 12px !important; white-space: normal !important; line-height: 1.5 !important; }
+.breeding-workspace label small { font-size: 11px; margin-left: 5px; color: var(--muted); }
+.breeding-workspace :is(#breedingDetailForm, #breedingForm) :is(.field, .select, textarea) { box-sizing: border-box; width: 100% !important; min-width: 0 !important; max-width: 100%; min-height: 46px; margin: 0 !important; padding: 10px 12px !important; border: 1px solid var(--line) !important; border-radius: 10px !important; background: var(--section-bg) !important; color: var(--text) !important; font-size: 16px !important; text-align: left !important; line-height: 1.5; box-shadow: none !important; }
+.breeding-workspace :is(#breedingDetailForm, #breedingForm) input[type="date"] { appearance: none; -webkit-appearance: none; }
+.breeding-workspace input[type="date"]::-webkit-date-and-time-value { text-align: left; min-width: 0; }
+.breeding-workspace .archive-directory-trigger { white-space: normal; overflow-wrap: anywhere; }
+.breeding-workspace :is(input, select, textarea, button):focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.breeding-workspace .breeding-note { margin-top: 18px; }
+.breeding-workspace :is(#breedingDetailForm, #breedingForm) textarea { min-height: 88px; resize: vertical; }
+.breeding-workspace input::placeholder, .breeding-workspace textarea::placeholder { font-size: 13px; color: var(--muted); }
+.breeding-workspace .breeding-detail-actions { margin-top: 16px; }
+.breeding-workspace :is(.primary, .secondary) { min-height: 46px; border-radius: 11px; font-size: 14px; box-shadow: none !important; }
+.breeding-workspace #breedingForm > .primary { margin-top: 18px; width: 100%; }
+.breeding-workspace .breeding-hatch-panel { margin-top: 0; }
+.breeding-workspace .breeding-hint, .breeding-workspace .breeding-hatch-panel > p { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 12px 0; }
+.breeding-progress-copy { font-size: 13px; margin-bottom: 10px; }
+.breeding-progress-copy > span { color: var(--muted); font-size: 12px !important; }
+.breeding-progress { display: block; width: 100%; height: 6px; border: 0; border-radius: 9px; overflow: hidden; appearance: none; background: var(--raised-bg); accent-color: var(--green); margin-bottom: 20px; }
+.breeding-progress::-webkit-progress-bar { background: var(--raised-bg); border-radius: 9px; }
+.breeding-progress::-webkit-progress-value { background: var(--green); border-radius: 9px; }
+.breeding-progress::-moz-progress-bar { background: var(--green); border-radius: 9px; }
+.breeding-workspace .breeding-hatch-actions { margin-top: 16px; display: flex; gap: 10px; }
+.breeding-workspace .breeding-hatch-actions > button { flex: 1; width: auto; margin: 0; }
+.breeding-workspace .breeding-history { margin-top: 20px; padding: 0 4px; }
+.breeding-history > summary { padding: 12px 0; color: var(--text); font-size: 14px; cursor: pointer; }
+.breeding-history > summary span { color: var(--muted); font-size: 12px; margin-left: 8px; }
+.breeding-workspace .breeding-intro { padding: 20px; margin-bottom: 18px; border-radius: 18px !important; }
+.breeding-workspace .breeding-intro h2 { font-size: 24px; margin: 8px 0; }
+.breeding-workspace .breeding-intro p { font-size: 12px; line-height: 1.6; }
+.breeding-workspace .breeding-row { padding: 16px; border-radius: 16px !important; box-shadow: none; }
+.breeding-workspace .breeding-row-heading strong { font-size: 16px; }
+.breeding-workspace [hidden], .breeding-workspace :is(#breedingDetailForm, #breedingForm) [hidden] { display: none !important; }
+.breeding-workspace :is(#breedingDetailForm, #breedingForm) .breeding-fields > label[hidden] { display: none !important; }
+html[data-theme-color="dark"] .breeding-workspace { color-scheme: dark; --line: #343a37; }
+html[data-theme-color="dark"] .breeding-workspace :is(.breeding-overview, .breeding-section, #breedingForm) { background: var(--card-bg) !important; }
+@media (max-width: 360px) {
+  .breeding-workspace .breeding-overview, .breeding-workspace .breeding-section, .breeding-workspace #breedingForm { padding: 16px; }
+  .breeding-workspace .breeding-overview h2 { font-size: 20px; }
+  .breeding-workspace #breedingDetailForm .breeding-hatch-fields { grid-template-columns: minmax(0, 1fr); }
+}

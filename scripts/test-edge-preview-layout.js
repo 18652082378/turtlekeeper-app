@@ -18,6 +18,7 @@ const extract = (start,end) => source.slice(source.indexOf(start),source.indexOf
       var BOTTOM_NAV_ROOT_PAGES=new Set(['market','home','messages','mine','ledger']);
       function saveState(){} function refreshCareReminderTimers(){} function setupMarketInfiniteScroll(){}
       function setupCommunityInfiniteScroll(){} function syncMobileKeyboardUI(){}
+      function updateAccountSaveStatus(){} function canLeaveRecordPage(){return true;}
       function syncPersistentBottomNav(){} function stopMarketDetailVideos(){} function patchMarketSnapshotDetails(){}
       function patchSystemAnnouncementOverlay(){} function hydrateMarketDetailVideos(){} function bindEvents(){}
       function render(){renderCount++;$app.innerHTML='<div class="topbar"><div class="nav-title"><h1>'+state.page+'</h1></div></div>'+

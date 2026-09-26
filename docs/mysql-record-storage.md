@@ -46,6 +46,14 @@ if ($LASTEXITCODE -eq 0) { git push origin main }
 
 ## 必须先在测试 MySQL 演练
 
+2026-09-12 已在隔离的真实 MySQL 8.0.46 上运行 `scripts/test-local-mysql.js` 并通过：分记录迁移、增量写入、重启读取、HTTP 业务接口、1.0.7 损耗和升级兼容、迁移命令的备份/导出，以及保留迁移后新增损耗的回滚。该测试使用合成数据，没有连接生产 RDS；不代表生产负载验收或正式切换已经完成。
+
+本机已有免安装 MySQL 时可重复执行（不安装系统服务）：
+
+```powershell
+node scripts/test-local-mysql.js output/mysql-local-test/mysql-8.0.46-winx64/bin/mysqld.exe
+```
+
 配置 `TEST_MYSQL_URL` 为专用测试 MySQL 8 的连接地址，再执行 `node scripts/test-mysql-records.js`。不要使用生产连接信息。测试账号需要创建和删除测试数据库的权限：脚本生成随机 `tk_record_test_*` 库，仅在这个库中操作，结束时删除它。脚本不会读取 `server/.env`。
 
 真实 MySQL 测试验证迁移、读回、提交和重启读取；失败注入由模拟驱动验证。再在测试环境用生产备份的脱敏副本运行下面的迁移、API 和回滚流程，核对收购、售出、损耗、批次、龟池及繁殖数量/金额，并记录响应耗时、ECS 内存和 RDS CPU/IOPS。未做这些检查前，不把模拟测试当成真实 RDS 上线验收。

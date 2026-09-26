@@ -366,6 +366,7 @@ function emptyAccountData() {
   return {
     careRecords: [],
     careCustomItems: [],
+    carePlans: [],
     turtles: [],
     keptSpecies: [],
     customSpecies: [],
@@ -417,6 +418,7 @@ function normalizeAccountData(data = {}) {
     customSpecies: normalizeCustomSpecies(next.customSpecies),
     careRecords: TurtleCare.normalizeRecords(next.careRecords),
     careCustomItems: TurtleCare.normalizeItems(next.careCustomItems),
+    carePlans: TurtleCare.normalizePlans(next.carePlans),
     memos: Array.isArray(next.memos) ? next.memos : [],
     ledgerRecords: Array.isArray(next.ledgerRecords) ? next.ledgerRecords : [],
     breedingRecords: Array.isArray(next.breedingRecords) ? next.breedingRecords : [],
@@ -459,6 +461,7 @@ function accountDataHasContent(data = {}) {
     account.customSpecies,
     account.careRecords,
     account.careCustomItems,
+    account.carePlans,
     account.memos,
     account.ledgerRecords,
     account.breedingRecords,
@@ -1238,7 +1241,7 @@ function careReminderClock(date = new Date()) {
 }
 
 function careReminderDue(memo, clock) {
-  if (!memo || !/^\d{2}:\d{2}$/.test(String(memo.remindTime || ""))) return false;
+  if (!memo || memo.reminderEnabled === false || memo.lastCompletedDate === clock.date || (!memo.repeat && memo.completedAt) || !/^\d{2}:\d{2}$/.test(String(memo.remindTime || ""))) return false;
   if (String(memo.remindTime) !== clock.time) return false;
   if (memo.dueDate && String(memo.dueDate) !== clock.date) return false;
   if (!memo.repeat) return true;
@@ -1252,8 +1255,8 @@ async function notifyCareReminder(user, memo) {
   const payload = {
     aps: {
       alert: {
-        title: "龟友手账护理提醒",
-        body: String(memo.title || "护理事项").slice(0, 120)
+        title: "龟友手账养护提醒",
+        body: String(memo.title || "养护事项").slice(0, 120)
       },
       sound: "default"
     },
@@ -1650,9 +1653,19 @@ async function handleSaveAccount(req, res) {
   const existingData = normalizeAccountData(user.data || {});
   // Older app builds do not send these fields. Preserve them without preventing
   // a new client from deliberately removing a saved picker option.
-  for (const field of ["careRecords", "careCustomItems"]) {
+  for (const field of ["careRecords", "careCustomItems", "carePlans"]) {
     if (!Object.prototype.hasOwnProperty.call(body.data || {}, field)) incomingData[field] = existingData[field];
   }
+  // Older care clients omit individual turtle links. Explicit [] from newer
+  // clients still clears them; omission preserves the historical associations.
+  const rawCareRecords = new Map((Array.isArray(body.data?.careRecords) ? body.data.careRecords : []).map(record => [record?.id, record]));
+  const previousCareRecords = new Map(existingData.careRecords.map(record => [record.id, record]));
+  incomingData.careRecords = incomingData.careRecords.map(record => rawCareRecords.has(record.id)
+    && !Object.prototype.hasOwnProperty.call(rawCareRecords.get(record.id), "turtleRefs")
+    ? { ...record, turtleRefs: previousCareRecords.get(record.id)?.turtleRefs || [] } : record);
+  incomingData.careRecords = incomingData.careRecords.map(record => rawCareRecords.has(record.id)
+    && !Object.prototype.hasOwnProperty.call(rawCareRecords.get(record.id), "sourceMemoId")
+    ? { ...record, sourceMemoId: previousCareRecords.get(record.id)?.sourceMemoId || "" } : record);
   const incomingHasContent = accountDataHasContent(incomingData);
   // Older clients and stale devices must not erase private catalogue entries.
   incomingData.customSpecies = normalizeCustomSpecies([...new Map([
