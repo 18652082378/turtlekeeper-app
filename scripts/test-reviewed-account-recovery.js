@@ -2,12 +2,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { launchBrowser, recordResult } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
 const codec = require('../assets/local-data-codec');
 const clone = x => JSON.parse(JSON.stringify(x));
 (async () => {
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
+  const browser = await launchBrowser();
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const errors = [];
@@ -114,6 +114,7 @@ const clone = x => JSON.parse(JSON.stringify(x));
     await page.evaluate(() => { Storage.prototype.setItem = () => { throw new Error('quota'); }; });
     assert.equal((await upload()).pending, true); assert.equal(saves, previousSaves, 'backup storage failure prevents cloud writes');
     assert.deepEqual(errors, []);
+    recordResult(root, 'reviewed-account-recovery.json', { pass: true, externalTraffic: false });
     console.log('Reviewed recovery passed: confirmation, file picker, both devices, local/cloud new edits, CAS race, lost response, concurrent local edit, invalid IDs and rollback storage failure.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

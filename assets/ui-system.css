@@ -1,0 +1,434 @@
+/* Shared visual system. Load after feature styles. Geometry owned by the native
+   viewport/keyboard/gesture code is intentionally not changed in this layer. */
+:root {
+  --ui-accent: #20745b;
+  --ui-primary-fill: #20745b;
+  --ui-page: #f3f5f2;
+  --ui-surface: #ffffff;
+  --ui-raised: #f0f5f1;
+  --ui-text: #23332c;
+  --ui-muted: #65746d;
+  --ui-line: #dfe7e1;
+  --ui-danger: #c44351;
+  --ui-focus: #28836a;
+  --ui-shadow: 0 2px 8px #18382b05;
+  --ui-sheet-shadow: 0 20px 64px #10281e26;
+  --ui-radius: 18px;
+  --ui-control-radius: 12px;
+  --ui-ease: cubic-bezier(.2,.75,.3,1);
+  --ui-duration: 160ms;
+}
+html[data-theme-color="forest"] { --ui-accent: #38653f; --ui-primary-fill: #38653f; --ui-page: #f2f5ee; --ui-raised: #eef3e9; }
+html[data-theme-color="ocean"] { --ui-accent: #226b7a; --ui-primary-fill: #226b7a; --ui-page: #f0f5f6; --ui-raised: #eaf3f5; }
+html[data-theme-color="plum"] { --ui-accent: #74547f; --ui-primary-fill: #74547f; --ui-page: #f6f2f6; --ui-raised: #f3edf5; }
+html[data-theme-color="dark"] {
+  color-scheme: dark;
+  --ui-accent: #7bd7b6;
+  --ui-primary-fill: #276f59;
+  --ui-page: #121212;
+  --ui-surface: #1c1c1c;
+  --ui-raised: #262626;
+  --ui-text: #ededed;
+  --ui-muted: #aaaaaa;
+  --ui-line: #363636;
+  --ui-danger: #f59aa0;
+  --ui-focus: #92dec1;
+  --ui-shadow: none;
+  --ui-sheet-shadow: 0 20px 64px #00000066;
+}
+/* These legacy tokens are also assigned inline by applyTheme. Keeping one
+   authoritative mapping prevents feature sheets from diverging in contrast. */
+html {
+  --text: var(--ui-text) !important;
+  --ink: var(--ui-text) !important;
+  --muted: var(--ui-muted) !important;
+  --green: var(--ui-accent) !important;
+  --accent: var(--ui-accent) !important;
+  --danger: var(--ui-danger) !important;
+  --page-bg: var(--ui-page) !important;
+  --bg: var(--ui-page) !important;
+  --section-bg: var(--ui-surface) !important;
+  --row-bg: var(--ui-surface) !important;
+  --card-bg: var(--ui-surface) !important;
+  --surface: var(--ui-surface) !important;
+  --surface-2: var(--ui-raised) !important;
+  --raised-bg: var(--ui-raised) !important;
+  --topbar-bg: var(--ui-surface) !important;
+  --line: var(--ui-line) !important;
+  --divider: var(--ui-line) !important;
+  --card-border: var(--ui-line) !important;
+  scrollbar-color: var(--ui-line) transparent;
+}
+html body { background: var(--ui-page) !important; color: var(--ui-text); }
+#app { touch-action: pan-y pinch-zoom !important; }
+html .phone-shell { background: var(--ui-page) !important; box-shadow: 0 0 0 1px var(--ui-line); }
+html .phone-shell::before { display: none; }
+html .phone-shell :is(.content, .page-fresh, .home-redesign, .market-page, .community-page, .messages-page) { background: var(--ui-page) !important; }
+html .phone-shell :is(.topbar, .nav-title, .status) { background: var(--ui-surface) !important; color: var(--ui-text) !important; }
+html .phone-shell .topbar { border-bottom-color: var(--ui-line); box-shadow: none; }
+html .phone-shell .nav-title h1 { color: var(--ui-text) !important; font-size: 18px !important; line-height: 1.3; }
+html .phone-shell .nav-title h1::after { display: none; }
+html .phone-shell .nav-title .icon-btn { min-height: 44px; min-width: 44px; box-shadow: none; color: var(--ui-accent); }
+html .phone-shell .bottom-nav {
+  --wechat-tabbar-bg: var(--ui-surface);
+  --wechat-tabbar-border: var(--ui-line);
+  --wechat-tabbar-text: var(--ui-muted);
+  --wechat-tabbar-active: var(--ui-accent);
+  background: var(--ui-surface) !important;
+  border-top-color: var(--ui-line) !important;
+  box-shadow: none !important;
+}
+html .phone-shell .bottom-nav > button.active { font-weight: 700 !important; }
+
+/* Clear hierarchy through spacing and surfaces, rather than deep shadows. */
+html .phone-shell :is(.fresh-card, .card, .settings-card, .filter-dock, .ledger-date-filter, .detail-grid-card, .ledger-detail-card, .note-card, .history-card, .metric-strip, .work-filters, .work-plans, .breeding-overview, .breeding-section) {
+  border-color: var(--ui-line) !important;
+  border-radius: var(--ui-radius) !important;
+  background: var(--ui-surface) !important;
+  box-shadow: var(--ui-shadow) !important;
+}
+html .phone-shell :is(.turtle-row, .ledger-row, .memo-row, .breed-row, .breeding-row, .home-turtle-card, .turtle-pool-card, .care-record, .market-form-card, .market-detail-main, .market-detail-specs, .market-detail-description, .market-seller-card) {
+  border-color: var(--ui-line) !important;
+  border-radius: 16px !important;
+  background: var(--ui-surface) !important;
+  box-shadow: none !important;
+}
+html .phone-shell :is(.page-intro, .care-intro, .breeding-intro) {
+  min-height: 0;
+  padding: 18px;
+  margin-bottom: 16px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius) !important;
+  background: var(--ui-surface) !important;
+  box-shadow: none !important;
+}
+html .phone-shell .page-intro::before { display: none; }
+html .phone-shell .page-intro h2 { margin: 8px 0; color: var(--ui-text) !important; font-size: 23px !important; line-height: 1.35; }
+html .phone-shell .page-intro p { margin: 6px 0 0; color: var(--ui-muted) !important; font-size: 13px; line-height: 1.65; }
+html .phone-shell .page-intro .eyebrow { padding: 3px 8px; border-radius: 6px; font-size: 10px; color: var(--ui-accent) !important; background: var(--ui-raised) !important; }
+html .phone-shell .section-title :is(h3, > span) { font-size: 17px; line-height: 1.4; color: var(--ui-text); }
+html .phone-shell .section-title > span::before { display: none; }
+html .phone-shell .section-title :is(small, button) { box-shadow: none; }
+html .phone-shell :is(.muted, .work-hint, .care-form-hint, .care-record-time, .directory-archive-subtitle, .directory-pool-label, .breeding-hint, .account-settings-row small) { color: var(--ui-muted) !important; }
+html .phone-shell :is(.work-save-status, .work-heading > span, .care-history .section-title > span) { color: var(--ui-muted) !important; }
+html .phone-shell :is(.work-plan, .work-task, .account-settings-row, .mine-row, .activity-row) { border-color: var(--ui-line); box-shadow: none; }
+html .phone-shell :is(.work-plan, .work-task) small { font-size: 12px; }
+html .phone-shell :is(.work-task > div, .care-history, .care-record-body, .care-record-title) { background: transparent !important; }
+html .phone-shell .care-history .section-title > span { font-size: 12px !important; font-weight: 400 !important; }
+
+/* Native-sized controls and visible keyboard focus across every feature. */
+html :is(button, a, input, select, textarea, summary) { -webkit-tap-highlight-color: transparent; }
+html :is(button, a, summary) { touch-action: manipulation; }
+html .phone-shell :is(.primary, .secondary, .ts-btn) {
+  min-height: 46px;
+  border-radius: var(--ui-control-radius) !important;
+  font-size: 14px;
+  font-weight: 600 !important;
+  box-shadow: none !important;
+  transition: background-color var(--ui-duration) var(--ui-ease), border-color var(--ui-duration) var(--ui-ease), opacity var(--ui-duration) ease;
+}
+html .phone-shell :is(.primary, .round-action, .hero-add),
+html .phone-shell .directory-footer > [data-directory-confirm],
+html .phone-shell .care-tabs button[aria-selected="true"] {
+  color: #fff !important;
+  background: var(--ui-primary-fill) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+html .phone-shell :is(.primary, .round-action, .hero-add) :is(span, strong, small, svg) { color: inherit !important; }
+html .phone-shell .secondary { color: var(--ui-accent) !important; border-color: var(--ui-line) !important; background: var(--ui-raised) !important; }
+html .phone-shell :is(.primary, .secondary):disabled { opacity: .48; cursor: default; }
+html button[data-ui-pending][aria-busy="true"] { position: relative; cursor: progress; opacity: .75; }
+html button[data-ui-pending][aria-busy="true"]::after { content: ""; position: absolute; right: 8px; bottom: 6px; width: 10px; height: 10px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: ui-busy-spin .7s linear infinite; pointer-events: none; }
+html .phone-shell :is(.primary, .secondary):active:not(:disabled) { opacity: .8; transform: none; }
+html .phone-shell :is(.field, .select, textarea, .work-fields input, .work-fields select, .team-space input:not([type="checkbox"]):not([type="radio"]), .team-space select) {
+  min-width: 0;
+  border-color: var(--ui-line) !important;
+  background: var(--ui-surface) !important;
+  color: var(--ui-text) !important;
+  border-radius: var(--ui-control-radius) !important;
+  box-shadow: none !important;
+  transition: border-color var(--ui-duration) ease, background-color var(--ui-duration) ease;
+}
+html .phone-shell :is(input, textarea)::placeholder { color: var(--ui-muted) !important; opacity: .86; }
+html .phone-shell :is(input, textarea)[readonly] { background: var(--ui-raised) !important; color: var(--ui-muted) !important; }
+html .phone-shell :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible,
+html .modal-overlay :is(button, input, select, textarea, summary, [tabindex]):focus-visible,
+html :is([role="dialog"], [role="alertdialog"]) :is(button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--ui-focus) !important;
+  outline-offset: 3px !important;
+}
+html #app :is(input, select, textarea)[aria-invalid="true"],
+html :is([role="dialog"], [role="alertdialog"]) :is(input, select, textarea)[aria-invalid="true"] { border-color: var(--ui-danger) !important; }
+.ui-field-error,
+html .phone-shell .ui-field-error,
+html :is([role="dialog"], [role="alertdialog"]) .ui-field-error { display: block; grid-column: 1 / -1; min-width: 0; margin: 7px 0 0; color: var(--ui-danger) !important; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.ui-field-error[hidden] { display: none !important; }
+.form-block > .ui-field-error { grid-column: 2 !important; margin-top: -4px; }
+html .phone-shell .code-row > .secondary { grid-column: 2; grid-row: 1; }
+html .phone-shell .code-row > .ui-field-error { grid-column: 1 / -1; grid-row: 2; }
+html .phone-shell .survey-field > span { white-space: normal !important; overflow-wrap: anywhere; }
+/* The SMS row already splits space with its action button. A second pair of
+   columns inside the label left only a few pixels for the code on small phones. */
+@media (max-width: 520px) {
+  html .phone-shell #accountForm .code-row .survey-field { grid-template-columns: minmax(0, 1fr) !important; gap: 6px !important; }
+}
+/* User-authored URLs and uninterrupted text must wrap inside the surface;
+   clipping the app viewport alone hides text without fixing the oversized row. */
+html .phone-shell :is(.community-detail-copy, .forum-detail-title, .market-detail-description p, .announcement-admin-card strong, .announcement-admin-card p) { overflow-wrap: anywhere; }
+html .phone-shell .announcement-admin-list { grid-template-columns: minmax(0, 1fr); }
+html .phone-shell .announcement-admin-card,
+html .phone-shell .announcement-admin-card > * { min-width: 0; }
+html .phone-shell :is(.danger-link, .text-danger) { color: var(--ui-danger) !important; }
+/* Enlarge independent tap targets, leaving the dense alphabet index compact. */
+html .phone-shell :is(.turtle-row, .breeding-row) .more-btn { width: 44px !important; min-width: 44px !important; height: 44px !important; min-height: 44px !important; top: 0 !important; right: 0 !important; }
+html .phone-shell :is(.market-top-add, .market-favorite-button) { min-width: 44px; min-height: 44px; }
+html .phone-shell .growth-filter-row > button { min-height: 44px; }
+html .phone-shell .growth-filter-row > button.active { background: var(--ui-primary-fill) !important; color: #fff !important; }
+html .phone-shell .community-refined-page .forum-circle-card { min-height: 44px; }
+html .phone-shell .community-refined-page .forum-sort-tabs { gap: 8px; }
+html .phone-shell .community-refined-page .forum-sort-tabs > button { min-width: 44px; }
+html .phone-shell .community-refined-page .forum-thread-author { grid-template-columns: 44px minmax(0, 1fr) auto 44px; }
+html .phone-shell .community-refined-page .forum-thread-author > button:first-child { width: 44px; min-height: 44px; display: grid; place-items: center; }
+html .phone-shell .community-refined-page :is(.forum-thread-more, .forum-thread-more-wrap) { width: 44px; height: 44px; }
+html .phone-shell .community-refined-page .forum-thread-follow { min-height: 44px; }
+html .phone-shell .community-detail-page .community-detail-card .community-detail-actions > button:nth-child(n) { min-width: 44px; }
+html .phone-shell .forum-comment-actions > button { min-width: 44px; min-height: 44px; }
+
+/* Dashboard: one calm overview and four compact, aligned entry points. */
+html .phone-shell .home-redesign .home-hero {
+  border: 0;
+  border-radius: 20px;
+  background: linear-gradient(115deg, #214b3d, var(--ui-primary-fill)) !important;
+  box-shadow: none;
+  padding: 22px 20px 44px;
+}
+html .phone-shell .home-hero::after { display: none; }
+html .phone-shell .home-redesign .home-hero h2 { font-size: 24px !important; color: #fff !important; }
+html .phone-shell .home-hero .hero-add { width: 48px; height: 48px; border: 1px solid #ffffff42 !important; border-radius: 16px; background: #ffffff1f !important; color: #fff !important; }
+html .phone-shell .metric-strip.home-overview-metrics { border-radius: 16px !important; padding: 10px 4px; margin: -26px 10px 16px; }
+html .phone-shell .home-overview-metrics > div { min-height: 54px; padding: 4px 1px; background: transparent !important; }
+html .phone-shell .home-overview-metrics > div + div { border-left: 1px solid var(--ui-line); border-radius: 0; }
+html .phone-shell .home-overview-metrics > div strong { font-size: 22px; color: var(--ui-accent) !important; font-variant-numeric: tabular-nums; }
+html .phone-shell .home-overview-metrics > div:nth-child(n+4) strong { color: var(--ui-danger) !important; }
+html .phone-shell .home-overview-metrics > div span { font-size: 11px; color: var(--ui-muted) !important; }
+html .phone-shell .action-panel.care-action-panel.home-module-panel { gap: 10px; margin-bottom: 18px; }
+html .phone-shell .action-panel.care-action-panel.home-module-panel > .care-action {
+  display: grid !important;
+  grid-template-columns: 38px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: center !important;
+  align-items: center !important;
+  justify-items: start !important;
+  column-gap: 10px !important;
+  row-gap: 4px !important;
+  min-height: 86px !important;
+  padding: 14px 12px !important;
+  border: 1px solid var(--ui-line) !important;
+  border-radius: 16px !important;
+  background: var(--ui-surface) !important;
+  box-shadow: none !important;
+  text-align: left !important;
+}
+html .phone-shell .action-panel.care-action-panel.home-module-panel > .care-action > .home-module-icon {
+  grid-row: 1 / 3 !important;
+  width: 38px !important; height: 42px !important; margin: 0;
+  border: 0; border-radius: 12px !important; box-shadow: none !important;
+  background: var(--ui-raised) !important; color: var(--ui-accent) !important;
+}
+html .phone-shell .action-panel.care-action-panel.home-module-panel > .care-action > strong { grid-column: 2 !important; grid-row: 1 !important; align-self: end !important; text-align: left !important; font-size: 14px !important; color: var(--ui-text) !important; }
+html .phone-shell .action-panel.care-action-panel.home-module-panel > .care-action > small { grid-column: 2; grid-row: 2; align-self: start !important; text-align: left !important; max-width: 100%; font-size: 11px !important; line-height: 1.5; color: var(--ui-muted) !important; white-space: normal; }
+html .phone-shell :is(.work-tasks, .work-timeline).fresh-card { padding: 16px; }
+html .phone-shell .work-task { padding: 10px 0; }
+html .phone-shell .work-task:last-child { padding-bottom: 0; }
+
+/* Ledger, care and breeding keep their useful data dense and readable. */
+html .phone-shell .ledger-profit-card { border-radius: 18px; box-shadow: none; }
+html .phone-shell .ledger-summary { gap: 10px !important; }
+html .phone-shell .ledger-summary > div { min-height: 92px; border: 1px solid var(--ui-line); border-radius: 14px; background: var(--ui-surface) !important; box-shadow: none; }
+html .phone-shell .ledger-command-panel { padding: 10px; }
+html .phone-shell .ledger-command-button { min-height: 44px; border: 1px solid var(--ui-line); border-radius: 10px; background: var(--ui-raised) !important; color: var(--ui-accent) !important; box-shadow: none !important; font-size: 13px; }
+html .phone-shell .ledger-command-button.active { background: var(--ui-primary-fill) !important; color: #fff !important; border-color: transparent; }
+html .phone-shell :is(.ledger-date-filter, .care-tabs, .my-market-tabs, .market-stage-tabs) { padding: 4px; gap: 4px; border: 1px solid var(--ui-line); border-radius: 14px !important; background: var(--ui-raised) !important; box-shadow: none !important; }
+html .phone-shell :is(.ledger-range, .care-tabs button, .my-market-tabs button, .market-stage-tabs button) { min-height: 40px; border-radius: 10px; color: var(--ui-muted) !important; font-size: 13px; background: transparent !important; }
+html .phone-shell :is(.ledger-range.active, .my-market-tabs button.active, .market-stage-tabs button.active) { color: var(--ui-accent) !important; background: var(--ui-surface) !important; box-shadow: 0 1px 4px #1230270a !important; font-weight: 650 !important; }
+html .phone-shell .care-tabs { margin-bottom: 16px; }
+html .phone-shell .care-tabs button[aria-selected="true"] { color: var(--ui-accent) !important; background: var(--ui-surface) !important; box-shadow: 0 1px 4px #1230270a !important; }
+html .phone-shell .care-quick-actions { margin-bottom: 16px; }
+html .phone-shell :is(.work-filters, .work-plans) { padding: 6px 16px; }
+html .phone-shell .care-record { border: 1px solid var(--ui-line); padding: 12px 14px; }
+html .phone-shell .care-record-body > button { border-radius: 10px; color: var(--ui-accent) !important; background: var(--ui-raised) !important; }
+html .phone-shell .care-record footer { padding-top: 4px; border-top: 1px solid var(--ui-line); margin-top: 8px; gap: 14px; }
+html .phone-shell .care-date { margin-top: 18px; color: var(--ui-muted) !important; }
+html .phone-shell .breeding-overview-stats strong { font-variant-numeric: tabular-nums; }
+html .phone-shell .breeding-overview-stats > div:last-child strong { color: var(--ui-accent) !important; }
+html .phone-shell .breeding-workspace :is(.breeding-photo-box, .breeding-form-hint, .breeding-status) { background: var(--ui-raised) !important; border-color: var(--ui-line) !important; }
+
+/* Compact growth rows: one surface, two metrics, quiet record metadata. */
+html .phone-shell .growth-summary { margin: 0 0 12px; padding: 12px 4px; border: 0; background: transparent !important; box-shadow: none !important; }
+html .phone-shell .growth-summary > div { padding: 0 8px; border-radius: 0; background: transparent !important; }
+html .phone-shell .growth-summary > div + div { border-left: 1px solid var(--ui-line); }
+html .phone-shell .growth-summary strong { font-size: 22px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+html .phone-shell .growth-summary span { margin-top: 5px; font-size: 11px; }
+html .phone-shell .growth-filter-row { margin-bottom: 12px; }
+html .phone-shell .growth-update-list { gap: 10px; }
+html .phone-shell .growth-update-card { grid-template-columns: 40px minmax(0, 1fr) auto 10px; gap: 12px 10px; align-items: center; padding: 12px 14px 6px; border-radius: 14px !important; }
+html .phone-shell .growth-update-card > img { grid-column: 1; grid-row: 1; width: 40px; height: 40px; border-radius: 10px; }
+html .phone-shell .growth-update-main { grid-column: 2; grid-row: 1; min-width: 0; }
+html .phone-shell .growth-update-head { flex-wrap: wrap; gap: 4px 6px; }
+html .phone-shell .growth-update-head strong { max-width: 100%; font-size: 15px; line-height: 1.4; }
+html .phone-shell .growth-update-main > p { margin: 3px 0 0; color: var(--ui-muted) !important; font-size: 11px; line-height: 1.5; }
+html .phone-shell .growth-update-timing { grid-column: 3; grid-row: 1; display: grid; gap: 4px; min-width: 0; max-width: 116px; padding: 0; border: 0; text-align: right; }
+html .phone-shell .growth-update-timing > span { font-size: 11px; }
+html .phone-shell .growth-update-timing > small { font-size: 10px; line-height: 1.4; white-space: normal; }
+html .phone-shell .growth-update-card > b { grid-column: 4; grid-row: 1; justify-self: end; }
+html .phone-shell :is(.growth-update-history, .growth-update-card > .growth-update-chips) { grid-column: 1 / -1; min-width: 0; }
+html .phone-shell .growth-history-flow { padding: 0; }
+html .phone-shell .growth-history-track { width: 100%; min-width: 100%; gap: 10px; }
+html .phone-shell .growth-update-history .growth-history-step { box-sizing: border-box; flex: 0 0 100%; padding: 0; border: 0; border-radius: 0; background: transparent !important; box-shadow: none; }
+html .phone-shell .growth-history-pair { grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr); gap: 6px; }
+html .phone-shell .growth-history-pair > div { gap: 5px; padding: 0; align-content: start; }
+html .phone-shell .growth-history-pair > div:not(.growth-history-interval) { align-self: start; }
+html .phone-shell .growth-history-pair > div:last-child { text-align: right; }
+html .phone-shell .growth-history-pair > div > span { font-size: 11px; }
+html .phone-shell .growth-history-pair .growth-metric-values { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 4px; min-width: 0; font-variant-numeric: tabular-nums; }
+html .phone-shell .growth-history-pair > div:last-child .growth-metric-values { justify-content: flex-end; }
+html .phone-shell .growth-metric-values > span { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+html .phone-shell .growth-metric-values > i { color: var(--ui-muted); font-size: 12px; font-style: normal; }
+html .phone-shell .growth-metric-values > b { overflow: visible; max-width: 100%; font-size: 16px; font-weight: 650; line-height: 1.3; white-space: normal; overflow-wrap: anywhere; color: var(--ui-text) !important; }
+html .phone-shell .growth-history-step-head { justify-content: flex-start; align-items: center; min-height: 32px; gap: 8px; margin: 8px 0 0; padding-top: 4px; border-top: 1px solid var(--ui-line); color: var(--ui-muted); }
+html .phone-shell .growth-history-step-head > strong { font-size: 10px; font-weight: 400; white-space: nowrap; }
+html .phone-shell .growth-history-step-head > small { font-size: 10px; font-variant-numeric: tabular-nums; }
+html .phone-shell .growth-history-swipe-hint { margin-left: auto; font-size: 10px; white-space: nowrap; }
+html .phone-shell .growth-history-delete { display: grid; place-items: center; width: 32px; height: 32px; min-width: 32px; margin-left: auto; border: 0; border-radius: 8px; background: transparent !important; color: var(--ui-muted) !important; }
+html .phone-shell .growth-history-swipe-hint + .growth-history-delete { margin-left: 0; }
+html .phone-shell .growth-history-delete svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+html .phone-shell .growth-history-delete:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
+html .phone-shell .growth-history-pair > .growth-history-interval { align-self: center; align-content: center; justify-items: center; gap: 2px; color: var(--ui-muted); text-align: center; }
+html .phone-shell .growth-history-interval small { max-width: 100%; color: var(--ui-muted); font-size: 9px; font-weight: 400; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
+html .phone-shell .growth-history-interval b { color: var(--ui-muted); font-size: 17px; font-weight: 400; line-height: 1; }
+html .phone-shell .growth-update-card > .growth-update-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 0; border-top: 1px solid var(--ui-line); }
+
+/* Social, marketplace, settings and team screens use the same surface scale. */
+html .phone-shell :is(.market-search-wrap, .community-search-shell > label, .fresh-search, .filter-dock) { border-color: var(--ui-line) !important; border-radius: 13px !important; background: var(--ui-surface) !important; box-shadow: none !important; }
+html .phone-shell .market-promise-strip { background: var(--ui-raised) !important; color: var(--ui-accent) !important; border-radius: 12px; }
+html .phone-shell .market-promise-strip strong { color: var(--ui-accent) !important; }
+html .phone-shell .market-promise-strip small { color: var(--ui-muted) !important; }
+html .phone-shell :is(.market-card, .community-feed-card, .community-tile, .community-home-empty, .community-login-card) { border-color: var(--ui-line) !important; background: var(--ui-surface) !important; box-shadow: none !important; }
+html .phone-shell .market-publish-fab { background: var(--ui-primary-fill) !important; color: #fff !important; box-shadow: 0 6px 18px #153e2926; }
+html .phone-shell :is(.mine-row, .activity-row, .message-activity-card) { background: var(--ui-surface) !important; }
+html .phone-shell .fresh-profile { margin: 0; border: 0; border-radius: 0 0 22px 22px; background: linear-gradient(115deg, #214b3d, var(--ui-primary-fill)) !important; box-shadow: none; }
+html .phone-shell .fresh-profile::after { display: none; }
+html .phone-shell .fresh-profile :is(h2, p, strong, span, small) { color: #f0faf3 !important; }
+html .phone-shell .fresh-profile h2 { font-size: 26px !important; }
+html .phone-shell .account-brief > div { border: 1px solid var(--ui-line); border-radius: 14px; background: var(--ui-surface) !important; box-shadow: none; }
+html .phone-shell .team-space { --ts-green: var(--ui-accent); --ts-muted: var(--ui-muted); --ts-line: var(--ui-line); --ts-paper: var(--ui-surface); --ts-soft: var(--ui-raised); background: var(--ui-page) !important; color: var(--ui-text); }
+html .phone-shell .team-space :is(.ts-panel, .ts-dialog, .ts-setup-guide) { border-color: var(--ui-line) !important; background: var(--ui-surface) !important; box-shadow: none; }
+html .phone-shell .team-space .ts-primary { background: var(--ui-primary-fill) !important; color: #fff !important; border-color: transparent; }
+
+/* Empty states and selection sheets retain their content without tall blank
+   blocks, clipped labels or a second competing visual language. */
+html .phone-shell :is(.empty, .small-empty, .market-empty, .message-empty, .community-home-empty) {
+  min-height: 164px;
+  padding: 28px 20px;
+  gap: 10px;
+  border: 1px dashed var(--ui-line);
+  border-radius: 16px;
+  background: var(--ui-surface) !important;
+  box-shadow: none !important;
+  text-align: center;
+}
+html .phone-shell :is(.empty, .small-empty, .market-empty, .message-empty) :is(strong, h3) { margin: 0; font-size: 16px !important; line-height: 1.5; color: var(--ui-text) !important; }
+html .phone-shell :is(.empty, .small-empty, .market-empty, .message-empty) p { margin: 0; font-size: 13px; line-height: 1.7; color: var(--ui-muted) !important; }
+html .phone-shell :is(.empty, .small-empty, .market-empty, .message-empty) > button { min-height: 44px; margin-top: 6px; }
+html .phone-shell .market-grid > :is(.empty, .market-empty, .small-empty) { grid-column: 1 / -1; width: 100%; min-width: 0; }
+html .phone-shell [data-feed-retry] { min-height: 44px; padding: 10px 18px; border: 1px solid var(--ui-line); border-radius: var(--ui-control-radius); background: var(--ui-raised) !important; color: var(--ui-accent) !important; font-size: 14px; font-weight: 600; }
+html :is(.archive-directory-dialog, .ts-dialog, .market-sale-dialog, .market-service-dialog, .account-delete-dialog, .community-visibility-sheet) { background: var(--ui-surface) !important; color: var(--ui-text) !important; border-color: var(--ui-line) !important; box-shadow: var(--ui-sheet-shadow); }
+html .account-delete-dialog .account-delete-check { display: flex; min-height: 44px; align-items: center; gap: 9px; }
+html .account-delete-dialog .account-delete-check > input { flex: 0 0 18px; width: 18px; height: 18px; margin: 0; }
+html .account-delete-dialog .account-delete-check > span { min-width: 0; }
+html .archive-directory-dialog :is(.directory-search, .directory-filters select, .directory-species-card, .directory-archive-card, .directory-footer) { background: var(--ui-surface) !important; border-color: var(--ui-line) !important; }
+html .archive-directory-dialog .directory-archive-card[aria-pressed="true"] { background: var(--ui-raised) !important; border-color: var(--ui-accent) !important; box-shadow: inset 0 0 0 1px var(--ui-accent); }
+html .archive-directory-dialog :is([data-directory-close], .directory-search > button) { width: 44px; min-height: 44px; }
+html .archive-directory-dialog .directory-types > button { min-height: 44px; }
+html .archive-directory-dialog .directory-types > button[aria-pressed="true"] { background: var(--ui-primary-fill) !important; color: #fff !important; }
+html .archive-directory-dialog .directory-footer > [data-directory-confirm] { background: var(--ui-primary-fill) !important; color: #fff !important; border-color: transparent; }
+html .archive-directory-dialog .directory-result-heading [data-directory-back] { min-height: 44px; }
+html .archive-directory-dialog .directory-heading > strong { font-size: 21px; color: var(--ui-text) !important; }
+html .archive-directory-dialog .directory-footer > p { color: var(--ui-muted) !important; font-size: 11px; }
+
+/* Dark mode uses neutral surfaces. Brand/action colors belong to controls and
+   meaningful values, not the page, card borders, or large decorative banners. */
+html[data-theme-color="dark"] .phone-shell :is(.home-redesign .home-hero, .fresh-profile, .ledger-profit-card, .ledger-profit-card.negative, .community-refined-page .community-invite, .turtle-profile-card, .ts-entry, .team-space .ts-hero, .team-space .ts-workhero, .ts-brand-preview, .team-space .ts-breed-rate) {
+  background: var(--ui-surface) !important;
+  border-color: var(--ui-line) !important;
+  color: var(--ui-text) !important;
+  box-shadow: none !important;
+}
+html[data-theme-color="dark"] .phone-shell :is(.fresh-profile, .community-refined-page .community-invite, .turtle-profile-card) :is(h2, p, strong, span, small) { color: var(--ui-text) !important; }
+html[data-theme-color="dark"] .phone-shell .community-refined-page :is(.community-invite p, .community-invite-eyebrow) { color: var(--ui-muted) !important; }
+html[data-theme-color="dark"] .phone-shell .community-refined-page .community-invite-publish,
+html[data-theme-color="dark"] .phone-shell .community-refined-page .community-invite-publish > span { background: var(--ui-primary-fill) !important; color: #fff !important; }
+html[data-theme-color="dark"] .phone-shell :is(.growth-update-card, .growth-history-card, .next-growth-card, .detail-growth-chart) { background: var(--ui-surface) !important; border-color: var(--ui-line) !important; }
+html[data-theme-color="dark"] .phone-shell :is(.growth-snapshot-card, .growth-snapshot-card.is-new, .next-growth-date, .detail-chart-summary > span) { background: var(--ui-raised) !important; border-color: var(--ui-line) !important; color: var(--ui-text) !important; }
+html[data-theme-color="dark"] .phone-shell :is(.growth-update-main, .growth-history-flow, .growth-history-track, .growth-history-pair, .growth-history-pair > div) { background: transparent !important; }
+html[data-theme-color="dark"] .phone-shell :is(.growth-update-head > span, .ledger-row .ledger-inline-type, .ledger-turtle-meta span, .market-card-delivery, .market-title-templates button) { background: var(--ui-raised) !important; border-color: var(--ui-line) !important; color: var(--ui-muted) !important; }
+html[data-theme-color="dark"] :is(.modal-overlay.archive-directory-overlay, .ts-backdrop) { background: rgba(0, 0, 0, .56) !important; }
+html[data-theme-color="dark"] .toast { background: #303030f5; border-color: var(--ui-line); box-shadow: 0 8px 28px #00000040; }
+
+/* Loading is a stable placeholder; background refresh never covers content. */
+.ui-loading-skeleton { width: 100%; padding: 6px 0; }
+.ui-skeleton-row { display: flex; align-items: center; gap: 14px; min-height: 100px; margin-bottom: 12px; padding: 16px; border: 1px solid var(--ui-line); border-radius: 16px; background: var(--ui-surface); }
+.ui-skeleton-avatar { width: 62px; height: 68px; flex: 0 0 62px; border-radius: 12px; }
+.ui-skeleton-lines { min-width: 0; flex: 1; display: grid; gap: 9px; }
+.ui-skeleton-lines i { display: block; width: 75%; height: 10px; border-radius: 5px; }
+.ui-skeleton-lines i:first-child { width: 58%; height: 14px; }
+.ui-skeleton-lines i:last-child { width: 42%; }
+.ui-skeleton-avatar, .ui-skeleton-lines i { background: var(--ui-raised); animation: ui-placeholder-breathe 1.5s ease-in-out infinite alternate; }
+/* Old feed loaders styled every descendant <i> as a rotating ring. The new
+   placeholders use the same semantic-free element, so reset that decoration. */
+.ui-loading-skeleton .ui-skeleton-lines > i { border: 0; margin: 0; border-radius: 5px; transform: none; animation: ui-placeholder-breathe 1.5s ease-in-out infinite alternate; }
+html .phone-shell :is(.community-feed-initial-loading, .market-feed-initial-loading):has(.ui-loading-skeleton) { display: block; width: 100%; min-width: 0; padding: 0; grid-column: 1 / -1; }
+.ui-loading-label { display: block; margin: 10px 0; font-size: 13px; line-height: 1.6; text-align: center; color: var(--ui-muted) !important; }
+.ui-request-status { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 12px; min-height: 32px; border-radius: 10px; background: var(--ui-raised); color: var(--ui-muted) !important; font-size: 12px; line-height: 1.5; pointer-events: none; }
+.ui-request-status[hidden] { display: none !important; }
+.ui-request-status::before { content: ""; flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--ui-accent); }
+.ui-request-status:has(.ui-loading-skeleton) { display: block; width: 100%; padding: 0; grid-column: 1 / -1; border-radius: 0; background: transparent; }
+.ui-request-status:has(.ui-loading-skeleton)::before { display: none; }
+html .toast { width: max-content; max-width: min(420px, calc(100vw - 32px)); border: 1px solid #ffffff1f; border-radius: 14px; padding: 12px 18px; background: #223a30f5; color: #fff !important; font-size: 13px; line-height: 1.6; box-shadow: 0 8px 28px #102c2026; overflow-wrap: anywhere; }
+.ui-sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip-path: inset(50%) !important; white-space: nowrap !important; border: 0 !important; }
+@keyframes ui-placeholder-breathe { from { opacity: .55; } to { opacity: 1; } }
+@keyframes ui-busy-spin { to { transform: rotate(360deg); } }
+
+@media (hover: hover) and (pointer: fine) {
+  html .phone-shell :is(.primary, .secondary):hover:not(:disabled) { filter: brightness(.96); }
+  html .phone-shell :is(.home-module-panel > button, .turtle-row, .ledger-row, .mine-row):hover { border-color: var(--ui-accent) !important; box-shadow: none !important; transform: none; }
+}
+@media (max-width: 600px) {
+  html :is(.phone-shell, [role="dialog"], [role="alertdialog"]) :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) { font-size: 16px !important; }
+  html .phone-shell :is(.fresh-search, .market-search-wrap, .community-search-shell, .directory-search) input::placeholder { font-size: 13px; }
+  html .phone-shell .content { padding-inline: 14px; }
+  html .phone-shell .community-refined-page { padding-inline: 14px; }
+}
+@media (max-width: 360px) {
+  html .phone-shell .content { padding-inline: 12px; }
+  html .phone-shell .home-redesign .home-hero h2 { font-size: 21px !important; }
+  html .phone-shell .action-panel.care-action-panel.home-module-panel > .care-action { grid-template-columns: 30px minmax(0, 1fr); column-gap: 7px !important; padding-inline: 10px !important; }
+  html .phone-shell .action-panel.care-action-panel.home-module-panel > .care-action > .home-module-icon { width: 30px !important; height: 38px !important; }
+  html .phone-shell .action-panel.care-action-panel.home-module-panel > .care-action > strong { font-size: 13px !important; }
+  html .phone-shell .care-record footer { flex-wrap: wrap; gap: 0 12px; }
+  html .phone-shell .care-record footer .care-view-turtles { flex-basis: auto; }
+  html .phone-shell .page-intro { padding: 16px; }
+  html .phone-shell .home-archive-section .filter-dock { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  html .phone-shell .home-archive-section .filter-dock > :last-child { grid-column: 1 / -1; }
+}
+@media (min-width: 900px) {
+  html .phone-shell .content:not(.market-page):not(.community-detail-page):not(.community-chat-page) { padding-inline: 28px; }
+  html .phone-shell .action-panel.care-action-panel.home-module-panel { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-skeleton-avatar, .ui-loading-skeleton .ui-skeleton-lines > i { animation: none; opacity: .85; }
+  html button[data-ui-pending][aria-busy="true"]::after { animation: none; }
+  html :is([role="dialog"], [role="alertdialog"], .modal-overlay, .ts-backdrop, .community-visibility-overlay, .community-visibility-sheet) { animation: none !important; transition: none !important; }
+  html .phone-shell :is(.primary, .secondary, .field, .select, textarea, .home-module-panel > button, .turtle-row, .ledger-row, .mine-row) { transition: none; }
+}

@@ -16,7 +16,7 @@ function device() {
     document: { querySelector: () => null, createElement: () => ({ dataset: {}, setAttribute() {}, querySelector: () => ({ addEventListener() {} }) }) },
     normalizeAccountData: data => clone(data), hasCloudSession: () => true, render() {},
     currentCloudToken: () => 'token', accountHasEmbeddedImages: () => false,
-    accountDataSnapshot: state => ({ ledgerRecords: clone(state.ledgerRecords) }),
+    accountDataSnapshot: state => Object.fromEntries(['turtles', 'memos', 'breedingRecords', 'turtlePools', 'ledgerRecords', 'careRecords', 'careCustomItems', 'carePlans'].map(field => [field, clone(state[field] || [])])),
     saveState() {}, queueCloudSave() {}, updateAccountSaveStatus() {}, toast() {}, console,
   };
   ctx.readPendingCloudData = () => ctx.pending;
@@ -50,7 +50,7 @@ function device() {
   const saving = a.pushCloudDataNow(true);
   a.state.ledgerRecords.push({ id: 'loss-2', type: 'loss' });
   a.persistPendingCloudData();
-  resolveSave({ user: { updatedAt: 'revision-2' } });
+  resolveSave({ user: { phone: 'account', updatedAt: 'revision-2', dataRevision: 'hash-2', data: { ledgerRecords: [{ id: 'sale-1', type: 'sold' }] } } });
   await saving;
   assert.equal(a.pending.data.ledgerRecords.length, 2, 'save acknowledgment cannot clear edits made during upload');
   assert.equal(a.pending.baseUpdatedAt, 'revision-2');
@@ -110,7 +110,7 @@ function device() {
   f.persistPendingCloudData();
   f.apiPost = async (route, payload) => {
     assert.equal(payload.baseDataRevision, 'hash-1');
-    return { user: { updatedAt: 'revision-9', dataRevision: 'hash-2' } };
+    return { user: { phone: 'account', updatedAt: 'revision-9', dataRevision: 'hash-2', data: clone(payload.data) } };
   };
   await f.pushCloudDataNow(true);
   assert.equal(f.pending, null);
@@ -154,5 +154,56 @@ function device() {
   await oldSave;
   assert.ok(renewed.pending, 'a previous session cannot clear the current recovery journal');
   assert.notEqual(renewed.state.cloudAccountUpdatedAt, 'obsolete-revision');
+  for (const mode of ['omitted', 'empty', 'changed-links', 'changed-note']) {
+    const care = device();
+    care.state.careRecords = [{ id: 'feeding-1', title: '喂食', date: '2026-09-27', note: '吃完了', turtleRefs: [{ id: 't1' }] }];
+    care.persistPendingCloudData();
+    care.apiPost = async (route, payload) => {
+      const data = clone(payload.data);
+      if (mode === 'omitted') delete data.careRecords;
+      if (mode === 'empty') data.careRecords = [];
+      if (mode === 'changed-links') data.careRecords[0].turtleRefs = [];
+      if (mode === 'changed-note') data.careRecords[0].note = '';
+      return { user: { phone: 'account', data, updatedAt: 'new', dataRevision: 'new' } };
+    };
+    await assert.rejects(care.pushCloudDataNow(true), /未完整确认保存/);
+    assert.equal(care.pending.data.careRecords[0].note, '吃完了', mode);
+    assert.equal(care.state.cloudSyncConflict.code, 'CLOUD_SAVE_INCOMPLETE');
+    assert.notEqual(care.state.cloudAccountDataRevision, 'new');
+    const reopened = device();
+    reopened.pending = clone(care.pending);
+    reopened.restorePendingCloudData();
+    reopened.apiPost = async () => ({ user: { phone: 'account', data: { ledgerRecords: [] }, dataRevision: 'old-server' } });
+    await reopened.refreshCloudAccountFromServer();
+    assert.equal(reopened.state.careRecords[0].note, '吃完了', 'cold launch preserves rejected receipt');
+    assert.equal(reopened.cloudRenders, 0);
+  }
+  const mirror = device();
+  mirror.state.careRecords = [{ id: 'old-ack', note: '旧客户端已清理同步队列，但本机副本仍在' }];
+  mirror.apiPost = async () => ({ user: { phone: 'account', data: { ledgerRecords: [] }, dataRevision: 'old' } });
+  await mirror.refreshCloudAccountFromServer();
+  assert.ok(mirror.pending.data.careRecords.length, 'old acknowledged mirror is journaled before incompatible load');
+  assert.equal(mirror.cloudRenders, 0);
+  for (const field of ['turtles', 'memos', 'breedingRecords', 'turtlePools', 'ledgerRecords', 'careCustomItems', 'carePlans']) {
+    for (const mode of ['omitted', 'empty', 'changed']) {
+      const client = device();
+      client.state[field] = [{ id: 'persisted', note: '完整内容', amount: 25 }];
+      client.persistPendingCloudData();
+      client.apiPost = async (route, payload) => {
+        const data = clone(payload.data);
+        if (mode === 'omitted') delete data[field];
+        if (mode === 'empty') data[field] = [];
+        if (mode === 'changed') data[field][0].note = '';
+        return { user: { phone: 'account', dataRevision: 'truncated', data } };
+      };
+      await assert.rejects(client.pushCloudDataNow(true), /未完整确认保存/);
+      assert.equal(client.pending.data[field][0].note, '完整内容', field + ' ' + mode);
+      const reopened = device(); reopened.pending = clone(client.pending); reopened.restorePendingCloudData();
+      reopened.apiPost = async () => ({ user: { phone: 'account', dataRevision: 'truncated', data: {} } });
+      await reopened.refreshCloudAccountFromServer();
+      assert.equal(reopened.state[field][0].note, '完整内容', field + ' remains after relaunch');
+      assert.equal(reopened.cloudRenders, 0);
+    }
+  }
   console.log('Account sync races passed: concurrent saves, cross-device refresh, pending recovery, load/edit races and stale-write preservation.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

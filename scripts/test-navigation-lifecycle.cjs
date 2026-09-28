@@ -1,12 +1,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { engine, launchBrowser, artifactName } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
 fs.mkdirSync(path.join(root, 'output'), { recursive: true });
 
 (async () => {
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
+  const browser = await launchBrowser();
   const outcomes = [];
   try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
@@ -81,6 +81,109 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       await page.evaluate(() => navigateBack());
       await page.waitForTimeout(600); // Exceed both transition and fallback timer.
       assert.equal(await page.evaluate(() => state.page), 'about');
+    });
+    await check('personal space uses the same back gesture as other secondary pages', async page => {
+      await page.evaluate(() => {
+        setState({ page: 'messages' }, { skipSave: true, pageMotion: 'none' });
+        setState({ page: 'mine' }, { skipSave: true, pageMotion: 'none' });
+      });
+      await swipe(page); await page.waitForTimeout(450);
+      assert.equal(await page.evaluate(() => state.page), 'messages');
+    });
+    await check('short edge drag held still does not become a stale fling', async page => {
+      await secondary(page);
+      await page.mouse.move(5, 220); await page.mouse.down();
+      await page.mouse.move(55, 220);
+      await page.waitForTimeout(350);
+      await page.mouse.up(); await page.waitForTimeout(450);
+      assert.equal(await page.evaluate(() => state.page), 'rules');
+      assert.equal(await page.locator('.edge-back-preview').count(), 0);
+    });
+    await check('reversing an edge swipe cancels even after the distance threshold', async page => {
+      await secondary(page);
+      await page.mouse.move(5, 220); await page.mouse.down();
+      await page.mouse.move(220, 220, { steps: 5 });
+      await page.mouse.move(110, 220);
+      await page.mouse.up(); await page.waitForTimeout(450);
+      assert.equal(await page.evaluate(() => state.page), 'rules');
+    });
+    await check('horizontal controls own their gesture even at the left screen edge', async page => {
+      await secondary(page);
+      await page.evaluate(() => {
+        const strip = document.createElement('div');
+        strip.style.cssText = 'position:fixed;left:0;top:180px;width:100%;height:120px;overflow-x:auto;z-index:99';
+        strip.innerHTML = '<div style="width:1000px;height:100px">横向选项</div>';
+        $app.append(strip);
+      });
+      await swipe(page);
+      await page.waitForTimeout(450);
+      assert.equal(await page.evaluate(() => state.page), 'rules');
+    });
+    await check('reduced motion avoids animated settling and preview parallax', async page => {
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await secondary(page);
+      await swipe(page, false);
+      assert.equal(await page.locator('.edge-back-preview').evaluate(el => el.style.transform), 'translate3d(0px, 0px, 0px)');
+      await page.mouse.up();
+      await page.waitForTimeout(80);
+      assert.equal(await page.evaluate(() => state.page), 'about');
+      assert.equal(await page.evaluate(() => $app.style.transform), '');
+      assert.equal(await page.locator('.edge-back-preview').count(), 0);
+    });
+    await check('swipe preview is excluded from keyboard and screen reader interaction', async page => {
+      await secondary(page); await swipe(page, false);
+      const result = await page.locator('.edge-back-preview').evaluate(el => ({ inert: el.inert, hidden: el.getAttribute('aria-hidden') }));
+      assert.deepEqual(result, { inert: true, hidden: 'true' });
+      await page.mouse.up();
+    });
+    await check('a cancelled drag cannot click through but keyboard activation still works', async page => {
+      await secondary(page);
+      await page.evaluate(() => {
+        window.auditClicks = 0;
+        const button = document.createElement('button'); button.id = 'auditGestureClick';
+        button.style.cssText = 'position:fixed;top:300px;left:50px;z-index:10';
+        button.textContent = '操作'; button.addEventListener('click', () => auditClicks++); $app.append(button);
+      });
+      await page.mouse.move(5, 220); await page.mouse.down(); await page.mouse.move(40, 220);
+      await page.waitForTimeout(180); await page.mouse.up();
+      const counts = await page.evaluate(() => {
+        const button = document.getElementById('auditGestureClick');
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+        const pointer = auditClicks;
+        button.click();
+        return { pointer, keyboard: auditClicks };
+      });
+      assert.deepEqual(counts, { pointer: 0, keyboard: 1 });
+      await page.locator('#auditGestureClick').click();
+      assert.equal(await page.evaluate(() => auditClicks), 2, 'a fresh deliberate tap remains usable');
+      await page.waitForTimeout(450);
+      assert.equal(await page.evaluate(() => state.page), 'rules');
+    });
+    await check('second finger cancels navigation without leaving displaced layers', async page => {
+      await secondary(page); await swipe(page, false);
+      await page.evaluate(() => $app.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, isPrimary: false, pointerId: 2, pointerType: 'touch', clientX: 200, clientY: 250
+      })));
+      await page.mouse.up(); await page.waitForTimeout(450);
+      assert.equal(await page.evaluate(() => state.page), 'rules');
+      assert.equal(await page.evaluate(() => $app.style.transform), '');
+      assert.equal(await page.locator('.edge-back-preview').count(), 0);
+    });
+    await check('declining an edge return keeps the unsaved form and navigation stack', async page => {
+      await secondary(page);
+      await page.evaluate(() => setState({ page: 'memos', careTab: 'care', careDraft: null }, { skipSave: true, pageMotion: 'none' }));
+      await page.locator('[data-new-care="feeding"]').click();
+      await page.locator('#careForm [name="note"]').fill('手势返回时保留草稿');
+      const depth = await page.evaluate(() => edgeBackSnapshots.length);
+      let prompted = false;
+      page.once('dialog', dialog => { prompted = true; return dialog.dismiss(); });
+      await swipe(page);
+      await page.waitForTimeout(450);
+      assert.equal(prompted, true, 'the dirty-form guard must run on gesture return');
+      assert.equal(await page.locator('#careForm [name="note"]').inputValue(), '手势返回时保留草稿');
+      assert.equal(await page.evaluate(() => edgeBackSnapshots.length), depth);
+      assert.equal(await page.locator('.edge-back-preview').count(), 0);
+      assert.equal(await page.evaluate(() => $app.style.transform), '');
     });
     await check('rerender during drag restores fixed layers', async page => {
       await secondary(page); await swipe(page, false);
@@ -234,11 +337,12 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
         }
         return results;
       }, routes);
-      fs.writeFileSync(path.join(root, 'output/navigation-pages.json'), JSON.stringify(results, null, 2));
+      fs.writeFileSync(path.join(root, 'output', artifactName('navigation-pages.json')), JSON.stringify(results, null, 2));
       assert.deepEqual(results.filter(x => !x.pass), []);
     });
     fs.mkdirSync(path.join(root, 'output'), { recursive: true });
-    fs.writeFileSync(path.join(root, 'output/navigation-lifecycle.json'), JSON.stringify(outcomes, null, 2));
+    fs.writeFileSync(path.join(root, 'output', artifactName('navigation-lifecycle.json')), JSON.stringify(outcomes, null, 2));
+    console.log(`Browser engine: ${engine}; desktop simulation, not a native iPhone`);
     console.log(JSON.stringify(outcomes, null, 2));
     assert.ok(outcomes.every(x => x.pass), 'all lifecycle cases must pass');
   } finally { await browser.close(); }

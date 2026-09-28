@@ -1,11 +1,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { launchBrowser, artifactName, recordResult } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
 const clone = value => JSON.parse(JSON.stringify(value));
 (async () => {
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
+  const browser = await launchBrowser();
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const errors = [];
@@ -102,7 +102,10 @@ const clone = value => JSON.parse(JSON.stringify(value));
       'repeated hydration keeps the local screen mounted and does not flash remote records or conflict toasts');
     await page.locator('[data-cloud-sync-notice] button').click();
     assert.equal(await page.evaluate(() => state.page), 'sync', JSON.stringify(errors));
-    await page.locator('.settings-card').screenshot({ path: path.join(root, 'output', 'sync-recovery-settings.png') });
+    // Entering the route starts a separate account read. Capture the completed
+    // review, not the temporary settings DOM replaced by that read's result.
+    await page.locator('.sync-conflict-review').waitFor({ state: 'visible' });
+    await page.locator('.settings-card').screenshot({ path: path.join(root, 'output', artifactName('sync-recovery-settings.png')) });
     assert.equal(await page.locator('[data-export-local-backup]').count(), 1);
     // Independent reconciliation makes the server identical; explicit recheck resumes.
     user.data = await page.evaluate(() => accountDataSnapshot(state));
@@ -111,6 +114,7 @@ const clone = value => JSON.parse(JSON.stringify(value));
     await page.waitForFunction(() => !readPendingCloudData() && !cloudSyncIsPaused());
     assert.equal(saves, 2, 'recovery never overwrites either side');
     assert.deepEqual(errors, []);
+    recordResult(root, 'sync-recovery-ui.json', { pass: true, externalTraffic: false });
     console.log('Sync recovery UI passed: old journal repair, navigation without writes, genuine edits, one conflict toast, persistent pause, backup access and safe resume.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

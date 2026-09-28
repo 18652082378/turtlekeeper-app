@@ -41,9 +41,15 @@ const root = path.resolve(__dirname, '..');
     assert.ok(JSON.parse(await fs.readFile(durable, 'utf8')).users[phone], 'registration cannot return before its delayed commit');
     const auth = { phone, token: registered.user.token };
     const data = { ...registered.user.data, turtles: [{ id: 'one', code: 'ONE', status: '正常饲养', measureHistory: [] }],
-      ledgerRecords: [{ id: 'purchase', type: 'purchase', amount: 450, turtleId: 'one' }] };
+      ledgerRecords: [{ id: 'purchase', type: 'purchase', amount: 450, turtleId: 'one' }],
+      memos: [{ id: 'memo-1', title: '喂食', repeat: true, remindTime: '10:00', lastCompletedDate: '2026-09-27' }],
+      breedingRecords: [{ id: 'nest-1', eggCount: 5, fertileCount: 4, hatchCount: 2, hatchEvents: [{ id: 'hatch-1', count: 2, turtleIds: ['h1', 'h2'] }] }],
+      turtlePools: [{ id: 'pool-1', name: '专项龟池', type: 'breeder', count: 3, countMode: 'additional', note: '检查关联' }],
+      careRecords: [{ id: 'care-1', title: '喂食', itemId: 'feeding', date: '2026-09-27', note: '持久保存', sourceMemoId: 'memo-1', turtleRefs: [{ id: 'one', code: 'ONE', speciesName: '果核蛋龟' }] }],
+      careCustomItems: [{ id: 'custom-1', title: '清洗过滤器' }], carePlans: [{ id: 'plan-1', name: '全选喂食', turtleRefs: [{ id: 'one' }] }] };
     await post('/api/account/save', { ...auth, accountName: 'durability test', data, baseDataRevision: registered.user.dataRevision });
     assert.equal(JSON.parse(await fs.readFile(durable, 'utf8')).users[phone].data.ledgerRecords[0].amount, 450, 'save response waits for ledger durability');
+    const committedData = JSON.parse(await fs.readFile(durable, 'utf8')).users[phone].data;
     const visit = { ...auth, visitorId: 'synthetic-visitor', sessionId: 'synthetic-session', module: '看板' };
     await post('/api/analytics/visit', { ...visit, event: 'start' });
     await post('/api/analytics/visit', { ...visit, event: 'heartbeat', module: '账本' });
@@ -55,11 +61,21 @@ const root = path.resolve(__dirname, '..');
     await stop(); await start();
     assert.deepEqual(JSON.parse(await fs.readFile(durable, 'utf8')).appAnalytics, analyticsBefore, 'real HTTP start/heartbeat/end survive restart with session storage');
     const loaded = await post('/api/account/load', auth);
+    assert.deepEqual(loaded.user.data, committedData, 'all six modules and nested links survive record-store restart');
     assert.equal(loaded.user.data.ledgerRecords[0].amount, 450);
+    assert.equal(loaded.user.data.careRecords[0].note, '持久保存');
+    assert.equal(loaded.user.data.careRecords[0].sourceMemoId, 'memo-1');
+    assert.equal(loaded.user.data.careRecords[0].turtleRefs[0].id, 'one');
+    assert.equal(loaded.user.data.careCustomItems[0].title, '清洗过滤器');
+    assert.equal(loaded.user.data.carePlans[0].name, '全选喂食');
     await fs.writeFile(fail, 'test');
-    await post('/api/account/save', { ...auth, accountName: 'durability test', baseDataRevision: loaded.user.dataRevision,
-      data: { ...loaded.user.data, ledgerRecords: [...loaded.user.data.ledgerRecords, { id: 'failed', type: 'other', amount: 999 }] } }, false);
+    const failingData = JSON.parse(JSON.stringify(loaded.user.data));
+    for (const field of ['turtles', 'careRecords', 'memos', 'breedingRecords', 'turtlePools', 'ledgerRecords', 'careCustomItems', 'carePlans'])
+      failingData[field][0] = { ...failingData[field][0], note: 'should roll back', title: 'should roll back', name: 'should roll back' };
+    failingData.ledgerRecords.push({ id: 'failed', type: 'other', amount: 999 });
+    await post('/api/account/save', { ...auth, accountName: 'durability test', baseDataRevision: loaded.user.dataRevision, data: failingData }, false);
     assert.equal(JSON.parse(await fs.readFile(durable, 'utf8')).users[phone].data.ledgerRecords.length, 1, 'failed commit cannot leak half-written ledger records');
+    assert.deepEqual(JSON.parse(await fs.readFile(durable, 'utf8')).users[phone].data, committedData, 'failed commit leaves the entire account intact');
     await post('/api/account/load', auth, false);
     await stop(); await fs.unlink(fail); await start();
     assert.equal((await post('/api/account/load', auth)).user.data.ledgerRecords.length, 1, 'restart reads committed data only');

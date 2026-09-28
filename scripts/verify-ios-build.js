@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
+const plist = require("plist");
 
 const root = path.resolve(__dirname, "..");
 const read = file => fs.readFileSync(path.join(root, file), "utf8");
@@ -29,9 +30,23 @@ assert.ok(builds.length && builds.every(value => value === builds[0]), "Debug/Re
 for (const file of ["config.js", "www/config.js"]) {
   assert.equal(Number(read(file).match(/TURTLE_APP_BUILD\s*=\s*(\d+)/)?.[1]), builds[0], `${file} build number differs from Xcode`);
 }
-const bundledSources = ["index.html", "app.js", "styles.css", "species-data.js", "assets/account-merge.js", "assets/team-space.js", "assets/team-space.css", "assets/care-records.js", "assets/care-records.css", "assets/workspace-ui.js", "assets/workspace-ui.css"];
+function filesUnder(folder) {
+  return fs.readdirSync(path.join(root, folder), { withFileTypes: true }).flatMap(item => {
+    const file = `${folder}/${item.name}`;
+    return item.isDirectory() ? filesUnder(file) : [file];
+  });
+}
+// Check all shipped web files, not a hand-picked subset that misses new UI
+// modules, policy pages or binary assets. Hash comparisons keep errors concise.
+const bundledSources = ["index.html", "official.html", "config.js", "species-data.js", "app.js", "styles.css", "chat-tools.css", "dark-surface-audit.css", "privacy.html", "terms.html", "support.html", ...filesUnder("assets")].sort();
+const hash = file => crypto.createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex');
 for (const file of bundledSources) {
-  assert.equal(read(`www/${file}`), read(file), `${file} is stale in www`);
+  assert.equal(hash(`www/${file}`), hash(file), `Stale web asset: ${file}`);
+}
+assert.equal(filesUnder('www').map(file => file.slice(4)).sort().join('\n'), bundledSources.join('\n'), 'www contains missing or unexpected release files');
+for (const match of read('index.html').matchAll(/(?:src|href)=["']\.\/([^"']+)/g)) {
+  const file = match[1].split(/[?#]/)[0];
+  assert.ok(bundledSources.includes(file), `Entry references an unbundled asset: ${file}`);
 }
 assert.ok(read('index.html').includes('./assets/team-space.js'), 'Team page script is missing from the app');
 const purchases = read('ios/App/App/TurtlePurchasesPlugin.swift');
@@ -41,11 +56,28 @@ for (const product of ['keyoushouzhang.team.monthly', 'keyoushouzhang.team.yearl
 assert.ok(project.includes('TurtlePurchasesPlugin.swift in Sources'), 'StoreKit plugin is not compiled by Xcode');
 assert.ok(project.includes('com.apple.InAppPurchase = { enabled = 1; }'), 'In-App Purchase capability is missing');
 assert.ok(read('scripts/configure-ios-local-plugins.js').includes('plugins.add("TurtlePurchasesPlugin")'), 'StoreKit plugin registration is missing');
+const localPlugins = fs.readdirSync(path.join(root, 'ios/App/App')).filter(file => /^Turtle\w+Plugin\.swift$/.test(file)).map(file => file.replace(/\.swift$/, ''));
+for (const plugin of localPlugins) {
+  assert.ok(project.includes(`${plugin}.swift in Sources`), `${plugin} is not compiled by Xcode`);
+  assert.ok(read('scripts/configure-ios-local-plugins.js').includes(`plugins.add("${plugin}")`), `${plugin} is missing from the local plugin configurator`);
+}
+// Apple lists contentModificationDateKey under FileTimestamp. This plugin
+// inspects only its own app-container cache, matching the C617.1 reason.
+const privacy = plist.parse(read('ios/App/App/PrivacyInfo.xcprivacy'));
+const timestamp = privacy.NSPrivacyAccessedAPITypes?.find(item => item.NSPrivacyAccessedAPIType === 'NSPrivacyAccessedAPICategoryFileTimestamp');
+assert.ok(timestamp?.NSPrivacyAccessedAPITypeReasons?.includes('C617.1'), 'File timestamp privacy reason C617.1 is missing');
+const privacyReference = project.match(/([A-F0-9]+) \/\* PrivacyInfo\.xcprivacy \*\/ = \{isa = PBXFileReference;[^\n]*path = PrivacyInfo\.xcprivacy;/)?.[1];
+const privacyBuild = privacyReference && project.match(new RegExp(`([A-F0-9]+) /\\* PrivacyInfo\\.xcprivacy in Resources \\*/ = \\{isa = PBXBuildFile; fileRef = ${privacyReference} `))?.[1];
+const resourcesPhase = project.slice(project.indexOf('/* Begin PBXResourcesBuildPhase section */'), project.indexOf('/* End PBXResourcesBuildPhase section */'));
+assert.ok(privacyBuild && resourcesPhase.includes(`${privacyBuild} /* PrivacyInfo.xcprivacy in Resources */`), 'PrivacyInfo.xcprivacy is missing from Xcode Resources');
+for (const workflow of ['.github/workflows/ios-check.yml', 'codemagic.yaml']) {
+  assert.match(read(workflow), /npx cap sync ios[\s\S]*node scripts\/configure-ios-local-plugins\.js[\s\S]*node scripts\/verify-ios-build\.js --native/, `iOS workflow ${workflow} must configure plugins and verify native assets after sync`);
+}
 if (process.argv.includes('--native')) {
   const native = JSON.parse(read('ios/App/App/capacitor.config.json'));
-  assert.ok(native.packageClassList.includes('TurtlePurchasesPlugin'), 'Synced iOS plugin registration is missing');
-  for (const file of [...bundledSources, 'config.js']) {
-    assert.equal(read(`ios/App/App/public/${file}`), read(`www/${file}`), `Stale native asset: ${file}`);
+  for (const plugin of localPlugins) assert.ok(native.packageClassList.includes(plugin), `Synced iOS plugin registration is missing: ${plugin}`);
+  for (const file of bundledSources) {
+    assert.equal(hash(`ios/App/App/public/${file}`), hash(`www/${file}`), `Stale native asset: ${file}`);
   }
 }
 // Validate the bundled files themselves; adding a species must not break a
@@ -56,4 +88,4 @@ for (const file of [...images, "manifest.json"]) {
   assert.ok(fs.readFileSync(path.join(root, "assets/species", file)).equals(
     fs.readFileSync(path.join(root, "www/assets/species", file))), `Missing or stale species asset: ${file}`);
 }
-console.log(`Verified iOS ${version} (${builds[0]}): matching source/build versions and ${images.length} bundled species photos.`);
+console.log(`Verified iOS ${version} (${builds[0]}): ${bundledSources.length} matching web assets, ${images.length} bundled species photos, ${localPlugins.length} local plugins and the app privacy manifest. Xcode compilation/signing is not performed by this check.`);

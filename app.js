@@ -410,6 +410,7 @@ let cloudSyncTimer = null;
 let cloudSyncInFlight = false;
 let cloudSyncQueued = false;
 let cloudConflictReview = null;
+let cloudConflictReviewRequest = 0;
 let cloudAutoMergeAttempts = 0;
 let syncPageActionBusy = false;
 let syncPageFeedback = "";
@@ -2139,7 +2140,7 @@ function renderTurtleGrowthSnapshot(snapshot = {}, photo, label, isNew = false) 
     <section class="growth-snapshot-card ${isNew ? "is-new" : ""}">
       <div class="growth-snapshot-head">
         <span>${label}</span>
-        <img class="growth-preview-photo" src="${photo || defaultPhoto}" alt="${label}照片" data-growth-photo-preview role="button" tabindex="0" title="点击放大">
+        <img class="growth-preview-photo" src="${escapeHtml(photo || defaultPhoto)}" alt="${label}照片" data-growth-photo-preview role="button" tabindex="0" title="点击放大">
       </div>
       <strong>${nickname}</strong>
       <div class="growth-snapshot-meta">
@@ -2164,7 +2165,7 @@ function renderBreedingHistorySnapshot(snapshot = {}, photo, label, isNew = fals
     <section class="growth-snapshot-card breeding-history-snapshot ${isNew ? "is-new" : ""}">
       <div class="growth-snapshot-head">
         <span>${label}</span>
-        ${photo ? `<img class="growth-preview-photo" src="${photo}" alt="${label}附图" data-growth-photo-preview role="button" tabindex="0" title="点击放大">` : `<i class="breeding-history-photo" aria-hidden="true">繁</i>`}
+        ${photo ? `<img class="growth-preview-photo" src="${escapeHtml(photo)}" alt="${label}附图" data-growth-photo-preview role="button" tabindex="0" title="点击放大">` : `<i class="breeding-history-photo" aria-hidden="true">繁</i>`}
       </div>
       <strong>${motherName}</strong>
       <div class="growth-snapshot-meta">
@@ -2434,9 +2435,9 @@ function communityMedia(item, compact = false) {
   // Community cards must not download media until the user explicitly plays it.
   // The API server has limited bandwidth and several metadata/autoplay requests
   // in a scrolling feed can otherwise starve the video the user selected.
-  if (first.type === "video") return `<video class="community-media" src="${first.url}"${videoPosterAttribute(first)} ${compact ? "muted playsinline" : "controls playsinline"} preload="none" crossorigin="anonymous"></video>`;
-  if (mediaItems.length === 1) return `<img class="community-media" src="${first.url}" alt="动态图片" loading="lazy">`;
-  return `<div class="community-media-gallery community-media-gallery-${mediaItems.length}">${mediaItems.map((media, index) => `<img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy">`).join("")}</div>`;
+  if (first.type === "video") return `<video class="community-media" src="${escapeHtml(first.url)}"${videoPosterAttribute(first)} ${compact ? "muted playsinline" : "controls playsinline"} preload="none" crossorigin="anonymous"></video>`;
+  if (mediaItems.length === 1) return `<img class="community-media" src="${escapeHtml(first.url)}" alt="动态图片" loading="lazy">`;
+  return `<div class="community-media-gallery community-media-gallery-${mediaItems.length}">${mediaItems.map((media, index) => `<img class="community-media" src="${escapeHtml(media.url)}" alt="动态图片 ${index + 1}" loading="lazy">`).join("")}</div>`;
 }
 
 function communityFeedMedia(item) {
@@ -2446,7 +2447,7 @@ function communityFeedMedia(item) {
     if (media.type === "video") {
       return `<div class="community-feed-media-button is-video" role="button" tabindex="0" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><div class="inline-video-shell"><img class="community-media" src="${escapeHtml(apiAssetUrl(media.thumbnailUrl || media.posterUrl || defaultPhoto))}" alt="视频封面" loading="lazy"><span class="community-video-play-mark" aria-hidden="true">▶</span>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
     }
-    return `<button class="community-feed-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
+    return `<button class="community-feed-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${escapeHtml(media.url)}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
   };
   if (!mediaItems.length) return "";
   if (mediaItems.length === 1) return mediaButton(mediaItems[0], 0);
@@ -2567,9 +2568,9 @@ function communityDetailMedia(item) {
       ${mediaItems.map((media, index) => {
         const label = media.type === "video" ? "播放视频" : `查看图片 ${index + 1}`;
         if (media.type === "video") {
-          return `<div class="community-detail-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${media.url}"${videoPosterAttribute(media)} muted playsinline controls preload="none" crossorigin="anonymous" data-inline-video></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
+          return `<div class="community-detail-media-button is-video" aria-label="${label}"><div class="inline-video-shell"><video class="community-media" src="${escapeHtml(media.url)}"${videoPosterAttribute(media)} muted playsinline controls preload="none" crossorigin="anonymous" data-inline-video></video>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
         }
-        return `<button class="community-detail-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${media.url}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
+        return `<button class="community-detail-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${escapeHtml(media.url)}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
       }).join("")}
     </div>
   `;
@@ -2876,8 +2877,14 @@ function accountModuleCache(phone) {
     publicReviewsInitialized: false, publicReviewsError: false, publicFeedbackInitialized: false, publicFeedbackError: false };
 }
 
+function uiLoadingMarkup(label = "正在加载…") {
+  const safeLabel = String(label).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  return `<div class="ui-request-status" role="status" aria-live="polite" aria-busy="true"><div class="ui-loading-skeleton" aria-hidden="true">${Array.from({ length: 3 }, () => `<div class="ui-skeleton-row"><div class="ui-skeleton-avatar"></div><div class="ui-skeleton-lines"><i></i><i></i><i></i></div></div>`).join("")}</div><span class="ui-loading-label">${safeLabel}</span></div>`;
+}
+
 function remoteListEmptyMarkup(initialized, failed, emptyText, helpText) {
   const loading = hasCloudSession() && !initialized;
+  if (loading && !failed) return uiLoadingMarkup();
   return `<div class="empty small-empty" role="status"><div><strong>${loading ? (failed ? "加载失败，请稍后重试" : "正在加载…") : emptyText}</strong><br>${loading ? "已有内容加载完成后会显示在这里" : helpText}</div></div>`;
 }
 
@@ -2902,7 +2909,7 @@ function messageListEmptyMarkup() {
   if (hasCloudSession() && !state.communityFriendsInitialized) {
     return state.communityFriendsError
       ? `<div class="message-empty" role="status"><strong>消息加载失败</strong><span>请检查网络，稍后会自动重试</span></div>`
-      : `<div class="message-empty" role="status" aria-busy="true"><strong>正在加载消息…</strong><span>正在获取你的会话列表</span></div>`;
+      : uiLoadingMarkup("正在加载消息…");
   }
   return `<div class="message-empty"><strong>暂无消息</strong><span>在龟集市联系卖家后，可在这里继续沟通</span></div>`;
 }
@@ -3192,7 +3199,7 @@ function pageCommunity() {
       ${communityCircleStrip(posts)}
       ${selectedCircle ? `<section class="forum-selected-circle"><div><i>${selectedCircle.icon}</i><span><strong>${selectedCircle.name}</strong><small>${selectedCircle.note}</small></span></div><button class="${followed ? "active" : ""}" type="button" data-toggle-community-circle="${selectedCircle.id}">${followed ? "已关注" : "+ 关注"}</button></section>` : ""}
       ${communityTopicTabs()}
-      <section class="community-feed ${communityInitialLoading ? "is-initial-loading" : ""}">${feedNotice || (communityInitialLoading ? `<div class="community-feed-initial-loading" role="status" aria-live="polite"><i aria-hidden="true"></i><span>正在加载帖子…</span></div>` : "")}${!communityInitialLoading && (visiblePosts.length || !feedNotice) ? communityFeedMarkup(visiblePosts) : ""}</section>
+      <section class="community-feed ${communityInitialLoading ? "is-initial-loading" : ""}">${feedNotice || (communityInitialLoading ? `<div class="community-feed-initial-loading">${uiLoadingMarkup("正在加载帖子…")}</div>` : "")}${!communityInitialLoading && (visiblePosts.length || !feedNotice) ? communityFeedMarkup(visiblePosts) : ""}</section>
       ${posts.length ? `<div class="community-feed-status" data-community-load-sentinel>${state.communityFeedLoadingMore ? "正在加载更多动态…" : state.communityFeedHasMore ? "继续上滑，加载更多" : "已经到底了"}</div>` : ""}
     </main>
     ${bottomNav()}
@@ -3410,7 +3417,7 @@ function pageCommunityAdd() {
         <label class="forum-compose-title"><input name="title" minlength="5" maxlength="31" value="${escapeHtml(communityDraftTitle)}" placeholder="请输入完整帖子标题（5–31个字）" required></label>
         <label class="community-compose-copy"><textarea name="content" maxlength="2000" placeholder="请输入正文（建议200–2000字）">${escapeHtml(communityDraftText)}</textarea></label>
         <div class="community-draft-media-grid">
-          ${mediaItems.map((media, index) => `<div class="community-draft-media-item"><img src="${media.previewUrl}" alt="待发布图片 ${index + 1}"><button type="button" data-remove-community-media="${index}" aria-label="移除图片">×</button></div>`).join("")}
+          ${mediaItems.map((media, index) => `<div class="community-draft-media-item"><img src="${escapeHtml(media.previewUrl)}" alt="待发布图片 ${index + 1}"><button type="button" data-remove-community-media="${index}" aria-label="移除图片">×</button></div>`).join("")}
           ${canAddMedia ? `<button class="community-media-preview community-media-add" type="button" data-community-media-button aria-label="添加图片"><span>＋<small>${mediaItems.length}/9</small></span></button>` : ""}
         </div>
         <p class="community-draft-media-tip">最多选择 9 张图片，发布页展示前三张</p>
@@ -4089,7 +4096,7 @@ function marketDraftMediaMarkup() {
   const mediaItems = Array.isArray(state.marketDraftMedia) ? state.marketDraftMedia : [];
   return `${mediaItems.map((item, index) => `
     <div class="market-media-item" draggable="true" data-market-media-index="${index}">
-      ${item.type === "video" ? `<video src="${item.dataUrl || item.url}"${videoPosterAttribute(item)} muted playsinline preload="none" crossorigin="anonymous" data-video-first-frame></video><i>▶</i>` : `<img src="${item.dataUrl || item.url}" alt="实拍图 ${index + 1}">`}
+      ${item.type === "video" ? `<video src="${escapeHtml(item.dataUrl || item.url)}"${videoPosterAttribute(item)} muted playsinline preload="none" crossorigin="anonymous" data-video-first-frame></video><i>▶</i>` : `<img src="${escapeHtml(item.dataUrl || item.url)}" alt="实拍图 ${index + 1}">`}
       <div class="market-media-order-controls" aria-label="调整媒体顺序">
         <button type="button" data-move-market-media="${index}" data-market-media-direction="-1" aria-label="向前移动第 ${index + 1} 个媒体"${index === 0 ? " disabled" : ""}>‹</button>
         <button type="button" data-move-market-media="${index}" data-market-media-direction="1" aria-label="向后移动第 ${index + 1} 个媒体"${index === mediaItems.length - 1 ? " disabled" : ""}>›</button>
@@ -4689,7 +4696,7 @@ function pageMarket() {
         ${[["all", "全部"], ["hatchling", "苗子"], ["juvenile", "亚成"], ["adult", "种龟"]].map(([value, label]) => `<button class="${stage === value ? "active" : ""}" type="button" data-market-stage="${value}">${label}</button>`).join("")}
       </section>
       <section class="market-grid ${marketInitialLoading ? "is-initial-loading" : ""}">
-        ${marketInitialLoading ? `<div class="market-feed-initial-loading" role="status" aria-live="polite"><i aria-hidden="true"></i><span>正在加载商品…</span></div>` : ""}
+        ${marketInitialLoading ? `<div class="market-feed-initial-loading">${uiLoadingMarkup("正在加载商品…")}</div>` : ""}
         ${feedNotice}
         ${listings.map(marketListingCard).join("") || (!marketInitialLoading && !feedNotice ? marketEmptyMarkup : "")}
       </section>
@@ -4716,7 +4723,7 @@ function myMarketListingRow(item) {
   const meta = marketRefreshMeta(item);
   const preview = media?.type === "video"
     ? `<span class="my-market-media is-video"><img src="${escapeHtml(apiAssetUrl(media.thumbnailUrl || media.posterUrl || defaultPhoto))}" alt="商品视频" loading="lazy"><i>▶</i></span>`
-    : `<span class="my-market-media"><img src="${marketListingPhoto(item)}" alt="${escapeHtml(item.title || "出售乌龟")}"></span>`;
+    : `<span class="my-market-media"><img src="${escapeHtml(marketListingPhoto(item))}" alt="${escapeHtml(item.title || "出售乌龟")}"></span>`;
   return `
     <article class="my-market-listing fresh-card ${item.status === "inactive" ? "is-inactive" : ""}">
       ${preview}
@@ -4851,7 +4858,7 @@ function pageMarketDetail() {
     ${topbar("商品详情", true, detailMoreAction)}
     <main class="content page-fresh market-detail-page">
       <section class="market-detail-gallery-wrap">
-      <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery><div class="market-detail-gallery-track" data-market-detail-gallery-track>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster, sold, index === 0) : `<div class="market-detail-photo"><img src="${escapeHtml(apiAssetUrl(media.displayUrl || media.url))}" data-preview-original="${escapeHtml(apiAssetUrl(media.url))}" data-market-image-original="${escapeHtml(apiAssetUrl(media.url))}" loading="lazy" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button" draggable="false" decoding="async" fetchpriority="${index < 2 ? "high" : "auto"}">${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${defaultPhoto}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button" draggable="false" decoding="async">${sold ? `<span>已售出</span>` : ""}</div>`}</div></section>
+      <section class="market-detail-gallery" id="marketDetailGallery" data-market-detail-gallery><div class="market-detail-gallery-track" data-market-detail-gallery-track>${primaryMediaItems.length ? primaryMediaItems.map((media, index) => media.type === "video" ? marketDetailVideoMarkup(media, detailVideoFallbackPoster, sold, index === 0) : `<div class="market-detail-photo"><img src="${escapeHtml(apiAssetUrl(media.displayUrl || media.url))}" data-preview-original="${escapeHtml(apiAssetUrl(media.url))}" data-market-image-original="${escapeHtml(apiAssetUrl(media.url))}" loading="lazy" alt="${escapeHtml(item.title || "出售乌龟")} ${index + 1}" data-preview-market-image tabindex="0" role="button" draggable="false" decoding="async" fetchpriority="${index < 2 ? "high" : "auto"}">${sold ? `<span>已售出</span>` : ""}</div>`).join("") : `<div class="market-detail-photo"><img src="${escapeHtml(defaultPhoto)}" alt="暂无实拍图" data-preview-market-image tabindex="0" role="button" draggable="false" decoding="async">${sold ? `<span>已售出</span>` : ""}</div>`}</div></section>
         <span class="market-detail-edge-back-zone" aria-hidden="true"></span>
         <span class="market-detail-gallery-count" data-market-gallery-count aria-live="polite">1/${Math.max(1, primaryMediaItems.length)}</span>
         ${hasPrimaryGalleryControls ? `<button class="market-detail-gallery-arrow prev" type="button" data-market-gallery-prev aria-label="查看上一张图片" aria-controls="marketDetailGallery">‹</button><button class="market-detail-gallery-arrow next" type="button" data-market-gallery-next aria-label="查看下一张图片" aria-controls="marketDetailGallery">›</button>` : ""}
@@ -5048,12 +5055,12 @@ function pageTurtlePoolAdd() {
 
 function turtleCard(t) {
   return `
-    <article class="home-turtle-card" data-view-turtle="${t.id}">
-      <img class="turtle-photo" src="${t.photo || defaultPhoto}" alt="${t.speciesName}">
+    <article class="home-turtle-card" data-view-turtle="${escapeHtml(t.id)}">
+      <img class="turtle-photo" src="${escapeHtml(t.photo || defaultPhoto)}" alt="${escapeHtml(t.speciesName)}">
       <div>
-        <strong>${t.code} · ${t.speciesName}</strong>
-        <span>${t.gender} · ${t.acquiredDate || "未填写日期"}</span>
-        <div class="home-turtle-meta"><span>${t.weight || "-"}g</span><span>背甲 ${t.carapaceLength || "-"}cm</span><span>${t.health}</span></div>
+        <strong>${escapeHtml(t.code)} · ${escapeHtml(t.speciesName)}</strong>
+        <span>${escapeHtml(t.gender)} · ${escapeHtml(t.acquiredDate || "未填写日期")}</span>
+        <div class="home-turtle-meta"><span>${escapeHtml(t.weight || "-")}g</span><span>背甲 ${escapeHtml(t.carapaceLength || "-")}cm</span><span>${escapeHtml(t.health)}</span></div>
       </div>
     </article>
   `;
@@ -5138,16 +5145,16 @@ function archiveDashboardSection() {
       ${ledgerDashboardPicker ? `<div class="ledger-dashboard-picker"><div><strong>选择要关联的档案</strong><p>点击下方档案，返回售出表单继续填写。</p></div><button class="secondary" type="button" data-cancel-ledger-picker>取消选择</button></div>` : ""}
       <label class="archive-search"><span class="sr-only">搜索档案</span><input class="field" type="search" data-archive-search value="${escapeHtml(archiveListView.query)}" placeholder="搜索编号、昵称、品种或批次" aria-label="搜索档案"></label>
       <section class="filter-dock">
-        <select class="select" data-filter-species>
+        <select class="select" data-filter-species aria-label="按品种筛选">
           <option value="all">全部品种</option>
-          ${speciesOptions.map(s => `<option value="${s.code}" ${state.turtleFilter === s.code ? "selected" : ""}>${s.name}</option>`).join("")}
+          ${speciesOptions.map(s => `<option value="${escapeHtml(s.code)}" ${state.turtleFilter === s.code ? "selected" : ""}>${escapeHtml(s.name)}</option>`).join("")}
         </select>
-        <select class="select" data-filter-pool>
+        <select class="select" data-filter-pool aria-label="按龟池筛选">
           <option value="all">全部龟池</option>
           <option value="unassigned" ${state.turtlePoolFilter === "unassigned" ? "selected" : ""}>未关联龟池</option>
           ${poolOptions.map(pool => `<option value="${pool.id}" ${state.turtlePoolFilter === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")}</option>`).join("")}
         </select>
-        <select class="select" data-sort-turtles>
+        <select class="select" data-sort-turtles aria-label="档案排序">
           <option value="default" ${state.turtleSort === "default" ? "selected" : ""}>默认排序</option>
           <option value="latest" ${state.turtleSort === "latest" ? "selected" : ""}>最新添加</option>
           <option value="weight" ${state.turtleSort === "weight" ? "selected" : ""}>克重排序</option>
@@ -5292,13 +5299,13 @@ function pageTurtleReward() {
       <section class="reward-celebration"><span>✓</span><div><p>${hasGrowth ? `第 ${history.length + 1} 次记录完成` : "建档完成 · 成长旅程已开启"}</p><h2>${hasGrowth ? "这次变化，值得被看见" : `欢迎你，${escapeHtml(turtle.code || "新朋友")}`}</h2><small>${hasGrowth ? "新的成长数据已加入报告" : "第一份成长档案已经保存好了"}</small></div></section>
       <article class="turtle-profile-card" data-reward-card>
         <header><div><small>龟友手账 · 龟档案</small><h1>${escapeHtml(turtle.code || "未命名龟龟")}</h1><p>${escapeHtml(turtle.speciesName || "品种未填写")}</p></div><b>${turtleKeepingDaysNumber(turtle.acquiredDate)}<small>陪伴天数</small></b></header>
-        <img src="${turtle.photo || defaultPhoto}" alt="${escapeHtml(turtle.code || turtle.speciesName || "乌龟")}的照片" data-reward-photo>
+        <img src="${escapeHtml(turtle.photo || defaultPhoto)}" alt="${escapeHtml(turtle.code || turtle.speciesName || "乌龟")}的照片" data-reward-photo>
         <div class="reward-card-stats"><span><small>入手日期</small><strong>${escapeHtml(turtle.acquiredDate || "-")}</strong></span><span><small>当前体重</small><strong>${escapeHtml(turtle.weight || "-")} g</strong></span><span><small>背甲长度</small><strong>${escapeHtml(turtle.carapaceLength || "-")} cm</strong></span></div>
         <footer><span>每一次记录，都在见证生命成长</span><b>龟友手账</b></footer>
       </article>
       <div class="reward-actions"><button class="primary" type="button" data-share-growth-card><span aria-hidden="true">↗</span>${hasGrowth ? "分享成长报告" : "分享档案卡"}</button><button class="secondary" type="button" data-save-growth-card><span aria-hidden="true">↓</span>保存图片</button></div>
       <section class="next-growth-card fresh-card"><div class="next-growth-date"><strong>${nextDate.slice(5, 7)}<small>月</small>${nextDate.slice(8)}<small>日</small></strong><span>${reminderEnabled ? "上午 09:00" : "成长计划"}</span></div><div class="next-growth-copy"><div><small>下一次记录</small><button class="reminder-on ${reminderEnabled ? "is-on" : "is-off"}" type="button" data-toggle-growth-reminder="${escapeHtml(turtle.id)}" aria-pressed="${reminderEnabled ? "true" : "false"}" aria-label="${reminderEnabled ? "关闭成长记录提醒" : "开启成长记录提醒"}"><i></i>${reminderEnabled ? "提醒已开启" : "提醒已关闭"}</button></div><h3>30 天后，再看看它长大多少</h3><p>拍一张新照片，记录体重和背甲，即可生成第一次成长对比。</p></div></section>
-      ${hasGrowth ? `<section class="growth-report-card fresh-card"><div class="growth-report-heading"><div><small>累计成长报告</small><h3>${history.length + 1} 次记录 · ${escapeHtml(turtle.code || turtle.speciesName)}</h3></div><strong class="${weightGain >= 0 ? "positive" : ""}">${weightGain >= 0 ? "+" : ""}${weightGain.toFixed(1)}g</strong></div>${growthSparkline(weightPoints)}<div class="growth-report-legend"><span>初始 ${firstWeight}g</span><span>现在 ${turtle.weight}g</span></div><div class="photo-compare"><figure><img src="${latest?.oldPhoto || turtle.photo || defaultPhoto}" alt="上次照片"><figcaption>上次</figcaption></figure><b>→</b><figure><img src="${latest?.newPhoto || turtle.photo || defaultPhoto}" alt="本次照片"><figcaption>本次</figcaption></figure></div></section>` : `<section class="reward-preview-lock fresh-card"><div class="reward-lock-head"><span>成长奖励</span><small>再记录 1 次解锁</small></div><h3>下次回来，会自动生成</h3><div class="reward-unlock-list"><span><i>↗</i>成长曲线</span><span><i>＋</i>增重变化</span><span><i>◫</i>照片对比</span></div><p>无需整理数据，每次记录都会自动累积。</p></section>`}
+      ${hasGrowth ? `<section class="growth-report-card fresh-card"><div class="growth-report-heading"><div><small>累计成长报告</small><h3>${history.length + 1} 次记录 · ${escapeHtml(turtle.code || turtle.speciesName)}</h3></div><strong class="${weightGain >= 0 ? "positive" : ""}">${weightGain >= 0 ? "+" : ""}${weightGain.toFixed(1)}g</strong></div>${growthSparkline(weightPoints)}<div class="growth-report-legend"><span>初始 ${firstWeight}g</span><span>现在 ${turtle.weight}g</span></div><div class="photo-compare"><figure><img src="${escapeHtml(latest?.oldPhoto || turtle.photo || defaultPhoto)}" alt="上次照片"><figcaption>上次</figcaption></figure><b>→</b><figure><img src="${escapeHtml(latest?.newPhoto || turtle.photo || defaultPhoto)}" alt="本次照片"><figcaption>本次</figcaption></figure></div></section>` : `<section class="reward-preview-lock fresh-card"><div class="reward-lock-head"><span>成长奖励</span><small>再记录 1 次解锁</small></div><h3>下次回来，会自动生成</h3><div class="reward-unlock-list"><span><i>↗</i>成长曲线</span><span><i>＋</i>增重变化</span><span><i>◫</i>照片对比</span></div><p>无需整理数据，每次记录都会自动累积。</p></section>`}
       <button class="text-green reward-finish" type="button" data-page="home">完成，返回看板</button>
     </main>${bottomNav()}`;
 }
@@ -5336,7 +5343,7 @@ function turtleBatchListRow(t) {
   const menuOpen = state.openTurtleMenuId === t.id;
   const keepingDays = t.sourceBreedingId ? turtleArchiveKeepingDays(summary.representative) : turtleKeepingDays(t.acquiredDate);
   return `<article class="turtle-row fresh-card turtle-batch-row ${menuOpen ? "menu-open" : ""}" data-view-turtle="${t.id}" data-reorder-turtle="${t.id}">
-    <img src="${t.photo || defaultPhoto}" alt="${escapeHtml(t.speciesName)}" draggable="false" loading="lazy" decoding="async" width="58" height="58">
+    <img src="${escapeHtml(t.photo || defaultPhoto)}" alt="${escapeHtml(t.speciesName)}" draggable="false" loading="lazy" decoding="async" width="58" height="58">
     ${t.pinned ? `<span class="turtle-pinned-badge">置顶</span>` : ""}
     <div class="turtle-row-content">
       <div class="turtle-row-title"><strong>${escapeHtml(turtleBatchLabel(t))}</strong><span class="turtle-pool-title-meta">龟池 ${escapeHtml(turtleBatchPoolLabel(summary))}</span></div>
@@ -5370,7 +5377,7 @@ function pageTurtleBatchDetail(t) {
     <section class="turtle-pool-summary fresh-card batch-summary"><div><span>当前在养</span><strong>${summary.count}<small>只</small></strong></div><div><span>累计损耗</span><strong>${summary.lost}<small>只</small></strong></div><div><span>在养购入成本</span><strong><small>¥</small>${money(summary.cost)}</strong></div></section>
     <section class="fresh-card note-card batch-profile"><h3>批次资料</h3><div class="batch-profile-line"><span>性别组成</span><p>${summary.male} 公 · ${summary.female} 母 · ${summary.unknown} 性别未知</p></div><div class="batch-profile-line"><span>所在龟池</span><p>${escapeHtml(turtleBatchPoolLabel(summary))}</p></div><div class="batch-profile-line"><span>阶段 / 健康</span><p>${({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[current.stage] || "未填写"} · ${escapeHtml(current.health || "健康")}</p></div>${current.note ? `<p class="batch-profile-note">${escapeHtml(current.note)}</p>` : ""}</section>
     ${editing ? `<form id="turtleDetailForm" class="breeding-form fresh-card turtle-detail-edit-form">
-      <div class="photo-uploader breeding-photo-box"><img src="${photo}" alt="批次照片"><div><button class="secondary" type="button" data-update-photo-button>更新批次照片</button><button class="danger-link" type="button" data-clear-update-photo>清除图片</button></div></div>
+      <div class="photo-uploader breeding-photo-box"><img src="${escapeHtml(photo)}" alt="批次照片"><div><button class="secondary" type="button" data-update-photo-button>更新批次照片</button><button class="danger-link" type="button" data-clear-update-photo>清除图片</button></div></div>
       <input class="hidden-file" type="file" accept="image/*" data-update-photo-input>
       <div class="breeding-form-grid">
         <label class="batch-field-wide"><span>批次名称</span><input class="field" name="batchName" maxlength="60" value="${value("batchName")}" required></label>
@@ -5504,36 +5511,36 @@ function turtleListRow(t) {
   const isHatched = Boolean(t.sourceBreedingId || t.source === "孵化");
   const totalCost = turtleTotalCost(t);
   return `
-    <article class="turtle-row fresh-card ${menuOpen ? "menu-open" : ""}" data-view-turtle="${t.id}" data-reorder-turtle="${t.id}">
-      <img src="${t.photo || defaultPhoto}" alt="${t.speciesName}" draggable="false" loading="lazy" decoding="async" width="58" height="58">
+    <article class="turtle-row fresh-card ${menuOpen ? "menu-open" : ""}" data-view-turtle="${escapeHtml(t.id)}" data-reorder-turtle="${escapeHtml(t.id)}">
+      <img src="${escapeHtml(t.photo || defaultPhoto)}" alt="${escapeHtml(t.speciesName)}" draggable="false" loading="lazy" decoding="async" width="58" height="58">
       ${t.pinned ? `<span class="turtle-pinned-badge" aria-label="已置顶">置顶</span>` : ""}
       <div class="turtle-row-content">
         <div class="turtle-row-title">
-          <strong>${t.code}</strong>
+          <strong>${escapeHtml(t.code)}</strong>
           <span class="turtle-pool-title-meta">龟池 ${escapeHtml(turtlePoolName(t.poolId))}</span>
         </div>
         <div class="turtle-row-species">
-          <p>${t.speciesName}</p>
+          <p>${escapeHtml(t.speciesName)}</p>
           ${totalCost > 0 ? `<span class="turtle-price" aria-label="总成本 ${money(totalCost)} 元">¥${money(totalCost)}</span>` : ""}
         </div>
         <div class="turtle-row-bottom">
           <div class="turtle-row-meta">
-            <span>${t.weight || "-"}g</span>
-            <span>背甲 ${t.carapaceLength || "-"}cm</span>
+            <span>${escapeHtml(t.weight || "-")}g</span>
+            <span>背甲 ${escapeHtml(t.carapaceLength || "-")}cm</span>
           </div>
           ${keepingDays ? `<span class="turtle-keeping-days">${keepingDays}</span>` : ""}
           ${t.status === "已死亡" ? `<span class="turtle-row-status-badge turtle-loss-badge">损耗</span>` : isHatched ? `<span class="turtle-row-status-badge turtle-hatch-badge">孵化</span>` : ""}
         </div>
       </div>
-      <button class="more-btn" data-toggle-turtle-menu="${t.id}" aria-label="档案操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
+      <button class="more-btn" data-toggle-turtle-menu="${escapeHtml(t.id)}" aria-label="档案操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
       ${menuOpen ? `
         <div class="turtle-menu archive-turtle-menu" role="menu" aria-label="${escapeHtml(t.code || t.speciesName || "乌龟")}的档案操作">
-          <button class="pin-link ${t.pinned ? "active" : ""}" data-toggle-turtle-pin="${t.id}" role="menuitem">${turtleActionIcon("pin")}<span>${t.pinned ? "取消置顶" : "置顶"}</span></button>
-          <button data-update-turtle="${t.id}" role="menuitem">${turtleActionIcon("update")}<span>更新</span></button>
-          <button data-ledger-for-turtle="sold:${t.id}" role="menuitem">${turtleActionIcon("sold")}<span>售出</span></button>
-          <button data-ledger-for-turtle="loss:${t.id}" role="menuitem">${turtleActionIcon("loss")}<span>损耗</span></button>
-          <button data-share-turtle="${t.id}" role="menuitem">${turtleActionIcon("share")}<span>分享</span></button>
-          <button class="danger-link" data-delete-turtle="${t.id}" role="menuitem">${turtleActionIcon("delete")}<span>删除</span></button>
+          <button class="pin-link ${t.pinned ? "active" : ""}" data-toggle-turtle-pin="${escapeHtml(t.id)}" role="menuitem">${turtleActionIcon("pin")}<span>${t.pinned ? "取消置顶" : "置顶"}</span></button>
+          <button data-update-turtle="${escapeHtml(t.id)}" role="menuitem">${turtleActionIcon("update")}<span>更新</span></button>
+          <button data-ledger-for-turtle="sold:${escapeHtml(t.id)}" role="menuitem">${turtleActionIcon("sold")}<span>售出</span></button>
+          <button data-ledger-for-turtle="loss:${escapeHtml(t.id)}" role="menuitem">${turtleActionIcon("loss")}<span>损耗</span></button>
+          <button data-share-turtle="${escapeHtml(t.id)}" role="menuitem">${turtleActionIcon("share")}<span>分享</span></button>
+          <button class="danger-link" data-delete-turtle="${escapeHtml(t.id)}" role="menuitem">${turtleActionIcon("delete")}<span>删除</span></button>
         </div>
       ` : ""}
     </article>
@@ -5776,7 +5783,7 @@ function pageSpecies() {
           <label><span>品种名称</span><input class="field" name="name" maxlength="40" required placeholder="填写你饲养的乌龟品种"></label>
           <div class="label">品种配图（选填）</div>
           <div class="photo-uploader custom-species-photo">
-            <img src="${defaultPhoto}" data-custom-species-preview alt="品种照片">
+            <img src="${escapeHtml(defaultPhoto)}" data-custom-species-preview alt="品种照片">
             <div><button class="secondary" type="button" data-custom-species-photo-button>添加照片</button><button class="danger-link" type="button" data-custom-species-photo-clear>清除</button></div>
           </div>
           <input class="hidden-file" type="file" name="photo" accept="image/*" lang="zh-CN" aria-label="添加品种照片" data-custom-species-photo>
@@ -5802,10 +5809,10 @@ function pageSpecies() {
         <section class="species-section" data-letter-section="${letter}">
           <div class="species-letter"><h3>${letter}</h3><span>${items.length} 个品种</span></div>
           ${items.map(item => `
-            <article class="species-row fresh-card ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-species-keywords="${item.name.toLowerCase()} ${item.code.toLowerCase()}">
-              <img class="species-photo" src="${speciesPhoto(item)}" alt="${item.name}" data-species-img="${item.code}" data-fallback-photo loading="lazy">
-              <div><strong>${item.name}</strong><small>${item.isCustom ? "自建 · 仅自己可见" : item.code}</small></div>
-              <button class="species-add ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-add-species="${item.code}">${state.speciesPickerForAdd || state.speciesPickerForLedger ? "选择" : state.keptSpecies.includes(item.code) ? "取消" : "加入"}</button>
+            <article class="species-row fresh-card ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-species-keywords="${escapeHtml(item.name.toLowerCase())} ${escapeHtml(item.code.toLowerCase())}">
+              <img class="species-photo" src="${escapeHtml(speciesPhoto(item))}" alt="${escapeHtml(item.name)}" data-species-img="${escapeHtml(item.code)}" data-fallback-photo loading="lazy">
+              <div><strong>${escapeHtml(item.name)}</strong><small>${item.isCustom ? "自建 · 仅自己可见" : escapeHtml(item.code)}</small></div>
+              <button class="species-add ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-add-species="${escapeHtml(item.code)}">${state.speciesPickerForAdd || state.speciesPickerForLedger ? "选择" : state.keptSpecies.includes(item.code) ? "取消" : "加入"}</button>
             </article>
           `).join("")}
         </section>
@@ -5837,9 +5844,9 @@ function pageBreeds() {
       <section class="page-intro"><div><p class="eyebrow dark">常用</p><h2>${kept.length} 个品种</h2><p>这里展示已加入的饲养品种，可以删除。</p></div><button class="round-action" data-page="species">+</button></section>
       ${kept.map(item => `
         <article class="breed-row fresh-card">
-          <img class="ledger-thumb species-photo" src="${speciesPhoto(item)}" alt="${item.name}" data-species-img="${item.code}" data-fallback-photo loading="lazy">
-          <div><strong>${item.name}</strong><small>${item.code}</small></div>
-          <button class="danger-link" data-remove-species="${item.code}">删除</button>
+          <img class="ledger-thumb species-photo" src="${escapeHtml(speciesPhoto(item))}" alt="${escapeHtml(item.name)}" data-species-img="${escapeHtml(item.code)}" data-fallback-photo loading="lazy">
+          <div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.code)}</small></div>
+          <button class="danger-link" data-remove-species="${escapeHtml(item.code)}">删除</button>
         </article>
       `).join("") || `<div class="empty"><div><strong>还没有常用品种</strong></div></div>`}
     </main>
@@ -5872,7 +5879,7 @@ function pageAdd() {
         <section class="form-block fresh-card">
           <h3>基础信息</h3>
           <div class="photo-uploader">
-            <img src="${state.formPhoto || defaultPhoto}" alt="乌龟照片">
+            <img src="${escapeHtml(state.formPhoto || defaultPhoto)}" alt="乌龟照片">
             <div><button class="secondary" type="button" data-photo-input-button>上传照片</button><button class="danger-link" type="button" data-photo-clear>清除</button></div>
           </div>
           <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-photo-input>
@@ -6691,32 +6698,33 @@ function growthSnapshotMetric(snapshot = {}, field, unit) {
   return value === undefined || value === null || value === "" ? "-" : `${value}${unit}`;
 }
 
-function growthHistoryStepMarkup(record, index, turtleId = "") {
+function growthHistoryStepMarkup(record, index, turtleId = "", total = 1, previousTimestamp = 0) {
   const before = record.oldSnapshot || {};
   const after = record.newSnapshot || {};
   const date = growthDateLabel(record.updatedAt);
+  const timestamp = growthTimestamp(record.updatedAt);
+  const days = timestamp && previousTimestamp ? Math.max(0, Math.round((timestamp - previousTimestamp) / 86400000)) : null;
+  const interval = days === null ? (timestamp && index === 0 ? "首次记录" : "间隔未知") : `相隔 ${days} 天`;
+  const intervalDescription = days === null ? interval : `${index === 0 ? "与建档记录" : "与上次测量"}${interval}`;
   const removeButton = record.id && turtleId
-    ? `<button class="growth-history-delete" type="button" data-delete-growth-update="${escapeHtml(record.id)}" data-growth-turtle-id="${escapeHtml(turtleId)}" aria-label="删除第 ${index + 1} 次更新" title="删除本次更新">×</button>`
+    ? `<button class="growth-history-delete" type="button" data-delete-growth-update="${escapeHtml(record.id)}" data-growth-turtle-id="${escapeHtml(turtleId)}" aria-label="删除第 ${index + 1} 次更新" title="删除本次更新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"></path></svg></button>`
     : "";
   return `
     <section class="growth-history-step">
-      <div class="growth-history-step-head"><strong>第 ${index + 1} 次更新</strong><small>${date}</small>${removeButton}</div>
       <div class="growth-history-pair">
-        <div><span>更新前</span><b>体重 ${escapeHtml(growthSnapshotMetric(before, "weight", "g"))}</b><b>背甲 ${escapeHtml(growthSnapshotMetric(before, "carapaceLength", "cm"))}</b></div>
-        <i aria-hidden="true">→</i>
-        <div><span>更新后</span><b>体重 ${escapeHtml(growthSnapshotMetric(after, "weight", "g"))}</b><b>背甲 ${escapeHtml(growthSnapshotMetric(after, "carapaceLength", "cm"))}</b></div>
+        <div><span>体重</span><div class="growth-metric-values"><span aria-label="更新前体重">${escapeHtml(growthSnapshotMetric(before, "weight", "g"))}</span><i aria-hidden="true">→</i><b aria-label="更新后体重">${escapeHtml(growthSnapshotMetric(after, "weight", "g"))}</b></div></div>
+        <div class="growth-history-interval" aria-label="${intervalDescription}"><small>${interval}</small><b aria-hidden="true">→</b></div>
+        <div><span>背甲</span><div class="growth-metric-values"><span aria-label="更新前背甲">${escapeHtml(growthSnapshotMetric(before, "carapaceLength", "cm"))}</span><i aria-hidden="true">→</i><b aria-label="更新后背甲">${escapeHtml(growthSnapshotMetric(after, "carapaceLength", "cm"))}</b></div></div>
       </div>
+      <div class="growth-history-step-head"><small>${date}</small><strong>第 ${index + 1} 次${total > 1 ? ` / ${total}` : ""}</strong>${total > 1 ? `<span class="growth-history-swipe-hint">左右滑动</span>` : ""}${removeButton}</div>
     </section>
   `;
 }
 
-function growthHistoryFlowMarkup(timeline = [], turtleId = "") {
+function growthHistoryFlowMarkup(timeline = [], turtleId = "", initialTimestamp = 0) {
   return timeline.map((record, index) => {
-    const step = growthHistoryStepMarkup(record, index, turtleId);
-    if (index === timeline.length - 1) return step;
-    const next = timeline[index + 1];
-    const days = Math.max(0, Math.round((growthTimestamp(next.updatedAt) - growthTimestamp(record.updatedAt)) / 86400000));
-    return `${step}<div class="growth-history-interval"><small>相隔 ${days} 天</small><b aria-hidden="true">→</b></div>`;
+    const previousTimestamp = index > 0 ? growthTimestamp(timeline[index - 1].updatedAt) : initialTimestamp;
+    return growthHistoryStepMarkup(record, index, turtleId, timeline.length, previousTimestamp);
   }).join("");
 }
 
@@ -6735,7 +6743,7 @@ function growthUpdateCard(item) {
     heading = "繁殖更新";
     meta = [`产蛋 ${item.record.eggCount || 0} 枚`, `受精 ${item.record.fertileCount || 0} 枚`, `孵化 ${item.record.hatchCount || 0} 只`];
   } else {
-    historyFlow = growthHistoryFlowMarkup(item.timeline || [item.record], turtle.id);
+    historyFlow = growthHistoryFlowMarkup(item.timeline || [item.record], turtle.id, growthTimestamp(turtle.createdAt || turtle.acquiredDate));
     if (item.poolChanged) {
       heading = "龟池变动";
       meta.push(`龟池 ${item.baseline.poolName || turtlePoolName(item.baseline.poolId)} → ${item.current.poolName || turtlePoolName(item.current.poolId)}`);
@@ -6746,14 +6754,14 @@ function growthUpdateCard(item) {
   }
   return `
     <article class="growth-update-card fresh-card" data-view-turtle="${escapeHtml(turtle.id)}" role="button" tabindex="0" aria-label="查看 ${escapeHtml(turtle.code || turtle.speciesName || "乌龟")} 的成长详情">
-      <img src="${photo}" alt="${escapeHtml(turtle.code || turtle.speciesName || "乌龟")}" loading="lazy">
+      <img src="${escapeHtml(photo)}" alt="${escapeHtml(turtle.code || turtle.speciesName || "乌龟")}" loading="lazy">
       <div class="growth-update-main">
-        <div class="growth-update-head"><strong>${escapeHtml(turtle.code || "未命名乌龟")}</strong><span>${heading}</span></div>
-        <p>${escapeHtml(turtle.speciesName || "未填写品种")} · ${growthDateLabel(item.record?.updatedAt || item.record?.createdAt || item.record?.date)}${!isBreeding && item.historyCount > 1 ? ` · 已汇总 ${item.historyCount} 次更新` : ""}</p>
-        ${historyFlow ? `<div class="growth-history-flow" data-growth-history-flow aria-label="完整成长更新记录，可左右滑动查看每次更新"><div class="growth-history-track">${historyFlow}</div></div>` : `<div class="growth-update-chips">${meta.filter(Boolean).map(text => text.startsWith("<em ") ? text : `<em>${escapeHtml(text)}</em>`).join("")}</div>`}
+        <div class="growth-update-head"><strong>${escapeHtml(turtle.code || "未命名乌龟")}</strong>${heading !== "成长更新" ? `<span>${heading}</span>` : ""}</div>
+        <p>${escapeHtml(turtle.speciesName || "未填写品种")}${isBreeding ? ` · ${growthDateLabel(item.record?.updatedAt || item.record?.createdAt || item.record?.date)}` : ""}</p>
       </div>
       <div class="growth-update-timing" aria-label="记录时间"><span>${escapeHtml(timing[0])}</span><small>${escapeHtml(timing[1])}</small></div>
       <b aria-hidden="true">›</b>
+      ${historyFlow ? `<div class="growth-update-history"><div class="growth-history-flow" data-growth-history-flow aria-label="完整成长更新记录，可左右滑动查看每次更新"><div class="growth-history-track">${historyFlow}</div></div></div>` : `<div class="growth-update-chips">${meta.filter(Boolean).map(text => text.startsWith("<em ") ? text : `<em>${escapeHtml(text)}</em>`).join("")}</div>`}
     </article>
   `;
 }
@@ -6768,9 +6776,6 @@ function pageGrowth() {
   return `
     ${topbar("成长记录", true)}
     <main class="content page-fresh growth-page">
-      <section class="page-intro compact-intro growth-intro">
-        <div><p class="eyebrow dark">成长汇总</p><h2>${updatedTurtleCount} 只乌龟有更新</h2><p>每只乌龟保留最新一张卡片，并把最早记录到当前的体重、背甲和龟池变化完整汇总。</p></div>
-      </section>
       <section class="growth-summary fresh-card"><div><strong>${updatedTurtleCount}</strong><span>已更新个体</span></div><div><strong>${recentCount}</strong><span>近 7 天更新</span></div><div><strong>${Math.max(0, (state.turtles || []).length - updatedTurtleCount)}</strong><span>暂无更新</span></div></section>
       <section class="growth-filter-row" aria-label="成长记录筛选">
         ${[["all", "全部"], ["measure", "成长测量"], ["breeding", "繁殖"], ["pool", "龟池"]].map(([value, label]) => `<button type="button" class="${filter === value ? "active" : ""}" data-growth-filter="${value}">${label}</button>`).join("")}
@@ -6850,7 +6855,7 @@ function ledgerForm() {
       <section class="form-block fresh-card">
         <div class="form-head"><div><p class="eyebrow dark">${ledgerTypeText(type)}</p><h3>基础信息</h3></div><button type="button" class="danger-link" data-cancel-ledger>取消</button></div>
         <div class="photo-uploader">
-          ${lockedLoss ? `<img src="${escapeHtml(turtle.photo || defaultPhoto)}" alt="关联龟档案照片">` : state.ledgerDraftPhoto ? `<img src="${state.ledgerDraftPhoto}" alt="${ledgerTypeText(type)}照片">` : `<span>照片</span>`}
+          ${lockedLoss ? `<img src="${escapeHtml(turtle.photo || defaultPhoto)}" alt="关联龟档案照片">` : state.ledgerDraftPhoto ? `<img src="${escapeHtml(state.ledgerDraftPhoto)}" alt="${ledgerTypeText(type)}照片">` : `<span>照片</span>`}
           <div>${lockedLoss ? `<strong>关联档案图片</strong><p class="muted">自动使用这只龟的档案图片。</p>` : `<button class="secondary" type="button" data-ledger-photo-button>上传照片</button><p class="muted">${isOther ? "可上传小票、发票或购买物品照片。" : "和新建档案一样，可以上传这只龟当时的照片。"}</p>`}</div>
         </div>
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-ledger-photo-input>
@@ -6889,9 +6894,9 @@ function ledgerForm() {
           <input type="hidden" name="purchaseGender" value="${purchaseGender}">
         ` : turtle ? `
           <div class="label">品种代码</div>
-          <input class="field" value="${turtle.speciesCode} · ${turtle.speciesName}" readonly>
+          <input class="field" value="${escapeHtml(turtle.speciesCode)} · ${escapeHtml(turtle.speciesName)}" readonly>
           <div class="label">龟龟昵称</div>
-          <input class="field" value="${turtle.code}" readonly>
+          <input class="field" value="${escapeHtml(turtle.code)}" readonly>
           <div class="label">性别</div>
           <div class="radio-row readonly-radio">
             ${["公", "母", "未知"].map(g => `<button class="choice ${turtle.gender === g ? "active" : ""}" type="button" disabled>${g}</button>`).join("")}
@@ -7115,7 +7120,7 @@ function pageBreedingAdd() {
           <div><h3>记录一窝蛋</h3><p class="breeding-hint">选择单龟或整个批次，记下本次产蛋情况。</p></div>
         </div>
         <div class="photo-uploader breeding-photo-box">
-          ${state.breedingDraftPhoto ? `<img src="${state.breedingDraftPhoto}" alt="繁殖备注附图">` : `<span>附图</span>`}
+          ${state.breedingDraftPhoto ? `<img src="${escapeHtml(state.breedingDraftPhoto)}" alt="繁殖备注附图">` : `<span>附图</span>`}
           <div>
             <button class="secondary" type="button" data-breeding-photo-button>上传备注附图</button>
             <p class="muted">可上传产蛋现场、蛋盒、标记卡等图片。</p>
@@ -7149,7 +7154,7 @@ function breedingRow(record) {
   return `
     <article class="breeding-row fresh-card ${menuOpen ? "menu-open" : ""}" data-view-breeding="${record.id}">
       <div class="breeding-row-main">
-        ${record.photo ? `<img src="${record.photo}" alt="繁殖附图">` : `<div class="breeding-thumb">繁</div>`}
+        ${record.photo ? `<img src="${escapeHtml(record.photo)}" alt="繁殖附图">` : `<div class="breeding-thumb">繁</div>`}
         <div class="breeding-row-copy">
           <div class="breeding-row-heading"><strong>${record.motherName || "未填写种母"}</strong></div>
           <p>${record.date || "未填写日期"} · 龟池 ${escapeHtml(record.poolName || turtlePoolName(record.poolId))}</p>
@@ -7196,7 +7201,7 @@ function pageBreedingDetail() {
         <section class="fresh-card breeding-section">
         <div class="breeding-section-heading"><h3>基本资料</h3><span>产蛋信息</span></div>
         <div class="photo-uploader breeding-photo-box">
-          ${currentPhoto ? `<img src="${currentPhoto}" alt="繁殖备注附图">` : `<span>附图</span>`}
+          ${currentPhoto ? `<img src="${escapeHtml(currentPhoto)}" alt="繁殖备注附图">` : `<span>附图</span>`}
           <div>
             <button class="secondary" type="button" data-breeding-edit-photo-button>${currentPhoto ? "更换附图" : "添加附图"}</button>
             ${currentPhoto ? `<button class="danger-link" type="button" data-clear-breeding-edit-photo>移除</button>` : `<small class="breeding-hint">产蛋现场、蛋盒或标记卡</small>`}
@@ -7391,7 +7396,7 @@ function pagePublicSatisfaction() {
 
 function feedbackAvatarMarkup(item, className = "feedback-avatar") {
   const avatar = item.authorAvatar || "";
-  if (avatar) return `<img class="${className}" src="${avatar}" alt="头像">`;
+  if (avatar) return `<img class="${className}" src="${escapeHtml(avatar)}" alt="头像">`;
   const letter = String(item.authorName || "壳").trim().slice(0, 1) || "壳";
   return `<div class="${className} fallback-avatar">${escapeHtml(letter)}</div>`;
 }
@@ -7525,7 +7530,7 @@ function pageAccount() {
     ${topbar("账号与安全", true)}
     <main class="content page-fresh">
       <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">账户</p><h2>${loggedIn ? maskedPhone : "手机号登录"}</h2><p>${loggedIn ? "账号已登录，可管理本地资料和同步设置。" : "使用手机号登录；注册时需要创建密码并通过验证码核对。"}</p></div>
+        <div><p class="eyebrow dark">账户</p><h2>${loggedIn ? maskedPhone : state.accountMode === "register" ? "注册账号" : "手机号登录"}</h2><p>${loggedIn ? "账号已登录，可管理本地资料和同步设置。" : state.accountMode === "register" ? "创建密码并核对手机验证码，即可注册账号。" : "使用手机号和密码登录，继续查看和同步你的记录。"}</p></div>
       </section>
       ${loggedIn ? `
         <section class="fresh-card survey-form">
@@ -7541,11 +7546,11 @@ function pageAccount() {
           <section class="default-avatar-picker" aria-label="选择内置头像">
             <div><strong>选择内置头像</strong><span>新用户将随机获得其中一张</span></div>
             <div class="default-avatar-grid">
-              ${DEFAULT_ACCOUNT_AVATARS.map((avatar, index) => `<button class="default-avatar-option ${state.accountAvatar === avatar ? "active" : ""}" type="button" data-select-default-avatar="${avatar}" aria-label="选择默认头像 ${index + 1}"><img src="${accountAvatarSource(avatar)}" alt="默认头像 ${index + 1}"></button>`).join("")}
+              ${DEFAULT_ACCOUNT_AVATARS.map((avatar, index) => `<button class="default-avatar-option ${state.accountAvatar === avatar ? "active" : ""}" type="button" data-select-default-avatar="${avatar}" aria-label="选择默认头像 ${index + 1}"><img src="${escapeHtml(accountAvatarSource(avatar))}" alt="默认头像 ${index + 1}"></button>`).join("")}
             </div>
           </section>
           <form id="profileForm" class="profile-form-inner">
-            <label class="survey-field"><span>昵称</span><input class="field" name="nickname" value="${state.accountName || ""}" placeholder="请输入昵称"></label>
+            <label class="survey-field"><span>昵称</span><input class="field" name="nickname" value="${escapeHtml(state.accountName || "")}" placeholder="请输入昵称"></label>
             <button class="primary" type="submit">保存昵称和头像</button>
           </form>
           <p class="muted">手机号：${maskedPhone}</p>
@@ -7587,10 +7592,10 @@ function pageAccount() {
         </section>
         ${state.accountSessionNotice ? `<p class="fresh-card settings-card" role="alert">${escapeHtml(state.accountSessionNotice)}</p>` : ""}
         <form class="fresh-card survey-form" id="accountForm" data-auth-form="${state.accountMode}">
-          <label class="survey-field"><span>手机号</span><input class="field" name="phone" inputmode="tel" maxlength="11" placeholder="请输入 11 位手机号" value="${state.accountDraftPhone || ""}" required></label>
-          <label class="survey-field"><span>${state.accountMode === "register" ? "创建密码" : "登录密码"}</span><input class="field" name="password" type="password" minlength="6" placeholder="至少 6 位密码" value="${state.accountDraftPassword || ""}" required></label>
+          <label class="survey-field"><span>手机号</span><input class="field" name="phone" inputmode="tel" maxlength="11" placeholder="请输入 11 位手机号" value="${escapeHtml(state.accountDraftPhone || "")}" required></label>
+          <label class="survey-field"><span>${state.accountMode === "register" ? "创建密码" : "登录密码"}</span><input class="field" name="password" type="password" minlength="6" placeholder="至少 6 位密码" value="${escapeHtml(state.accountDraftPassword || "")}" required></label>
           ${state.accountMode === "register" ? `
-            <label class="survey-field"><span>核对密码</span><input class="field" name="confirmPassword" type="password" minlength="6" placeholder="请再次输入密码" value="${state.accountDraftConfirmPassword || ""}" required><small class="field-error" data-password-error hidden>密码不一致</small></label>
+            <label class="survey-field"><span>核对密码</span><input class="field" name="confirmPassword" type="password" minlength="6" placeholder="请再次输入密码" value="${escapeHtml(state.accountDraftConfirmPassword || "")}" required><small class="field-error" data-password-error hidden>密码不一致</small></label>
             <div class="code-row">
               <label class="survey-field"><span>验证码</span><input class="field" name="code" inputmode="numeric" maxlength="6" placeholder="6 位验证码" required></label>
               <button class="secondary" type="button" data-send-code ${codeCooldown > 0 ? "disabled" : ""}>${codeCooldown > 0 ? `${codeCooldown} 秒后重试` : "获取验证码"}</button>
@@ -7889,7 +7894,7 @@ function operationMonthLabel(value) {
 }
 
 function operationMonthSelector(scope, rows, selectedMonth) {
-  return `<section class="fresh-card operations-month-picker"><div><span>统计月份</span><strong>${operationMonthLabel(selectedMonth)}</strong></div><select class="select" data-operations-month="${scope}">${rows.map(row => `<option value="${row.month}" ${row.month === selectedMonth ? "selected" : ""}>${operationMonthLabel(row.month)}</option>`).join("")}</select></section>`;
+  return `<section class="fresh-card operations-month-picker"><div><span>统计月份</span><strong>${operationMonthLabel(selectedMonth)}</strong></div><select class="select" aria-label="统计月份" data-operations-month="${scope}">${rows.map(row => `<option value="${row.month}" ${row.month === selectedMonth ? "selected" : ""}>${operationMonthLabel(row.month)}</option>`).join("")}</select></section>`;
 }
 
 function operationsDatePicker(selectedDate) {
@@ -7979,11 +7984,13 @@ function render() {
   // A data refresh can replace the page even without changing its route.
   $app.cancelEdgeBackGesture?.();
   if (state.page === "membership") state.page = "team";
+  $app.dataset.uiRoute = state.page;
   $app.classList.toggle('team-page', state.page === 'team');
   applyTheme();
   if (forceUpdateState.required) {
     $app.innerHTML = forceUpdatePage();
     bindForceUpdateActions();
+    window.TurtleUI?.enhance($app);
     return;
   }
   const pages = {
@@ -8084,6 +8091,7 @@ function render() {
   }
   bindEvents();
   if (state.page === 'team') TurtleTeam.bind();
+  window.TurtleUI?.enhance($app);
   setupMarketInfiniteScroll();
   setupCommunityInfiniteScroll();
   requestAnimationFrame(() => {
@@ -14441,7 +14449,7 @@ function maskPhone(phone) {
 
 function accountAvatarMarkup(className = "avatar") {
   return state.accountAvatar
-    ? `<img class="${className} avatar-img" src="${accountAvatarSource(state.accountAvatar)}" alt="头像">`
+    ? `<img class="${className} avatar-img" src="${escapeHtml(accountAvatarSource(state.accountAvatar))}" alt="头像">`
     : `<div class="${className}">龟</div>`;
 }
 
@@ -14650,6 +14658,7 @@ async function apiPost(path, payload) {
   const feedRead = /^\/api\/(market\/(list|detail)|community\/list)$/.test(path);
   const controller = accountSync || feedRead || path === "/api/account/session" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), accountSync ? 20000 : 15000) : null;
+  const finishFeedback = window.TurtleUI?.beginRequest(path);
   let response, data;
   try {
     response = await fetch(`${base}${path}`, {
@@ -14675,7 +14684,10 @@ async function apiPost(path, payload) {
     }
     if (accountSync && error instanceof TypeError) throw new Error("暂时无法连接云端，本机修改已保留，请检查网络后重试");
     throw error;
-  } finally { if (timer) clearTimeout(timer); }
+  } finally {
+    if (timer) clearTimeout(timer);
+    finishFeedback?.();
+  }
   if (response.status === 401 && payload?.phone === state.loggedInPhone && payload?.token && payload.token === currentCloudToken()) {
     clearExpiredCloudSession(data);
   }
@@ -14779,6 +14791,12 @@ function waitForMediaUploadRetry(delayMs) {
 async function apiUploadMediaFile(file, duration = 0, options = {}) {
   const base = window.TURTLE_API_BASE_URL || "";
   const mediaKind = localMediaFileKind(file);
+  const maxBytes = mediaKind === "video" ? 128 * 1024 * 1024 : 10 * 1024 * 1024;
+  if (Number(file?.size || 0) > maxBytes) {
+    const error = new Error(mediaKind === "video" ? "视频不能超过 128 MB，请压缩后重试" : "图片不能超过 10 MB，请压缩后重试");
+    error.status = 413;
+    throw error;
+  }
   const contentType = localMediaUploadMimeType(file, mediaKind);
   const maxAttempts = mediaKind === "video" ? 3 : 2;
   let lastError;
@@ -14952,6 +14970,25 @@ function accountSyncSignature(source) {
     accountAvatar: source.accountAvatar || "", data: accountDataSnapshot(source) }));
 }
 
+function cloudOmitsLocalAccountData(user) {
+  return ["turtles", "memos", "breedingRecords", "turtlePools", "ledgerRecords", "careRecords", "careCustomItems", "carePlans"].some(field =>
+    (state[field] || []).length && !Array.isArray(user?.data?.[field]));
+}
+
+function verifyCloudSaveReceipt(user, submitted, phone) {
+  const ordered = value => Array.isArray(value) ? value.map(ordered)
+    : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value;
+  const canonical = value => JSON.stringify(ordered(value));
+  if (!user || user.phone !== phone || !user.data || !user.dataRevision) return false;
+  return ["turtles", "memos", "breedingRecords", "turtlePools", "ledgerRecords", "careRecords", "careCustomItems", "carePlans"].every(field => {
+    const sent = submitted[field] || [];
+    // An old backend may accept the request but discard fields it does not know.
+    // Only acknowledge the exact submitted records, including links and notes.
+    return (!sent.length && !Object.hasOwn(user.data, field))
+      || (Array.isArray(user.data[field]) && canonical(sent) === canonical(user.data[field]));
+  });
+}
+
 function cloudSyncIsPaused() {
   return Boolean(state.loggedInPhone && state.cloudSyncConflict?.phone === state.loggedInPhone);
 }
@@ -14963,8 +15000,11 @@ function updateCloudSyncNotice() {
   notice.className = "fresh-card";
   notice.dataset.cloudSyncNotice = "";
   notice.setAttribute("role", "status");
-  notice.innerHTML = `<p>有几条记录需要确认，本机修改已保留</p><button class="secondary" type="button">查看并处理</button>`;
-  notice.querySelector("button").addEventListener("click", () => { setState({ page: "sync" }, { skipCloud: true }); openCloudConflictReview(); });
+  const incomplete = state.cloudSyncConflict?.code === "CLOUD_SAVE_INCOMPLETE";
+  notice.innerHTML = incomplete
+    ? `<p>云端未完整确认保存，本机记录已保留。请重新核对同步，仍有异常时联系管理员。</p><button class="secondary" type="button">重新核对同步</button>`
+    : `<p>有几条记录需要确认，本机修改已保留</p><button class="secondary" type="button">查看并处理</button>`;
+  notice.querySelector("button").addEventListener("click", () => { setState({ page: "sync" }, { skipCloud: true }); if (incomplete) syncCloudAccountManually(); else openCloudConflictReview(); });
   document.querySelector("main")?.prepend(notice);
 }
 
@@ -14977,7 +15017,9 @@ function pauseCloudSync(code = "ACCOUNT_DATA_CONFLICT") {
   persistPendingCloudData();
   saveState({ skipCloud: true });
   updateCloudSyncNotice();
-  if (!alreadyPaused) toast("同步已暂停，本机修改已保留，可在同步设置直接处理不同记录");
+  if (!alreadyPaused) toast(code === "CLOUD_SAVE_INCOMPLETE"
+    ? "云端未完整确认保存，本机记录已保留，请勿卸载或清理数据，请重新核对同步"
+    : "同步已暂停，本机修改已保留，可在同步设置直接处理不同记录");
 }
 
 function setCloudAccountRevision(user) {
@@ -15058,24 +15100,28 @@ function tryAutomaticCloudMerge(user) {
 async function openCloudConflictReview() {
   if (!hasCloudSession()) return toast("登录状态已失效，请先登录；本机修改仍保留");
   if (cloudSyncInFlight || cloudImageMigrationInFlight) return toast("正在同步，请稍候再试");
-  const phone = state.loggedInPhone;
+  const phone = state.loggedInPhone, token = currentCloudToken();
+  const request = ++cloudConflictReviewRequest;
   const openingPage = state.page;
+  const isCurrent = () => phone === state.loggedInPhone && token === currentCloudToken()
+    && state.page === openingPage && request === cloudConflictReviewRequest;
   try {
-    const latest = await apiPost("/api/account/load", { phone, token: currentCloudToken(), termsVersion: POLICY_VERSION });
-    if (phone !== state.loggedInPhone || state.page !== openingPage) return;
-    if (latest.user?.phone !== phone) throw new Error("云端未返回有效账号数据，本机修改已保留，请重试");
+    const latest = await apiPost("/api/account/load", { phone, token, termsVersion: POLICY_VERSION });
+    if (!isCurrent()) return;
+    if (latest.user?.phone !== phone || !latest.user.dataRevision || !latest.user.data || Array.isArray(latest.user.data)) throw new Error("云端未返回有效账号数据，本机修改已保留，请重试");
+    if (cloudOmitsLocalAccountData(latest.user)) { pauseCloudSync("CLOUD_SAVE_INCOMPLETE"); return; }
     if (acknowledgeIdenticalCloudUser(latest.user)) { cloudConflictReview = null; render(); return toast("数据已一致，已恢复同步"); }
     const plan = cloudMergePlan(latest.user);
     if (!plan) throw new Error("暂时无法读取记录，请稍后重试");
-    cloudConflictReview = { phone, user: latest.user, localSignature: accountSyncSignature(state), plan, choices: {} };
+    cloudConflictReview = { phone, token, user: latest.user, localSignature: accountSyncSignature(state), plan, choices: {} };
     setState({ page: "sync" }, { skipCloud: true, forceRender: true });
     scrollFormBelowTopbar(".sync-conflict-review");
-  } catch (error) { toast(error.message || "核对失败，请稍后重试"); }
+  } catch (error) { if (isCurrent()) toast(error.message || "核对失败，请稍后重试"); }
 }
 
 function cloudConflictReviewHtml() {
   const review = cloudConflictReview;
-  if (!review || review.phone !== state.loggedInPhone) return "";
+  if (!review || review.phone !== state.loggedInPhone || (review.token && review.token !== currentCloudToken())) return "";
   const side = summary => `${summary.archives || summary.ledger ? `<p>档案 ${summary.archives} 只 · 在养 ${summary.active} 只 · 账本 ${summary.ledger} 笔</p><p>收购 ¥${money(summary.purchase)} · 售出 ¥${money(summary.sold)} · 损耗 ¥${money(summary.loss)}</p>` : ""}<ul>${summary.records.map(text => `<li>${escapeHtml(text)}</li>`).join("")}</ul>${summary.omitted ? `<p>另有 ${summary.omitted} 条关联记录，数量及金额已计入上方汇总。</p>` : ""}`;
   return `<section class="fresh-card sync-conflict-review"><h2>处理不同记录</h2><p class="muted">${review.plan.hasBase ? "不同记录的修改已自动汇总。以下关联记录在两端都发生了变化，请选择每组要保留的版本。" : "这些旧版记录没有共同的同步历史。相同记录会保留，请核对每组不同的记录。"}数量和账本会一起处理，恢复前会保留两端副本。</p>
     ${review.plan.conflicts.map(item => `<fieldset><legend>${escapeHtml(item.label)}</legend><div class="sync-conflict-options">${["local", "remote"].map(which => `<label><input type="radio" name="conflict-${escapeHtml(item.key)}" data-cloud-conflict-choice="${escapeHtml(item.key)}" value="${which}" ${review.choices[item.key] === which ? "checked" : ""}><strong>${which === "local" ? "保留本机这组记录" : "保留云端这组记录"}</strong>${side(item[which])}</label>`).join("")}</div></fieldset>`).join("")}
@@ -15084,19 +15130,24 @@ function cloudConflictReviewHtml() {
 
 async function applyCloudConflictChoices() {
   const review = cloudConflictReview;
-  if (!review?.plan.ready || review.phone !== state.loggedInPhone || cloudSyncInFlight || cloudImageMigrationInFlight) return;
+  const phone = state.loggedInPhone, token = currentCloudToken();
+  const sameSession = () => phone === state.loggedInPhone && token === currentCloudToken();
+  if (!token || !review?.plan.ready || review.phone !== phone || (review.token && review.token !== token) || cloudSyncInFlight || cloudImageMigrationInFlight) return;
   try {
-    const latest = await apiPost("/api/account/load", { phone: review.phone, token: currentCloudToken(), termsVersion: POLICY_VERSION });
-    if (state.loggedInPhone !== review.phone) return;
+    const latest = await apiPost("/api/account/load", { phone, token, termsVersion: POLICY_VERSION });
+    if (!sameSession() || cloudConflictReview !== review) return;
+    if (latest.user?.phone !== phone || !latest.user.dataRevision || !latest.user.data || Array.isArray(latest.user.data)
+      || cloudOmitsLocalAccountData(latest.user)) throw new Error("云端未返回完整账号数据，本机修改已保留，请重新核对");
     if (accountSyncSignature(state) !== review.localSignature || latest.user?.dataRevision !== review.user.dataRevision) {
-      await openCloudConflictReview(); return toast("核对期间有新修改，请重新选择，原记录已保留");
+      await openCloudConflictReview(); if (sameSession()) toast("核对期间有新修改，请重新选择，原记录已保留"); return;
     }
     if (!window.confirm("确认采用所选记录？所选版本会用于这一组关联档案、账本和其他记录；两端原始副本会保存在本机。")) return;
     if (!stageCloudMerge(latest.user, review.plan, true)) return toast("本机备份未完成，尚未处理，请稍后重试");
     cloudAutoMergeAttempts = 0;
     await pushCloudDataNow(true);
+    if (!sameSession()) return;
     toast(readPendingCloudData() ? "所选记录已保存在本机，联网后继续同步" : "记录已处理，已恢复同步");
-  } catch (error) { toast(error.message || "记录已保留，请稍后重试同步"); }
+  } catch (error) { if (sameSession()) toast(error.message || "记录已保留，请稍后重试同步"); }
 }
 
 function queueCloudSave() {
@@ -15136,6 +15187,7 @@ async function pushCloudDataNow(throwOnError = false) {
   const savingPhone = state.loggedInPhone;
   const savingToken = currentCloudToken();
   const pendingAtStart = readPendingCloudData();
+  const submittedData = accountDataSnapshot(state);
   try {
     const result = await apiPost("/api/account/save", {
       phone: state.loggedInPhone,
@@ -15145,10 +15197,15 @@ async function pushCloudDataNow(throwOnError = false) {
       accountAvatar: state.accountAvatar,
       baseUpdatedAt: state.cloudAccountUpdatedAt || "",
       ...(state.cloudAccountDataRevision ? { baseDataRevision: state.cloudAccountDataRevision } : {}),
-      data: accountDataSnapshot(state)
+      data: submittedData
     });
     const pendingNow = readPendingCloudData();
     if (state.loggedInPhone === savingPhone && currentCloudToken() === savingToken) {
+      if (!verifyCloudSaveReceipt(result.user, submittedData, savingPhone)) {
+        pauseCloudSync("CLOUD_SAVE_INCOMPLETE");
+        if (throwOnError) throw Object.assign(new Error("云端未完整确认保存，本机记录已保留"), { code: "CLOUD_SAVE_INCOMPLETE" });
+        return;
+      }
       setCloudAccountRevision(result.user || {});
       cloudAutoMergeAttempts = 0;
       if (!accountHasEmbeddedImages(state) && JSON.stringify(pendingNow) === JSON.stringify(pendingAtStart)) clearPendingCloudData(savingPhone);
@@ -15206,6 +15263,13 @@ async function refreshCloudAccountFromServer(options = {}) {
       // server nickname/avatar visibly overwrite it.
       const pendingAfterLoad = readPendingCloudData();
       if (options.background && (cloudSyncInFlight || cloudImageMigrationInFlight || pendingAfterLoad?.phone === loadingPhone)) return false;
+      // Also protect the on-device mirror left by released clients which
+      // already cleared their journal after an incomplete server response.
+      if (cloudOmitsLocalAccountData(result.user)) {
+        cloudHydrationComplete = true;
+        pauseCloudSync("CLOUD_SAVE_INCOMPLETE");
+        return false;
+      }
       // Device clocks cannot decide whether an unsent sale/loss is disposable.
       // Check the journal BEFORE applying the cloud snapshot: rendering the
       // cloud first briefly loses local records and resets the paused state.
@@ -15243,38 +15307,41 @@ function validateReviewedRecovery(backup) {
   }
   for (const snapshot of [backup, ...backup.recovery.sources]) {
     if (!snapshot || typeof snapshot.accountName !== "string" || !snapshot.data || typeof snapshot.data !== "object") throw new Error("恢复文件内容不完整");
-    for (const field of ["turtles", "ledgerRecords", "memos", "breedingRecords", "activityLogs", "turtlePools"]) {
+    for (const field of ["turtles", "ledgerRecords", "memos", "breedingRecords", "activityLogs", "turtlePools", "careRecords", "careCustomItems", "carePlans"]) {
       const records = snapshot.data[field];
       if (!Array.isArray(records) || records.some(record => !record?.id) || new Set(records.map(record => record.id)).size !== records.length) {
         throw new Error("恢复文件存在缺失或重复记录，请重新核对");
       }
     }
   }
-  if (!(backup.data.turtles.length || backup.data.ledgerRecords.length)) throw new Error("恢复文件不能清空账号数据");
+  if (!["turtles", "ledgerRecords", "memos", "breedingRecords", "turtlePools", "careRecords", "careCustomItems", "carePlans"].some(field => backup.data[field].length)) throw new Error("恢复文件不能清空账号数据");
   return new Set([backup, ...backup.recovery.sources].map(reviewedRecoverySignature));
 }
 
 async function importReviewedAccountRecovery(file) {
   if (!hasCloudSession()) return toast("请先登录需要恢复的账号");
   if (cloudSyncInFlight || cloudImageMigrationInFlight) return toast("正在同步，请稍候再试");
+  const phone = state.loggedInPhone, token = currentCloudToken();
+  const sameSession = () => phone === state.loggedInPhone && token === currentCloudToken();
   let ownsSyncLock = false;
   try {
     if (file.size > 20 * 1024 * 1024) throw new Error("恢复文件超过 20 MB，请先核对文件");
     const backup = TurtleLocalData.parse(await file.text());
+    if (!sameSession()) return;
     const accepted = validateReviewedRecovery(backup);
     if (cloudSyncInFlight || cloudImageMigrationInFlight) throw new Error("正在同步，请稍候再试");
-    const phone = state.loggedInPhone;
     const beforeSignature = accountSyncSignature(state);
     const targetSignature = reviewedRecoverySignature(backup);
     if (!accepted.has(beforeSignature)) throw new Error("本机已有备份之外的新修改，未恢复；请重新导出两端完整备份核对");
-    const latest = await apiPost("/api/account/load", { phone, token: currentCloudToken(), termsVersion: POLICY_VERSION });
-    if (state.loggedInPhone !== phone || accountSyncSignature(state) !== beforeSignature) throw new Error("核对期间本机数据发生变化，已停止恢复");
+    const latest = await apiPost("/api/account/load", { phone, token, termsVersion: POLICY_VERSION });
+    if (!sameSession()) return;
+    if (accountSyncSignature(state) !== beforeSignature) throw new Error("核对期间本机数据发生变化，已停止恢复");
     if (latest.user?.phone !== phone || !accepted.has(reviewedRecoverySignature(latest.user))) throw new Error("云端已有备份之外的新修改，未恢复；请重新核对云端数据");
     if (!latest.user.dataRevision) throw new Error("服务器尚未支持安全恢复，请先更新服务器");
     const data = normalizeAccountData(backup.data);
     if (accountHasEmbeddedImages(data)) throw new Error("恢复文件还有未上传照片，请先完成照片核对");
     const total = type => money(data.ledgerRecords.filter(record => record.type === type).reduce((sum, record) => sum + Number(record.amount || 0), 0));
-    if (!window.confirm(`确认恢复已核对的数据？\n\n档案 ${data.turtles.length} 只，账本 ${data.ledgerRecords.length} 笔\n收购 ${total("purchase")} 元\n售出 ${total("sold")} 元\n损耗 ${total("loss")} 元\n\n将保留恢复前的本机和云端副本。两台设备都需导入同一恢复文件；出现新修改时会停止。`)) return;
+    if (!window.confirm(`确认恢复已核对的数据？\n\n档案 ${data.turtles.length} 只，账本 ${data.ledgerRecords.length} 笔\n养护 ${data.careRecords.length} 条，提醒 ${data.memos.length} 条\n繁殖 ${data.breedingRecords.length} 窝，龟池 ${data.turtlePools.length} 个\n养护方案 ${data.carePlans.length} 个，常用事项 ${data.careCustomItems.length} 个\n收购 ${total("purchase")} 元\n售出 ${total("sold")} 元\n损耗 ${total("loss")} 元\n\n将保留恢复前的本机和云端副本。两台设备都需导入同一恢复文件；出现新修改时会停止。`)) return;
     if (cloudSyncInFlight || cloudImageMigrationInFlight || state.loggedInPhone !== phone || accountSyncSignature(state) !== beforeSignature) throw new Error("数据正在变化，已停止恢复，请稍后重新核对");
     // Verify a durable rollback copy BEFORE touching either live snapshot.
     const rollbackKey = "turtlekeeper-account-recovery-rollback-v1";
@@ -15291,14 +15358,15 @@ async function importReviewedAccountRecovery(file) {
     cloudSyncTimer = null;
     let restoredUser = latest.user;
     if (reviewedRecoverySignature(latest.user) !== targetSignature) {
-      const result = await apiPost("/api/account/save", { phone, token: currentCloudToken(), termsVersion: POLICY_VERSION,
+      const result = await apiPost("/api/account/save", { phone, token, termsVersion: POLICY_VERSION,
         accountName: backup.accountName, accountAvatar: backup.accountAvatar || "", data,
         baseDataRevision: latest.user.dataRevision, baseUpdatedAt: latest.user.updatedAt || "" });
       restoredUser = result.user;
     }
     // An edit made during upload must remain in its original journal; never
     // relabel it with the new revision or overwrite it with the recovery file.
-    if (state.loggedInPhone !== phone || accountSyncSignature(state) !== beforeSignature) throw new Error("云端已恢复，期间的本机新修改已保留，请重新导出备份核对");
+    if (!sameSession()) return;
+    if (accountSyncSignature(state) !== beforeSignature) throw new Error("云端已恢复，期间的本机新修改已保留，请重新导出备份核对");
     if (restoredUser?.phone !== phone || reviewedRecoverySignature(restoredUser) !== targetSignature) throw new Error("云端返回数据与恢复文件不一致，本机修改已保留，请重新核对");
     const previous = state;
     state = { ...state, ...data, accountName: backup.accountName, accountAvatar: backup.accountAvatar || "" };
@@ -15310,21 +15378,29 @@ async function importReviewedAccountRecovery(file) {
     render();
     toast(localBackupFailed ? "云端已恢复，请重试保存本地备份" : "恢复完成，已恢复同步；另一台设备请导入同一恢复文件");
   } catch (error) {
-    toast(error?.code === "ACCOUNT_DATA_CONFLICT" ? "恢复期间云端出现新修改，未覆盖云端，请重新核对" : error.message || "恢复未完成，本机数据已保留");
+    if (sameSession()) toast(error?.code === "ACCOUNT_DATA_CONFLICT" ? "恢复期间云端出现新修改，未覆盖云端，请重新核对" : error.message || "恢复未完成，本机数据已保留");
   } finally {
-    if (ownsSyncLock) { cloudSyncInFlight = false; cloudSyncQueued = false; }
+    if (ownsSyncLock) {
+      cloudSyncInFlight = false;
+      const queued = cloudSyncQueued;
+      cloudSyncQueued = false;
+      if (queued) queueCloudSave();
+    }
   }
 }
 
 async function syncCloudAccountManually() {
   if (!hasCloudSession()) return toast("请先登录云端账号");
   if (cloudSyncInFlight || cloudImageMigrationInFlight) return toast("正在同步，请稍候再试");
+  const phone = state.loggedInPhone, token = currentCloudToken();
+  const sameSession = () => phone === state.loggedInPhone && token === currentCloudToken();
   try {
-    if (readPendingCloudData()?.phone === state.loggedInPhone) {
-      const checkingPhone = state.loggedInPhone;
-      const latest = await apiPost("/api/account/load", { phone: checkingPhone, token: currentCloudToken(), termsVersion: POLICY_VERSION });
-      if (state.loggedInPhone !== checkingPhone || latest.user?.phone !== checkingPhone) return;
+    if (readPendingCloudData()?.phone === phone) {
+      const latest = await apiPost("/api/account/load", { phone, token, termsVersion: POLICY_VERSION });
+      if (!sameSession()) return;
+      if (latest.user?.phone !== phone || !latest.user.dataRevision || !latest.user.data || Array.isArray(latest.user.data)) throw new Error("云端未返回有效账号数据，本机修改已保留，请重试");
       cloudHydrationComplete = true;
+      if (cloudOmitsLocalAccountData(latest.user)) { pauseCloudSync("CLOUD_SAVE_INCOMPLETE"); return; }
       if (acknowledgeIdenticalCloudUser(latest.user)) {
         render();
         return toast("完整数据与云端一致，已恢复同步");
@@ -15340,13 +15416,16 @@ async function syncCloudAccountManually() {
       persistPendingCloudData();
       saveState({ skipCloud: true });
       if (accountHasEmbeddedImages(state)) await migrateEmbeddedImagesToCloud();
+      if (!sameSession()) return;
       if (accountHasEmbeddedImages(state)) throw new Error("照片尚未上传完成，本机数据已保留，请稍后重试");
       await pushCloudDataNow(true);
+      if (!sameSession()) return;
     }
     const loaded = await refreshCloudAccountFromServer({ background: true });
+    if (!sameSession()) return;
     toast(loaded ? "已获取云端最新数据" : "暂未获取最新数据，本机修改已保留，请稍后重试");
   } catch (error) {
-    if (!["ACCOUNT_DATA_CONFLICT", "GROWTH_HISTORY_CONFLICT"].includes(error?.code)) toast(error.message || "同步失败，本机修改已保留");
+    if (sameSession() && !["ACCOUNT_DATA_CONFLICT", "GROWTH_HISTORY_CONFLICT"].includes(error?.code)) toast(error.message || "同步失败，本机修改已保留");
   }
 }
 
@@ -15909,6 +15988,13 @@ function deleteGrowthRecordAndRebuild(turtle, historyId) {
 
 async function deleteGrowthUpdate(turtleId, historyId) {
   if (!requireLogin()) return;
+  const phone = state.loggedInPhone;
+  const token = currentCloudToken();
+  const cloudDeletion = Boolean(CONFIGURED_SMS_BACKEND && phone && token);
+  if (cloudDeletion && (cloudSyncInFlight || cloudImageMigrationInFlight || !cloudHydrationComplete
+    || cloudSyncIsPaused() || readPendingCloudData()?.phone === phone)) {
+    return toast("请先完成同步，再删除成长记录；本机修改已保留");
+  }
   const turtle = (state.turtles || []).find(item => item.id === turtleId);
   const record = turtle?.measureHistory?.find(item => item.id === historyId);
   if (!turtle || !record) return toast("未找到这条成长记录");
@@ -15916,23 +16002,52 @@ async function deleteGrowthUpdate(turtleId, historyId) {
   const before = record.oldSnapshot || {};
   if (!window.confirm(`确认删除 ${label} 的这一次成长更新吗？\n\n删除后无法恢复，当前档案将回退至更新前：体重 ${growthSnapshotMetric(before, "weight", "g")}、背甲 ${growthSnapshotMetric(before, "carapaceLength", "cm")}。`)) return;
 
+  const sameSession = () => state.loggedInPhone === phone && currentCloudToken() === token;
+  let ownsSyncLock = false;
   try {
     // Deliberate history deletion uses a dedicated endpoint. It is separate
     // from the normal full-account save so the stale-device protection can
     // keep rejecting accidental history rollback while this explicit action
     // still works safely.
-    if (CONFIGURED_SMS_BACKEND && state.loggedInPhone && currentCloudToken()) {
+    if (cloudDeletion) {
+      const beforeSignature = accountSyncSignature(state);
+      const before = { accountName: state.accountName || "", accountAvatar: state.accountAvatar || "",
+        data: TurtleLocalData.parse(TurtleLocalData.stringify(accountDataSnapshot(state))) };
+      const rebuilt = deleteGrowthRecordAndRebuild(turtle, historyId);
+      const expected = { ...before.data, turtles: before.data.turtles.map(item => item.id === turtleId ? rebuilt.turtle : item) };
+      cloudSyncInFlight = true;
+      ownsSyncLock = true;
+      updateAccountSaveStatus();
       const result = await apiPost("/api/account/growth-record/delete", {
-        phone: state.loggedInPhone,
-        token: currentCloudToken(),
+        phone,
+        token,
+        ...(state.cloudAccountDataRevision ? { baseDataRevision: state.cloudAccountDataRevision } : {}),
         turtleId,
         historyId
       });
-      if (result.user) {
-        applyCloudUser(result.user, "", { skipCloud: true, skipMigration: true, page: "growth" });
-        toast("已删除这一次成长更新，档案数据已回退");
+      if (!sameSession()) return;
+      // A success status alone cannot acknowledge a destructive mutation.
+      // Confirm the exact rebuilt record and every other saved collection.
+      if (!verifyCloudSaveReceipt(result.user, expected, phone)) {
+        pauseCloudSync("CLOUD_SAVE_INCOMPLETE");
         return;
       }
+      if (accountSyncSignature(state) === beforeSignature) {
+        clearPendingCloudData(phone);
+        applyCloudUser(result.user, "", { skipCloud: true, skipMigration: true, page: state.page });
+      } else {
+        const plan = TurtleAccountMerge.merge(before,
+          { accountName: state.accountName || "", accountAvatar: state.accountAvatar || "", data: accountDataSnapshot(state) },
+          { accountName: result.user.accountName || "", accountAvatar: result.user.accountAvatar || "", data: normalizeAccountData(result.user.data) });
+        if (!plan.ready || !stageCloudMerge(result.user, plan, true)) {
+          pauseCloudSync("GROWTH_HISTORY_CONFLICT");
+          return toast("云端已处理删除，期间的本机修改已保留，请在同步设置核对不同记录");
+        }
+        setState({}, { skipCloud: true, preserveInputValues: true });
+        cloudSyncQueued = true;
+      }
+      toast("已删除这一次成长更新，档案数据已回退");
+      return;
     }
     const rebuilt = deleteGrowthRecordAndRebuild(turtle, historyId);
     if (!rebuilt) return toast("未找到这条成长记录");
@@ -15942,23 +16057,21 @@ async function deleteGrowthUpdate(turtleId, historyId) {
     }, { page: "growth" });
     toast("已删除这一次成长更新，档案数据已回退");
   } catch (error) {
+    if (!sameSession()) return;
     console.warn(error.message || "删除成长记录失败");
-    // The deployed server may temporarily be older than this web build and
-    // not yet expose the dedicated deletion endpoint.  Keep deletion usable
-    // during a rolling upgrade: the legacy save path still carries the fully
-    // rebuilt timeline and will be replaced by the protected endpoint as soon
-    // as the server is updated.
+    // The full-account endpoint deliberately rejects history rollback. An old
+    // server cannot safely emulate this operation by ordinary background save.
     if (Number(error?.status) === 405 || String(error?.message || "") === "方法不支持") {
-      const rebuilt = deleteGrowthRecordAndRebuild(turtle, historyId);
-      if (!rebuilt) return toast("未找到这条成长记录");
-      setState({
-        turtles: state.turtles.map(item => item.id === turtleId ? rebuilt.turtle : item),
-        activityLogs: logActivity(`删除成长记录：${turtleLabel(turtle)} · ${label}`, "档案")
-      }, { page: "growth" });
-      toast("已删除这一次成长更新，档案数据已回退");
-      return;
+      return toast("服务器暂不支持删除成长记录，记录已保留，请更新服务后重试");
     }
+    if (error?.code === "ACCOUNT_DATA_CONFLICT" || Number(error?.status) === 409) pauseCloudSync("ACCOUNT_DATA_CONFLICT");
     toast(error.message || "删除失败，请稍后重试");
+  } finally {
+    if (ownsSyncLock) {
+      cloudSyncInFlight = false;
+      updateAccountSaveStatus();
+      if (cloudSyncQueued) { cloudSyncQueued = false; queueCloudSave(); }
+    }
   }
 }
 
@@ -17007,10 +17120,13 @@ function toast(text) {
   lastToastAt = now;
   document.querySelector(".toast")?.remove();
   const el = document.createElement("div");
-  el.className = "toast";
+  el.className = "toast ui-toast";
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-live", "polite");
+  el.setAttribute("aria-atomic", "true");
   el.textContent = text;
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 2200);
+  setTimeout(() => el.remove(), Math.min(6500, Math.max(2800, String(text).length * 110)));
 }
 
 function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwipeSettle, onSingleTap, onDismissMove, onDismissCancel, onDismiss, nativePager = false } = {}) {
@@ -17386,6 +17502,28 @@ function attachPreviewZoom(stage, media, { onSwipe, canSwipe, onSwipeMove, onSwi
       stage.removeEventListener("contextmenu", contextMenu);
     }
   };
+}
+
+function suppressPreviewCloseClickThrough() {
+  let timer = 0;
+  const clear = () => {
+    window.clearTimeout(timer);
+    document.removeEventListener("click", swallow, true);
+    document.removeEventListener("pointerdown", clear, true);
+    document.removeEventListener("keydown", clear, true);
+  };
+  const swallow = event => {
+    clear();
+    // Only the click synthesized from the closing pointer is suppressed.
+    // A new pointerdown or keyboard action starts a deliberate interaction.
+    if (event.detail <= 0) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+  document.addEventListener("click", swallow, true);
+  document.addEventListener("pointerdown", clear, true);
+  document.addEventListener("keydown", clear, true);
+  timer = window.setTimeout(clear, 360);
 }
 
 function openImagePreview(src, alt = "图片预览", options = {}) {
@@ -17767,22 +17905,13 @@ function openImagePreview(src, alt = "图片预览", options = {}) {
     next.addEventListener("click", () => switchImage(1));
   }
 
-  const suppressCloseClickThrough = () => {
-    const swallowFollowUpClick = event => {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      document.removeEventListener("click", swallowFollowUpClick, true);
-    };
-    document.addEventListener("click", swallowFollowUpClick, true);
-    window.setTimeout(() => document.removeEventListener("click", swallowFollowUpClick, true), 360);
-  };
   const closeFromButton = event => {
     event.preventDefault();
     event.stopImmediatePropagation();
     // On iOS the synthetic click follows pointerup after the overlay has been
     // removed. Consume that one click so it cannot trigger the product's
     // share button underneath the close control.
-    if (event.type === "pointerup") suppressCloseClickThrough();
+    if (event.type === "pointerup") suppressPreviewCloseClickThrough();
     close();
   };
   // Use pointerup as well as click so the close control responds reliably on
@@ -17856,22 +17985,13 @@ function openVideoPreview(src, alt = "视频预览", poster = "") {
     if (event.key === "Escape") close();
   };
 
-  const suppressCloseClickThrough = () => {
-    const swallowFollowUpClick = event => {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      document.removeEventListener("click", swallowFollowUpClick, true);
-    };
-    document.addEventListener("click", swallowFollowUpClick, true);
-    window.setTimeout(() => document.removeEventListener("click", swallowFollowUpClick, true), 360);
-  };
   const closeFromButton = event => {
     event.preventDefault();
     event.stopImmediatePropagation();
     // iOS can dispatch a synthetic click after pointerup.  The preview is
     // already gone by then, so consume that click before it reaches the
     // community camera/publish control underneath this close button.
-    if (event.type === "pointerup") suppressCloseClickThrough();
+    if (event.type === "pointerup") suppressPreviewCloseClickThrough();
     close();
   };
   closeButton.addEventListener("pointerup", closeFromButton);
@@ -17951,7 +18071,9 @@ function syncMobileKeyboardUI() {
     composerViewport.keyboardOpen = nativeKeyboard;
     if (!nativeKeyboard) composerViewport.bottom = 0;
   }
-  document.documentElement.style.setProperty("--forum-keyboard-bottom", composerViewport.bottom + "px");
+  const keyboardBottom = composerViewport.bottom + "px";
+  if (document.documentElement.style.getPropertyValue("--forum-keyboard-bottom") !== keyboardBottom)
+    document.documentElement.style.setProperty("--forum-keyboard-bottom", keyboardBottom);
   document.documentElement.classList.toggle("forum-keyboard-open", composerViewport.keyboardOpen);
   // Focus can remain after dismissing the software keyboard or using a physical
   // keyboard. Hide tabs only while geometry/native state says it is visible.
@@ -17959,13 +18081,34 @@ function syncMobileKeyboardUI() {
 }
 
 function setupMobileKeyboardGuard() {
-  document.addEventListener("focusin", () => requestAnimationFrame(syncMobileKeyboardUI));
-  document.addEventListener("focusout", () => window.setTimeout(syncMobileKeyboardUI, 80));
-  window.visualViewport?.addEventListener("resize", syncMobileKeyboardUI);
-  window.visualViewport?.addEventListener("scroll", syncMobileKeyboardUI);
-  window.addEventListener("resize", syncMobileKeyboardUI);
-  window.addEventListener("pageshow", syncMobileKeyboardUI);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) syncMobileKeyboardUI(); });
+  if (document.body.dataset.keyboardGuardBound === "true") return;
+  document.body.dataset.keyboardGuardBound = "true";
+  let viewportFrame = 0;
+  let focusOutTimer = 0;
+  const scheduleViewport = () => {
+    // Safari sends focus, resize and visualViewport scroll in the same frame
+    // while the keyboard animates. Measure once, then update the fixed layers.
+    if (!viewportFrame) viewportFrame = window.requestAnimationFrame(() => {
+      viewportFrame = 0;
+      syncMobileKeyboardUI();
+    });
+  };
+  const suspendViewport = () => {
+    window.cancelAnimationFrame(viewportFrame);
+    window.clearTimeout(focusOutTimer);
+    viewportFrame = focusOutTimer = 0;
+  };
+  document.addEventListener("focusin", scheduleViewport);
+  document.addEventListener("focusout", () => {
+    window.clearTimeout(focusOutTimer);
+    focusOutTimer = window.setTimeout(scheduleViewport, 80);
+  });
+  window.visualViewport?.addEventListener("resize", scheduleViewport);
+  window.visualViewport?.addEventListener("scroll", scheduleViewport);
+  window.addEventListener("resize", scheduleViewport);
+  window.addEventListener("pageshow", scheduleViewport);
+  window.addEventListener("pagehide", suspendViewport);
+  document.addEventListener("visibilitychange", () => document.hidden ? suspendViewport() : scheduleViewport());
   syncMobileKeyboardUI();
 }
 
@@ -18171,6 +18314,8 @@ function showEdgeBackPreview(snapshot) {
   // height); without them the preview content starts at y=0 and jumps when
   // the real messages page is restored.
   preview.className = "edge-back-preview phone-shell";
+  preview.inert = true;
+  preview.setAttribute("aria-hidden", "true");
   if (snapshot?.liveDom?.hasChildNodes()) {
     // The preview is deliberately a clone. The previous implementation moved
     // the visible Messages DOM out of this layer at the end of a back swipe;
@@ -18225,10 +18370,11 @@ function setupEdgeBackAndConversationSwipe() {
   let gestureAnimationFrame = 0;
   let edgeSettleTimer = 0;
   let edgeSettleCleanup = null;
+  let suppressPointerClickUntil = 0;
   // Pointer-up ends the drag, but its temporary layer positions still belong
   // to the settling animation. Keep that owner until completion or cancellation.
   let settlingGesture = null;
-  const rootPages = new Set(["home", "ledger", "market", "messages", "mine"]);
+  const rootPages = BOTTOM_NAV_ROOT_PAGES;
   const edgePinnedProperties = ["position", "top", "left", "right", "bottom", "width", "transform"];
   const pinEdgeFixedLayers = active => {
     if (active?.edgePinnedLayers?.length) return;
@@ -18298,7 +18444,7 @@ function setupEdgeBackAndConversationSwipe() {
     if (!active) return;
     if (active.mode === "edge") {
       $app.style.transform = `translate3d(${active.edgeOffset}px, 0, 0)`;
-      active.preview?.style.setProperty("transform", `translate3d(${-22 + (active.edgeProgress * 22)}%, 0, 0)`);
+      active.preview?.style.setProperty("transform", active.reducedMotion ? "translate3d(0, 0, 0)" : `translate3d(${-22 + (active.edgeProgress * 22)}%, 0, 0)`);
     }
   };
   const scheduleGesturePaint = () => {
@@ -18316,9 +18462,18 @@ function setupEdgeBackAndConversationSwipe() {
   document.addEventListener("pointerdown", event => {
     if (!event.isPrimary) { if (gesture || settlingGesture) cancelActiveGesture(); return; }
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    suppressPointerClickUntil = 0;
     // A new touch must never inherit a previous drag or its delayed rebound.
     if (gesture || settlingGesture || edgeSettleTimer) cancelActiveGesture();
     if (!$app.contains(event.target) || event.target.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [aria-modal='true'], [class*='-overlay']")) return;
+    // Zoom/pan and horizontal controls retain ownership for their entire
+    // gesture, including the left boundary of a scroll strip. A new carousel
+    // must not need a page-specific exclusion to avoid accidental navigation.
+    if (Math.abs((window.visualViewport?.scale || 1) - 1) > .05) return;
+    for (let node = event.target; node && node !== $app; node = node.parentElement) {
+      if (node.matches?.("[role='slider'], [data-no-edge-back]")) return;
+      if (node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)) return;
+    }
     // A native product gallery owns every horizontal gesture except the thin
     // left-edge shield rendered above it. This prevents the page-back path
     // from competing with an image page while the finger is already on it.
@@ -18330,10 +18485,14 @@ function setupEdgeBackAndConversationSwipe() {
     // document-level edge/drag handler claim their pointer: that would turn a
     // UIKit-style inertial swipe back into a JavaScript drag.
     if (event.target.closest(".message-friend-swipe")) return;
+    const bounds = $app.getBoundingClientRect();
     gesture = {
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
+      edgeStart: event.clientX - bounds.left,
+      width: Math.max(1, bounds.width),
+      reducedMotion: Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches),
       lastX: event.clientX,
       lastAt: performance.now(),
       velocityX: 0,
@@ -18361,7 +18520,7 @@ function setupEdgeBackAndConversationSwipe() {
         active.mode = "vertical";
         return;
       }
-      if (active.x <= 24 && dx > 0 && !rootPages.has(state.page) && edgeBackSnapshots.length) {
+      if (active.edgeStart >= 0 && active.edgeStart <= 24 && dx > 0 && !rootPages.has(state.page) && edgeBackSnapshots.length) {
         active.mode = "edge";
         active.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
         claimPointer(active, $app);
@@ -18373,8 +18532,8 @@ function setupEdgeBackAndConversationSwipe() {
       }
     }
     if (active.mode === "edge") {
-      active.edgeOffset = Math.max(0, dx);
-      active.edgeProgress = Math.min(1, active.edgeOffset / Math.max(1, window.innerWidth));
+      active.edgeOffset = Math.max(0, Math.min(active.width, dx));
+      active.edgeProgress = active.edgeOffset / active.width;
       scheduleGesturePaint();
       if (event.cancelable) event.preventDefault();
     }
@@ -18388,22 +18547,28 @@ function setupEdgeBackAndConversationSwipe() {
     releasePointer(active);
     if (active.mode === "edge") {
       settlingGesture = active;
-      const width = Math.max(1, window.innerWidth);
+      suppressPointerClickUntil = performance.now() + 450;
+      const width = active.width;
       const edgeOffset = Math.max(0, Math.min(width, active.edgeOffset ?? dx));
-      const hasForwardFling = active.velocityX > .48 && dx > 26;
-      const shouldComplete = (dx > Math.max(78, width * .18) || hasForwardFling) && Math.abs(dx) > Math.abs(dy) && canLeaveRecordPage();
+      // The release direction is the user's final intent. Do not retain a
+      // fling from hundreds of milliseconds ago, or commit a reversed swipe
+      // just because it once crossed a distance threshold.
+      const releaseVelocity = performance.now() - active.lastAt > 120 ? 0 : active.velocityX;
+      const hasForwardFling = releaseVelocity > .48 && dx > 26;
+      const reversed = releaseVelocity < -.25;
+      const shouldComplete = !reversed && (dx > Math.max(78, width * .18) || hasForwardFling) && Math.abs(dx) > Math.abs(dy) && canLeaveRecordPage();
       // A UIKit interactive-pop transition continues with the release
       // velocity. Keep the same principle here: the final leg is calculated
       // from distance and finger speed instead of one fixed, mechanical time.
       const remaining = shouldComplete ? width - edgeOffset : edgeOffset;
-      const releaseSpeed = Math.max(.42, Math.min(2.35, Math.abs(active.velocityX || 0)));
-      const settleDuration = Math.round(Math.max(145, Math.min(310, remaining / releaseSpeed)));
+      const releaseSpeed = Math.max(.42, Math.min(2.35, Math.abs(releaseVelocity || 0)));
+      const settleDuration = active.reducedMotion ? 0 : Math.round(Math.max(145, Math.min(310, remaining / releaseSpeed)));
       $app.classList.remove("edge-back-dragging");
       $app.style.transition = `transform ${settleDuration}ms cubic-bezier(.18,.78,.2,1)`;
-      $app.style.transform = shouldComplete ? "translate3d(100vw, 0, 0)" : "translate3d(0, 0, 0)";
+      $app.style.transform = shouldComplete ? `translate3d(${width}px, 0, 0)` : "translate3d(0, 0, 0)";
       if (active.preview) {
         active.preview.style.transition = `transform ${settleDuration}ms cubic-bezier(.18,.78,.2,1)`;
-        active.preview.style.transform = shouldComplete ? "translate3d(0, 0, 0)" : "translate3d(-22%, 0, 0)";
+        active.preview.style.transform = shouldComplete || active.reducedMotion ? "translate3d(0, 0, 0)" : "translate3d(-22%, 0, 0)";
       }
       // Do not guess when the transition has finished.  The old 190 ms timer
       // ran before the 200 ms transform animation had reached its final
@@ -18436,7 +18601,7 @@ function setupEdgeBackAndConversationSwipe() {
       };
       edgeSettleCleanup = () => $app.removeEventListener("transitionend", handleEdgeTransitionEnd);
       $app.addEventListener("transitionend", handleEdgeTransitionEnd);
-      edgeSettleTimer = window.setTimeout(finishEdgeSettle, settleDuration + 90);
+      edgeSettleTimer = window.setTimeout(finishEdgeSettle, active.reducedMotion ? 0 : settleDuration + 90);
     }
     gesture = null;
   }, { passive: true });
@@ -18444,6 +18609,14 @@ function setupEdgeBackAndConversationSwipe() {
     if (!gesture || event.pointerId !== gesture.pointerId) return;
     cancelActiveGesture();
   }, { passive: true });
+  document.addEventListener("click", event => {
+    // A cancelled drag may otherwise activate the control under the release
+    // point. Keyboard/screen-reader activation (detail 0) remains available.
+    if (event.detail > 0 && performance.now() < suppressPointerClickUntil) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
   window.addEventListener("pagehide", cancelActiveGesture);
   window.addEventListener("pageshow", cancelActiveGesture);
   window.addEventListener("blur", cancelActiveGesture);

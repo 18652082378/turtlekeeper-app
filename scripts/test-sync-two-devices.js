@@ -21,8 +21,8 @@ async function freePort() {
   let browser;
   const server = spawn(process.execPath, ['server/server.js'], { cwd: root, windowsHide: true,
     env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', TURTLE_RUNTIME_DIR: runtime,
-      MYSQL_URL: '', MYSQL_HOST: '', SMS_PROVIDER: 'mock', SMS_MOCK: 'true',
-      APNS_KEY_PATH: '', APNS_KEY_ID: '', APNS_TEAM_ID: '', MIN_SUPPORTED_APP_BUILD: '95', LATEST_APP_BUILD: '99' },
+      MYSQL_URL: '', MYSQL_HOST: '', MYSQL_STORAGE_MODE: 'legacy', SMS_PROVIDER: 'mock', SMS_MOCK: 'true',
+      APNS_KEY_PATH: '', APNS_KEY_ID: '', APNS_TEAM_ID: '', MIN_SUPPORTED_APP_BUILD: '117', LATEST_APP_BUILD: '119' },
     stdio: ['ignore', 'pipe', 'pipe'] });
   let serverOutput = '';
   server.stdout.on('data', chunk => { serverOutput += chunk; });
@@ -68,7 +68,7 @@ async function freePort() {
           assert.equal(response.status(), 200, 'server commits before acknowledgment is lost');
           return route.abort('connectionreset');
         }
-        if (url.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: `window.TURTLE_API_BASE_URL = ${JSON.stringify(base)}; window.TURTLE_APP_BUILD = 107;` });
+        if (url.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: `window.TURTLE_API_BASE_URL = ${JSON.stringify(base)}; window.TURTLE_APP_BUILD = 119;` });
         if (width === 390 && offlineRelaunchAssets && !url.pathname.startsWith('/api/')) {
           // Native app assets are bundled even without internet. Keep only
           // those assets available while real API requests remain offline.

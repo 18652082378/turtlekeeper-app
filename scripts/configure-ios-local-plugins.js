@@ -12,9 +12,10 @@ const plugins = new Set(Array.isArray(config.packageClassList) ? config.packageC
 plugins.add("TurtleMediaPickerPlugin");
 plugins.add("TurtleAppReviewPlugin");
 plugins.add("TurtlePurchasesPlugin");
+plugins.add("TurtleVideoCachePlugin");
 config.packageClassList = [...plugins];
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-console.log("Registered local iOS plugins: TurtleMediaPickerPlugin, TurtleAppReviewPlugin, TurtlePurchasesPlugin");
+console.log("Registered local iOS plugins: TurtleMediaPickerPlugin, TurtleAppReviewPlugin, TurtlePurchasesPlugin, TurtleVideoCachePlugin");
 
 // Capacitor sync on Windows writes Windows separators into Swift string paths.
 // Keep the generated package portable when the source is opened on a Mac.

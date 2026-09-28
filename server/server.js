@@ -18,6 +18,7 @@ const { createApplePurchases } = require('./apple-team-purchases');
 const { createAlipayPurchases } = require('./alipay-team-purchases');
 const { createBackupStorage } = require('./backup-storage');
 const TurtleCare = require('../assets/care-records');
+const { mediaUrl: validatedMediaUrl } = require('./media-url');
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -62,6 +63,14 @@ const BACKUP_DIR = path.resolve(RUNTIME_ROOT, "backups");
 const ACCOUNT_SNAPSHOT_DIR = path.resolve(BACKUP_DIR, "account-snapshots");
 const ACCOUNT_SNAPSHOT_LIMIT = Math.min(200, Math.max(20, Math.floor(Number(process.env.ACCOUNT_SNAPSHOT_LIMIT || 100))));
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
+// Public media sends original images up to 10 MiB, including released build 119.
+// Archive/avatar uploads use the separate, pre-existing MAX_UPLOAD_BYTES limit.
+const configuredMediaImageLimit = Number(process.env.MAX_MEDIA_IMAGE_UPLOAD_BYTES || 10 * 1024 * 1024);
+const MAX_MEDIA_IMAGE_UPLOAD_BYTES = Number.isSafeInteger(configuredMediaImageLimit) && configuredMediaImageLimit > 0
+  ? configuredMediaImageLimit : 10 * 1024 * 1024;
+const configuredMediaLimit = Number(process.env.MAX_MEDIA_UPLOAD_BYTES || 128 * 1024 * 1024);
+const MAX_MEDIA_UPLOAD_BYTES = Number.isSafeInteger(configuredMediaLimit) && configuredMediaLimit > 0
+  ? configuredMediaLimit : 128 * 1024 * 1024;
 const OSS_REGION = String(process.env.OSS_REGION || "").trim();
 const OSS_BUCKET = String(process.env.OSS_BUCKET || "").trim();
 const OSS_ACCESS_KEY_ID = String(process.env.OSS_ACCESS_KEY_ID || "").trim();
@@ -339,7 +348,7 @@ function readJson(req) {
       if (bytes > 25 * 1024 * 1024) {
         failed = true;
         chunks.length = 0;
-        reject(new Error("请求内容过大"));
+        reject(Object.assign(new Error("请求内容过大"), { status: 413 }));
         return;
       }
       chunks.push(buffer);
@@ -351,10 +360,11 @@ function readJson(req) {
         // the bytes; coercing each chunk to text corrupts Chinese and emoji.
         const raw = Buffer.concat(chunks, bytes).toString("utf8");
         const body = raw ? JSON.parse(raw) : {};
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected a JSON object');
         req.accountAuth = { phone: body?.phone, token: body?.token };
         resolve(body);
       } catch {
-        reject(new Error("请求格式不正确"));
+        reject(Object.assign(new Error("请求格式不正确"), { status: 400 }));
       }
     });
     req.on("error", reject);
@@ -429,7 +439,7 @@ function normalizeAccountData(data = {}) {
     marketHistoryIds: Array.isArray(next.marketHistoryIds) ? next.marketHistoryIds.map(String).slice(0, 100) : [],
     pinnedConversationPhones: Array.isArray(next.pinnedConversationPhones) ? next.pinnedConversationPhones.map(String).slice(0, 200) : [],
     hiddenConversationPhones: Array.isArray(next.hiddenConversationPhones) ? next.hiddenConversationPhones.map(String).slice(0, 200) : [],
-    turtlePools: Array.isArray(next.turtlePools) ? next.turtlePools.slice(0, 200).map(pool => ({
+    turtlePools: Array.isArray(next.turtlePools) ? next.turtlePools.map(pool => ({
       ...pool,
       id: String(pool?.id || crypto.randomUUID()),
       name: String(pool?.name || "").trim().slice(0, 24),
@@ -476,7 +486,7 @@ function accountDataHasContent(data = {}) {
 
 function accountRecordCounts(data = {}) {
   const account = normalizeAccountData(data);
-  const fields = ["turtles", "keptSpecies", "memos", "careRecords", "ledgerRecords", "breedingRecords", "turtlePools"];
+  const fields = ["turtles", "keptSpecies", "memos", "careRecords", "careCustomItems", "carePlans", "ledgerRecords", "breedingRecords", "turtlePools"];
   return Object.fromEntries(fields.map(field => [field, Array.isArray(account[field]) ? account[field].length : 0]));
 }
 
@@ -1510,13 +1520,19 @@ async function handleRegister(req, res) {
   if (password.length < 6) return sendJson(res, 400, { ok: false, message: "密码至少需要 6 位" });
   if (body.termsAccepted !== true) return sendJson(res, 400, { ok: false, message: "请先阅读并同意服务规则和隐私政策" });
 
-  const db = readDatabase();
+  let db = readDatabase();
   if (db.users[phone]) return sendJson(res, 409, { ok: false, message: "手机号已注册，请直接登录" });
   try {
     await verifyRegistrationCode(phone, code);
   } catch (error) {
     return sendJson(res, 400, { ok: false, message: error.message || "验证码核对失败" });
   }
+
+  // Remote SMS verification yields to other requests. JSON storage returns a
+  // snapshot, so retaining it here could overwrite saves/registrations made
+  // while the provider was responding. Re-read immediately before mutation.
+  db = readDatabase();
+  if (db.users[phone]) return sendJson(res, 409, { ok: false, message: '手机号已注册，请直接登录' });
 
   const passwordInfo = hashPassword(password);
   const token = makeAuthToken();
@@ -1638,6 +1654,7 @@ async function handleSaveAccount(req, res) {
   const db = readDatabase();
   const user = authenticate(db, phone, token);
   if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
+  const accountAvatar = validatedMediaUrl(body.accountAvatar, { allowImageData: true });
   const incomingData = normalizeAccountData(body.data || {});
   if (user.teamSpace && typeof body.baseDataRevision !== 'string') {
     return sendJson(res, 409, { ok: false, message: '团队共享已启用，请更新客户端并刷新云端数据后再保存' });
@@ -1708,7 +1725,7 @@ async function handleSaveAccount(req, res) {
   } catch (error) {
     return sendJson(res, 400, { ok: false, message: error.message || "昵称不可使用" });
   }
-  user.accountAvatar = String(body.accountAvatar || "");
+  user.accountAvatar = accountAvatar;
   recordAccountChange(user, existingData, incomingData);
   user.data = incomingData;
   user.updatedAt = new Date(Math.max(Date.now(), (Date.parse(user.updatedAt) || 0) + 1)).toISOString();
@@ -1729,6 +1746,14 @@ async function handleDeleteGrowthRecord(req, res) {
   const user = authenticate(db, phone, token);
   if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
   if (!turtleId || !historyId) return sendJson(res, 400, { ok: false, message: "缺少成长记录标识，未执行删除" });
+  if (Object.hasOwn(body, 'baseDataRevision')) {
+    if (typeof body.baseDataRevision !== 'string' || !body.baseDataRevision) {
+      return sendJson(res, 400, { ok: false, message: '数据版本无效，请刷新后重试' });
+    }
+    if (body.baseDataRevision !== accountDataRevision(user)) {
+      return sendJson(res, 409, { ok: false, code: 'ACCOUNT_DATA_CONFLICT', message: '云端数据已更新，请刷新后再删除成长记录' });
+    }
+  }
 
   const account = normalizeAccountData(user.data || {});
   const turtle = account.turtles.find(item => String(item?.id || "") === turtleId);
@@ -1753,8 +1778,13 @@ async function handleDeleteGrowthRecord(req, res) {
   const turtleIndex = account.turtles.findIndex(item => String(item?.id || "") === turtleId);
   account.turtles[turtleIndex] = rebuilt.turtle;
   user.data = account;
-  user.updatedAt = new Date().toISOString();
-  writeDatabase(db);
+  user.updatedAt = new Date(Math.max(Date.now(), (Date.parse(user.updatedAt) || 0) + 1)).toISOString();
+  try {
+    await writeDatabase(db);
+  } catch (error) {
+    console.error('成长记录删除未确认保存：', error.message);
+    return sendJson(res, 503, { ok: false, message: '数据库暂时无法保存，未确认删除成功，请保留本机数据后重试' });
+  }
   return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });
 }
 
@@ -2181,6 +2211,10 @@ async function handleUploadMedia(req, res) {
   if (!user) return;
   const media = parseMediaDataUrl(body.media);
   if (!media) return sendJson(res, 400, { ok: false, message: "仅支持 JPG、PNG、WebP、MP4、WebM 或 MOV" });
+  const limit = media.mediaType === 'image' ? MAX_MEDIA_IMAGE_UPLOAD_BYTES : MAX_MEDIA_UPLOAD_BYTES;
+  if (media.buffer.length > limit) {
+    return sendJson(res, 413, { ok: false, message: mediaUploadLimitMessage(media.mediaType, limit) });
+  }
   const now = new Date();
   const year = String(now.getFullYear());
   const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -2206,6 +2240,10 @@ function streamMediaInfo(mime) {
     "video/quicktime": { ext: "mov", mediaType: "video" }
   };
   return types[mime] || null;
+}
+
+function mediaUploadLimitMessage(mediaType, limit) {
+  return `${mediaType === 'image' ? '图片' : '视频'}不能超过 ${Math.ceil(limit / (1024 * 1024))}MB，请压缩后重新上传`;
 }
 
 function handleUploadMediaStream(req, res, mime) {
@@ -2234,6 +2272,13 @@ function handleUploadMediaStream(req, res, mime) {
       resolve();
       return;
     }
+    const limit = media.mediaType === 'image' ? MAX_MEDIA_IMAGE_UPLOAD_BYTES : MAX_MEDIA_UPLOAD_BYTES;
+    if (Number(req.headers['content-length'] || 0) > limit) {
+      req.resume();
+      sendJson(res, 413, { ok: false, message: mediaUploadLimitMessage(media.mediaType, limit) });
+      resolve();
+      return;
+    }
     const now = new Date();
     const year = String(now.getFullYear());
     const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -2248,18 +2293,23 @@ function handleUploadMediaStream(req, res, mime) {
       settled = true;
       resolve();
     };
-    const fail = () => {
+    const fail = (status = 500) => {
       if (settled) return;
       settled = true;
+      req.unpipe(output);
+      output.once('close', () => fs.rm(target, { force: true }, () => {}));
       if (!output.destroyed) output.destroy();
-      fs.rm(target, { force: true }, () => {});
-      if (!res.headersSent) sendJson(res, 500, { ok: false, message: "视频上传失败，请重试" });
+      req.resume();
+      if (!res.headersSent) sendJson(res, status, { ok: false, message: status === 413 ? mediaUploadLimitMessage(media.mediaType, limit) : '视频上传失败，请重试' });
       resolve();
     };
-    req.on("aborted", fail);
-    req.on("error", fail);
-    output.on("error", fail);
+    let bytes = 0;
+    req.on('data', chunk => { bytes += chunk.length; if (bytes > limit) fail(413); });
+    req.on("aborted", () => fail());
+    req.on("error", () => fail());
+    output.on("error", () => fail());
     output.on("finish", async () => {
+      if (settled) return;
       try {
         const url = await publishUpload(target, year, month, filename, mime);
         const posterUrl = media.mediaType === "video" ? await generateVideoPoster(url) : "";
@@ -3302,8 +3352,8 @@ async function handleCommunityCreate(req, res) {
   if (rawMediaItems.length > 9) return sendJson(res, 400, { ok: false, message: "图片最多可发布 9 张" });
   const mediaItems = rawMediaItems
     .map(media => ({
-      url: trimPublicText(media?.url, 800),
-      posterUrl: trimPublicText(media?.posterUrl || media?.poster, 800),
+      url: validatedMediaUrl(media?.url),
+      posterUrl: validatedMediaUrl(media?.posterUrl || media?.poster),
       type: media?.type === "video" ? "video" : "image"
     }))
     .filter(media => media.url);
@@ -3860,8 +3910,8 @@ async function handleCommunityChatSend(req, res) {
   if (!user) return;
   const target = communityUserById(db, body.userId);
   const content = trimPublicText(body.content, 1000);
-  const mediaUrl = trimPublicText(body.mediaUrl, 800);
-  const posterUrl = trimPublicText(body.posterUrl, 800);
+  const mediaUrl = validatedMediaUrl(body.mediaUrl);
+  const posterUrl = validatedMediaUrl(body.posterUrl);
   const mediaType = mediaUrl && body.mediaType === "video" ? "video" : "image";
   const marketListingId = trimPublicText(body.marketListingId, 100);
   if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "无法与该用户聊天" });
@@ -3894,7 +3944,9 @@ async function handleCommunityChatSend(req, res) {
       createdAt: new Date().toISOString()
     });
   }
-  db.messages = newMessages.slice(-5000);
+  // Retention must not silently delete unrelated conversations as the platform
+  // grows. Explicit recall/account deletion remain the removal operations.
+  db.messages = newMessages;
   // A new message restores a conversation explicitly deleted by either participant.
   [user, target].forEach(account => {
     account.data = normalizeAccountData(account.data);
@@ -4280,8 +4332,8 @@ async function handleMarketCreate(req, res) {
   const mediaItems = (Array.isArray(body.mediaItems) ? body.mediaItems : [])
     .slice(0, 9)
     .map(media => ({
-      url: trimPublicText(media?.url, 800),
-      posterUrl: trimPublicText(media?.posterUrl || media?.poster, 800),
+      url: validatedMediaUrl(media?.url),
+      posterUrl: validatedMediaUrl(media?.posterUrl || media?.poster),
       type: media?.type === "video" ? "video" : "image"
     }))
     .filter(media => media.url);
@@ -4306,7 +4358,7 @@ async function handleMarketCreate(req, res) {
     city: location.city,
     delivery: ["可快递", "仅自提", "可面交"].includes(body.delivery) ? body.delivery : "双方协商",
     description: trimPublicText(body.description, 600),
-    photoUrl: mediaItems[0]?.url || trimPublicText(body.photoUrl, 800),
+    photoUrl: mediaItems[0]?.url || validatedMediaUrl(body.photoUrl),
     mediaItems,
     impressionCount: 0,
     viewCount: 0,
@@ -4494,8 +4546,8 @@ async function handleMarketUpdate(req, res) {
   const mediaItems = (Array.isArray(body.mediaItems) ? body.mediaItems : [])
     .slice(0, 9)
     .map(media => ({
-      url: trimPublicText(media?.url, 800),
-      posterUrl: trimPublicText(media?.posterUrl || media?.poster, 800),
+      url: validatedMediaUrl(media?.url),
+      posterUrl: validatedMediaUrl(media?.posterUrl || media?.poster),
       type: media?.type === "video" ? "video" : "image"
     }))
     .filter(media => media.url);
@@ -4826,8 +4878,11 @@ function serveUpload(req, res, url) {
     const fileSize = stats.size;
     const range = String(req.headers.range || "").match(/^bytes=(\d*)-(\d*)$/i);
     if (range && fileSize > 0) {
-      let start = range[1] ? Number(range[1]) : 0;
-      let end = range[2] ? Number(range[2]) : fileSize - 1;
+      const suffix = !range[1];
+      const suffixLength = Number(range[2]);
+      let start = suffix ? Math.max(0, fileSize - suffixLength) : Number(range[1]);
+      let end = suffix || !range[2] ? fileSize - 1 : Number(range[2]);
+      if (suffix && (!Number.isSafeInteger(suffixLength) || suffixLength <= 0)) start = fileSize;
       if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start >= fileSize || end < start) {
         res.writeHead(416, { ...headers, "Content-Range": `bytes */${fileSize}` });
         res.end();
@@ -4973,7 +5028,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET") return serveStatic(req, res, url);
     return sendJson(res, 405, { ok: false, message: "方法不支持" });
   } catch (error) {
-    return sendJson(res, 500, { ok: false, message: error.message || "服务异常" });
+    const status = Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : 500;
+    return sendJson(res, status, { ok: false, message: error.message || "服务异常" });
   }
 });
 

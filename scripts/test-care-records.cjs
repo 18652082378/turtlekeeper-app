@@ -316,6 +316,30 @@ async function main() {
     const planMerge = Merge.merge(planBase, snapshot({ carePlans: [] }), snapshot({ carePlans: [{ id: 'p', name: '原方案' }, { id: 'p2', name: '新方案' }] }));
     assert.equal(planMerge.ready, true);
     assert.deepEqual(planMerge.snapshot.data.carePlans.map(plan => plan.id), ['p2']);
+    // A mixed release must retain data even when HTTP 200 omits new fields.
+    user = (await post('/api/account/load', auth)).user;
+    await page.evaluate(user => applyCloudUser(user, '', { skipCloud: true, page: 'memos' }), user);
+    await page.waitForFunction(() => !cloudSyncInFlight);
+    const legacyUser = JSON.parse(JSON.stringify(user));
+    delete legacyUser.data.careRecords; delete legacyUser.data.careCustomItems; delete legacyUser.data.carePlans;
+    const legacyReply = route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, user: legacyUser }) });
+    await page.route('**/api/account/save', legacyReply);
+    await page.route('**/api/account/load', legacyReply);
+    await page.locator('[data-new-care="feeding"]').click();
+    await page.locator('#careForm [name="note"]').fill('退出后仍需保留');
+    await page.getByRole('button', { name: '保存养护记录', exact: true }).click();
+    await page.waitForFunction(() => state.cloudSyncConflict?.code === 'CLOUD_SAVE_INCOMPLETE');
+    for (let i = 0; i < 2; i++) {
+      await page.reload();
+      await page.waitForFunction(() => cloudHydrationComplete);
+      assert.ok(await page.evaluate(() => state.careRecords.some(r => r.note === '退出后仍需保留')));
+      assert.ok(await page.evaluate(() => readPendingCloudData().data.careRecords.some(r => r.note === '退出后仍需保留')));
+    }
+    await page.unroute('**/api/account/save', legacyReply);
+    await page.unroute('**/api/account/load', legacyReply);
+    await page.evaluate(() => syncCloudAccountManually());
+    await page.waitForFunction(() => !readPendingCloudData() && !cloudSyncInFlight);
+    assert.ok((await post('/api/account/load', auth)).user.data.careRecords.some(r => r.note === '退出后仍需保留'), 'server upgrade allows protected data to sync');
     assert.deepEqual(errors, []);
     console.log('PASS: care UI, reusable/deletable options, immutable history, reminders, cloud save/load, legacy client compatibility, merge, 320/390/430px, escaped text.');
   } catch (error) { console.error(logs.slice(-1800)); throw error; }

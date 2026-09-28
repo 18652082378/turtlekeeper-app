@@ -67,8 +67,8 @@ async function main() {
   assert.deepEqual(cached.errors, []); await cached.close();
 
   const fresh = await open(false);
-  assert.match(await fresh.page.locator('.message-empty').innerText(), /正在加载消息/);
-  assert.doesNotMatch(await fresh.page.locator('.message-empty').innerText(), /暂无消息/);
+  assert.match(await fresh.page.locator('.ui-request-status[aria-busy="true"]').innerText(), /正在加载消息/);
+  assert.doesNotMatch(await fresh.page.locator('.ui-request-status[aria-busy="true"]').innerText(), /暂无消息/);
   fresh.fail(true); fresh.release();
   await fresh.page.waitForFunction(() => !communityLoading && !messageUnreadLoading);
   assert.match(await fresh.page.locator('.message-empty').innerText(), /消息加载失败/);

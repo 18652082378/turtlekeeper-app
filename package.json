@@ -1,6 +1,6 @@
 {
   "name": "turtlekeeper-ios-app",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "description": "ShellNote iOS cloud build package",
   "scripts": {
@@ -16,6 +16,15 @@
     "test:team-ui": "node scripts/test-team-ui.cjs",
     "test:mysql-records": "node scripts/test-mysql-records.js",
     "test:mysql-record-api": "node scripts/test-mysql-record-api.js",
+    "test:data-reliability": "node scripts/test-data-reliability.cjs",
+    "test:reliability-guards": "node scripts/test-reliability-guards.cjs",
+    "test:release119-compat": "node scripts/test-data-reliability.cjs --release --compat --hotfix",
+    "test:ui": "node scripts/test-ui-consistency.cjs",
+    "test:ui-interactions": "node scripts/test-ui-experience.cjs",
+    "test:client-mutations": "node scripts/test-client-mutation-races.cjs",
+    "test:media-safety": "node scripts/test-media-attribute-safety.cjs",
+    "test:postrelease-server": "node scripts/test-postrelease-server-audit.cjs --workflows && node scripts/test-postrelease-growth-delete.cjs && node scripts/test-postrelease-registration-race.cjs",
+    "test:navigation": "node scripts/test-navigation-lifecycle.cjs && node scripts/test-navigation-freshness.cjs",
     "migrate:mysql-records": "node scripts/migrate-mysql-records.js",
     "migrate:mysql": "node scripts/migrate-json-to-mysql.js",
     "migrate:oss-media": "node scripts/migrate-local-media-to-oss.js",

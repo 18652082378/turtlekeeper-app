@@ -11,13 +11,34 @@ const entries = ['package.json', 'package-lock.json', 'capacitor.config.json', '
   'app.js', 'index.html', 'config.js', 'styles.css', 'chat-tools.css', 'dark-surface-audit.css', 'species-data.js',
   'official.html', 'privacy.html', 'terms.html', 'support.html', 'apple-app-site-association', 'README.md',
   'server.js', 'ecosystem.config.cjs', 'assets', 'server', 'scripts', 'ios', 'deploy',
-  `docs/ios-${build}-release.md`, 'docs/navigation-scroll-keyboard-audit.md', 'docs/bottom-nav-recovery.md', 'docs/species-selection-audit.md'];
-const raw = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...entries], { cwd: root, maxBuffer: 16 * 1024 * 1024 }).toString('utf8');
+  'docs'];
+// A working directory can contain unrelated, untracked platform tools. Include
+// established source plus only explicitly reviewed additions for this release.
+const releaseList = `scripts/ios-${build}-release-files.txt`;
+const approved = fs.readFileSync(path.join(root, releaseList), 'utf8').split(/\r?\n/).map(file => file.trim()).filter(file => file && !file.startsWith('#'));
+const raw = execFileSync('git', ['ls-files', '-z', '--cached', '--', ...entries], { cwd: root, maxBuffer: 16 * 1024 * 1024 }).toString('utf8');
 const forbidden = /(^|\/)(?:\.git|node_modules|output|www|build|dist|data|uploads|backups|keys|Pods|DerivedData|xcuserdata)(?:\/|$)|(^|\/)\.env(?:$|\.(?!example$|sample$))|\.(?:p8|p12|jks|keystore|pem|key|log)$/i;
-const files = [...new Set(raw.split('\0').filter(Boolean))].filter(file => {
+for (const file of approved) {
+  if (path.isAbsolute(file) || file.includes('\\') || file.split('/').includes('..') || forbidden.test(file) || !entries.some(entry => file === entry || file.startsWith(entry + '/'))) throw Error('Invalid approved release path: ' + file);
+  if (!fs.existsSync(path.join(root, file))) throw Error('Missing approved release source: ' + file);
+}
+const files = [...new Set([...raw.split('\0').filter(Boolean), ...approved])].filter(file => {
   if (path.isAbsolute(file) || file.split('/').includes('..')) throw Error('Invalid source path');
   return !forbidden.test(file) && fs.existsSync(path.join(root, file));
 }).sort();
+const requiredSources = ['app.js', 'server/server.js', 'server/media-url.js', 'server/team-breeding.js', 'assets/care-records.js', 'assets/care-records.css', 'assets/ui-system.css', 'assets/ui-experience.js', 'scripts/build-web.js', 'scripts/verify-ios-build.js', 'scripts/configure-ios-local-plugins.js', 'scripts/test-ios-release-readiness.cjs', '.github/workflows/ios-check.yml', 'ios/App/App.xcodeproj/project.pbxproj', 'ios/App/App/PrivacyInfo.xcprivacy', `docs/ios-${build}-release.md`, releaseList];
+for (const file of files) {
+  if (!fs.lstatSync(path.join(root, file)).isFile()) throw Error('Expected regular source file: ' + file);
+}
+for (const required of requiredSources) {
+  if (!files.includes(required)) throw Error('Missing release source: ' + required);
+}
+// Release readiness can check the manifest without hashing source contents,
+// reading credential material, creating a ZIP or replacing prior artifacts.
+if (process.argv.includes('--check')) {
+  console.log(JSON.stringify({ mode: 'check-only', version, build, files: files.length, requiredSources, writes: false, snapshot: 'Current working tree; not the original published build' }, null, 2));
+  process.exit(0);
+}
 const hashes = {};
 for (const file of files) {
   const full = path.join(root, file);
@@ -28,7 +49,7 @@ for (const file of files) {
   if (/-----BEGIN (?:EC |RSA |ENCRYPTED |OPENSSH )?PRIVATE KEY-----\s*[A-Za-z0-9+/=]{40,}/.test(bytes.toString('utf8').replace(/\\n/g, '\n'))) throw Error('Private key in source: ' + file);
   hashes[file] = crypto.createHash('sha256').update(bytes).digest('hex');
 }
-for (const required of ['app.js', 'server/server.js', 'server/team-breeding.js', 'assets/care-records.js', 'assets/care-records.css', 'scripts/build-web.js', 'scripts/verify-ios-build.js', 'ios/App/App.xcodeproj/project.pbxproj', `docs/ios-${build}-release.md`]) {
+for (const required of requiredSources) {
   if (!hashes[required]) throw Error('Missing release source: ' + required);
 }
 fs.mkdirSync(output, { recursive: true });

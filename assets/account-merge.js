@@ -87,12 +87,15 @@
         ? { value: node.values[1] || node.values[2] } : choose(node.values));
       let conflict = decisions.some(d => d.conflict);
       const candidate = new Map(group.map((node, index) => [node.key, decisions[index].value]));
-      // Cross-record changes must be checked together: deleting a pool while
-      // the other device assigns a turtle to it is a real conflict.
+      // Cross-record changes must be checked together: a new assignment must
+      // not target a pool, mother or archive deleted on the other device.
+      // Existing historical references remain valid when a source snapshot
+      // deliberately retains the record without the referenced live entity.
       for (const node of group) {
         const record = candidate.get(node.key);
         if (!record || node.kind !== 'record' || ['careRecords', 'carePlans'].includes(node.field)) continue;
-        for (const dependency of [record.poolId ? `turtlePools:${record.poolId}` : '', record.sourceBreedingId ? `breedingRecords:${record.sourceBreedingId}` : ''].filter(Boolean)) {
+        for (const dependency of [...refs(record), record.poolId ? `turtlePools:${record.poolId}` : '', record.sourceBreedingId ? `breedingRecords:${record.sourceBreedingId}` : '',
+          ...(node.field === 'breedingRecords' ? (record.hatchArchiveIds || []).map(id => `turtles:${id}`) : [])].filter(Boolean)) {
           if (nodes.has(dependency) && candidate.get(dependency) === undefined
             && !snapshots.slice(1).some((s, side) => equal(node.values[side + 1], record) && nodes.get(dependency).values[side + 1] === undefined)) conflict = true;
         }
@@ -120,13 +123,19 @@
         else if (node.kind === 'record' || node.kind === 'set') {
           const saved = copy(value);
           if (conflict && selectedSide && node.field === 'turtles') {
-            // Choosing the current measurements must not erase the other
-            // device's growth history or trip the server's history guard.
+            // Preserve new history from both devices, but respect an explicit
+            // deletion of a shared-baseline entry on the selected side.
+            // Without a baseline, a missing entry cannot prove a deletion.
             const history = [], seen = new Map();
+            const selectedKeys = new Set((value.measureHistory || []).map(item => item.id || canonical(item)));
+            const deletedKeys = new Set(base && Array.isArray(value.measureHistory)
+              ? (node.values[0]?.measureHistory || []).map(item => item.id || canonical(item)).filter(key => !selectedKeys.has(key))
+              : []);
             for (const record of [value, ...node.values.filter(Boolean)]) {
               const occurrence = new Map();
               for (const item of record.measureHistory || []) {
                 const key = item.id || canonical(item);
+                if (deletedKeys.has(key)) continue;
                 const count = (occurrence.get(key) || 0) + 1; occurrence.set(key, count);
                 if (count > (seen.get(key) || 0)) { history.push(copy(item)); seen.set(key, count); }
               }

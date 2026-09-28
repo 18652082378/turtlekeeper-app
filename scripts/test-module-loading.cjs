@@ -10,9 +10,14 @@ function setup(){
   normalizeCommunityPosts:x=>x,normalizeMarketListings:x=>x,communityUserSnapshot:id=>({id}),communityAuthPayload:x=>x,reviewAuthPayload:()=>({}),feedbackAuthPayload:()=>({}),
   saveState(){},setupCommunityInfiniteScroll(){},patchVisibleCommunityFeed(){},$app:{querySelector:()=>null},render(){},toast(){},patchAnnouncementSlot(){}};
  ctx.currentCloudToken=()=>ctx.state.cloudToken;ctx.hasCloudSession=()=>!!ctx.state.cloudToken;ctx.setState=p=>Object.assign(ctx.state,p);
- vm.createContext(ctx);vm.runInContext(['refreshFollowing','refreshPublicReviews','refreshPublicFeedback','refreshCommunityUserProfile','loadMoreCommunityPosts','refreshContentReports','refreshOperationsOverview','refreshBlockedUsers','remoteListEmptyMarkup','accountModuleCache'].map(extract).join('\n'),ctx);return ctx;
+ vm.createContext(ctx);vm.runInContext(['refreshFollowing','refreshPublicReviews','refreshPublicFeedback','refreshCommunityUserProfile','loadMoreCommunityPosts','refreshContentReports','refreshOperationsOverview','refreshBlockedUsers','uiLoadingMarkup','remoteListEmptyMarkup','accountModuleCache'].map(extract).join('\n'),ctx);return ctx;
 }
 (async()=>{
+ {
+  const c=setup();const loading=c.remoteListEmptyMarkup(false,false,'EMPTY','hint');
+  assert.match(loading,/aria-busy="true"/);assert.match(loading,/aria-hidden="true"/);assert.doesNotMatch(loading,/EMPTY/);
+  assert.match(c.uiLoadingMarkup('<unsafe>'),/&lt;unsafe&gt;/);
+ }
  for(const [fn,key,result] of [['refreshFollowing','communityFollowingUsers',{following:[{id:'private-A'}]}],['refreshPublicReviews','publicReviews',{reviews:[{id:'private-A'}]}],['refreshPublicFeedback','publicFeedbackItems',{feedbacks:[{id:'private-A'}]}],['refreshContentReports','contentReports',{reports:[{id:'private-A'}]}],['refreshOperationsOverview','operationsOverview',{conversations:[{id:'private-A'}]}],['refreshBlockedUsers','blockedUsers',{users:[{id:'private-A'}]}]]){
   const c=setup();c.state.isCommunityAdmin=true;let resolve;c.apiPost=()=>new Promise(r=>resolve=r);const pending=c[fn](true);assert(resolve,fn);
   c.state={loggedInPhone:'B',cloudToken:'tokenB',page:'mine',[key]:[]};resolve(result);await pending;assert.equal(JSON.stringify(c.state[key]),'[]',fn+' discards old account');

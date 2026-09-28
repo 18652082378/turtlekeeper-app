@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>龟友手账</title>
     <link rel="stylesheet" href="./styles.css?v=20260809-market-gallery" />
     <link rel="stylesheet" href="./chat-tools.css?v=20260809-market-gallery" />
@@ -10,16 +10,6 @@
   </head>
   <body>
     <div id="app" class="phone-shell"></div>
-    <script>
-      // Keep the app at its designed scale on mobile.  In particular, avoid
-      // iOS retaining a pinch/double-tap zoom after a search field is focused.
-      document.addEventListener("touchmove", event => {
-        if (event.touches.length > 1) event.preventDefault();
-      }, { passive: false });
-      ["gesturestart", "gesturechange", "gestureend"].forEach(type => {
-        document.addEventListener(type, event => event.preventDefault(), { passive: false });
-      });
-    </script>
     <script src="./config.js?v=20260809-market-gallery"></script>
     <script src="./species-data.js?v=20260809-market-gallery"></script>
     <link rel="stylesheet" href="./assets/trade-guide.css" />
@@ -35,6 +25,8 @@
     <script src="./assets/team-space.js"></script>
     <link rel="stylesheet" href="./assets/workspace-ui.css" />
     <script src="./assets/workspace-ui.js"></script>
+    <link rel="stylesheet" href="./assets/ui-system.css" />
+    <script src="./assets/ui-experience.js"></script>
     <script src="./app.js?v=20260809-market-gallery"></script>
   </body>
 </html>

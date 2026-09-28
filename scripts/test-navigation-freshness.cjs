@@ -1,8 +1,8 @@
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { launchBrowser, recordResult } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
 async function main() {
-  const browser = await chromium.launch({ headless: true, channel: 'msedge' });
+  const browser = await launchBrowser({ channel: 'msedge' });
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const errors = []; page.on('pageerror', e => errors.push(e.message));
@@ -55,6 +55,7 @@ async function main() {
       assert.ok((await page.locator('#app').innerText()).includes(item.after + '再次修改'));
     }
     assert.deepEqual(errors, []);
+    recordResult(root, 'navigation-freshness.json', { pass: true, scenarios: 12, externalTraffic: false });
     console.log('PASS: breeding, pools, dashboard and care show saved edits immediately on button, gesture and HTML fallback returns; in-place mutations and immediate second edits covered.');
   } finally { await browser.close(); }
 }

@@ -36,12 +36,52 @@ b.data.turtles[0].measureHistory = [{ id: 'remote-growth', weight: 40 }];
 result = merge(base, a, b);
 result = merge(base, a, b, { [result.conflicts[0].key]: 'local' });
 assert.deepEqual(new Set(result.snapshot.data.turtles.find(t => t.id === 'a').measureHistory.map(h => h.id)), new Set(['local-growth', 'remote-growth']), 'choosing current values cannot erase either growth history');
+const deletionBase = copy(base); deletionBase.data.turtles[0].measureHistory = [{ id: 'confirmed-old', weight: 15 }];
+a = copy(deletionBase); b = copy(deletionBase);
+a.data.turtles[0].measureHistory.push({ id: 'new-offline-growth', weight: 30 }); a.data.turtles[0].weight = 30;
+b.data.turtles[0].measureHistory = []; b.data.turtles[0].weight = 10;
+result = merge(deletionBase, a, b);
+assert.equal(result.ready, false, 'a growth edit concurrent with deletion requires a choice');
+const chooseDeleted = merge(deletionBase, a, b, { [result.conflicts[0].key]: 'remote' });
+assert.deepEqual(chooseDeleted.snapshot.data.turtles[0].measureHistory.map(item => item.id), ['new-offline-growth'], 'choosing the confirmed deletion must not resurrect baseline history, but retains new offline history');
+const chooseKept = merge(deletionBase, a, b, { [result.conflicts[0].key]: 'local' });
+assert.deepEqual(new Set(chooseKept.snapshot.data.turtles[0].measureHistory.map(item => item.id)), new Set(['confirmed-old', 'new-offline-growth']), 'choosing the retained timeline explicitly keeps its baseline entries');
+const legacyDeleted = merge(null, a, b);
+const chooseLegacy = merge(null, a, b, { [legacyDeleted.conflicts[0].key]: 'remote' });
+assert.ok(chooseLegacy.snapshot.data.turtles[0].measureHistory.some(item => item.id === 'confirmed-old'), 'without a common baseline a missing entry is not proof of intentional deletion');
+const omittedHistory = copy(b); delete omittedHistory.data.turtles[0].measureHistory;
+const omittedConflict = merge(deletionBase, a, omittedHistory);
+const chooseOmitted = merge(deletionBase, a, omittedHistory, { [omittedConflict.conflicts[0].key]: 'remote' });
+assert.deepEqual(new Set(chooseOmitted.snapshot.data.turtles[0].measureHistory.map(item => item.id)), new Set(['confirmed-old', 'new-offline-growth']), 'an omitted legacy field is not an explicit history deletion');
 a = copy(base); b = copy(base);
 a.data.turtles = a.data.turtles.filter(t => t.id !== 'a'); b.data.turtles[0].weight = 40;
 assert.equal(merge(base, a, b).ready, false, 'delete versus update requires an explicit choice');
 const poolBase = copy(base); poolBase.data.turtlePools = [{ id: 'pool', name: 'pool' }];
 a = copy(poolBase); b = copy(poolBase); a.data.turtlePools = []; b.data.turtles[0].poolId = 'pool';
 assert.equal(merge(poolBase, a, b).ready, false, 'do not create orphan pool assignments');
+for (const [field, record] of [
+  ['breedingRecords', { id: 'new-nest', motherId: 'a', eggCount: 4 }],
+  ['memos', { id: 'new-measure-task', turtleId: 'a', title: '测量' }],
+  ['ledgerRecords', { id: 'new-associated-sale', turtleIds: ['a'], type: 'sold', amount: 160 }]
+]) {
+  a = copy(base); b = copy(base);
+  a.data.turtles = a.data.turtles.filter(t => t.id !== 'a');
+  b.data[field].push(record);
+  result = merge(base, a, b);
+  assert.equal(result.ready, false, field + ': a new relationship cannot silently target an archive deleted on the other device');
+  const conflict = result.conflicts.find(item => item.label.startsWith('a'));
+  const localChoice = merge(base, a, b, { [conflict.key]: 'local' });
+  assert.equal(localChoice.snapshot.data.turtles.some(t => t.id === 'a'), false);
+  assert.equal(localChoice.snapshot.data[field].some(item => item.id === record.id), false);
+  const remoteChoice = merge(base, a, b, { [conflict.key]: 'remote' });
+  assert.equal(remoteChoice.snapshot.data.turtles.some(t => t.id === 'a'), true);
+  assert.equal(remoteChoice.snapshot.data[field].some(item => item.id === record.id), true);
+}
+const historical = copy(base); historical.data.careRecords = [{ id: 'historical-care', turtleRefs: [{ id: 'a' }], title: '喂食' }];
+a = copy(historical); b = copy(historical); a.data.turtles = a.data.turtles.filter(t => t.id !== 'a');
+result = merge(historical, a, b);
+assert.equal(result.ready, true, 'existing care and ledger snapshots remain valid after an intentional archive deletion');
+assert.equal(result.snapshot.data.careRecords[0].id, 'historical-care');
 a = copy(base); b = copy(base);
 a.data.turtles.push({ id: 'new-a', code: 'GHG-3' }); b.data.turtles.push({ id: 'new-b', code: 'GHG-3' });
 assert.equal(merge(base, a, b).ready, false, 'offline duplicate codes must not silently enter the dashboard');
