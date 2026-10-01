@@ -32,6 +32,8 @@ git -c gc.auto=0 -c maintenance.auto=false push origin main
 
 Codemagic需提供主App和`com.turtlekeeper.app.NotificationService`扩展各自匹配的App Store签名描述文件；只配置主App描述文件可能导致扩展签名失败。
 
+用户提供的构建162日志已确认扩展缺少描述文件。补齐步骤见[签名修复说明](ios-121-signing-fix.md)。工作流增加真实构建机上的签名资源及应用后检查；本地回归运行`node scripts/test-ios-signing.cjs`，仅使用模拟描述文件，不能证明Apple签名可用。
+
 ## 验证边界
 
 用户本次服务器截图已显示community-recommendation-v3补丁校验、代码核对、备份与安装成功，意味着服务端已安装管理员审核覆盖关键词、选定帖子标题与配图载荷逻辑。它不证明真实APNs送达、图片显示或iPhone跳转成功。

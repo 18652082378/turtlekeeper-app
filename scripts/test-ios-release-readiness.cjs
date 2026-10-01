@@ -70,6 +70,13 @@ check('GitHub sync must configure local plugins before native verification', () 
   const file = '.github/workflows/ios-check.yml';
   assert.throws(() => verify({ [file]: read(file).replace(/.*node scripts\/configure-ios-local-plugins\.js.*\r?\n/g,'') }), /workflow|GitHub/i);
 });
+for (const command of ['node scripts/verify-ios-signing.cjs', 'node scripts/verify-ios-signing.cjs --applied']) {
+  check(`Codemagic cannot omit signing gate: ${command}`, () => {
+    const file = 'codemagic.yaml';
+    const value = read(file).split(/\r?\n/).filter(line => line.trim() !== command).join('\n');
+    assert.throws(() => verify({ [file]: value }), /signing profiles before Build IPA/);
+  });
+}
 const report = path.join(root,'output/release-acceptance/ios-readiness-regression.json');
 fs.mkdirSync(path.dirname(report), { recursive:true });
 fs.writeFileSync(report,JSON.stringify({ scope:'Read-only verifier with in-memory invalid artifact fixtures. Not an Xcode build.', outcomes },null,2));

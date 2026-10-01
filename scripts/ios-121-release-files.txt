@@ -80,3 +80,6 @@ server/server.js
 scripts/ios-121-release-files.txt
 scripts/copy-community-recommendation-server-command.sh
 scripts/test-community-recommendation-transfer.cjs
+scripts/verify-ios-signing.cjs
+scripts/test-ios-signing.cjs
+docs/ios-121-signing-fix.md

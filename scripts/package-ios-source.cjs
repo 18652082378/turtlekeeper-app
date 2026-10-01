@@ -28,6 +28,7 @@ const files = [...new Set([...raw.split('\0').filter(Boolean), ...approved])].fi
 }).sort();
 const requiredSources = ['app.js', 'server/server.js', 'server/media-url.js', 'server/team-breeding.js', 'assets/care-records.js', 'assets/care-records.css', 'assets/ui-system.css', 'assets/ui-experience.js', 'scripts/build-web.js', 'scripts/verify-ios-build.js', 'scripts/configure-ios-local-plugins.js', 'scripts/test-ios-release-readiness.cjs', '.github/workflows/ios-check.yml', 'ios/App/App.xcodeproj/project.pbxproj', 'ios/App/App/PrivacyInfo.xcprivacy', `docs/ios-${build}-release.md`, releaseList];
 requiredSources.push('scripts/verify-notification-extension.cjs', 'ios/App/TurtleNotificationService/NotificationService.swift', 'ios/App/TurtleNotificationService/Info.plist', 'ios/App/TurtleNotificationService/PrivacyInfo.xcprivacy');
+requiredSources.push('scripts/verify-ios-signing.cjs', 'scripts/test-ios-signing.cjs', 'docs/ios-121-signing-fix.md');
 for (const file of files) {
   if (!fs.lstatSync(path.join(root, file)).isFile()) throw Error('Expected regular source file: ' + file);
 }

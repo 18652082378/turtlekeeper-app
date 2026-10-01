@@ -32,9 +32,12 @@ workflows:
           node scripts/verify-ios-build.js --native
       - name: Apply signing profiles
         script: |
-          # Upload/fetch an App Store profile for
-          # com.turtlekeeper.app.NotificationService as well as the main app.
-          xcode-project use-profiles
+          set -e
+          # The existing ios_signing selector fetches BOTH uploaded profiles.
+          # See docs/ios-121-signing-fix.md to add the missing extension profile.
+          node scripts/verify-ios-signing.cjs
+          xcode-project use-profiles --archive-method app-store
+          node scripts/verify-ios-signing.cjs --applied
       - name: Build IPA
         script: |
           set +e

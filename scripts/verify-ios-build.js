@@ -74,6 +74,7 @@ assert.ok(privacyBuild && resourcesPhase.includes(`${privacyBuild} /* PrivacyInf
 for (const workflow of ['.github/workflows/ios-check.yml', 'codemagic.yaml']) {
   assert.match(read(workflow), /npx cap sync ios[\s\S]*node scripts\/configure-ios-local-plugins\.js[\s\S]*node scripts\/verify-ios-build\.js --native/, `iOS workflow ${workflow} must configure plugins and verify native assets after sync`);
 }
+assert.match(read('codemagic.yaml'), /node scripts\/verify-ios-signing\.cjs\s*\r?\n\s*xcode-project use-profiles --archive-method app-store\s*\r?\n\s*node scripts\/verify-ios-signing\.cjs --applied[\s\S]*- name: Build IPA/, 'Codemagic must validate both installed and applied signing profiles before Build IPA');
 if (process.argv.includes('--native')) {
   const native = JSON.parse(read('ios/App/App/capacitor.config.json'));
   for (const plugin of localPlugins) assert.ok(native.packageClassList.includes(plugin), `Synced iOS plugin registration is missing: ${plugin}`);
