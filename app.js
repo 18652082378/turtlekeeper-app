@@ -517,6 +517,8 @@ let pendingPageScrollReset = false;
 let edgeBackSnapshots = [];
 let messageListRefreshDeferred = false;
 let messageListRefreshFlushTimer = 0;
+let marketSearchRenderDeferred = false;
+let marketSearchPointerActive = false;
 // Keep a conversation action isolated from the list's background refreshes.
 // A refresh arriving while the action rail is open used to replace the row
 // before the tap reached its button, making pin/delete appear unresponsive.
@@ -1070,6 +1072,16 @@ function setState(patch, options = {}) {
     return locallySaved;
   }
   if (visibleDataChanged) preservedMessageSnapshotActive = false;
+  if (!pageChanged && options.preserveInputValues && state.page === "market" &&
+      document.activeElement?.matches?.("[data-market-search]")) {
+    // Recreating a focused iOS search input interrupts its keyboard/IME and
+    // can move fixed controls under the trailing touch click. Keep this live
+    // editor until an explicit search or until the user finishes editing.
+    marketSearchRenderDeferred = true;
+    patchMarketSnapshotDetails();
+    syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
+    return locallySaved;
+  }
   const formInputs = !pageChanged && options.preserveInputValues ? captureVisibleFormInputs() : null;
   render();
   if (formInputs) restoreVisibleFormInputs(formInputs);
@@ -4160,20 +4172,70 @@ function marketPublishSpeciesMatches(query) {
   return marketSpeciesMatches(query).filter(item => !isMarketProhibitedSpecies(item));
 }
 
+function flushMarketSearchRefresh() {
+  if (!marketSearchRenderDeferred || state.page !== "market") return;
+  if (document.activeElement?.closest?.(".market-page")) return;
+  if (marketSearchPointerActive) {
+    window.setTimeout(flushMarketSearchRefresh, 80);
+    return;
+  }
+  marketSearchRenderDeferred = false;
+  setState({}, { skipCloud: true, preserveInputValues: true, forceRender: true });
+}
+
+function setupMarketSearchInteractionGuard() {
+  if (document.body.dataset.marketSearchGuardBound === "true") return;
+  document.body.dataset.marketSearchGuardBound = "true";
+  let searchOrigin = false;
+  const begin = event => {
+    marketSearchPointerActive = true;
+    const origin = event.target instanceof Element ? event.target : null;
+    searchOrigin = state.page === "market" && Boolean(origin?.closest(".market-search-area"));
+  };
+  const end = () => { marketSearchPointerActive = false; };
+  document.addEventListener("pointerdown", begin, true);
+  document.addEventListener("pointerup", end, true);
+  document.addEventListener("pointercancel", () => { end(); searchOrigin = false; }, true);
+  if (!window.PointerEvent) {
+    document.addEventListener("touchstart", begin, { capture: true, passive: true });
+    document.addEventListener("touchend", end, { capture: true, passive: true });
+    document.addEventListener("touchcancel", () => { end(); searchOrigin = false; }, true);
+  }
+  // Bind before the document-level bottom-tab recovery handler. A click whose
+  // physical touch began in search cannot become an unrelated navigation when
+  // iOS hides its keyboard or replaces layout under the release position.
+  document.addEventListener("click", event => {
+    if (!searchOrigin || event.detail <= 0 || state.page !== "market") return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest(".market-search-area")) return;
+    if (!target?.closest("[data-page], [data-back], [data-view-market], [data-view-market-seller]")) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    searchOrigin = false;
+  }, true);
+  window.addEventListener("blur", end);
+  window.addEventListener("pagehide", end);
+}
+
 function bindMarketSearchSuggestions() {
   const form = document.querySelector("[data-market-search-form]");
   const input = form?.querySelector("[data-market-search]");
   const suggestions = document.querySelector("[data-market-search-suggestions]");
-  if (!form || !input || !suggestions) return;
+  if (!form || !input || !suggestions || form.__turtlekeeperMarketSearchBound) return;
+  form.__turtlekeeperMarketSearchBound = true;
   let closeTimer = 0;
+  let composing = false;
 
   const close = () => {
+    window.clearTimeout(closeTimer);
+    closeTimer = 0;
     suggestions.hidden = true;
     suggestions.innerHTML = "";
     input.setAttribute("aria-expanded", "false");
   };
 
   const searchSpecies = code => {
+    if (!form.isConnected || state.page !== "market" || composing) return;
     const species = speciesByCode(code);
     if (!species) return;
     input.value = species.name;
@@ -4182,6 +4244,7 @@ function bindMarketSearchSuggestions() {
   };
 
   const renderSuggestions = () => {
+    if (composing || !form.isConnected || state.page !== "market") return;
     const query = String(input.value || "").trim();
     const matches = query ? marketPublishSpeciesMatches(query).slice(0, 6) : [];
     if (!matches.length) {
@@ -4196,6 +4259,10 @@ function bindMarketSearchSuggestions() {
     suggestions.hidden = false;
     input.setAttribute("aria-expanded", "true");
     suggestions.querySelectorAll("[data-market-search-species]").forEach(button => {
+      // Keep focus during a touch tap too, so the blur timer and keyboard
+      // animation cannot remove a suggestion before its click is delivered.
+      button.addEventListener("pointerdown", event => event.preventDefault());
+      if (!window.PointerEvent) button.addEventListener("touchstart", event => event.preventDefault(), { passive: false });
       button.addEventListener("mousedown", event => event.preventDefault());
       button.addEventListener("click", () => searchSpecies(button.dataset.marketSearchSpecies));
     });
@@ -4206,14 +4273,21 @@ function bindMarketSearchSuggestions() {
     window.clearTimeout(closeTimer);
     renderSuggestions();
   });
-  input.addEventListener("input", renderSuggestions);
+  input.addEventListener("compositionstart", () => { composing = true; close(); });
+  input.addEventListener("compositionend", () => { composing = false; renderSuggestions(); });
+  input.addEventListener("input", event => { if (!event.isComposing) renderSuggestions(); });
   input.addEventListener("keydown", event => {
     if (event.key === "Escape") close();
   });
   input.addEventListener("blur", () => {
-    closeTimer = window.setTimeout(close, 140);
+    closeTimer = window.setTimeout(() => { close(); flushMarketSearchRefresh(); }, 140);
   });
-  form.addEventListener("submit", () => close());
+  form.addEventListener("submit", event => {
+    event.preventDefault();
+    if (composing || event.isComposing || !form.isConnected || state.page !== "market") return;
+    close();
+    resetMarketFeed({ marketSearch: String(input.value || "").trim(), marketAssistMenu: "" });
+  });
 }
 
 function marketTitleTemplatesMarkup(species) {
@@ -7980,6 +8054,7 @@ function placeholder(title) {
 }
 
 function render() {
+  marketSearchRenderDeferred = false;
   rememberRecordFormBaselines();
   // A data refresh can replace the page even without changing its route.
   $app.cancelEdgeBackGesture?.();
@@ -9316,11 +9391,6 @@ function bindEvents() {
     if (button.dataset.chatMediaType === "video") openVideoPreview(url, "聊天视频", button.dataset.chatMediaPoster || "");
     else openImagePreview(url, "聊天图片");
   }));
-  document.querySelector("[data-market-search-form]")?.addEventListener("submit", event => {
-    event.preventDefault();
-    const input = event.currentTarget.querySelector("[data-market-search]");
-    resetMarketFeed({ marketSearch: String(input?.value || "").trim(), marketAssistMenu: "" });
-  });
   bindMarketSearchSuggestions();
   document.querySelectorAll("[data-market-stage]").forEach(btn => btn.addEventListener("click", () => resetMarketFeed({ marketStage: btn.dataset.marketStage, marketAssistMenu: "" })));
   document.querySelectorAll("[data-market-assist-menu]").forEach(btn => btn.addEventListener("click", () => {
@@ -18653,6 +18723,7 @@ setupEdgeBackAndConversationSwipe();
 setupNativeMediaPicker();
 setupInlineVideoPreviewControls();
 setupUniversalMediaPreview();
+setupMarketSearchInteractionGuard();
 setupBottomNavForegroundRecovery();
 setupMarketShareDeepLinks();
 render();
