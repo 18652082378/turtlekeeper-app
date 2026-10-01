@@ -427,6 +427,15 @@ async function main() {
     await request("/api/community/admin/action", { ...auth(seller), postId, action: "dailyPushApprove" }, { status: 400 });
     await request("/api/community/admin/action", { ...auth(seller), postId, action: "dailyPushApprove", confirmNoAdvertising: true });
     await request("/api/community/admin/action", { ...auth(seller), postId, action: "dailyPushReject" });
+    for (const text of ["出售小龟500元", "加微信联系我", "扫码查看联系方式", "出龟包邮", "https://example.com"]) {
+      const selected = await request("/api/community/create", { ...auth(seller), title: "审核测试：" + text, content: text, mediaItems: [{ url: uploadedImage.json.url, type: "image" }] });
+      const selectedId = selected.json.posts.find(item => item.title === "审核测试：" + text)?.id;
+      assert.ok(selectedId);
+      await request("/api/community/admin/action", { ...auth(buyer), postId: selectedId, action: "dailyPushApprove", confirmNoAdvertising: true }, { status: 403 });
+      await request("/api/community/admin/action", { ...auth(seller), postId: selectedId, action: "dailyPushApprove" }, { status: 400 });
+      await request("/api/community/admin/action", { ...auth(seller), postId: selectedId, action: "dailyPushApprove", confirmNoAdvertising: true });
+      await request("/api/community/delete", { ...auth(seller), postId: selectedId });
+    }
     await request("/api/community/create", {
       ...auth(seller), title: "Objectionable turtle post", content: "提供 色-情 裸聊服务"
     }, { status: 400 });

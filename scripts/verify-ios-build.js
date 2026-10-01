@@ -6,6 +6,7 @@ const plist = require("plist");
 
 const root = path.resolve(__dirname, "..");
 const read = file => fs.readFileSync(path.join(root, file), "utf8");
+require('./verify-notification-extension.cjs').verifyNotificationExtension(root, read);
 const version = JSON.parse(read("package.json")).version;
 const project = read("ios/App/App.xcodeproj/project.pbxproj");
 const versions = [...project.matchAll(/MARKETING_VERSION\s*=\s*([^;]+);/g)].map(match => match[1].trim());

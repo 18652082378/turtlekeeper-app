@@ -8,7 +8,7 @@ config.js
 docs/app-update-channels.md
 docs/care-persistence-incident.md
 docs/data-reliability-audit-20260928.md
-docs/ios-120-release.md
+docs/ios-121-release.md
 docs/postlaunch-comprehensive-audit-20260928.md
 docs/postrelease-server-audit-20260928.md
 docs/release-acceptance-20260928.md
@@ -77,3 +77,6 @@ server/.env.example
 server/app-update-policy.js
 server/media-url.js
 server/server.js
+scripts/ios-121-release-files.txt
+scripts/copy-community-recommendation-server-command.sh
+scripts/test-community-recommendation-transfer.cjs

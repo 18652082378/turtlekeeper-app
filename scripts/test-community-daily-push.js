@@ -13,9 +13,9 @@ options.devices=user=>[{token:user.token}];
 (async()=>{
   assert.deepEqual(clock(new Date('2026-09-09T16:00:00Z')),{day:'2026-09-10',hour:0});
   for(const content of ['加微信联系我','扫一扫二维码','出龟包邮','https://example.com','售卖小龟500元']) assert.ok(advertisingRisk(post('ad',content)));
-  db.communityPosts=[post('unreviewed'),approve(post('ad','二维码加群'))];
+  db.communityPosts=[post('unreviewed'),post('ad','二维码加群')];
   const dispatch=createDailyCommunityDispatcher(options);
-  await dispatch();assert.equal(sent.length,0,'Unreviewed and advertising posts must never broadcast');
+  await dispatch();assert.equal(sent.length,0,'Unreviewed posts must never broadcast');
   const good=approve(post('first'));db.communityPosts.push(good,approve(post('second')));
   await Promise.all([dispatch(),dispatch()]);
   assert.equal(sent.length,2);assert.ok(sent.every(item=>item.payload.postId==='first'));
@@ -27,5 +27,5 @@ options.devices=user=>[{token:user.token}];
   time=new Date('2026-09-12T02:00:00Z');const changed=approve({...post('changed'),createdAt:'2026-09-12T01:00:00Z'});changed.content='编辑后的新内容';db.communityPosts=[changed];await dispatch();assert.equal(sent.length,4,'Editing invalidates approval');
   db.communityPosts=[approve({...post('write-failure'),createdAt:'2026-09-12T01:00:00Z'})];
   await assert.rejects(createDailyCommunityDispatcher({...options,write:async()=>{throw Error('disk failure');}})());assert.equal(sent.length,4,'No send unless durable claim succeeds');
-  console.log('Daily push passed: required ad review, suspicious text rejection, daily limit, concurrent calls, restart, quiet hours, opt-out, changed content and persistence failure.');
+  console.log('Daily push passed: required administrator review, unreviewed rejection, daily limit, concurrent calls, restart, quiet hours, opt-out, changed content and persistence failure.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

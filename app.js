@@ -13257,12 +13257,13 @@ async function toggleCommunityConversationPin(userId) {
 }
 
 async function communityAdminPostAction(postId, action) {
-  if (action === "dailyPushApprove" && !window.confirm("请逐张检查图片和全部文字：不含售卖、推广、二维码、联系方式、引流或其他广告。确认后加入每日提醒候选（北京时间9:00—21:00，每天最多一篇）。确认无广告？")) return;
+  const recommendedPost = (state.communityPosts || []).find(item => String(item.id) === String(postId));
+  if (action === "dailyPushApprove" && !window.confirm(`推荐《${communityPostTitle(recommendedPost || {})}》？系统通知将使用这篇帖子的标题和配图。请审核全部文字与图片；确认后以你的审核结果为准，疑似广告、联系方式或售卖关键词不会阻止推荐。北京时间9:00—21:00发送，每天最多一篇；当天未开始发送时，以最后审核推荐的有效帖子为准。`)) return;
   if (!state.isCommunityAdmin || !["pin", "feature", "dailyPushApprove", "dailyPushReject"].includes(action)) return;
   try {
     const result = await apiPost("/api/community/admin/action", communityAuthPayload({ postId, action, confirmNoAdvertising: action === "dailyPushApprove" }));
     setState({ communityPosts: normalizeCommunityPosts(result.posts || []) }, { skipCloud: true });
-    toast(action === "dailyPushApprove" ? "已加入每日新帖提醒候选，当天已推送则不再发送" : action === "dailyPushReject" ? "已撤销推荐，已发送的通知无法撤回" : action === "pin" ? "置顶状态已更新" : "精华状态已更新");
+    toast(action === "dailyPushApprove" ? "已推荐此帖，将展示该帖标题和配图；当天已开始推送则不再发送" : action === "dailyPushReject" ? "已撤销推荐，已发送的通知无法撤回" : action === "pin" ? "置顶状态已更新" : "精华状态已更新");
   } catch (error) {
     toast(error.message || "管理操作失败");
   }
@@ -18496,6 +18497,7 @@ function setupEdgeBackAndConversationSwipe() {
       lastX: event.clientX,
       lastAt: performance.now(),
       velocityX: 0,
+      peakOffset: 0,
       mode: "pending"
     };
   }, { passive: true });
@@ -18533,6 +18535,7 @@ function setupEdgeBackAndConversationSwipe() {
     }
     if (active.mode === "edge") {
       active.edgeOffset = Math.max(0, Math.min(active.width, dx));
+      active.peakOffset = Math.max(active.peakOffset, active.edgeOffset);
       active.edgeProgress = active.edgeOffset / active.width;
       scheduleGesturePaint();
       if (event.cancelable) event.preventDefault();
@@ -18543,6 +18546,18 @@ function setupEdgeBackAndConversationSwipe() {
     if (!active || event.pointerId !== active.pointerId) return;
     const dx = event.clientX - active.x;
     const dy = event.clientY - active.y;
+    // The release can carry a newer position than the last move event.
+    // Paint and decide from that position so a short swipe has no dead tail.
+    if (active.mode === "edge") {
+      const releaseDelta = event.clientX - active.lastX;
+      if (Math.abs(releaseDelta) > .1) {
+        active.velocityX = releaseDelta / Math.max(1, performance.now() - active.lastAt);
+        active.lastAt = performance.now();
+      }
+      active.edgeOffset = Math.max(0, Math.min(active.width, dx));
+      active.peakOffset = Math.max(active.peakOffset, active.edgeOffset);
+      active.edgeProgress = active.edgeOffset / active.width;
+    }
     flushGesturePaint(active);
     releasePointer(active);
     if (active.mode === "edge") {
@@ -18554,9 +18569,12 @@ function setupEdgeBackAndConversationSwipe() {
       // fling from hundreds of milliseconds ago, or commit a reversed swipe
       // just because it once crossed a distance threshold.
       const releaseVelocity = performance.now() - active.lastAt > 120 ? 0 : active.velocityX;
-      const hasForwardFling = releaseVelocity > .48 && dx > 26;
-      const reversed = releaseVelocity < -.25;
-      const shouldComplete = !reversed && (dx > Math.max(78, width * .18) || hasForwardFling) && Math.abs(dx) > Math.abs(dy) && canLeaveRecordPage();
+      // A deliberate short rightward drag should return even after a pause.
+      // Keep a small intent threshold for taps, and remember a pull-back even
+      // when the user pauses before releasing and velocity has become zero.
+      const hasForwardFling = releaseVelocity > .35 && dx >= 12;
+      const reversed = releaseVelocity < -.25 || active.peakOffset - edgeOffset >= 12;
+      const shouldComplete = !reversed && (dx >= 24 || hasForwardFling) && Math.abs(dx) > Math.abs(dy) && canLeaveRecordPage();
       // A UIKit interactive-pop transition continues with the release
       // velocity. Keep the same principle here: the final leg is calculated
       // from distance and finger speed instead of one fixed, mechanical time.

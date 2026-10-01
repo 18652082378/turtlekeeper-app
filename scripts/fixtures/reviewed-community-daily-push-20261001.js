@@ -10,8 +10,7 @@ function reviewHash(post) {
     post.speciesName, post.mediaUrl, post.mediaItems, post.visibility
   ])).digest('hex');
 }
-// Optional keyword hint only. Explicit administrator approval is authoritative;
-// this heuristic must never veto approval or dispatch.
+// A conservative pre-filter, NOT an image/ad classifier. Human review is mandatory.
 function advertisingRisk(post) {
   const text = [post.title, post.content, post.question, post.location, post.mentions, post.speciesName].join(' ')
     .normalize('NFKC').replace(/[\s\u200b-\u200f\ufeff]/g, '').toLowerCase();
@@ -22,38 +21,9 @@ function eligible(db, post, now) {
     && db.users?.[post.authorPhoneRaw]
     && Date.parse(post.createdAt) <= now.getTime()
     && Date.parse(post.createdAt) >= now.getTime() - 24 * 3600000
+    && !advertisingRisk(post)
     && post.dailyPushReview?.hash === reviewHash(post)
     && !(db.reports || []).some(report => report.targetId === post.id && report.status !== 'dismissed');
-}
-// Keep this allow-list in sync with the notification service extension. The
-// extension never fetches arbitrary URLs supplied by user-generated content.
-const ATTACHMENT_HOSTS = ['api.turtleworld.cn', 'media.turtleworld.cn', 'turtlekeeper-media-hz2026.oss-cn-hangzhou.aliyuncs.com'];
-function attachmentUrl(value) {
-  if (typeof value !== 'string' || !value || value.length > 800 || /[\u0000-\u0020\u007f"'<>`\\]/.test(value)) return '';
-  if (!/^https:\/\//i.test(value) && !/^\/(?:uploads|assets)\//.test(value)) return '';
-  try {
-    const rawPath = value.replace(/^https:\/\/[^/]+/i, '').split(/[?#]/)[0];
-    const decoded = decodeURIComponent(rawPath);
-    if (decoded.includes('\\') || decoded.split('/').some(part => part === '.' || part === '..')) return '';
-    const url = new URL(value, 'https://api.turtleworld.cn');
-    if (url.protocol !== 'https:' || url.username || url.password || url.port || !ATTACHMENT_HOSTS.includes(url.hostname)) return '';
-    return value.startsWith('/') ? url.href : value; // Preserve signed queries.
-  } catch { return ''; }
-}
-function pushText(value, limit) {
-  const text = typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim() : '';
-  const characters = Array.from(text);
-  return characters.length > limit ? characters.slice(0, limit - 1).join('') + '…' : text;
-}
-function recommendationPayload(post) {
-  const title = pushText(post.title, 120) || pushText(post.question || post.content, 80) || '分享了一张龟龟照片';
-  const excerpt = pushText(post.content || post.question, 160);
-  const media = Array.isArray(post.mediaItems) ? post.mediaItems : [];
-  // Use reviewed media only, never the author's avatar or an unrelated image.
-  const candidates = media.length ? media.map(item => item?.type === 'video' ? item.posterUrl || item.poster : item?.url) : [post.mediaUrl];
-  const image = candidates.map(attachmentUrl).find(Boolean);
-  return { aps: { alert: { title, body: excerpt && excerpt !== title ? excerpt : '点击查看完整内容' }, sound: 'default', ...(image ? { 'mutable-content': 1 } : {}) },
-    route: 'communityDaily', postId: post.id, ...(image ? { attachmentUrl: image } : {}) };
 }
 function createDailyCommunityDispatcher({ read, write, send, devices, canReceive, configured, now = () => new Date() }) {
   let running = false;
@@ -70,10 +40,7 @@ function createDailyCommunityDispatcher({ read, write, send, devices, canReceive
       if (!delivery) {
         const used = new Set(Object.values(db.communityDailyDeliveries).map(item => item.postId));
         const post = (db.communityPosts || []).filter(item => !used.has(item.id) && eligible(db, item, start))
-          // The latest explicit admin choice wins before today's selection is
-          // durably locked. Retain deterministic ordering for legacy reviews.
-          .sort((a,b) => (Date.parse(b.dailyPushReview.reviewedAt) || 0) - (Date.parse(a.dailyPushReview.reviewedAt) || 0)
-            || Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))[0];
+          .sort((a,b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))[0];
         if (!post) return;
         delivery = { postId: post.id, attempted: {}, createdAt: start.toISOString() };
         db.communityDailyDeliveries[day] = delivery;
@@ -96,7 +63,8 @@ function createDailyCommunityDispatcher({ read, write, send, devices, canReceive
           if (delivery.attempted[key]) continue;
           delivery.attempted[key] = now().toISOString();
           await write(db);
-          const payload = recommendationPayload(post);
+          // Fixed copy prevents an account nickname or title from injecting an ad.
+          const payload = { aps: { alert: { title: '龟友圈有新分享', body: '有壳友分享了新的养龟记录，点击看看吧。' }, sound: 'default' }, route: 'communityDaily', postId: post.id };
           await send(device.token, payload);
           // Re-read after each await: do not overwrite newer user/account changes.
           db = read(); delivery = db.communityDailyDeliveries[day];
@@ -109,4 +77,4 @@ function createDailyCommunityDispatcher({ read, write, send, devices, canReceive
     } finally { running = false; }
   };
 }
-module.exports = { clock, reviewHash, advertisingRisk, eligible, ATTACHMENT_HOSTS, attachmentUrl, recommendationPayload, createDailyCommunityDispatcher };
+module.exports = { clock, reviewHash, advertisingRisk, eligible, createDailyCommunityDispatcher };

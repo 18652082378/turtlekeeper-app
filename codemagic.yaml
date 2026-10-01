@@ -32,6 +32,8 @@ workflows:
           node scripts/verify-ios-build.js --native
       - name: Apply signing profiles
         script: |
+          # Upload/fetch an App Store profile for
+          # com.turtlekeeper.app.NotificationService as well as the main app.
           xcode-project use-profiles
       - name: Build IPA
         script: |

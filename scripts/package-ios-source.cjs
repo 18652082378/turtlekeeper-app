@@ -7,7 +7,7 @@ const output = path.join(root, 'output');
 const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'))).version;
 const build = Number(fs.readFileSync(path.join(root, 'config.js'), 'utf8').match(/TURTLE_APP_BUILD\s*=\s*(\d+)/)?.[1]);
 if (!/^\d+\.\d+\.\d+$/.test(version) || !Number.isInteger(build) || build < 1) throw Error('Invalid release version');
-const entries = ['package.json', 'package-lock.json', 'capacitor.config.json', 'codemagic.yaml', '.gitignore', '.github', '.well-known',
+const entries = ['package.json', 'package-lock.json', 'capacitor.config.json', 'codemagic.yaml', '.gitignore', '.gitattributes', '.github', '.well-known',
   'app.js', 'index.html', 'config.js', 'styles.css', 'chat-tools.css', 'dark-surface-audit.css', 'species-data.js',
   'official.html', 'privacy.html', 'terms.html', 'support.html', 'apple-app-site-association', 'README.md',
   'server.js', 'ecosystem.config.cjs', 'assets', 'server', 'scripts', 'ios', 'deploy',
@@ -27,6 +27,7 @@ const files = [...new Set([...raw.split('\0').filter(Boolean), ...approved])].fi
   return !forbidden.test(file) && fs.existsSync(path.join(root, file));
 }).sort();
 const requiredSources = ['app.js', 'server/server.js', 'server/media-url.js', 'server/team-breeding.js', 'assets/care-records.js', 'assets/care-records.css', 'assets/ui-system.css', 'assets/ui-experience.js', 'scripts/build-web.js', 'scripts/verify-ios-build.js', 'scripts/configure-ios-local-plugins.js', 'scripts/test-ios-release-readiness.cjs', '.github/workflows/ios-check.yml', 'ios/App/App.xcodeproj/project.pbxproj', 'ios/App/App/PrivacyInfo.xcprivacy', `docs/ios-${build}-release.md`, releaseList];
+requiredSources.push('scripts/verify-notification-extension.cjs', 'ios/App/TurtleNotificationService/NotificationService.swift', 'ios/App/TurtleNotificationService/Info.plist', 'ios/App/TurtleNotificationService/PrivacyInfo.xcprivacy');
 for (const file of files) {
   if (!fs.lstatSync(path.join(root, file)).isFile()) throw Error('Expected regular source file: ' + file);
 }

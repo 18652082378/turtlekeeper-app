@@ -8,7 +8,6 @@ const https = require("https");
 const http2 = require("http2");
 const path = require("path");
 const { URL } = require("url");
-const { appUpdatePolicy } = require("./app-update-policy");
 const { createMarketRankPager } = require("./market-ranking");
 const { MysqlRecordStore, assertLegacyMode, acquireWriter } = require("./mysql-record-store");
 const { reviewHash, advertisingRisk, createDailyCommunityDispatcher } = require("./community-daily-push");
@@ -17,8 +16,6 @@ const { createTeamService, recordAccountChange } = require('./team-space');
 const { createApplePurchases } = require('./apple-team-purchases');
 const { createAlipayPurchases } = require('./alipay-team-purchases');
 const { createBackupStorage } = require('./backup-storage');
-const TurtleCare = require('../assets/care-records');
-const { mediaUrl: validatedMediaUrl } = require('./media-url');
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -63,14 +60,6 @@ const BACKUP_DIR = path.resolve(RUNTIME_ROOT, "backups");
 const ACCOUNT_SNAPSHOT_DIR = path.resolve(BACKUP_DIR, "account-snapshots");
 const ACCOUNT_SNAPSHOT_LIMIT = Math.min(200, Math.max(20, Math.floor(Number(process.env.ACCOUNT_SNAPSHOT_LIMIT || 100))));
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 * 1024);
-// Public media sends original images up to 10 MiB, including released build 119.
-// Archive/avatar uploads use the separate, pre-existing MAX_UPLOAD_BYTES limit.
-const configuredMediaImageLimit = Number(process.env.MAX_MEDIA_IMAGE_UPLOAD_BYTES || 10 * 1024 * 1024);
-const MAX_MEDIA_IMAGE_UPLOAD_BYTES = Number.isSafeInteger(configuredMediaImageLimit) && configuredMediaImageLimit > 0
-  ? configuredMediaImageLimit : 10 * 1024 * 1024;
-const configuredMediaLimit = Number(process.env.MAX_MEDIA_UPLOAD_BYTES || 128 * 1024 * 1024);
-const MAX_MEDIA_UPLOAD_BYTES = Number.isSafeInteger(configuredMediaLimit) && configuredMediaLimit > 0
-  ? configuredMediaLimit : 128 * 1024 * 1024;
 const OSS_REGION = String(process.env.OSS_REGION || "").trim();
 const OSS_BUCKET = String(process.env.OSS_BUCKET || "").trim();
 const OSS_ACCESS_KEY_ID = String(process.env.OSS_ACCESS_KEY_ID || "").trim();
@@ -84,9 +73,7 @@ const MEDIA_CDN_BASE_URL = String(process.env.MEDIA_CDN_BASE_URL || "").trim().r
 // image that they cached as a failed request during a temporary outage.
 const MEDIA_CACHE_VERSION = String(process.env.MEDIA_CACHE_VERSION || "20260825.2").trim();
 const REVIEW_ADMIN_PHONE = process.env.ADMIN_PHONE || "18652082378";
-const RESERVED_PLATFORM_NICKNAME = "龟友手账";
-// Retain the previous official name to prevent impersonation after the rename.
-const RESERVED_PLATFORM_NICKNAMES = [RESERVED_PLATFORM_NICKNAME, "壳友手账"];
+const RESERVED_PLATFORM_NICKNAME = "壳友手账";
 const POLICY_VERSION = "2026-09-01";
 const LEGACY_POLICY_VERSION = "2026-08-12";
 const SUPPORTED_POLICY_VERSIONS = new Set([LEGACY_POLICY_VERSION, POLICY_VERSION]);
@@ -104,6 +91,12 @@ function publicUserForPolicyClient(user, token, db, body = {}) {
   if (!String(body.termsVersion || "").trim()) result.termsVersion = LEGACY_POLICY_VERSION;
   return result;
 }
+// 1.0.6 使用 build 90–94；1.0.7 从 build 95 开始。
+// 环境变量仍可在不改代码的情况下提高最低版本和最新构建号。
+const MIN_SUPPORTED_APP_BUILD = Math.max(0, Math.floor(Number(process.env.MIN_SUPPORTED_APP_BUILD || 95)));
+// App Store 正式上线版本为 1.0.7（99），与开发中的构建号分别维护。
+const LATEST_APP_BUILD = Math.max(MIN_SUPPORTED_APP_BUILD, Math.floor(Number(process.env.LATEST_APP_BUILD || 99)));
+const IOS_APP_STORE_URL = process.env.IOS_APP_STORE_URL || "https://apps.apple.com/app/id6783481335";
 // Apple Push Notification service (APNs) credentials are configured only on the server.
 const APNS_TEAM_ID = String(process.env.APNS_TEAM_ID || "").trim();
 const APNS_KEY_ID = String(process.env.APNS_KEY_ID || "").trim();
@@ -112,7 +105,7 @@ const APNS_HOST = String(process.env.APNS_HOST || "api.push.apple.com").trim();
 const APNS_KEY_PATH = String(process.env.APNS_KEY_PATH || "").trim();
 const APNS_KEY_BASE64 = String(process.env.APNS_KEY_BASE64 || "").trim();
 const CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || "Asia/Shanghai").trim();
-const MARKET_SALE_METHODS = ["自有客户成交", "闲鱼成交", "壳友手账成交", "龟友手账成交"];
+const MARKET_SALE_METHODS = ["自有客户成交", "闲鱼成交", "壳友手账成交"];
 const DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);
 
 function randomDefaultAccountAvatar() {
@@ -348,7 +341,7 @@ function readJson(req) {
       if (bytes > 25 * 1024 * 1024) {
         failed = true;
         chunks.length = 0;
-        reject(Object.assign(new Error("请求内容过大"), { status: 413 }));
+        reject(new Error("请求内容过大"));
         return;
       }
       chunks.push(buffer);
@@ -360,11 +353,10 @@ function readJson(req) {
         // the bytes; coercing each chunk to text corrupts Chinese and emoji.
         const raw = Buffer.concat(chunks, bytes).toString("utf8");
         const body = raw ? JSON.parse(raw) : {};
-        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected a JSON object');
         req.accountAuth = { phone: body?.phone, token: body?.token };
         resolve(body);
       } catch {
-        reject(Object.assign(new Error("请求格式不正确"), { status: 400 }));
+        reject(new Error("请求格式不正确"));
       }
     });
     req.on("error", reject);
@@ -374,9 +366,7 @@ function readJson(req) {
 
 function emptyAccountData() {
   return {
-    careRecords: [],
-    careCustomItems: [],
-    carePlans: [],
+    careRecords: [], careCustomItems: [], carePlans: [],
     turtles: [],
     keptSpecies: [],
     customSpecies: [],
@@ -423,12 +413,12 @@ function normalizeAccountData(data = {}) {
   // Preserve newer clients' loss metadata through the same JSON API.
   const next = { ...emptyAccountData(), ...(data || {}) };
   return {
+    careRecords: Array.isArray(next.careRecords) ? next.careRecords : [],
+    careCustomItems: Array.isArray(next.careCustomItems) ? next.careCustomItems : [],
+    carePlans: Array.isArray(next.carePlans) ? next.carePlans : [],
     turtles: Array.isArray(next.turtles) ? next.turtles : [],
     keptSpecies: Array.isArray(next.keptSpecies) ? next.keptSpecies : [],
     customSpecies: normalizeCustomSpecies(next.customSpecies),
-    careRecords: TurtleCare.normalizeRecords(next.careRecords),
-    careCustomItems: TurtleCare.normalizeItems(next.careCustomItems),
-    carePlans: TurtleCare.normalizePlans(next.carePlans),
     memos: Array.isArray(next.memos) ? next.memos : [],
     ledgerRecords: Array.isArray(next.ledgerRecords) ? next.ledgerRecords : [],
     breedingRecords: Array.isArray(next.breedingRecords) ? next.breedingRecords : [],
@@ -469,9 +459,7 @@ function accountDataHasContent(data = {}) {
     account.turtles,
     account.keptSpecies,
     account.customSpecies,
-    account.careRecords,
-    account.careCustomItems,
-    account.carePlans,
+    account.careRecords, account.careCustomItems, account.carePlans,
     account.memos,
     account.ledgerRecords,
     account.breedingRecords,
@@ -486,7 +474,7 @@ function accountDataHasContent(data = {}) {
 
 function accountRecordCounts(data = {}) {
   const account = normalizeAccountData(data);
-  const fields = ["turtles", "keptSpecies", "memos", "careRecords", "careCustomItems", "carePlans", "ledgerRecords", "breedingRecords", "turtlePools"];
+  const fields = ["careRecords", "careCustomItems", "carePlans", "turtles", "keptSpecies", "memos", "ledgerRecords", "breedingRecords", "turtlePools"];
   return Object.fromEntries(fields.map(field => [field, Array.isArray(account[field]) ? account[field].length : 0]));
 }
 
@@ -866,8 +854,8 @@ function validPhone(phone) {
 
 function accountNameForPhone(value, phone, fallback = "") {
   const name = String(value || "").normalize("NFKC").trim();
-  if (RESERVED_PLATFORM_NICKNAMES.includes(name) && String(phone) !== REVIEW_ADMIN_PHONE) {
-    throw new Error(`“${RESERVED_PLATFORM_NICKNAME}”仅供龟友手账官方账号使用`);
+  if (name === RESERVED_PLATFORM_NICKNAME && String(phone) !== REVIEW_ADMIN_PHONE) {
+    throw new Error(`“${RESERVED_PLATFORM_NICKNAME}”仅供壳友手账官方账号使用`);
   }
   return name || fallback;
 }
@@ -1216,7 +1204,7 @@ async function notifyCommunityActivity(db, notification) {
       : `${actorName}评论了你的帖子：${notification.preview || "查看新评论"}`;
   const payload = {
     aps: {
-      alert: { title: "龟友圈新互动", body: body.slice(0, 120) },
+      alert: { title: "壳友圈新互动", body: body.slice(0, 120) },
       badge: Math.min(99, Math.max(1, communityTotalUnreadCount(db, recipient))),
       sound: "default"
     },
@@ -1265,8 +1253,8 @@ async function notifyCareReminder(user, memo) {
   const payload = {
     aps: {
       alert: {
-        title: "龟友手账养护提醒",
-        body: String(memo.title || "养护事项").slice(0, 120)
+        title: "壳友手账护理提醒",
+        body: String(memo.title || "护理事项").slice(0, 120)
       },
       sound: "default"
     },
@@ -1520,19 +1508,13 @@ async function handleRegister(req, res) {
   if (password.length < 6) return sendJson(res, 400, { ok: false, message: "密码至少需要 6 位" });
   if (body.termsAccepted !== true) return sendJson(res, 400, { ok: false, message: "请先阅读并同意服务规则和隐私政策" });
 
-  let db = readDatabase();
+  const db = readDatabase();
   if (db.users[phone]) return sendJson(res, 409, { ok: false, message: "手机号已注册，请直接登录" });
   try {
     await verifyRegistrationCode(phone, code);
   } catch (error) {
     return sendJson(res, 400, { ok: false, message: error.message || "验证码核对失败" });
   }
-
-  // Remote SMS verification yields to other requests. JSON storage returns a
-  // snapshot, so retaining it here could overwrite saves/registrations made
-  // while the provider was responding. Re-read immediately before mutation.
-  db = readDatabase();
-  if (db.users[phone]) return sendJson(res, 409, { ok: false, message: '手机号已注册，请直接登录' });
 
   const passwordInfo = hashPassword(password);
   const token = makeAuthToken();
@@ -1631,7 +1613,6 @@ async function handleCreateCustomSpecies(req, res) {
   const db = readDatabase();
   const user = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
   if (!user) return sendJson(res, 401, { ok: false, message: "请先登录账号" });
-  if (/\uFFFD/.test(String(body.name || ""))) return sendJson(res, 400, { ok: false, message: "品种名称含乱码，请重新输入" });
   const species = normalizeCustomSpecies([{ code: body.code, name: body.name, photo: body.photo, createdAt: new Date().toISOString() }])[0];
   if (!species) return sendJson(res, 400, { ok: false, message: "请填写有效的品种名称" });
   user.data = normalizeAccountData(user.data || {});
@@ -1654,7 +1635,6 @@ async function handleSaveAccount(req, res) {
   const db = readDatabase();
   const user = authenticate(db, phone, token);
   if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
-  const accountAvatar = validatedMediaUrl(body.accountAvatar, { allowImageData: true });
   const incomingData = normalizeAccountData(body.data || {});
   if (user.teamSpace && typeof body.baseDataRevision !== 'string') {
     return sendJson(res, 409, { ok: false, message: '团队共享已启用，请更新客户端并刷新云端数据后再保存' });
@@ -1668,21 +1648,17 @@ async function handleSaveAccount(req, res) {
     return sendJson(res, 409, { ok: false, code: "ACCOUNT_DATA_CONFLICT", message: "其他设备已更新云端，本次保存未覆盖云端数据，请保留本机备份后核对" });
   }
   const existingData = normalizeAccountData(user.data || {});
-  // Older app builds do not send these fields. Preserve them without preventing
-  // a new client from deliberately removing a saved picker option.
-  for (const field of ["careRecords", "careCustomItems", "carePlans"]) {
-    if (!Object.prototype.hasOwnProperty.call(body.data || {}, field)) incomingData[field] = existingData[field];
+  for (const key of ['careRecords', 'careCustomItems', 'carePlans']) {
+    if (!Object.hasOwn(body.data || {}, key)) incomingData[key] = existingData[key];
   }
-  // Older care clients omit individual turtle links. Explicit [] from newer
-  // clients still clears them; omission preserves the historical associations.
-  const rawCareRecords = new Map((Array.isArray(body.data?.careRecords) ? body.data.careRecords : []).map(record => [record?.id, record]));
-  const previousCareRecords = new Map(existingData.careRecords.map(record => [record.id, record]));
-  incomingData.careRecords = incomingData.careRecords.map(record => rawCareRecords.has(record.id)
-    && !Object.prototype.hasOwnProperty.call(rawCareRecords.get(record.id), "turtleRefs")
-    ? { ...record, turtleRefs: previousCareRecords.get(record.id)?.turtleRefs || [] } : record);
-  incomingData.careRecords = incomingData.careRecords.map(record => rawCareRecords.has(record.id)
-    && !Object.prototype.hasOwnProperty.call(rawCareRecords.get(record.id), "sourceMemoId")
-    ? { ...record, sourceMemoId: previousCareRecords.get(record.id)?.sourceMemoId || "" } : record);
+  const oldCare = new Map(existingData.careRecords.map(r => [r?.id, r]));
+  incomingData.careRecords = incomingData.careRecords.map(r => {
+    if (!r || typeof r !== 'object') return r;
+    const prior = oldCare.get(r.id);
+    return { ...r,
+      turtleRefs: Object.hasOwn(r, 'turtleRefs') ? r.turtleRefs : prior?.turtleRefs || [],
+      sourceMemoId: Object.hasOwn(r, 'sourceMemoId') ? r.sourceMemoId : prior?.sourceMemoId || '' };
+  });
   const incomingHasContent = accountDataHasContent(incomingData);
   // Older clients and stale devices must not erase private catalogue entries.
   incomingData.customSpecies = normalizeCustomSpecies([...new Map([
@@ -1725,7 +1701,7 @@ async function handleSaveAccount(req, res) {
   } catch (error) {
     return sendJson(res, 400, { ok: false, message: error.message || "昵称不可使用" });
   }
-  user.accountAvatar = accountAvatar;
+  user.accountAvatar = String(body.accountAvatar || "");
   recordAccountChange(user, existingData, incomingData);
   user.data = incomingData;
   user.updatedAt = new Date(Math.max(Date.now(), (Date.parse(user.updatedAt) || 0) + 1)).toISOString();
@@ -1746,14 +1722,6 @@ async function handleDeleteGrowthRecord(req, res) {
   const user = authenticate(db, phone, token);
   if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
   if (!turtleId || !historyId) return sendJson(res, 400, { ok: false, message: "缺少成长记录标识，未执行删除" });
-  if (Object.hasOwn(body, 'baseDataRevision')) {
-    if (typeof body.baseDataRevision !== 'string' || !body.baseDataRevision) {
-      return sendJson(res, 400, { ok: false, message: '数据版本无效，请刷新后重试' });
-    }
-    if (body.baseDataRevision !== accountDataRevision(user)) {
-      return sendJson(res, 409, { ok: false, code: 'ACCOUNT_DATA_CONFLICT', message: '云端数据已更新，请刷新后再删除成长记录' });
-    }
-  }
 
   const account = normalizeAccountData(user.data || {});
   const turtle = account.turtles.find(item => String(item?.id || "") === turtleId);
@@ -1778,13 +1746,8 @@ async function handleDeleteGrowthRecord(req, res) {
   const turtleIndex = account.turtles.findIndex(item => String(item?.id || "") === turtleId);
   account.turtles[turtleIndex] = rebuilt.turtle;
   user.data = account;
-  user.updatedAt = new Date(Math.max(Date.now(), (Date.parse(user.updatedAt) || 0) + 1)).toISOString();
-  try {
-    await writeDatabase(db);
-  } catch (error) {
-    console.error('成长记录删除未确认保存：', error.message);
-    return sendJson(res, 503, { ok: false, message: '数据库暂时无法保存，未确认删除成功，请保留本机数据后重试' });
-  }
+  user.updatedAt = new Date().toISOString();
+  writeDatabase(db);
   return sendJson(res, 200, { ok: true, user: publicUser(user, token, db) });
 }
 
@@ -2001,7 +1964,7 @@ async function handlePushNotificationTest(req, res) {
   }
   const payload = {
     aps: {
-      alert: { title: "龟友手账", body: "这是一条推送通知实机测试消息。" },
+      alert: { title: "壳友手账", body: "这是一条推送通知实机测试消息。" },
       badge: 1,
       sound: "default"
     },
@@ -2063,7 +2026,7 @@ async function notifySystemAnnouncement(db, announcement) {
   const payload = {
     aps: {
       alert: {
-        title: String(announcement.title || "龟友手账").slice(0, 80),
+        title: String(announcement.title || "壳友手账").slice(0, 80),
         body: String(announcement.content || "您有一条新的系统公告").replace(/\s+/g, " ").slice(0, 120)
       },
       sound: "default"
@@ -2211,10 +2174,6 @@ async function handleUploadMedia(req, res) {
   if (!user) return;
   const media = parseMediaDataUrl(body.media);
   if (!media) return sendJson(res, 400, { ok: false, message: "仅支持 JPG、PNG、WebP、MP4、WebM 或 MOV" });
-  const limit = media.mediaType === 'image' ? MAX_MEDIA_IMAGE_UPLOAD_BYTES : MAX_MEDIA_UPLOAD_BYTES;
-  if (media.buffer.length > limit) {
-    return sendJson(res, 413, { ok: false, message: mediaUploadLimitMessage(media.mediaType, limit) });
-  }
   const now = new Date();
   const year = String(now.getFullYear());
   const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -2240,10 +2199,6 @@ function streamMediaInfo(mime) {
     "video/quicktime": { ext: "mov", mediaType: "video" }
   };
   return types[mime] || null;
-}
-
-function mediaUploadLimitMessage(mediaType, limit) {
-  return `${mediaType === 'image' ? '图片' : '视频'}不能超过 ${Math.ceil(limit / (1024 * 1024))}MB，请压缩后重新上传`;
 }
 
 function handleUploadMediaStream(req, res, mime) {
@@ -2272,13 +2227,6 @@ function handleUploadMediaStream(req, res, mime) {
       resolve();
       return;
     }
-    const limit = media.mediaType === 'image' ? MAX_MEDIA_IMAGE_UPLOAD_BYTES : MAX_MEDIA_UPLOAD_BYTES;
-    if (Number(req.headers['content-length'] || 0) > limit) {
-      req.resume();
-      sendJson(res, 413, { ok: false, message: mediaUploadLimitMessage(media.mediaType, limit) });
-      resolve();
-      return;
-    }
     const now = new Date();
     const year = String(now.getFullYear());
     const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -2293,23 +2241,18 @@ function handleUploadMediaStream(req, res, mime) {
       settled = true;
       resolve();
     };
-    const fail = (status = 500) => {
+    const fail = () => {
       if (settled) return;
       settled = true;
-      req.unpipe(output);
-      output.once('close', () => fs.rm(target, { force: true }, () => {}));
       if (!output.destroyed) output.destroy();
-      req.resume();
-      if (!res.headersSent) sendJson(res, status, { ok: false, message: status === 413 ? mediaUploadLimitMessage(media.mediaType, limit) : '视频上传失败，请重试' });
+      fs.rm(target, { force: true }, () => {});
+      if (!res.headersSent) sendJson(res, 500, { ok: false, message: "视频上传失败，请重试" });
       resolve();
     };
-    let bytes = 0;
-    req.on('data', chunk => { bytes += chunk.length; if (bytes > limit) fail(413); });
-    req.on("aborted", () => fail());
-    req.on("error", () => fail());
-    output.on("error", () => fail());
+    req.on("aborted", fail);
+    req.on("error", fail);
+    output.on("error", fail);
     output.on("finish", async () => {
-      if (settled) return;
       try {
         const url = await publishUpload(target, year, month, filename, mime);
         const posterUrl = media.mediaType === "video" ? await generateVideoPoster(url) : "";
@@ -3352,12 +3295,12 @@ async function handleCommunityCreate(req, res) {
   if (rawMediaItems.length > 9) return sendJson(res, 400, { ok: false, message: "图片最多可发布 9 张" });
   const mediaItems = rawMediaItems
     .map(media => ({
-      url: validatedMediaUrl(media?.url),
-      posterUrl: validatedMediaUrl(media?.posterUrl || media?.poster),
+      url: trimPublicText(media?.url, 800),
+      posterUrl: trimPublicText(media?.posterUrl || media?.poster, 800),
       type: media?.type === "video" ? "video" : "image"
     }))
     .filter(media => media.url);
-  if (mediaItems.some(media => media.type === "video")) return sendJson(res, 400, { ok: false, message: "龟友圈只允许发布图片" });
+  if (mediaItems.some(media => media.type === "video")) return sendJson(res, 400, { ok: false, message: "壳友圈只允许发布图片" });
   const primaryMedia = mediaItems[0] || null;
   const location = trimPublicText(body.location, 100);
   const mentions = trimPublicText(body.mentions, 200);
@@ -3546,7 +3489,7 @@ async function handleCommunityAdminAction(req, res) {
   else if (body.action === "feature") post.isFeatured = !post.isFeatured;
   else if (body.action === "dailyPushApprove") {
     if (body.confirmNoAdvertising !== true) return sendJson(res, 400, { ok: false, message: "请先检查所有图片和文字，确认不含广告或引流" });
-    if (normalizedCommunityVisibility(post.visibility) !== "public") return sendJson(res, 400, { ok: false, message: "帖子非公开，不可推送" });
+    if (normalizedCommunityVisibility(post.visibility) !== "public" || advertisingRisk(post)) return sendJson(res, 400, { ok: false, message: "帖子非公开或包含疑似广告、联系方式、售卖信息，不可推送" });
     if (Date.now() - Date.parse(post.createdAt) > 86400000) return sendJson(res, 400, { ok: false, message: "仅可推荐24小时内的新帖" });
     post.dailyPushReview = { hash: reviewHash(post), reviewedBy: user.phone, reviewedAt: new Date().toISOString() };
     recordAdminAudit(db, user, "确认新帖无广告，加入每日提醒候选", post.id);
@@ -3600,7 +3543,7 @@ function reportedContent(db, targetType, targetId) {
     type,
     id: item.id,
     ownerPhone: item.authorPhoneRaw,
-    title: trimPublicText(item.title || item.content || (item.mediaUrl ? "含图片或视频的龟友圈帖子" : "龟友圈帖子"), 120)
+    title: trimPublicText(item.title || item.content || (item.mediaUrl ? "含图片或视频的壳友圈帖子" : "壳友圈帖子"), 120)
   } : null;
 }
 
@@ -3910,8 +3853,8 @@ async function handleCommunityChatSend(req, res) {
   if (!user) return;
   const target = communityUserById(db, body.userId);
   const content = trimPublicText(body.content, 1000);
-  const mediaUrl = validatedMediaUrl(body.mediaUrl);
-  const posterUrl = validatedMediaUrl(body.posterUrl);
+  const mediaUrl = trimPublicText(body.mediaUrl, 800);
+  const posterUrl = trimPublicText(body.posterUrl, 800);
   const mediaType = mediaUrl && body.mediaType === "video" ? "video" : "image";
   const marketListingId = trimPublicText(body.marketListingId, 100);
   if (!target || target.phone === user.phone) return sendJson(res, 400, { ok: false, message: "无法与该用户聊天" });
@@ -3944,9 +3887,7 @@ async function handleCommunityChatSend(req, res) {
       createdAt: new Date().toISOString()
     });
   }
-  // Retention must not silently delete unrelated conversations as the platform
-  // grows. Explicit recall/account deletion remain the removal operations.
-  db.messages = newMessages;
+  db.messages = newMessages.slice(-5000);
   // A new message restores a conversation explicitly deleted by either participant.
   [user, target].forEach(account => {
     account.data = normalizeAccountData(account.data);
@@ -4332,8 +4273,8 @@ async function handleMarketCreate(req, res) {
   const mediaItems = (Array.isArray(body.mediaItems) ? body.mediaItems : [])
     .slice(0, 9)
     .map(media => ({
-      url: validatedMediaUrl(media?.url),
-      posterUrl: validatedMediaUrl(media?.posterUrl || media?.poster),
+      url: trimPublicText(media?.url, 800),
+      posterUrl: trimPublicText(media?.posterUrl || media?.poster, 800),
       type: media?.type === "video" ? "video" : "image"
     }))
     .filter(media => media.url);
@@ -4358,7 +4299,7 @@ async function handleMarketCreate(req, res) {
     city: location.city,
     delivery: ["可快递", "仅自提", "可面交"].includes(body.delivery) ? body.delivery : "双方协商",
     description: trimPublicText(body.description, 600),
-    photoUrl: mediaItems[0]?.url || validatedMediaUrl(body.photoUrl),
+    photoUrl: mediaItems[0]?.url || trimPublicText(body.photoUrl, 800),
     mediaItems,
     impressionCount: 0,
     viewCount: 0,
@@ -4443,7 +4384,7 @@ function syncMarketListingToLedger(owner, listing, status) {
         carapaceWidth: linkedTurtle?.carapaceWidth || "",
         shellHeight: linkedTurtle?.shellHeight || "",
         plastronLength: linkedTurtle?.plastronLength || "",
-        note: `成交方式：${saleMethod === "壳友手账成交" ? "龟友手账成交" : saleMethod}；由龟集市标记已售自动生成`,
+        note: `成交方式：${saleMethod}；由龟集市标记已售自动生成`,
         saleMethod,
         photo: marketLedgerPhoto(listing) || linkedTurtle?.photo || "",
         turtleSnapshot: snapshot,
@@ -4457,7 +4398,7 @@ function syncMarketListingToLedger(owner, listing, status) {
       if (record.autoMarketRecord) {
         record.amount = soldPrice;
         record.saleMethod = saleMethod;
-        record.note = `成交方式：${saleMethod === "壳友手账成交" ? "龟友手账成交" : saleMethod}；由龟集市标记已售自动生成`;
+        record.note = `成交方式：${saleMethod}；由龟集市标记已售自动生成`;
       }
     }
     listing.ledgerRecordId = record.id;
@@ -4466,7 +4407,7 @@ function syncMarketListingToLedger(owner, listing, status) {
     }
     owner.data.activityLogs = [{
       id: crypto.randomUUID(),
-      text: `龟集市已售自动记账：${record.title}，${saleMethod === "壳友手账成交" ? "龟友手账成交" : saleMethod}，成交价 ${Number(record.amount || 0).toFixed(2)} 元`,
+      text: `龟集市已售自动记账：${record.title}，${saleMethod}，成交价 ${Number(record.amount || 0).toFixed(2)} 元`,
       type: "账本",
       createdAt: new Date().toISOString()
     }, ...(owner.data.activityLogs || [])];
@@ -4546,8 +4487,8 @@ async function handleMarketUpdate(req, res) {
   const mediaItems = (Array.isArray(body.mediaItems) ? body.mediaItems : [])
     .slice(0, 9)
     .map(media => ({
-      url: validatedMediaUrl(media?.url),
-      posterUrl: validatedMediaUrl(media?.posterUrl || media?.poster),
+      url: trimPublicText(media?.url, 800),
+      posterUrl: trimPublicText(media?.posterUrl || media?.poster, 800),
       type: media?.type === "video" ? "video" : "image"
     }))
     .filter(media => media.url);
@@ -4754,14 +4695,14 @@ function marketSharePageHtml(req, url, content) {
     || "";
   const imageUrl = absoluteShareMediaUrl(firstImage, origin);
   const productTitle = String(publicListing.title || `${publicListing.speciesName || "乌龟"}诚意出售`).trim();
-  const title = `龟友手账｜${productTitle}`;
+  const title = `壳友手账｜${productTitle}`;
   const description = `${publicListing.speciesName || "龟集市商品"}${publicListing.price ? ` · ¥${Number(publicListing.price).toFixed(2)}` : ""}${publicListing.city ? ` · ${publicListing.city}` : ""}`;
   const canonicalUrl = new URL(url.pathname || "/", origin);
   canonicalUrl.searchParams.set("market", listingId);
   const metadata = [
     `<meta name="description" content="${escapeShareMeta(description)}">`,
     `<meta property="og:type" content="website">`,
-    `<meta property="og:site_name" content="龟友手账">`,
+    `<meta property="og:site_name" content="壳友手账">`,
     `<meta property="og:title" content="${escapeShareMeta(title)}">`,
     `<meta property="og:description" content="${escapeShareMeta(description)}">`,
     `<meta property="og:url" content="${escapeShareMeta(canonicalUrl.toString())}">`,
@@ -4843,8 +4784,13 @@ function serveStatic(req, res, url) {
 }
 
 function handleAppVersion(req, res) {
-  res.setHeader("Cache-Control", "no-store");
-  return sendJson(res, 200, appUpdatePolicy(req));
+  return sendJson(res, 200, {
+    ok: true,
+    minimumBuild: MIN_SUPPORTED_APP_BUILD,
+    latestBuild: LATEST_APP_BUILD,
+    appStoreUrl: IOS_APP_STORE_URL,
+    message: "龟友手账 1.1.1 已正式上线。当前版本已停止支持，请前往 App Store 更新后继续使用。"
+  });
 }
 
 function serveUpload(req, res, url) {
@@ -4878,11 +4824,8 @@ function serveUpload(req, res, url) {
     const fileSize = stats.size;
     const range = String(req.headers.range || "").match(/^bytes=(\d*)-(\d*)$/i);
     if (range && fileSize > 0) {
-      const suffix = !range[1];
-      const suffixLength = Number(range[2]);
-      let start = suffix ? Math.max(0, fileSize - suffixLength) : Number(range[1]);
-      let end = suffix || !range[2] ? fileSize - 1 : Number(range[2]);
-      if (suffix && (!Number.isSafeInteger(suffixLength) || suffixLength <= 0)) start = fileSize;
+      let start = range[1] ? Number(range[1]) : 0;
+      let end = range[2] ? Number(range[2]) : fileSize - 1;
       if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start >= fileSize || end < start) {
         res.writeHead(416, { ...headers, "Content-Range": `bytes */${fileSize}` });
         res.end();
@@ -5028,8 +4971,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET") return serveStatic(req, res, url);
     return sendJson(res, 405, { ok: false, message: "方法不支持" });
   } catch (error) {
-    const status = Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : 500;
-    return sendJson(res, status, { ok: false, message: error.message || "服务异常" });
+    return sendJson(res, 500, { ok: false, message: error.message || "服务异常" });
   }
 });
 
@@ -5104,3 +5046,5 @@ void initializeMysqlDatabase().then(() => {
   if (mysqlPool) void mysqlPool.end();
   process.exitCode = 1;
 });
+
+// CARE_PERSISTENCE_HOTFIX_20260927

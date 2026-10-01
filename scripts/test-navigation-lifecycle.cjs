@@ -90,10 +90,48 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       await swipe(page); await page.waitForTimeout(450);
       assert.equal(await page.evaluate(() => state.page), 'messages');
     });
-    await check('short edge drag held still does not become a stale fling', async page => {
+    await check('short deliberate edge drag returns after holding still', async page => {
       await secondary(page);
       await page.mouse.move(5, 220); await page.mouse.down();
-      await page.mouse.move(55, 220);
+      await page.mouse.move(19, 220);
+      await page.waitForTimeout(150);
+      await page.mouse.move(35, 220);
+      await page.waitForTimeout(350);
+      await page.mouse.up(); await page.waitForTimeout(450);
+      assert.equal(await page.evaluate(() => state.page), 'about');
+      assert.equal(await page.locator('.edge-back-preview').count(), 0);
+      assert.equal(await page.evaluate(() => $app.style.transform), '');
+    });
+    await check('quick 18 pixel edge swipe returns one level', async page => {
+      await secondary(page);
+      await page.mouse.move(5, 220); await page.mouse.down();
+      await page.mouse.move(23, 221);
+      await page.mouse.up(); await page.waitForTimeout(450);
+      assert.equal(await page.evaluate(() => state.page), 'about');
+    });
+    await check('release position completes a short swipe without a final move event', async page => {
+      await secondary(page);
+      await page.mouse.move(5, 220); await page.mouse.down();
+      await page.mouse.move(15, 220);
+      await page.waitForTimeout(150);
+      await page.evaluate(() => $app.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true, isPrimary: true, pointerId: 1, pointerType: 'mouse', clientX: 35, clientY: 220
+      })));
+      await page.mouse.up(); await page.waitForTimeout(450);
+      assert.equal(await page.evaluate(() => state.page), 'about');
+      assert.equal(await page.evaluate(() => $app.style.transform), '');
+    });
+    await check('short right swipe outside the edge does not navigate back', async page => {
+      await secondary(page);
+      await page.mouse.move(100, 220); await page.mouse.down();
+      await page.mouse.move(135, 220);
+      await page.mouse.up(); await page.waitForTimeout(450);
+      assert.equal(await page.evaluate(() => state.page), 'rules');
+    });
+    await check('tiny edge drag held still does not become a stale fling', async page => {
+      await secondary(page);
+      await page.mouse.move(5, 220); await page.mouse.down();
+      await page.mouse.move(15, 220);
       await page.waitForTimeout(350);
       await page.mouse.up(); await page.waitForTimeout(450);
       assert.equal(await page.evaluate(() => state.page), 'rules');
@@ -104,6 +142,24 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       await page.mouse.move(5, 220); await page.mouse.down();
       await page.mouse.move(220, 220, { steps: 5 });
       await page.mouse.move(110, 220);
+      await page.mouse.up(); await page.waitForTimeout(450);
+      assert.equal(await page.evaluate(() => state.page), 'rules');
+    });
+    await check('pulling back then pausing cancels a short edge swipe', async page => {
+      await secondary(page);
+      await page.mouse.move(5, 220); await page.mouse.down();
+      await page.mouse.move(65, 220);
+      await page.mouse.move(35, 220);
+      await page.waitForTimeout(350);
+      await page.mouse.up(); await page.waitForTimeout(450);
+      assert.equal(await page.evaluate(() => state.page), 'rules');
+      assert.equal(await page.locator('.edge-back-preview').count(), 0);
+    });
+    await check('vertical edge scroll does not navigate back', async page => {
+      await secondary(page);
+      await page.mouse.move(5, 220); await page.mouse.down();
+      await page.mouse.move(10, 250);
+      await page.mouse.move(35, 290);
       await page.mouse.up(); await page.waitForTimeout(450);
       assert.equal(await page.evaluate(() => state.page), 'rules');
     });
@@ -144,7 +200,7 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
         button.style.cssText = 'position:fixed;top:300px;left:50px;z-index:10';
         button.textContent = '操作'; button.addEventListener('click', () => auditClicks++); $app.append(button);
       });
-      await page.mouse.move(5, 220); await page.mouse.down(); await page.mouse.move(40, 220);
+      await page.mouse.move(5, 220); await page.mouse.down(); await page.mouse.move(15, 220);
       await page.waitForTimeout(180); await page.mouse.up();
       const counts = await page.evaluate(() => {
         const button = document.getElementById('auditGestureClick');
@@ -177,7 +233,10 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       const depth = await page.evaluate(() => edgeBackSnapshots.length);
       let prompted = false;
       page.once('dialog', dialog => { prompted = true; return dialog.dismiss(); });
-      await swipe(page);
+      await page.mouse.move(5, 220); await page.mouse.down();
+      await page.mouse.move(35, 220);
+      await page.waitForTimeout(150);
+      await page.mouse.up();
       await page.waitForTimeout(450);
       assert.equal(prompted, true, 'the dirty-form guard must run on gesture return');
       assert.equal(await page.locator('#careForm [name="note"]').inputValue(), '手势返回时保留草稿');
