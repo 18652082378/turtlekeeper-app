@@ -2650,7 +2650,7 @@ function marketChatListingSnapshot(db, listingId, sellerPhone = "") {
     description: listing.description || "",
     impressionCount: Math.max(0, Number(listing.impressionCount || 0)),
     viewCount: Math.max(0, Number(listing.viewCount || 0)),
-    wantCount: (Array.isArray(listing.wantedPhones) ? listing.wantedPhones : []).length,
+    wantCount: marketWantCount(listing),
     mediaUrl: primaryMedia.url || "",
     mediaPosterUrl: primaryMedia.posterUrl || "",
     mediaType: primaryMedia.type === "video" ? "video" : "image",
@@ -2948,7 +2948,7 @@ function operationsSummary(db, selectedDate = analyticsDateKey()) {
   });
   const listingRows = listings.map(item => {
     const view = marketListingView(db, item);
-    const wantCount = (Array.isArray(item.wantedPhones) ? item.wantedPhones : []).filter(phone => String(phone) !== REVIEW_ADMIN_PHONE).length;
+    const wantCount = marketWantCount(item, true);
     return { ...view, wantCount, chatCount: chatPairsByListing.get(item.id)?.size || 0 };
   });
   const activeListings = listingRows.filter(item => item.status === "active");
@@ -4066,6 +4066,13 @@ async function handleCommunityUnread(req, res) {
 const MARKET_REFRESH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MARKET_MANUAL_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
+function marketWantCount(item, excludeAdmin = false) {
+  const phones = Array.isArray(item.wantedPhones) ? item.wantedPhones : [];
+  const realCount = excludeAdmin ? phones.filter(phone => String(phone) !== REVIEW_ADMIN_PHONE).length : phones.length;
+  const adjustment = Number(item.manualMetricAdjustment?.wantDelta || 0);
+  return Math.max(0, realCount + (Number.isSafeInteger(adjustment) ? adjustment : 0));
+}
+
 function marketListingView(db, item, viewer = null) {
   const viewerPhone = viewer?.phone || "";
   const seller = db.users?.[item.sellerPhoneRaw];
@@ -4086,7 +4093,7 @@ function marketListingView(db, item, viewer = null) {
     description: item.description || "",
     impressionCount: Math.max(0, Number(item.impressionCount || 0)),
     viewCount: Math.max(0, Number(item.viewCount || 0)),
-    wantCount: (Array.isArray(item.wantedPhones) ? item.wantedPhones : []).length,
+    wantCount: marketWantCount(item),
     photoUrl: item.photoUrl || "",
     mediaItems: (Array.isArray(item.mediaItems) ? item.mediaItems : []).slice(0, 9).map(media => ({
       url: media.url || "",
@@ -4656,7 +4663,7 @@ async function handleMarketView(req, res) {
     listingId: listing.id,
     impressionCount: Math.max(0, Number(listing.impressionCount || 0)),
     viewCount: listing.viewCount,
-    wantCount: (Array.isArray(listing.wantedPhones) ? listing.wantedPhones : []).length
+    wantCount: marketWantCount(listing)
   });
 }
 
@@ -4677,7 +4684,7 @@ async function handleMarketImpression(req, res) {
     listingId: listing.id,
     impressionCount: Math.max(0, Number(listing.impressionCount || 0)),
     viewCount: Math.max(0, Number(listing.viewCount || 0)),
-    wantCount: (Array.isArray(listing.wantedPhones) ? listing.wantedPhones : []).length
+    wantCount: marketWantCount(listing)
   });
 }
 
@@ -4700,7 +4707,7 @@ async function handleMarketWant(req, res) {
     listingId: listing.id,
     impressionCount: Math.max(0, Number(listing.impressionCount || 0)),
     viewCount: Math.max(0, Number(listing.viewCount || 0)),
-    wantCount: listing.wantedPhones.length
+    wantCount: marketWantCount(listing)
   });
 }
 

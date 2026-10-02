@@ -6,16 +6,21 @@ const zlib = require('node:zlib');
 const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { AFTER, patchServer, deploy } = require('./deploy-market-city-override.cjs');
+const { BEFORE, AFTER, patchServer, deploy } = require('./deploy-market-city-override.cjs');
 const { serverCommand } = require('./copy-market-city-server-command.cjs');
 const workspace = path.resolve(__dirname, '..');
-const before = execFileSync('git', ['show', 'HEAD:server/server.js'], { cwd: workspace, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+let before = execFileSync('git', ['show', 'HEAD:server/server.js'], { cwd: workspace, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).replaceAll('\r\n', '\n');
+// A committed city patch must still exercise deployment from the older validator.
+before = before.replace(AFTER, BEFORE).replaceAll('const location = verifiedMarketLocation(body, user);', 'const location = verifiedMarketLocation(body);');
 const after = patchServer(before);
-assert.equal(after.replaceAll('\r\n', '\n'), fs.readFileSync(path.join(workspace, 'server/server.js'), 'utf8').replaceAll('\r\n', '\n'), 'deployment and local source must implement the same change');
+const currentServer = fs.readFileSync(path.join(workspace, 'server/server.js'), 'utf8');
+const expectedServer = currentServer.includes('function marketWantCount(') ? require('./deploy-market-stat-adjustment.cjs').patchServer(after) : after;
+assert.equal(expectedServer.replaceAll('\r\n', '\n'), currentServer.replaceAll('\r\n', '\n'), 'deployment and local source must implement the same change');
 assert.equal(patchServer(after), after, 'reapplying must not duplicate code');
 assert.equal(patchServer(before.replaceAll('\n', '\r\n')), after.replaceAll('\n', '\r\n'), 'preserve existing line endings');
 assert.throws(() => patchServer(before.replace('const latitude = Number(body.latitude);', 'const latitude = parseFloat(body.latitude);')), /Unreviewed/);
-assert.throws(() => patchServer(before.replace('const location = verifiedMarketLocation(body);', 'const location = customLocation(body);')), /two/);
+const locationCall = before.includes('function verifiedMarketLocation(body, user)') ? 'const location = verifiedMarketLocation(body, user);' : 'const location = verifiedMarketLocation(body);';
+assert.throws(() => patchServer(before.replace(locationCall, 'const location = customLocation(body);')), /two/);
 const context = vm.createContext({ trimPublicText: (value, max) => String(value || '').trim().slice(0, max), isAdminUser: user => user?.phone === 'configured-admin' });
 vm.runInContext(AFTER, context);
 for (const phone of ['17302554044', 'configured-admin']) {
