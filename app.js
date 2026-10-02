@@ -162,6 +162,7 @@ const initialState = {
   blockedUsers: [],
   isCommunityAdmin: false,
   communityFriends: [],
+  communityConversationState: { clearVersions: {}, hiddenIds: [] },
   communityFriendsInitialized: false,
   communityFriendsError: false,
   communityFollowingUsers: [],
@@ -527,6 +528,8 @@ let marketSearchPointerActive = false;
 // A refresh arriving while the action rail is open used to replace the row
 // before the tap reached its button, making pin/delete appear unresponsive.
 const communityConversationActionPending = new Set();
+const communityConversationDeleting = new Set();
+let communityConversationRevision = 0;
 let nativePushListenersAttached = false;
 let nativePushSetupInFlight = false;
 let nativePushDeviceToken = "";
@@ -761,6 +764,7 @@ function normalizeState(next) {
     blockedUsers: Array.isArray(base.blockedUsers) ? base.blockedUsers : [],
     isCommunityAdmin: Boolean(base.isCommunityAdmin),
     communityFriends: loggedInPhone && Array.isArray(base.communityFriends) ? base.communityFriends : [],
+    communityConversationState: loggedInPhone && base.communityConversationState ? base.communityConversationState : { clearVersions: {}, hiddenIds: [] },
     communityFriendsInitialized: Boolean(loggedInPhone && (base.communityFriendsInitialized || base.communityFriends?.length)),
     communityFriendsError: false,
     communityFollowingUsers: Array.isArray(base.communityFollowingUsers) ? base.communityFollowingUsers : [],
@@ -906,6 +910,7 @@ function saveState(options = {}) {
       accountCodeCooldownUntil: state.accountCodeCooldownUntil,
       communityPosts: state.communityPosts || [],
       communityFriends: state.communityFriends || [],
+      communityConversationState: state.communityConversationState || { clearVersions: {}, hiddenIds: [] },
       communityFriendsInitialized: Boolean(state.communityFriendsInitialized),
       communityNotifications: state.communityNotifications || [],
       communityNotificationSummary: state.communityNotificationSummary || null,
@@ -972,6 +977,12 @@ function restoreVisibleFormInputs(forms) {
 function setState(patch, options = {}) {
   const patchChangesState = Object.keys(patch).some(key => !Object.is(state[key], patch[key]));
   const visibleDataChanged = navigationDataKeys(state.page).some(key => Object.hasOwn(patch, key) && patch[key] !== state[key]);
+  if ((Object.hasOwn(patch, "loggedInPhone") && patch.loggedInPhone !== state.loggedInPhone) ||
+      (Object.hasOwn(patch, "cloudToken") && patch.cloudToken !== state.cloudToken)) {
+    communityConversationRevision++;
+    communityConversationActionPending.clear();
+    communityConversationDeleting.clear();
+  }
   if (Object.hasOwn(patch, "loggedInPhone") && patch.loggedInPhone !== state.loggedInPhone) {
     patch = { ...patch, careDraft: null, carePickerOpen: false, careTab: "care" };
     careHistoryFilter = {}; careHistoryLimit = 40;
@@ -2908,6 +2919,7 @@ function messageCacheForAccount(phone) {
   const sameAccount = Boolean(phone && phone === state.loggedInPhone);
   return {
     communityFriends: sameAccount ? state.communityFriends || [] : [],
+    communityConversationState: sameAccount ? state.communityConversationState || { clearVersions: {}, hiddenIds: [] } : { clearVersions: {}, hiddenIds: [] },
     communityFriendsInitialized: sameAccount && Boolean(state.communityFriendsInitialized || state.communityFriends?.length),
     communityFriendsError: sameAccount && Boolean(state.communityFriendsError),
     communityNotifications: sameAccount ? state.communityNotifications || [] : [],
@@ -2933,8 +2945,8 @@ function messageListEmptyMarkup() {
 function pageMessages() {
   const chatPreview = latestCommunityMessagePreview(state.communityChatMessages || []);
   const friends = (() => {
-    const rows = [...(state.communityFriends || [])];
-    if (state.selectedCommunityFriendId && chatPreview?.lastMessage) {
+    const rows = (state.communityFriends || []).filter(friend => !isCommunityConversationHidden(friend.id));
+    if (state.selectedCommunityFriendId && chatPreview?.lastMessage && !isCommunityConversationHidden(state.selectedCommunityFriendId)) {
       const index = rows.findIndex(item => item.id === state.selectedCommunityFriendId);
       const previewPatch = { lastMessage: chatPreview.lastMessage, lastMessageAt: chatPreview.lastMessageAt };
       // The conversation request contains the complete timeline and is often
@@ -3475,16 +3487,17 @@ function shouldShowCommunityMessageTime(messages, index) {
 function normalizeCommunityChatListing(listing) {
   if (!listing || typeof listing !== "object") return null;
   const status = ["active", "inactive", "sold", "removed"].includes(listing.status) ? listing.status : "active";
+  const primaryMedia = Array.isArray(listing.mediaItems) ? listing.mediaItems.find(media => media?.url) : null;
   return {
     ...listing,
     status,
     unavailable: Boolean(listing.unavailable) || status !== "active",
     unavailableReason: listing.unavailableReason || (status === "sold" ? "sold" : status === "active" ? "" : "offline"),
     price: Math.max(0, Number(listing.price || 0)),
-    mediaUrl: apiAssetUrl(listing.mediaUrl || listing.photoUrl || ""),
-    mediaPosterUrl: apiAssetUrl(listing.mediaPosterUrl || listing.posterUrl || ""),
+    mediaUrl: apiAssetUrl(listing.mediaUrl || primaryMedia?.url || listing.photoUrl || ""),
+    mediaPosterUrl: apiAssetUrl(listing.mediaPosterUrl || listing.posterUrl || primaryMedia?.posterUrl || primaryMedia?.poster || ""),
     photoUrl: apiAssetUrl(listing.photoUrl || listing.mediaUrl || ""),
-    mediaType: listing.mediaType === "video" ? "video" : "image",
+    mediaType: (listing.mediaType || primaryMedia?.type) === "video" ? "video" : "image",
     mediaItems: Array.isArray(listing.mediaItems) ? listing.mediaItems.slice(0, 9).map(media => ({
       ...media,
       url: apiAssetUrl(media?.url || ""),
@@ -3712,9 +3725,11 @@ function communityChatListingCard(listing) {
   const meta = [listing.city || "全国", listing.delivery].filter(Boolean).join(" · ");
   const unavailable = isUnavailableChatListing(listing);
   const unavailableMark = unavailable ? `<em class="community-chat-product-unavailable-mark">已售出</em>` : "";
+  const videoCover = listing.mediaType === "video"
+    ? marketVideoPosterUrl({ url: listing.mediaUrl, posterUrl: listing.mediaPosterUrl }, defaultPhoto, listing.id) : "";
   const preview = listing.mediaUrl
     ? (listing.mediaType === "video"
-      ? `<span class="community-chat-product-media is-video ${unavailable ? "is-unavailable" : ""}"><video src="${escapeHtml(listing.mediaUrl)}"${videoPosterAttribute(listing)} muted playsinline preload="none" crossorigin="anonymous" data-video-first-frame></video><i>▶</i>${unavailableMark}</span>`
+      ? `<span class="community-chat-product-media is-video ${unavailable ? "is-unavailable" : ""}"><img src="${escapeHtml(apiAssetUrl(videoCover))}" data-market-poster-listing="${escapeHtml(listing.id || "")}" data-market-poster-video="${escapeHtml(listing.mediaUrl)}" data-poster-missing="${videoCover === defaultPhoto}" alt="${escapeHtml(title)}的视频首帧" decoding="async"><i aria-hidden="true">▶</i>${unavailableMark}</span>`
       : `<span class="community-chat-product-media ${unavailable ? "is-unavailable" : ""}"><img src="${escapeHtml(listing.mediaUrl)}" alt="${escapeHtml(title)}">${unavailableMark}</span>`)
     : `<span class="community-chat-product-media is-placeholder ${unavailable ? "is-unavailable" : ""}">龟${unavailableMark}</span>`;
   return `
@@ -11586,6 +11601,7 @@ async function contactMarketSeller(listingId, buying = false) {
   const listing = (state.marketListings || []).find(item => item.id === listingId);
   if (!listing || listing.isOwn || listing.pendingLocal) return;
   if (!canUseCommunity()) return;
+  const requestContext = communityChatRequestContext(listing.sellerId);
   void recordMarketWant(listingId);
   const buyMessage = `你好，我想咨询「${listing.title || listing.speciesName || "这只龟"}」，请问现在还在售吗？`;
   marketChatDraft = buyMessage;
@@ -11618,6 +11634,8 @@ async function contactMarketSeller(listingId, buying = false) {
       content: buyMessage,
       marketListingId: listing.id
     }));
+    if (!isCommunityChatRequestCurrent(requestContext)) return;
+    reconcileCommunityConversationState(sent);
     const friend = sent.friend || initialFriend;
     const messages = sent.messages || [];
     const marketListing = normalizeCommunityChatListing(sent.marketListing) || initialListing;
@@ -11627,17 +11645,19 @@ async function contactMarketSeller(listingId, buying = false) {
     communityChatOpening = false;
     if (chatStillVisible) $app.classList.remove("community-chat-enter-motion");
     pendingCommunityChatLatestScroll = chatStillVisible;
-    setState({
-      page: "communityChat",
+    const chatData = {
       selectedCommunityFriendId: listing.sellerId,
       selectedCommunityFriend: friend,
       communityChatMessages: messages,
       communityChatListing: marketListing,
       communityChatToolsOpen: false,
       communityFriends: communityFriendsWithPreview(listing.sellerId, friend, messages, { unreadCount: 0 })
-    }, { skipCloud: true, pageMotion: "chat" });
+    };
+    if (chatStillVisible) setState(chatData, { skipCloud: true, pageMotion: "chat" });
+    else setState({ communityFriends: chatData.communityFriends }, { skipCloud: true, renderPages: ["messages"] });
     refreshMessageUnread(true);
   } catch (error) {
+    if (!isCommunityChatRequestCurrent(requestContext)) return;
     communityChatOpening = false;
     if (state.page === "communityChat" && state.selectedCommunityFriendId === listing.sellerId) {
       $app.classList.remove("community-chat-enter-motion");
@@ -12193,9 +12213,12 @@ async function refreshCommunity(force = false) {
   communityLoading = true;
   const requestPhone = state.loggedInPhone;
   const requestToken = currentCloudToken();
+  const conversationRevision = communityConversationRevision;
   try {
     const result = await apiPost("/api/community/list", communityAuthPayload({ offset: 0, limit: 10, sort: "latest" }));
     if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
+    if (conversationRevision !== communityConversationRevision || communityConversationDeleting.size) return;
+    reconcileCommunityConversationState(result);
     communityLastLoadedAt = Date.now();
     const hasFriends = Array.isArray(result.friends);
     const friends = hasFriends ? mergeCommunityFriends(result.friends) : (state.communityFriends || []);
@@ -12736,27 +12759,15 @@ function createVideoPoster(file, remoteUrl = "", isRelevant = () => true) {
         finish(null);
       }
     };
-    const seekAndCapture = () => {
-      const duration = Number(video.duration || 0);
-      const target = Number.isFinite(duration) && duration > 0.2 ? Math.min(0.16, Math.max(0.04, duration - 0.04)) : 0;
-      if (target > 0 && Math.abs(video.currentTime - target) > 0.01) {
-        video.addEventListener("seeked", capture, { once: true });
-        try {
-          video.currentTime = target;
-        } catch {
-          capture();
-        }
-      } else {
-        capture();
-      }
-    };
     timer = window.setTimeout(() => finish(null), 10000);
     if (remoteUrl) visibilityTimer = window.setInterval(() => { if (!isRelevant()) finish(null); }, 250);
     if (remoteUrl) video.crossOrigin = "anonymous";
     video.muted = true;
     video.playsInline = true;
     video.preload = "auto";
-    video.addEventListener("loadeddata", seekAndCapture, { once: true });
+    // Match the server-generated cover: capture the first decoded frame,
+    // without seeking forward or starting playback.
+    video.addEventListener("loadeddata", capture, { once: true });
     video.addEventListener("error", () => finish(null), { once: true });
     video.src = objectUrl;
     video.load();
@@ -13277,7 +13288,32 @@ function isCommunityPreviewAtLeastAsNew(candidate, current) {
   return Boolean(candidateAt && (!currentAt || candidateAt >= currentAt)) || !current?.lastMessage;
 }
 
+function isCommunityConversationHidden(userId) {
+  return (state.communityConversationState?.hiddenIds || []).includes(String(userId));
+}
+
+function reconcileCommunityConversationState(result) {
+  const incoming = result?.conversationState;
+  if (!incoming || !Array.isArray(incoming.hiddenIds) || !incoming.clearVersions || typeof incoming.clearVersions !== "object") return;
+  const previous = state.communityConversationState || { clearVersions: {}, hiddenIds: [] };
+  const next = { clearVersions: { ...previous.clearVersions, ...incoming.clearVersions }, hiddenIds: [...new Set([
+    ...incoming.hiddenIds.map(String), ...communityConversationDeleting,
+    ...(previous.hiddenIds || []).filter(id => previous.clearVersions?.[id] && !incoming.clearVersions[id])
+  ])] };
+  const cleared = Object.keys(next.clearVersions).filter(id => next.clearVersions[id] !== previous.clearVersions?.[id]);
+  if (JSON.stringify(next) !== JSON.stringify(previous)) communityConversationRevision++;
+  const selectedCleared = cleared.includes(state.selectedCommunityFriendId);
+  state = { ...state, communityConversationState: next,
+    ...(selectedCleared ? { communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false } : {}) };
+  if (cleared.length) {
+    // No saved chat DOM may show a previous copy after a clear on this or another device.
+    edgeBackSnapshots = edgeBackSnapshots.filter(snapshot => snapshot.page !== "communityChat");
+    if (selectedCleared) { marketChatDraft = ""; communityChatLoadedKey = ""; closeCommunityChatMessageMenu(); if (state.page === "communityChat") render(); }
+  }
+}
+
 function communityFriendsWithPreview(userId, friend, messages = [], options = {}) {
+  if (isCommunityConversationHidden(userId) && !messages.length) return (state.communityFriends || []).filter(item => item.id !== userId);
   const preview = latestCommunityMessagePreview(messages);
   const current = (state.communityFriends || []).find(item => item.id === userId);
   const useChatPreview = isCommunityPreviewAtLeastAsNew(preview, current);
@@ -13300,7 +13336,7 @@ function mergeCommunityFriends(incomingFriends = []) {
   const previous = state.communityFriends || [];
   const previousMap = new Map(previous.map(item => [item.id, item]));
   const incomingIds = new Set();
-  const merged = (Array.isArray(incomingFriends) ? incomingFriends : []).map(friend => {
+  const merged = (Array.isArray(incomingFriends) ? incomingFriends : []).filter(friend => !isCommunityConversationHidden(friend.id)).map(friend => {
     incomingIds.add(friend.id);
     const old = previousMap.get(friend.id) || {};
     // A slower response from /community/list or /community/unread must never
@@ -13315,7 +13351,7 @@ function mergeCommunityFriends(incomingFriends = []) {
     };
   });
   previous.forEach(friend => {
-    if (!incomingIds.has(friend.id) && (friend.lastMessage || friend.lastMessageAt)) merged.push(friend);
+    if (!isCommunityConversationHidden(friend.id) && !incomingIds.has(friend.id) && (friend.lastMessage || friend.lastMessageAt)) merged.push(friend);
   });
   return merged.sort((left, right) => Number(right.pinned) - Number(left.pinned) || new Date(right.lastMessageAt || right.createdAt || 0) - new Date(left.lastMessageAt || left.createdAt || 0));
 }
@@ -13323,6 +13359,7 @@ function mergeCommunityFriends(incomingFriends = []) {
 async function openCommunityChat(userId) {
   if (!canUseCommunity()) return;
   const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
+  const conversationRevision = communityConversationRevision;
   marketChatDraft = "";
   communityChatLoadedKey = "";
   const previousFriend = (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId);
@@ -13360,6 +13397,8 @@ async function openCommunityChat(userId) {
   try {
     const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
     if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
+    if (conversationRevision !== communityConversationRevision || communityConversationDeleting.size) return;
+    reconcileCommunityConversationState(result);
     communityChatLoadedKey = `${userId}:${Math.floor(Date.now() / 10000)}`;
     const friend = result.friend || previousFriend;
     // Message media reserves a stable fallback aspect ratio in CSS. Do not
@@ -13469,23 +13508,56 @@ async function deleteCommunityConversation(userId) {
   const friend = (state.communityFriends || []).find(item => item.id === userId);
   const name = String(friend?.name || "该用户").trim();
   if (!canUseCommunity() || communityConversationActionPending.has(userId)) return;
-  if (!window.confirm(`确认删除与“${name}”的聊天记录吗？\n\n删除后将不再显示此会话；收到对方新消息时会再次出现。`)) return;
+  if (!window.confirm(`确认删除与“${name}”的聊天记录吗？\n\n将清空你这边的历史记录并移除此会话。再次聊天只显示新消息，对方的记录不受影响。`)) return;
+  const phone = state.loggedInPhone, token = currentCloudToken();
+  const isCurrent = () => phone === state.loggedInPhone && token === currentCloudToken();
   const previousFriends = state.communityFriends || [];
+  const previousConversationState = state.communityConversationState || { clearVersions: {}, hiddenIds: [] };
+  const selectedWasDeleted = state.selectedCommunityFriendId === userId;
+  const previousChat = selectedWasDeleted ? { selectedCommunityFriendId: userId, selectedCommunityFriend: state.selectedCommunityFriend,
+    communityChatMessages: state.communityChatMessages, communityChatListing: state.communityChatListing } : null;
+  communityConversationRevision++;
+  communityConversationDeleting.add(userId);
   communityConversationActionPending.add(userId);
   // Remove it optimistically so pressing “OK” always gives immediate, visible
   // feedback instead of waiting for a network round trip.
-  setState({ communityFriends: previousFriends.filter(item => item.id !== userId) }, { skipCloud: true });
+  const remainingFriends = previousFriends.filter(item => item.id !== userId);
+  const clearChat = selectedWasDeleted ? { selectedCommunityFriendId: "", selectedCommunityFriend: null, communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false } : {};
+  if (selectedWasDeleted) { marketChatDraft = ""; communityChatLoadedKey = ""; communityChatOpening = false; closeCommunityChatMessageMenu(); }
+  edgeBackSnapshots = edgeBackSnapshots.filter(snapshot => snapshot.page !== "communityChat");
+  const unreadRemoved = Math.max(0, Number(friend?.unreadCount || 0));
+  setState({ ...clearChat, ...(selectedWasDeleted && state.page === "communityChat" ? { page: "messages" } : {}),
+    communityConversationState: { ...previousConversationState, hiddenIds: [...new Set([...previousConversationState.hiddenIds, userId])] },
+    communityFriends: remainingFriends, messageUnreadCount: Math.max(0, Number(state.messageUnreadCount || 0) - unreadRemoved)
+  }, { skipCloud: true, forceRender: true, skipEdgeSnapshot: true });
+  patchStoredMessageLists(remainingFriends);
   try {
     const result = await apiPost("/api/community/chat/delete", communityAuthPayload({ userId }));
+    if (!isCurrent()) return;
     if (!result?.ok || !Array.isArray(result.friends)) throw new Error(result?.message || "删除失败，请重试");
-    setState({ communityFriends: result.friends }, { skipCloud: true });
+    reconcileCommunityConversationState(result);
+    const friends = mergeCommunityFriends(result.friends);
+    setState({ communityFriends: friends, ...(Number.isFinite(result.totalUnreadCount) ? { messageUnreadCount: result.totalUnreadCount } : {}) }, { skipCloud: true, forceRender: state.page === "messages" });
+    patchStoredMessageLists(friends);
     toast("聊天记录已删除");
   } catch (error) {
-    setState({ communityFriends: previousFriends }, { skipCloud: true });
+    if (!isCurrent()) return;
+    const restoredFriends = (state.communityFriends || []).filter(item => item.id !== userId).concat(friend ? [friend] : []);
+    const nowConversationState = state.communityConversationState || previousConversationState;
+    const hiddenIds = nowConversationState.hiddenIds.filter(id => id !== userId);
+    if (previousConversationState.hiddenIds.includes(userId)) hiddenIds.push(userId);
+    setState({ communityFriends: restoredFriends, communityConversationState: { ...nowConversationState, hiddenIds },
+      ...(previousChat && !state.selectedCommunityFriendId ? previousChat : {}),
+      messageUnreadCount: Number(state.messageUnreadCount || 0) + unreadRemoved }, { skipCloud: true, forceRender: state.page === "messages" });
+    patchStoredMessageLists(restoredFriends);
     console.error("删除会话失败", error);
     toast(error.message || "删除失败，请重试");
   } finally {
-    communityConversationActionPending.delete(userId);
+    if (isCurrent()) {
+      communityConversationRevision++;
+      communityConversationActionPending.delete(userId);
+      communityConversationDeleting.delete(userId);
+    }
   }
 }
 
@@ -13501,10 +13573,13 @@ async function refreshMessageUnread(force = false, options = {}) {
   messageUnreadLoading = true;
   const phone = state.loggedInPhone;
   const token = currentCloudToken();
+  const conversationRevision = communityConversationRevision;
   try {
     const readRevision = communityNotificationReadRevision;
     const result = await apiPost("/api/community/unread", communityAuthPayload());
     if (phone !== state.loggedInPhone || token !== currentCloudToken()) return;
+    if (conversationRevision !== communityConversationRevision || communityConversationDeleting.size) return;
+    reconcileCommunityConversationState(result);
     if (readRevision !== communityNotificationReadRevision) { messageUnreadRenderRequested = true; return; }
     const unreadCount = Math.max(0, Number(result.totalUnreadCount ?? result.unreadCount ?? 0));
     messageUnreadLastLoadedAt = Date.now();
@@ -13569,17 +13644,20 @@ function patchVisibleMessageList(friends) {
 }
 
 function patchStoredMessageLists(friends) {
-  edgeBackSnapshots
-    .filter(snapshot => snapshot?.page === "messages")
-    .forEach(snapshot => {
-      if (snapshot.liveDom?.hasChildNodes?.()) { patchMessageListInRoot(snapshot.liveDom, friends); patchMessageActivitySummary(snapshot.liveDom); }
-      if (!snapshot.html) return;
+  edgeBackSnapshots = edgeBackSnapshots.filter(snapshot => {
+      if (snapshot?.page !== "messages") return true;
+      if (snapshot.liveDom?.hasChildNodes?.()) {
+        if (!patchMessageListInRoot(snapshot.liveDom, friends)) return false;
+        patchMessageActivitySummary(snapshot.liveDom);
+      }
+      if (!snapshot.html) return true;
       const template = document.createElement("template");
       template.innerHTML = snapshot.html;
-      patchMessageListInRoot(template.content, friends);
+      if (!patchMessageListInRoot(template.content, friends)) return false;
       patchMessageActivitySummary(template.content);
       snapshot.html = template.innerHTML;
       snapshot.previewHtml = buildEdgeBackPreviewHtml(snapshot.html);
+      return true;
     });
 }
 
@@ -13718,6 +13796,7 @@ async function refreshCommunityChat(force = false, options = {}) {
   const userId = state.selectedCommunityFriendId;
   if (!userId || !hasCloudSession()) return;
   const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
+  const conversationRevision = communityConversationRevision;
   if (communityChatLoading) {
     if (force) communityChatRefreshPending = true;
     return;
@@ -13728,6 +13807,8 @@ async function refreshCommunityChat(force = false, options = {}) {
   try {
     const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
     if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
+    if (conversationRevision !== communityConversationRevision || communityConversationDeleting.size) return;
+    reconcileCommunityConversationState(result);
     communityChatLoadedKey = key;
     const friend = result.friend || state.selectedCommunityFriend;
     const messages = mergeCommunityChatMessages(state.selectedCommunityFriendId === userId ? state.communityChatMessages : [], result.messages || []);
@@ -13777,9 +13858,10 @@ async function sendCommunityMessage(event) {
   if (!canUseCommunity()) return;
   const content = String(new FormData(event.currentTarget).get("content") || "").trim();
   if (!content) return;
+  const requestContext = communityChatRequestContext();
   try {
-    const result = await apiPost("/api/community/chat/send", communityAuthPayload({ userId: state.selectedCommunityFriendId, content }));
-    applyCommunityChatSendResult(result);
+    const result = await apiPost("/api/community/chat/send", communityAuthPayload({ userId: requestContext.userId, content }));
+    applyCommunityChatSendResult(result, { requestContext });
   } catch (error) {
     toast(error.message || "消息发送失败");
   }
@@ -13823,13 +13905,13 @@ function quoteCommunityChatMessage(message) {
 
 async function recallCommunityChatMessage(message) {
   if (!message?.id || !canUseCommunity()) return;
+  const requestContext = communityChatRequestContext();
   try {
     const result = await apiPost("/api/community/chat/recall", communityAuthPayload({
-      userId: state.selectedCommunityFriendId,
+      userId: requestContext.userId,
       messageId: message.id
     }));
-    applyCommunityChatSendResult(result);
-    toast("已撤回消息");
+    if (applyCommunityChatSendResult(result, { requestContext })) toast("已撤回消息");
   } catch (error) {
     toast(error.message || "撤回失败，请重试");
   }
@@ -13923,14 +14005,31 @@ function bindCommunityChatTextMessageMenus() {
   });
 }
 
+function communityChatRequestContext(userId = state.selectedCommunityFriendId) {
+  return { userId, phone: state.loggedInPhone, token: currentCloudToken(), revision: communityConversationRevision };
+}
+
+function isCommunityChatRequestCurrent(request) {
+  return request.phone === state.loggedInPhone && request.token === currentCloudToken() && request.revision === communityConversationRevision && !communityConversationDeleting.has(request.userId);
+}
+
 function applyCommunityChatSendResult(result, options = {}) {
+  const request = options.requestContext;
+  if (request && !isCommunityChatRequestCurrent(request)) return false;
+  reconcileCommunityConversationState(result);
+  if (request) request.revision = communityConversationRevision;
   marketChatDraft = "";
   communityChatLoadedKey = `${state.selectedCommunityFriendId}:${Math.floor(Date.now() / 10000)}`;
   pendingCommunityChatLatestScroll = true;
   const friend = result.friend || state.selectedCommunityFriend;
   const messages = result.messages || [];
-  const chatFriends = communityFriendsWithPreview(state.selectedCommunityFriendId, friend, messages, { unreadCount: 0 });
+  const userId = request?.userId || state.selectedCommunityFriendId;
+  const chatFriends = communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 });
   patchStoredMessageLists(chatFriends);
+  if (request && state.selectedCommunityFriendId !== userId) {
+    setState({ communityFriends: chatFriends }, { skipCloud: true, renderPages: ["messages"] });
+    return true;
+  }
   setState({
     selectedCommunityFriend: friend,
     communityChatMessages: messages,
@@ -13939,6 +14038,7 @@ function applyCommunityChatSendResult(result, options = {}) {
     communityFriends: chatFriends
   }, { skipCloud: true });
   refreshMessageUnread(true);
+  return true;
 }
 
 function bindCommunityChatCameraButton() {
@@ -14029,6 +14129,7 @@ async function sendCommunityChatMediaBatch(event) {
   const files = Array.from(input.files || []);
   input.value = "";
   if (!files.length || !canUseCommunity()) return;
+  const requestContext = communityChatRequestContext();
   const kinds = files.map(localMediaFileKind);
   if (kinds.some(kind => !kind)) return toast("请选择图片或不超过 30 秒的视频");
   if (kinds.includes("video") && files.length !== 1) return toast("视频一次只能发送 1 个，图片最多可选择 9 张");
@@ -14039,6 +14140,7 @@ async function sendCommunityChatMediaBatch(event) {
   const total = files.length;
   try {
     for (let index = 0; index < files.length; index += 1) {
+      if (!isCommunityChatRequestCurrent(requestContext)) return;
       const file = files[index];
       const mediaKind = kinds[index];
       const duration = mediaKind === "video" ? await readVideoDuration(file) : 0;
@@ -14059,14 +14161,15 @@ async function sendCommunityChatMediaBatch(event) {
         if (String(poster?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(poster.previewUrl);
       }
       updateCommunityChatMediaUploadProgress({ current: index + 1, total, percent: 100, stage: "正在发送消息…" });
+      if (!isCommunityChatRequestCurrent(requestContext)) return;
       const result = await apiPost("/api/community/chat/send", communityAuthPayload({
-        userId: state.selectedCommunityFriendId,
+        userId: requestContext.userId,
         content: "",
         mediaUrl: uploaded.url || "",
         mediaType: uploaded.mediaType || mediaKind,
         posterUrl
       }));
-      applyCommunityChatSendResult(result);
+      if (!applyCommunityChatSendResult(result, { requestContext })) return;
     }
     collapseCommunityChatTools();
     toast(total > 1 ? `已发送 ${total} 张图片` : (kinds[0] === "video" ? "视频已发送" : "图片已发送"));
@@ -14085,6 +14188,7 @@ async function sendCommunityChatMedia(event) {
     input.value = "";
     return;
   }
+  const requestContext = communityChatRequestContext();
   const mediaKind = localMediaFileKind(file);
   if (!mediaKind) {
     input.value = "";
@@ -14108,8 +14212,9 @@ async function sendCommunityChatMedia(event) {
     } finally {
       if (String(poster?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(poster.previewUrl);
     }
+    if (!isCommunityChatRequestCurrent(requestContext)) return;
     const result = await apiPost("/api/community/chat/send", communityAuthPayload({
-      userId: state.selectedCommunityFriendId,
+      userId: requestContext.userId,
       content: "",
       mediaUrl: uploaded.url || "",
       mediaType: uploaded.mediaType || mediaKind,
@@ -14117,7 +14222,7 @@ async function sendCommunityChatMedia(event) {
     }));
     // 成功发送后先收起相册／拍摄面板，避免其遮住刚发送的媒体消息。
     collapseCommunityChatTools();
-    applyCommunityChatSendResult(result);
+    if (!applyCommunityChatSendResult(result, { requestContext })) return;
     toast(mediaKind === "video" ? "视频已发送" : "图片已发送");
   } catch (error) {
     toast(error.message === "请输入消息" ? "服务器尚未同步聊天媒体接口，请部署服务器后重试" : (error.message || "媒体发送失败"));

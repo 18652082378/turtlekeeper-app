@@ -1063,7 +1063,7 @@ function removeInvalidPushDevice(phone, deviceToken) {
 function communityUnreadMessageCount(db, user) {
   if (!user?.phone) return 0;
   return (Array.isArray(db.messages) ? db.messages : [])
-    .filter(item => item.toPhone === user.phone && !item.readAt)
+    .filter(item => item.toPhone === user.phone && !item.readAt && communityMessageVisibleTo(item, user.phone))
     .length;
 }
 
@@ -2680,9 +2680,35 @@ function resolveCommunityChatListing(db, snapshot) {
   };
 }
 
+function communityMessageVisibleTo(message, phone) {
+  return !(Array.isArray(message.deletedForPhones) && message.deletedForPhones.includes(phone));
+}
+
+function communityConversationState(user) {
+  const versions = user?.communityConversationClearVersions || {};
+  return {
+    clearVersions: Object.fromEntries(Object.entries(versions).map(([phone, version]) => [communityUserId(phone), version])),
+    hiddenIds: [...new Set([...(Array.isArray(user?.data?.hiddenConversationPhones) ? user.data.hiddenConversationPhones : []), ...(Array.isArray(user?.communityConversationHiddenPhones) ? user.communityConversationHiddenPhones : [])])].map(communityUserId)
+  };
+}
+
+function clearCommunityConversationHistory(db, user, targetPhone) {
+  // Each participant owns a copy. Remove the shared record only after both
+  // participants have cleared it; new messages never restore an older copy.
+  db.messages = (Array.isArray(db.messages) ? db.messages : []).flatMap(message => {
+    if (!((message.fromPhone === user.phone && message.toPhone === targetPhone) || (message.fromPhone === targetPhone && message.toPhone === user.phone))) return [message];
+    const deletedForPhones = [...new Set([...(Array.isArray(message.deletedForPhones) ? message.deletedForPhones : []), user.phone])];
+    if ([message.fromPhone, message.toPhone].every(phone => deletedForPhones.includes(phone))) return [];
+    return [{ ...message, deletedForPhones }];
+  });
+  user.communityConversationClearVersions = { ...(user.communityConversationClearVersions || {}), [targetPhone]: crypto.randomUUID() };
+  // Keep server-owned deletion state outside the full-account upload payload.
+  user.communityConversationHiddenPhones = [...new Set([...(user.communityConversationHiddenPhones || []), targetPhone])];
+}
+
 function communityConversationMessages(db, phoneA, phoneB) {
   return (Array.isArray(db.messages) ? db.messages : [])
-    .filter(item => [item.fromPhone, item.toPhone].includes(phoneA) && [item.fromPhone, item.toPhone].includes(phoneB))
+    .filter(item => [item.fromPhone, item.toPhone].includes(phoneA) && [item.fromPhone, item.toPhone].includes(phoneB) && communityMessageVisibleTo(item, phoneA))
     .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
     .map(item => {
       const recalled = Boolean(item.recalledAt);
@@ -3072,7 +3098,7 @@ async function handleAdminFeedbackAction(req, res) {
 
 function communityFriends(db, viewer) {
   const links = Array.isArray(db.friendships) ? db.friendships : [];
-  const messages = Array.isArray(db.messages) ? db.messages : [];
+  const messages = (Array.isArray(db.messages) ? db.messages : []).filter(message => communityMessageVisibleTo(message, viewer.phone));
   const contactPhones = new Set();
   links
     .filter(item => item.phones?.includes(viewer.phone))
@@ -3082,7 +3108,7 @@ function communityFriends(db, viewer) {
     if (message.toPhone === viewer.phone && message.fromPhone) contactPhones.add(message.fromPhone);
   });
   const pinned = new Set(Array.isArray(viewer.data?.pinnedConversationPhones) ? viewer.data.pinnedConversationPhones : []);
-  const hidden = new Set(Array.isArray(viewer.data?.hiddenConversationPhones) ? viewer.data.hiddenConversationPhones : []);
+  const hidden = new Set([...(Array.isArray(viewer.data?.hiddenConversationPhones) ? viewer.data.hiddenConversationPhones : []), ...(Array.isArray(viewer.communityConversationHiddenPhones) ? viewer.communityConversationHiddenPhones : [])]);
   const blocked = blockedPhoneSet(viewer);
   return [...contactPhones]
     .filter(phone => !hidden.has(phone) && !blocked.has(phone))
@@ -3282,6 +3308,7 @@ async function handleCommunityList(req, res) {
     nextOffset,
     total: allPosts.length,
     friends: user ? communityFriends(db, user) : [],
+    conversationState: user ? communityConversationState(user) : undefined,
     profileStats: communityProfileStats(db, user),
     followedCircleIds: user && Array.isArray(user.communityCircleIds) ? user.communityCircleIds : [],
     isAdmin: isAdminUser(user)
@@ -3888,15 +3915,19 @@ async function handleCommunityChatList(req, res) {
   if (usersBlockEachOther(user, target)) return sendJson(res, 403, { ok: false, message: "屏蔽关系存在，无法继续聊天" });
   db.messages = Array.isArray(db.messages) ? db.messages : [];
   let readStateChanged = false;
+  if (user.data?.hiddenConversationPhones?.includes(target.phone) && !user.communityConversationClearVersions?.[target.phone]) {
+    clearCommunityConversationHistory(db, user, target.phone);
+    readStateChanged = true;
+  }
   const readAt = new Date().toISOString();
   db.messages.forEach(item => {
-    if (item.fromPhone === target.phone && item.toPhone === user.phone && !item.readAt) {
+    if (item.fromPhone === target.phone && item.toPhone === user.phone && !item.readAt && communityMessageVisibleTo(item, user.phone)) {
       item.readAt = readAt;
       readStateChanged = true;
     }
   });
   if (readStateChanged) {
-    writeDatabase(db);
+    await writeDatabase(db);
     // Reading a conversation may bring the total down to zero. Update every
     // registered device without showing another user-facing notification.
     void syncCommunityUnreadBadge(db, user);
@@ -3906,6 +3937,7 @@ async function handleCommunityChatList(req, res) {
     ok: true,
     friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "", isAdmin: isAdminUser(target) },
     messages,
+    conversationState: communityConversationState(user),
     marketListing: latestConversationMarketListing(messages)
   });
 }
@@ -3927,6 +3959,10 @@ async function handleCommunityChatSend(req, res) {
   if (marketListingId && !marketListing) return sendJson(res, 400, { ok: false, message: "商品信息无效" });
   if (!content && !mediaUrl && !marketListing) return sendJson(res, 400, { ok: false, message: "请输入消息" });
   if (rejectObjectionableContent(res, content)) return;
+  [user, target].forEach(account => {
+    const otherPhone = account.phone === user.phone ? target.phone : user.phone;
+    if (account.data?.hiddenConversationPhones?.includes(otherPhone) && !account.communityConversationClearVersions?.[otherPhone]) clearCommunityConversationHistory(db, account, otherPhone);
+  });
   const message = {
     id: crypto.randomUUID(),
     fromPhone: user.phone,
@@ -3958,8 +3994,9 @@ async function handleCommunityChatSend(req, res) {
   [user, target].forEach(account => {
     account.data = normalizeAccountData(account.data);
     account.data.hiddenConversationPhones = account.data.hiddenConversationPhones.filter(phone => phone !== (account.phone === user.phone ? target.phone : user.phone));
+    account.communityConversationHiddenPhones = (Array.isArray(account.communityConversationHiddenPhones) ? account.communityConversationHiddenPhones : []).filter(phone => phone !== (account.phone === user.phone ? target.phone : user.phone));
   });
-  writeDatabase(db);
+  await writeDatabase(db);
   // Send asynchronously so a temporary APNs issue never delays the chat itself.
   void notifyCommunityMessage(db, message, user, target);
   const messages = communityConversationMessages(db, user.phone, target.phone);
@@ -3967,6 +4004,7 @@ async function handleCommunityChatSend(req, res) {
     ok: true,
     friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "", isAdmin: isAdminUser(target) },
     messages,
+    conversationState: communityConversationState(user),
     marketListing: latestConversationMarketListing(messages)
   });
 }
@@ -4024,8 +4062,11 @@ async function handleCommunityConversationDelete(req, res) {
   user.data = normalizeAccountData(user.data);
   user.data.hiddenConversationPhones = [...new Set([...user.data.hiddenConversationPhones, target.phone])];
   user.data.pinnedConversationPhones = user.data.pinnedConversationPhones.filter(phone => phone !== target.phone);
-  writeDatabase(db);
-  return sendJson(res, 200, { ok: true, friends: communityFriends(db, user) });
+  clearCommunityConversationHistory(db, user, target.phone);
+  await writeDatabase(db);
+  void syncCommunityUnreadBadge(db, user);
+  return sendJson(res, 200, { ok: true, friends: communityFriends(db, user), conversationState: communityConversationState(user),
+    totalUnreadCount: communityTotalUnreadCount(db, user) });
 }
 
 async function handleCommunityUnread(req, res) {
@@ -4059,7 +4100,8 @@ async function handleCommunityUnread(req, res) {
     notificationUnreadCount,
     notifications: publicCommunityNotifications(db, user),
     notificationSummary: communityNotificationSummary(db, user),
-    friends: communityFriends(db, user)
+    friends: communityFriends(db, user),
+    conversationState: communityConversationState(user)
   });
 }
 
