@@ -9,6 +9,8 @@ async function main() {
   const browser = await chromium.launch({ headless: true, ...(process.env.BROWSER_EXECUTABLE ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const pageErrors = [];
+    page.on('pageerror', error => pageErrors.push(error.message));
     await page.setContent('<style>body{margin:0}.card{height:200px}.edge-back-preview{position:fixed;inset:0;overflow:auto;background:white}</style><div id="app"></div>');
     await page.addScriptTag({ content: `
       var $app=document.querySelector('#app');
@@ -22,6 +24,7 @@ async function main() {
       var marketLoading=false,marketLastLoadedAt=0,incomingMarketShareLoading=false,incomingMarketShareListingId='';
       function saveState(){} function refreshCareReminderTimers(){} function setupMarketInfiniteScroll(){}
       function setupCommunityInfiniteScroll(){} function syncMobileKeyboardUI(){}
+      function canLeaveRecordPage(){return true} function updateAccountSaveStatus(){}
       function syncPersistentBottomNav(){} function hydrateVideoFirstFrames(){} function hydrateCommunityPostVideos(){} function hydrateMarketDetailVideos(){}
       function patchSystemAnnouncementOverlay(){}
       function savedMarketListingIds(){return []} function hasCloudSession(){return true} function marketAuthPayload(x){return x}
@@ -101,6 +104,7 @@ async function main() {
     assert.equal(latePage.offset,latePage.beforeOffset, 'background pagination must not skip a detached page');
     assert.equal(latePage.loading,false);
     assert.equal(latePage.count,latePage.cards);
+    assert.deepEqual(pageErrors, [], 'the isolated navigation fixture must not hide browser errors');
     console.log('Market back-scroll browser checks passed: button, gesture hand-off, HTML fallback, exact card position, filters, loaded pagination and late page responses.');
   } finally { await browser.close(); }
 }

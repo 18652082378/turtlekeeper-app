@@ -494,7 +494,11 @@ let communityPublishSubmissionId = "";
 let communityPublishProgress = { active: false, current: 0, total: 0, stage: "" };
 let marketLoading = false;
 let marketLastLoadedAt = 0;
+let marketCityLocationRequestId = 0;
 let marketLoadObserver = null;
+let marketLoadRetryKey = "";
+let marketLoadCheckFrame = 0;
+let marketLoadUserRetryPending = false;
 let marketImpressionObserver = null;
 let marketImpressionSeenIds = new Set();
 let marketImpressionTimers = new Map();
@@ -939,7 +943,7 @@ function captureVisibleFormInputs() {
     id: form.id, formIndex,
     inputs: [...form.querySelectorAll("input, textarea, select")].map((input, index) => ({
       index, name: input.name, type: input.type, value: input.type === "file" ? "" : input.value,
-      checked: input.checked, selected: input.multiple ? [...input.selectedOptions].map(option => option.value) : null,
+      checked: input.checked, selected: input.tagName === "SELECT" && input.multiple ? [...input.selectedOptions].map(option => option.value) : null,
       focused: input === document.activeElement, start: input.selectionStart, end: input.selectionEnd
     })).filter(input => input.type !== "file")
   }));
@@ -4410,6 +4414,7 @@ function syncMarketWifiVideos() {
 }
 
 function updateMarketNetworkType(status) {
+  if (status?.connected === true) scheduleMarketPaginationCheck(true);
   const nextType = String(status?.connectionType || "unknown").toLowerCase();
   if (nextType === marketNetworkType) return;
   marketNetworkType = nextType;
@@ -4774,7 +4779,7 @@ function pageMarket() {
         ${feedNotice}
         ${listings.map(marketListingCard).join("") || (!marketInitialLoading && !feedNotice ? marketEmptyMarkup : "")}
       </section>
-      ${listings.length ? `<div class="market-feed-status" data-market-load-sentinel>${state.marketFeedLoadingMore ? "正在加载更多商品…" : state.marketFeedHasMore ? "继续上滑，加载更多" : "已经到底了"}</div>` : ""}
+      ${listings.length ? `<button class="market-feed-status" type="button" data-market-load-sentinel>${state.marketFeedLoadingMore ? "正在加载更多商品…" : state.marketFeedHasMore ? "继续上滑，加载更多" : "已经到底了"}</button>` : ""}
     </main>
     ${guestLoginSlot()}
     <button class="market-floating-add" type="button" data-page="marketAdd"><span>＋</span>发布出售</button>
@@ -4836,7 +4841,13 @@ function pageMyMarketListings() {
   `;
 }
 
+function canManuallyEditMarketCity() {
+  return Boolean(state.loggedInPhone && (state.loggedInPhone === "17302554044" ||
+    state.loggedInPhone === REVIEW_ADMIN_PHONE || state.isCommunityAdmin));
+}
+
 function pageMarketAdd() {
+  const manualCityAllowed = canManuallyEditMarketCity();
   const editingListing = state.editingMarketListingId
     ? ((state.myMarketListings || []).find(item => item.id === state.editingMarketListingId) || (state.marketListings || []).find(item => item.id === state.editingMarketListingId))
     : null;
@@ -4896,8 +4907,8 @@ function pageMarketAdd() {
           <div class="market-form-two market-city-delivery-row">
             <div class="market-city-field">
               <div class="market-city-label"><span>所在城市<i class="required-mark" aria-hidden="true">*</i></span><button type="button" data-market-city-locate>⌖ 定位</button></div>
-              <input class="field" name="city" maxlength="24" value="${escapeHtml(state.marketDraftCity || "")}" placeholder="请先允许定位" data-market-city readonly required aria-describedby="marketCityHint">
-              <small id="marketCityHint" data-market-city-hint>城市仅能由当前位置自动获取，不能手动填写</small>
+              <input class="field" name="city" maxlength="24" value="${escapeHtml(state.marketDraftCity || "")}" placeholder="${manualCityAllowed ? "填写所在城市，如杭州市" : "请先允许定位"}" data-market-city ${manualCityAllowed ? "" : "readonly"} required aria-describedby="marketCityHint">
+              <small id="marketCityHint" data-market-city-hint>${manualCityAllowed ? "可手动修改城市，也可点击定位填写" : "城市仅能由当前位置自动获取，不能手动填写"}</small>
             </div>
             <label class="market-delivery-field"><span>交付方式<i class="required-mark" aria-hidden="true">*</i></span><select class="select" name="delivery" required><option value="" ${!formValue("delivery") ? "selected" : ""} disabled>请选择方式</option><option value="可快递" ${formValue("delivery") === "可快递" ? "selected" : ""}>可快递</option><option value="仅自提" ${formValue("delivery") === "仅自提" ? "selected" : ""}>仅自提</option><option value="可面交" ${formValue("delivery") === "可面交" ? "selected" : ""}>可面交</option></select><small aria-hidden="true">&nbsp;</small></label>
           </div>
@@ -9745,6 +9756,14 @@ function bindEvents() {
     }
   });
   document.querySelector("[data-market-city-locate]")?.addEventListener("click", () => requestMarketCityAutofill({ force: true }));
+  document.querySelector("[data-market-city]")?.addEventListener("input", event => {
+    if (!canManuallyEditMarketCity()) return;
+    state.marketDraftCity = event.target.value;
+    state.marketDraftLatitude = "";
+    state.marketDraftLongitude = "";
+    state.marketLocationStatus = "manual";
+    updateMarketCityLocationUi();
+  });
   bindMarketSpeciesPicker();
   bindMarketMediaDraftEvents();
   document.querySelector("#marketListingForm")?.addEventListener("submit", submitMarketListing);
@@ -10105,6 +10124,7 @@ async function refreshMarket(force = false) {
   if (!hasCloudSession() || marketLoading) return;
   if (isMarketFeed && state.marketFeedInitialized && !force) return;
   if (!force && Date.now() - marketLastLoadedAt < 10000) return;
+  if (isMarketFeed) marketLoadRetryKey = "";
   marketLoading = true;
   try {
     const sharedListingId = incomingMarketShareLoading
@@ -10185,11 +10205,13 @@ async function refreshMarket(force = false) {
   } finally {
     marketLoading = false;
     if (state.page === "market" && requestKey !== marketFeedRequestKey() && hasCloudSession()) void refreshMarket(true);
+    else setupMarketInfiniteScroll();
   }
 }
 
 function resetMarketFeed(patch = {}) {
   marketLastLoadedAt = 0;
+  marketLoadRetryKey = "";
   setState({
     ...patch,
     marketListings: [],
@@ -10207,6 +10229,7 @@ function resetMarketFeed(patch = {}) {
 async function loadMoreMarketListings() {
   if (!hasCloudSession() || state.page !== "market" || marketLoading || state.marketFeedLoadingMore || !state.marketFeedHasMore) return;
   const requestKey = marketFeedRequestKey();
+  marketLoadRetryKey = "";
   marketLoading = true;
   state.marketFeedLoadingMore = true;
   const loadingStatus = document.querySelector("[data-market-load-sentinel]");
@@ -10234,6 +10257,11 @@ async function loadMoreMarketListings() {
       return;
     }
     const incoming = normalizeMarketListings(result.listings || []);
+    const previousOffset = Math.max(0, Number(state.marketFeedNextOffset || 0));
+    const nextOffset = Math.max(0, Number(result.nextOffset ?? (previousOffset + incoming.length)));
+    if (!Number.isFinite(nextOffset) || (result.hasMore && nextOffset <= previousOffset)) {
+      throw new Error("商品分页位置未推进，请重试");
+    }
     // Detail refreshes may cache future pages. Cached data is not evidence
     // that the corresponding cards have already been appended to the feed.
     const existingIds = new Set(state.marketFeedSessionId
@@ -10249,7 +10277,7 @@ async function loadMoreMarketListings() {
       marketFeedOrderIds: [...(state.marketFeedOrderIds || []), ...appended.map(item => String(item.id))],
       myMarketListings: normalizeMarketListings(result.myListings || state.myMarketListings || []),
       marketFeedInitialized: true,
-      marketFeedNextOffset: Math.max(0, Number(result.nextOffset ?? (Number(state.marketFeedNextOffset || 0) + incoming.length))),
+      marketFeedNextOffset: nextOffset,
       marketFeedHasMore: Boolean(result.hasMore),
       marketFeedLoadingMore: false
     };
@@ -10277,25 +10305,86 @@ async function loadMoreMarketListings() {
       syncMarketWifiVideos();
     });
   } catch (error) {
-    state.marketFeedLoadingMore = false;
-    const status = document.querySelector("[data-market-load-sentinel]");
-    if (status) status.textContent = "加载失败，上滑重试";
+    if (requestKey === marketFeedRequestKey()) {
+      state.marketFeedLoadingMore = false;
+      // An observer may deliver its first notification after the failure. Do
+      // not turn that into an endless network retry; wait for user intent or
+      // an online event, without requiring a trip back to the top.
+      marketLoadRetryKey = requestKey;
+      const status = document.querySelector("[data-market-load-sentinel]");
+      if (status) status.textContent = "加载失败，上滑或点击重试";
+    }
     console.warn(error.message || "加载更多龟集市商品失败");
   } finally {
     marketLoading = false;
     if (state.page === "market" && requestKey !== marketFeedRequestKey() && hasCloudSession()) void refreshMarket(true);
+    else setupMarketInfiniteScroll();
   }
+}
+
+function scheduleMarketPaginationCheck(userRetry = false) {
+  if (state.page !== "market") return;
+  marketLoadUserRetryPending ||= userRetry;
+  if (marketLoadCheckFrame) return;
+  marketLoadCheckFrame = window.requestAnimationFrame(() => {
+    marketLoadCheckFrame = 0;
+    const retry = marketLoadUserRetryPending;
+    marketLoadUserRetryPending = false;
+    if (state.page !== "market" || !state.marketFeedInitialized || !state.marketFeedHasMore ||
+        state.marketFeedLoadingMore || marketLoading || !hasCloudSession() || document.hidden) return;
+    const sentinel = document.querySelector("[data-market-load-sentinel]");
+    if (!sentinel?.isConnected) return;
+    const rect = sentinel.getBoundingClientRect();
+    const viewportBottom = window.visualViewport
+      ? window.visualViewport.offsetTop + window.visualViewport.height : window.innerHeight;
+    if (rect.bottom < 0 || rect.top > viewportBottom + 220) return;
+    if (marketLoadRetryKey === marketFeedRequestKey() && !retry) return;
+    void loadMoreMarketListings();
+  });
+}
+
+function setupMarketPaginationRecovery() {
+  if (document.body.dataset.marketPaginationRecoveryBound === "true") return;
+  document.body.dataset.marketPaginationRecoveryBound = "true";
+  // Scroll alone cannot fire while already at the bottom of an iOS page. A
+  // deliberate upward touch still retries, even if the viewport did not move.
+  let touchStartY = null;
+  document.addEventListener("touchstart", event => {
+    touchStartY = state.page === "market" && event.touches?.length === 1 ? event.touches[0].clientY : null;
+  }, { passive: true });
+  document.addEventListener("touchend", event => {
+    const endY = event.changedTouches?.[0]?.clientY;
+    if (touchStartY !== null && Number.isFinite(endY) && touchStartY - endY >= 12) scheduleMarketPaginationCheck(true);
+    touchStartY = null;
+  }, { passive: true });
+  document.addEventListener("touchcancel", () => { touchStartY = null; }, { passive: true });
+  window.addEventListener("scroll", () => scheduleMarketPaginationCheck(), { passive: true });
+  window.addEventListener("wheel", event => { if (event.deltaY > 0) scheduleMarketPaginationCheck(true); }, { passive: true });
+  window.addEventListener("resize", () => scheduleMarketPaginationCheck(), { passive: true });
+  window.addEventListener("online", () => scheduleMarketPaginationCheck(true));
+  window.addEventListener("pageshow", () => scheduleMarketPaginationCheck());
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) scheduleMarketPaginationCheck(); });
 }
 
 function setupMarketInfiniteScroll() {
   marketLoadObserver?.disconnect();
   marketLoadObserver = null;
   setupMarketImpressionTracking();
-  if (state.page !== "market" || !state.marketFeedHasMore || state.marketFeedLoadingMore) return;
+  setupMarketPaginationRecovery();
+  if (state.page !== "market" || !state.marketFeedHasMore) return;
   const sentinel = document.querySelector("[data-market-load-sentinel]");
-  if (!sentinel || typeof IntersectionObserver === "undefined") return;
+  if (!sentinel) return;
+  if (!sentinel.__marketLoadRetryBound) {
+    sentinel.__marketLoadRetryBound = true;
+    sentinel.addEventListener("click", () => scheduleMarketPaginationCheck(true));
+  }
+  if (marketLoadRetryKey === marketFeedRequestKey()) sentinel.textContent = "加载失败，上滑或点击重试";
+  // Recheck after releasing any list/detail request lock. IntersectionObserver
+  // does not notify twice just because a still-visible sentinel becomes usable.
+  scheduleMarketPaginationCheck();
+  if (typeof IntersectionObserver === "undefined") return;
   marketLoadObserver = new IntersectionObserver(entries => {
-    if (entries.some(entry => entry.isIntersecting)) loadMoreMarketListings();
+    if (entries.some(entry => entry.isIntersecting)) scheduleMarketPaginationCheck();
   }, { root: null, rootMargin: "0px 0px 220px", threshold: 0.01 });
   marketLoadObserver.observe(sentinel);
 }
@@ -10711,7 +10800,15 @@ function updateMarketCityLocationUi(status = state.marketLocationStatus) {
     manual: ["重新定位", "请重新定位以确认所在城市"],
     idle: ["定位", "城市仅能通过当前位置自动获取"]
   };
-  const [buttonText, hintText] = labels[status] || labels.idle;
+  const manualLabels = {
+    loading: ["定位中…", "正在读取设备位置，也可直接填写城市"],
+    success: ["重新定位", "定位已填写城市，可继续手动修改"],
+    error: ["重新定位", "定位暂不可用，可直接填写城市"],
+    manual: ["定位", "已手动填写城市，可继续修改或点击定位"],
+    idle: ["定位", "可手动修改城市，也可点击定位填写"]
+  };
+  const activeLabels = canManuallyEditMarketCity() ? manualLabels : labels;
+  const [buttonText, hintText] = activeLabels[status] || activeLabels.idle;
   button.textContent = buttonText;
   button.disabled = status === "loading";
   hint.textContent = hintText;
@@ -10944,7 +11041,16 @@ async function requestLocationPermissionOnLogin() {
 }
 
 async function requestMarketCityAutofill({ force = false } = {}) {
+  if (canManuallyEditMarketCity() && !force) {
+    updateMarketCityLocationUi();
+    return;
+  }
   if (state.marketLocationStatus === "loading") return;
+  const requestId = ++marketCityLocationRequestId;
+  const requestPhone = state.loggedInPhone;
+  const editingId = state.editingMarketListingId;
+  const stillCurrent = () => requestId === marketCityLocationRequestId && state.loggedInPhone === requestPhone && state.editingMarketListingId === editingId &&
+    !(canManuallyEditMarketCity() && state.marketLocationStatus === "manual");
   if (!force && state.marketLocationStatus === "success" && String(state.marketDraftCity || "").trim() && Number.isFinite(Number(state.marketDraftLatitude)) && Number.isFinite(Number(state.marketDraftLongitude))) {
     updateMarketCityLocationUi(state.marketLocationStatus === "idle" ? "success" : state.marketLocationStatus);
     return;
@@ -10955,6 +11061,7 @@ async function requestMarketCityAutofill({ force = false } = {}) {
     const position = await getMarketLocationPosition({ requestPermission: force });
     const city = await reverseGeocodeMarketCity(position.coords.latitude, position.coords.longitude);
     if (!city) throw new Error("未能识别所在城市");
+    if (!stillCurrent()) return;
     const input = document.querySelector("[data-market-city]");
     state.marketDraftCity = city;
     state.marketDraftLatitude = String(position.coords.latitude);
@@ -10963,6 +11070,7 @@ async function requestMarketCityAutofill({ force = false } = {}) {
     state.marketLocationStatus = "success";
     updateMarketCityLocationUi();
   } catch (error) {
+    if (!stillCurrent()) return;
     state.marketLocationStatus = "error";
     updateMarketCityLocationUi();
     if (isLocationPermissionDenied(error)) toast(locationSettingsHint());
@@ -11015,9 +11123,9 @@ async function submitMarketListing(event) {
     price: Number(form.get("price") || 0),
     negotiable: form.get("negotiable") === "on",
     city: String(form.get("city") || "").trim(),
-    locationSource: "device",
-    latitude: Number(state.marketDraftLatitude),
-    longitude: Number(state.marketDraftLongitude),
+    locationSource: canManuallyEditMarketCity() ? "manual" : "device",
+    latitude: canManuallyEditMarketCity() ? undefined : Number(state.marketDraftLatitude),
+    longitude: canManuallyEditMarketCity() ? undefined : Number(state.marketDraftLongitude),
     delivery: String(form.get("delivery") || ""),
     description: String(form.get("description") || "").trim()
   };
@@ -11027,7 +11135,8 @@ async function submitMarketListing(event) {
     !payload.stage && "阶段",
     !payload.shellLength && "背甲长度",
     payload.shellLength && (!Number.isFinite(Number(payload.shellLength)) || Number(payload.shellLength) <= 0) && "背甲长度",
-    (!payload.city || state.marketLocationStatus !== "success" || !Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) && "所在城市（请先允许位置访问并完成定位）",
+    (!payload.city || (!canManuallyEditMarketCity() && (state.marketLocationStatus !== "success" || !Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)))) &&
+      (canManuallyEditMarketCity() ? "所在城市" : "所在城市（请先允许位置访问并完成定位）"),
     !payload.delivery && "交付方式",
     !payload.description && "详细说明"
   ].filter(Boolean);
@@ -11403,12 +11512,12 @@ function beginMarketListingEdit(listingId) {
     marketDraftTurtleId: listing.turtleId || "",
     marketDraftPhoto: "",
     marketDraftMedia: mediaItems,
-    marketDraftCity: "",
+    marketDraftCity: canManuallyEditMarketCity() ? String(listing.city || "") : "",
     marketDraftLatitude: "",
     marketDraftLongitude: "",
     marketDraftDescription: listing.description || "",
     marketDraftDescriptionTemplate: "",
-    marketLocationStatus: "idle"
+    marketLocationStatus: canManuallyEditMarketCity() && listing.city ? "manual" : "idle"
   }, { skipCloud: true });
 }
 

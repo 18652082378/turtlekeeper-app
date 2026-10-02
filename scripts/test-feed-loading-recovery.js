@@ -33,7 +33,7 @@ async function main() {
     marketLoading: false, marketLastLoadedAt: 0, incomingMarketShareLoading: false, incomingMarketShareListingId: '',
     marketFeedRequestKey: () => 'key', savedMarketListingIds: () => [], marketFeedRequestOptions: () => ({}),
     marketAuthPayload: x => x, normalizeMarketListings: x => x, normalizeAccountData: x => x,
-    render: () => { ctx.renders++; }, renders: 0,
+    setupMarketInfiniteScroll: () => {}, render: () => { ctx.renders++; }, renders: 0,
     setState: patch => Object.assign(ctx.state, patch),
     apiPost: async () => { throw new Error('network failure'); }
   };

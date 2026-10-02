@@ -1886,8 +1886,15 @@ function rejectObjectionableContent(res, ...values) {
   return true;
 }
 
-function verifiedMarketLocation(body) {
+function canManuallySetMarketCity(user) {
+  return Boolean(user && (user.phone === "17302554044" || isAdminUser(user)));
+}
+
+function verifiedMarketLocation(body, user) {
   const city = trimPublicText(body.city, 24);
+  if (body.locationSource === "manual" && canManuallySetMarketCity(user)) {
+    return city ? { city } : null;
+  }
   const latitude = Number(body.latitude);
   const longitude = Number(body.longitude);
   if (body.locationSource !== "device" || !city || !Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
@@ -4339,7 +4346,7 @@ async function handleMarketCreate(req, res) {
     .filter(media => media.url);
   const price = Number(body.price || 0);
   if (!title || !speciesName || !Number.isFinite(price) || price < 0) return sendJson(res, 400, { ok: false, message: "请填写正确的标题、品种和价格" });
-  const location = verifiedMarketLocation(body);
+  const location = verifiedMarketLocation(body, user);
   if (!location) return sendJson(res, 400, { ok: false, message: "龟集市必须获取当前位置城市。请在系统设置中允许位置访问后重新定位。" });
   if (rejectObjectionableContent(res, title, body.description, body.city, body.delivery)) return;
   const listing = {
@@ -4554,7 +4561,7 @@ async function handleMarketUpdate(req, res) {
   if (!title || !speciesName || !Number.isFinite(price) || price < 0 || !mediaItems.length) {
     return sendJson(res, 400, { ok: false, message: "请填写正确的商品信息并保留至少一项实拍媒体" });
   }
-  const location = verifiedMarketLocation(body);
+  const location = verifiedMarketLocation(body, user);
   if (!location) return sendJson(res, 400, { ok: false, message: "龟集市必须获取当前位置城市。请在系统设置中允许位置访问后重新定位。" });
   if (rejectObjectionableContent(res, title, body.description, body.city, body.delivery)) return;
   Object.assign(listing, {

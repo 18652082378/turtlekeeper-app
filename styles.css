@@ -16334,6 +16334,12 @@ html[data-theme-color="dark"] .turtle-keeping-days {
 }
 
 .market-feed-status {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   min-height: 44px;
   padding: 14px 8px 4px;
   color: var(--muted);

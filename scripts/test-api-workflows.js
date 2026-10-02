@@ -628,6 +628,30 @@ async function main() {
     const sellerAfterSale = await request("/api/account/load", auth(seller));
     assert.ok(sellerAfterSale.json.user.data.ledgerRecords.some(record => record.marketListingId === listingId));
 
+    // Manual sale cities are limited to the authenticated designated account
+    // and configured administrator, independently of client-supplied flags.
+    const cityUser = await register("17302554044", "City permission fixture");
+    const cityPayload = { title: "城市权限测试商品", speciesCode: "GHG", stage: "juvenile", gender: "未知", shellLength: "6", price: 100,
+      locationSource: "manual", city: "杭州市", delivery: "可快递", description: "隔离城市权限回归", mediaItems: [{ url: uploadedImage.json.url, type: "image" }] };
+    for (const owner of [seller, cityUser]) {
+      const created = (await request('/api/market/create', { ...auth(owner), ...cityPayload })).json;
+      const item = created.myListings.find(item => item.title === cityPayload.title);
+      assert.equal(item.city, '杭州市', 'authorized create must retain a manually selected city without GPS');
+      const edited = (await request('/api/market/update', { ...auth(owner), ...cityPayload, listingId: item.id, city: '上海市' })).json;
+      assert.equal(edited.myListings.find(listing => listing.id === item.id).city, '上海市');
+      const readBack = (await request('/api/market/detail', { ...auth(buyer), listingId: item.id })).json;
+      assert.equal(readBack.listing.city, '上海市', 'new reads must preserve the manually edited city');
+      await request('/api/market/update', { ...auth(owner), ...cityPayload, listingId: item.id, city: '   ' }, { status: 400 });
+      if (owner === cityUser) await request('/api/market/update', { ...auth(cityUser), ...cityPayload, listingId: cheapId }, { status: 403 });
+    }
+    await request('/api/market/create', { ...auth(buyer), ...cityPayload, isAdmin: true, manualCityAllowed: true }, { status: 400 });
+    await request('/api/market/create', { ...cityPayload, phone: cityUser.phone, token: buyer.token }, { status: 401 });
+    const ordinaryListing = (await request('/api/market/create', { ...auth(buyer), ...cityPayload, locationSource: 'device', latitude: 32.06, longitude: 118.79 })).json.myListings[0];
+    await request('/api/market/update', { ...auth(buyer), ...cityPayload, listingId: ordinaryListing.id, city: '上海市', isAdmin: true }, { status: 400 });
+    const ordinaryDetail = (await request('/api/market/detail', { ...auth(buyer), listingId: ordinaryListing.id })).json;
+    assert.equal(ordinaryDetail.listing.city, '杭州市', 'denied manual edit must not change ordinary listing');
+    await request('/api/account/delete', { ...auth(cityUser), password, confirmation: 'DELETE' });
+
     await request("/api/community/chat/delete", { ...auth(seller), userId: buyerId });
     await request("/api/account/delete", { ...auth(buyer), password, confirmation: "DELETE" });
     await request("/api/account/delete", { ...auth(seller), password, confirmation: "DELETE" });
