@@ -68,6 +68,67 @@ const root = path.resolve(__dirname, '..');
       finally { await page.close(); }
     }
     const waitForCalls = (page, count) => page.waitForFunction(count => calls.length >= count, count, { timeout: 1600 });
+    await test('tab return keeps server ranking instead of flashing cached local sorting', async page => {
+      await page.evaluate(() => {
+        state.marketListings[7].createdAt = new Date(Date.now() + 60000).toISOString();
+        state.marketListings.push({ ...state.marketListings[0], id: 'detail-only', createdAt: new Date(Date.now() + 120000).toISOString() });
+        marketLoading = false; marketLastLoadedAt = 0;
+        navigateBottomTab('ledger'); navigateBottomTab('market');
+        window.returnedCard = document.querySelector('[data-view-market]');
+        window.returnedOrder = [...document.querySelectorAll('[data-view-market]')].map(node => node.dataset.viewMarket);
+      });
+      assert.deepEqual(await page.evaluate(() => returnedOrder), Array.from({ length: 8 }, (_, i) => 'fixture-' + i));
+      await page.waitForTimeout(220);
+      assert.equal(await page.evaluate(() => returnedCard === document.querySelector('[data-view-market]')), true);
+      assert.equal(await page.evaluate(() => calls.length), 0, 'tab return must not reset an established feed');
+    });
+    await test('switching tabs keeps loaded pages and continues at the same cursor', async page => {
+      await page.evaluate(() => {
+        state.marketListings.push({ ...state.marketListings[0], id: 'loaded-page-two' });
+        state.marketFeedOrderIds.push('loaded-page-two'); state.marketFeedNextOffset = 16;
+        marketLoading = false; navigateBottomTab('ledger'); navigateBottomTab('market');
+      });
+      assert.equal(await page.locator('[data-view-market="loaded-page-two"]').count(), 1);
+      await page.evaluate(async () => {
+        responses.push({ ...successPage(), nextOffset: 17 }); await loadMoreMarketListings();
+      });
+      assert.equal(await page.evaluate(() => calls[0].offset), 16);
+      assert.equal(await page.evaluate(() => calls[0].rankingSession), 'fixture-session');
+      assert.equal(await page.locator('[data-view-market="loaded-page-two"]').count(), 1);
+    });
+    await test('repeated tab switches do not request new ranking sessions', async page => {
+      await page.evaluate(() => {
+        marketLoading = false; marketLastLoadedAt = 0;
+        for (let i = 0; i < 6; i++) { navigateBottomTab('ledger'); navigateBottomTab('market'); }
+      });
+      await page.waitForTimeout(220);
+      assert.equal(await page.evaluate(() => calls.length), 0);
+      assert.equal(await page.evaluate(() => state.marketFeedSessionId), 'fixture-session');
+      assert.equal(await page.evaluate(() => state.marketFeedNextOffset), 8);
+    });
+    await test('pull refresh can still replace the established recommendation with fresh data', async page => {
+      await page.evaluate(async () => {
+        marketLoading = false;
+        responses.push({ ...successPage('fresh-ranking'), rankingSession: 'fresh-session', nextOffset: 1 });
+        await runPullRefresh();
+      });
+      assert.equal(await page.evaluate(() => calls[0].offset), 0);
+      assert.equal(await page.evaluate(() => state.marketFeedSessionId), 'fresh-session');
+      assert.equal(await page.locator('[data-view-market="fresh-ranking"]').count(), 1);
+      assert.equal(await page.locator('[data-view-market="fixture-0"]').count(), 0);
+    });
+    await test('an uninitialized market still fetches its first page when entered', async page => {
+      await page.evaluate(() => {
+        marketLoading = false; marketLastLoadedAt = 0;
+        navigateBottomTab('ledger');
+        state.marketFeedInitialized = false; state.marketListings = []; state.marketFeedOrderIds = [];
+        responses.push({ ...successPage('first-entry'), rankingSession: 'first-session', nextOffset: 1 });
+        navigateBottomTab('market');
+      });
+      await waitForCalls(page, 1);
+      await page.waitForFunction(() => !marketLoading);
+      assert.equal(await page.locator('[data-view-market="first-entry"]').count(), 1);
+    });
     await test('a late detail refresh resumes a visible feed without another intersection', async page => {
       await page.evaluate(() => {
         setState({ page: 'marketDetail', selectedMarketListingId: 'fixture-0' }, { skipSave: true });

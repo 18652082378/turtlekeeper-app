@@ -163,6 +163,7 @@ const initialState = {
   isCommunityAdmin: false,
   communityFriends: [],
   communityConversationState: { clearVersions: {}, hiddenIds: [] },
+  communityChatTextOutbox: {},
   communityFriendsInitialized: false,
   communityFriendsError: false,
   communityFollowingUsers: [],
@@ -529,6 +530,7 @@ let marketSearchPointerActive = false;
 // before the tap reached its button, making pin/delete appear unresponsive.
 const communityConversationActionPending = new Set();
 const communityConversationDeleting = new Set();
+const communityChatTextSending = new Set();
 let communityConversationRevision = 0;
 let nativePushListenersAttached = false;
 let nativePushSetupInFlight = false;
@@ -765,6 +767,7 @@ function normalizeState(next) {
     isCommunityAdmin: Boolean(base.isCommunityAdmin),
     communityFriends: loggedInPhone && Array.isArray(base.communityFriends) ? base.communityFriends : [],
     communityConversationState: loggedInPhone && base.communityConversationState ? base.communityConversationState : { clearVersions: {}, hiddenIds: [] },
+    communityChatTextOutbox: loggedInPhone && base.communityChatTextOutbox && typeof base.communityChatTextOutbox === "object" ? base.communityChatTextOutbox : {},
     communityFriendsInitialized: Boolean(loggedInPhone && (base.communityFriendsInitialized || base.communityFriends?.length)),
     communityFriendsError: false,
     communityFollowingUsers: Array.isArray(base.communityFollowingUsers) ? base.communityFollowingUsers : [],
@@ -911,6 +914,7 @@ function saveState(options = {}) {
       communityPosts: state.communityPosts || [],
       communityFriends: state.communityFriends || [],
       communityConversationState: state.communityConversationState || { clearVersions: {}, hiddenIds: [] },
+      communityChatTextOutbox: state.communityChatTextOutbox || {},
       communityFriendsInitialized: Boolean(state.communityFriendsInitialized),
       communityNotifications: state.communityNotifications || [],
       communityNotificationSummary: state.communityNotificationSummary || null,
@@ -2372,15 +2376,11 @@ function navigateBottomTab(targetPage) {
     turtleDetailDraft: null,
     updateDraftPhoto: ""
   };
-  if (targetPage === "market") {
-    marketLastLoadedAt = 0;
-    Object.assign(navigationState, {
-      marketFeedInitialized: false,
-      marketFeedNextOffset: 0,
-      marketFeedHasMore: true,
-      marketFeedLoadingMore: false
-    });
-  }
+  // A tab switch is not a feed reset. Keep the server's ranking session and
+  // loaded pages; clearing initialized made the first frame use local sorting
+  // (including detail-only cached listings), then rebuild on the list response.
+  // First entry still loads normally. Search/filter/publish and pull refresh
+  // explicitly reset or refresh the feed when fresh recommendations are wanted.
   setState(navigationState);
 }
 
@@ -2920,6 +2920,7 @@ function messageCacheForAccount(phone) {
   return {
     communityFriends: sameAccount ? state.communityFriends || [] : [],
     communityConversationState: sameAccount ? state.communityConversationState || { clearVersions: {}, hiddenIds: [] } : { clearVersions: {}, hiddenIds: [] },
+    communityChatTextOutbox: sameAccount ? state.communityChatTextOutbox || {} : {},
     communityFriendsInitialized: sameAccount && Boolean(state.communityFriendsInitialized || state.communityFriends?.length),
     communityFriendsError: sameAccount && Boolean(state.communityFriendsError),
     communityNotifications: sameAccount ? state.communityNotifications || [] : [],
@@ -3798,6 +3799,7 @@ function pageCommunityChat() {
       <form class="community-chat-form" id="communityChatForm">
         <input name="content" maxlength="1000" value="${escapeHtml(marketChatDraft)}" placeholder="输入消息…" autocomplete="off" enterkeyhint="send">
         <button class="community-chat-plus-btn ${toolsOpen ? "is-open" : ""}" type="button" data-toggle-community-chat-tools aria-label="${toolsOpen ? "收起更多功能" : "更多功能"}" aria-expanded="${toolsOpen ? "true" : "false"}">${toolsOpen ? "×" : "+"}</button>
+        <button class="community-chat-send-btn" type="submit" hidden>发送</button>
         <input class="community-chat-media-input" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime,video/x-m4v" multiple data-community-chat-media-input hidden>
         <input class="community-chat-media-input" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" data-community-chat-camera-photo-input hidden>
         <input class="community-chat-media-input" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-m4v" capture="environment" data-community-chat-camera-video-input hidden>
@@ -8080,6 +8082,7 @@ function placeholder(title) {
 }
 
 function render() {
+  if (!forceUpdateState.required && $app.deferChatGestureRender?.()) return;
   marketSearchRenderDeferred = false;
   rememberRecordFormBaselines();
   // A data refresh can replace the page even without changing its route.
@@ -8681,6 +8684,7 @@ function bindSyncPageActions() {
 }
 
 function bindEvents() {
+  $app.syncNativeChatEdgeBack?.();
   bindCareEvents();
   bindWorkspaceUI();
   $app.querySelectorAll("[data-feed-retry]").forEach(button => {
@@ -9391,8 +9395,10 @@ function bindEvents() {
   }));
   document.querySelectorAll("[data-delete-community-post]").forEach(btn => btn.addEventListener("click", () => deleteCommunityPost(btn.dataset.deleteCommunityPost)));
   document.querySelector("#communityChatForm")?.addEventListener("submit", sendCommunityMessage);
+  syncCommunityChatSendButton();
   document.querySelector("#communityChatForm input[name='content']")?.addEventListener("input", event => {
     marketChatDraft = event.currentTarget.value;
+    syncCommunityChatSendButton();
   });
   document.querySelector("#communityChatForm input[name='content']")?.addEventListener("keydown", event => {
     if (event.key !== "Enter" || event.isComposing) return;
@@ -13304,6 +13310,7 @@ function reconcileCommunityConversationState(result) {
   if (JSON.stringify(next) !== JSON.stringify(previous)) communityConversationRevision++;
   const selectedCleared = cleared.includes(state.selectedCommunityFriendId);
   state = { ...state, communityConversationState: next,
+    communityChatTextOutbox: Object.fromEntries(Object.entries(state.communityChatTextOutbox || {}).filter(([id]) => !cleared.includes(id))),
     ...(selectedCleared ? { communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false } : {}) };
   if (cleared.length) {
     // No saved chat DOM may show a previous copy after a clear on this or another device.
@@ -13516,6 +13523,8 @@ async function deleteCommunityConversation(userId) {
   const selectedWasDeleted = state.selectedCommunityFriendId === userId;
   const previousChat = selectedWasDeleted ? { selectedCommunityFriendId: userId, selectedCommunityFriend: state.selectedCommunityFriend,
     communityChatMessages: state.communityChatMessages, communityChatListing: state.communityChatListing } : null;
+  const previousOutbox = state.communityChatTextOutbox?.[userId];
+  const clearedOutbox = { ...state.communityChatTextOutbox }; delete clearedOutbox[userId];
   communityConversationRevision++;
   communityConversationDeleting.add(userId);
   communityConversationActionPending.add(userId);
@@ -13527,6 +13536,7 @@ async function deleteCommunityConversation(userId) {
   edgeBackSnapshots = edgeBackSnapshots.filter(snapshot => snapshot.page !== "communityChat");
   const unreadRemoved = Math.max(0, Number(friend?.unreadCount || 0));
   setState({ ...clearChat, ...(selectedWasDeleted && state.page === "communityChat" ? { page: "messages" } : {}),
+    communityChatTextOutbox: clearedOutbox,
     communityConversationState: { ...previousConversationState, hiddenIds: [...new Set([...previousConversationState.hiddenIds, userId])] },
     communityFriends: remainingFriends, messageUnreadCount: Math.max(0, Number(state.messageUnreadCount || 0) - unreadRemoved)
   }, { skipCloud: true, forceRender: true, skipEdgeSnapshot: true });
@@ -13547,6 +13557,7 @@ async function deleteCommunityConversation(userId) {
     const hiddenIds = nowConversationState.hiddenIds.filter(id => id !== userId);
     if (previousConversationState.hiddenIds.includes(userId)) hiddenIds.push(userId);
     setState({ communityFriends: restoredFriends, communityConversationState: { ...nowConversationState, hiddenIds },
+      ...(previousOutbox && !state.communityChatTextOutbox?.[userId] ? { communityChatTextOutbox: { ...state.communityChatTextOutbox, [userId]: previousOutbox } } : {}),
       ...(previousChat && !state.selectedCommunityFriendId ? previousChat : {}),
       messageUnreadCount: Number(state.messageUnreadCount || 0) + unreadRemoved }, { skipCloud: true, forceRender: state.page === "messages" });
     patchStoredMessageLists(restoredFriends);
@@ -13859,12 +13870,41 @@ async function sendCommunityMessage(event) {
   const content = String(new FormData(event.currentTarget).get("content") || "").trim();
   if (!content) return;
   const requestContext = communityChatRequestContext();
+  const pendingKey = `${requestContext.phone}:${requestContext.userId}`;
+  if (!requestContext.userId || communityChatTextSending.has(pendingKey)) return;
+  const previous = state.communityChatTextOutbox?.[requestContext.userId];
+  const clearVersion = state.communityConversationState?.clearVersions?.[requestContext.userId] || "";
+  const intent = previous?.content === content && previous.clearVersion === clearVersion
+    ? previous : { clientMessageId: crypto.randomUUID(), content, clearVersion };
+  communityChatTextSending.add(pendingKey);
+  setState({ communityChatTextOutbox: { ...state.communityChatTextOutbox, [requestContext.userId]: intent } }, { skipCloud: true, renderPages: [] });
+  syncCommunityChatSendButton();
   try {
-    const result = await apiPost("/api/community/chat/send", communityAuthPayload({ userId: requestContext.userId, content }));
-    applyCommunityChatSendResult(result, { requestContext });
+    const result = await apiPost("/api/community/chat/send", communityAuthPayload({ userId: requestContext.userId, content, clientMessageId: intent.clientMessageId }));
+    if (!isCommunityChatRequestCurrent(requestContext)) return;
+    const outbox = { ...state.communityChatTextOutbox };
+    if (outbox[requestContext.userId]?.clientMessageId === intent.clientMessageId) delete outbox[requestContext.userId];
+    state = { ...state, communityChatTextOutbox: outbox };
+    const draft = state.selectedCommunityFriendId === requestContext.userId && marketChatDraft.trim() !== content ? marketChatDraft : "";
+    applyCommunityChatSendResult(result, { requestContext, draft });
   } catch (error) {
+    if (requestContext.phone !== state.loggedInPhone || requestContext.token !== currentCloudToken()) return;
     toast(error.message || "消息发送失败");
+  } finally {
+    communityChatTextSending.delete(pendingKey);
+    syncCommunityChatSendButton();
   }
+}
+
+function syncCommunityChatSendButton() {
+  const button = document.querySelector('#communityChatForm button[type="submit"]');
+  if (!button) return;
+  const sending = communityChatTextSending.has(`${state.loggedInPhone}:${state.selectedCommunityFriendId}`);
+  button.hidden = !sending && !marketChatDraft.trim();
+  document.querySelector('#communityChatForm')?.classList.toggle('has-send-button', !button.hidden);
+  button.disabled = sending;
+  button.textContent = sending ? "发送中…" : "发送";
+  button.setAttribute('aria-busy', String(sending));
 }
 
 function closeCommunityChatMessageMenu() {
@@ -14018,7 +14058,7 @@ function applyCommunityChatSendResult(result, options = {}) {
   if (request && !isCommunityChatRequestCurrent(request)) return false;
   reconcileCommunityConversationState(result);
   if (request) request.revision = communityConversationRevision;
-  marketChatDraft = "";
+  if (!request || state.selectedCommunityFriendId === request.userId) marketChatDraft = options.draft || "";
   communityChatLoadedKey = `${state.selectedCommunityFriendId}:${Math.floor(Date.now() / 10000)}`;
   pendingCommunityChatLatestScroll = true;
   const friend = result.friend || state.selectedCommunityFriend;
@@ -14941,7 +14981,8 @@ async function apiPost(path, payload) {
   const base = window.TURTLE_API_BASE_URL || "";
   const accountSync = /^\/api\/account\/(load|save)$/.test(path);
   const feedRead = /^\/api\/(market\/(list|detail)|community\/list)$/.test(path);
-  const controller = accountSync || feedRead || path === "/api/account/session" ? new AbortController() : null;
+  const chatRequest = /^\/api\/community\/chat\/(list|send|recall)$/.test(path);
+  const controller = accountSync || feedRead || chatRequest || path === "/api/account/session" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), accountSync ? 20000 : 15000) : null;
   const finishFeedback = window.TurtleUI?.beginRequest(path);
   let response, data;
@@ -14958,6 +14999,11 @@ async function apiPost(path, payload) {
     });
   } catch (error) {
     if (controller?.signal.aborted) {
+      if (chatRequest) {
+        const timeout = new Error(path.endsWith('/send') ? "发送超时，消息可能已送达，请重试确认" : "聊天加载超时，请重试");
+        timeout.code = 'CHAT_REQUEST_TIMEOUT';
+        throw timeout;
+      }
       if (feedRead) {
         const timeout = new Error("加载超时，请检查网络后重试");
         timeout.code = "FEED_LOAD_TIMEOUT";
@@ -18659,6 +18705,63 @@ function setupEdgeBackAndConversationSwipe() {
   // Pointer-up ends the drag, but its temporary layer positions still belong
   // to the settling animation. Keep that owner until completion or cancellation.
   let settlingGesture = null;
+  let chatRenderDeferred = false;
+  let nativeChatEdgeReady = false;
+  let nativeChatEdgeGeneration = 0;
+  let nativeChatEdgeConfiguration = "";
+  const nativeEdgePlugin = () => {
+    const capacitor = window.Capacitor;
+    if (!capacitor?.isNativePlatform?.() || capacitor.getPlatform?.() !== "ios") return null;
+    const plugin = capacitor.Plugins?.TurtleEdgeBack || capacitor.registerPlugin?.("TurtleEdgeBack");
+    return typeof plugin?.configure === "function" ? plugin : null;
+  };
+  const chatEdgeBlocked = () => Boolean(forceUpdateState.required || state.policyConsentRequired ||
+    [...document.querySelectorAll("[role='dialog'], [aria-modal='true'], [class*='-overlay']")]
+      .some(node => !node.closest('.edge-back-preview') && node.getClientRects().length && getComputedStyle(node).visibility !== "hidden"));
+  $app.syncNativeChatEdgeBack = () => {
+    const plugin = nativeEdgePlugin();
+    if (!plugin) return;
+    const width = Math.max(1, window.innerWidth), height = Math.max(1, window.innerHeight);
+    const enabled = state.page === "communityChat" && edgeBackSnapshots.length > 0 && !chatEdgeBlocked() && Math.abs((window.visualViewport?.scale || 1) - 1) < .05;
+    // Pinning/translating the composer changes its screen rectangle while the
+    // finger owns back. Do not turn those animation frames into reconfiguration.
+    if (enabled && (gesture?.mode === "edge" || settlingGesture)) return;
+    if (!enabled && gesture?.nativeEdge) cancelActiveGesture();
+    const excludedRegions = enabled ? [...$app.querySelectorAll("input, textarea, select, [contenteditable='true'], [role='slider'], [data-no-edge-back]")]
+      .map(node => node.getBoundingClientRect()).filter(rect => rect.width > 0 && rect.height > 0)
+      .map(rect => ({ x: rect.left / width, y: rect.top / height, width: rect.width / width, height: rect.height / height })) : [];
+    const configuration = JSON.stringify({ enabled, excludedRegions });
+    if (configuration === nativeChatEdgeConfiguration) return;
+    nativeChatEdgeConfiguration = configuration;
+    nativeChatEdgeReady = false;
+    const generation = ++nativeChatEdgeGeneration;
+    Promise.resolve(plugin.configure({ enabled, excludedRegions, generation })).then(result => {
+      if (generation === nativeChatEdgeGeneration) nativeChatEdgeReady = enabled && result?.enabled === true;
+    }).catch(() => {
+      if (generation === nativeChatEdgeGeneration) { nativeChatEdgeConfiguration = ""; nativeChatEdgeReady = false; }
+    });
+  };
+  // Dialogs can mount outside render(); keep native ownership in sync with them.
+  let nativeSyncFrame = 0;
+  const scheduleNativeEdgeSync = () => {
+    if (nativeSyncFrame) return;
+    nativeSyncFrame = requestAnimationFrame(() => { nativeSyncFrame = 0; $app.syncNativeChatEdgeBack(); });
+  };
+  new MutationObserver(scheduleNativeEdgeSync).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "aria-modal", "hidden", "class"] });
+  window.visualViewport?.addEventListener("resize", scheduleNativeEdgeSync);
+  window.addEventListener("resize", scheduleNativeEdgeSync);
+  $app.deferChatGestureRender = () => {
+    if (state.page === "communityChat" && (gesture?.mode === "edge" || settlingGesture)) { chatRenderDeferred = true; return true; }
+    return false;
+  };
+  const flushChatRender = () => {
+    if (!chatRenderDeferred) return;
+    window.requestAnimationFrame(() => {
+      if (gesture?.mode === "edge" || settlingGesture) return;
+      chatRenderDeferred = false;
+      if (state.page === "communityChat") render();
+    });
+  };
   const rootPages = BOTTOM_NAV_ROOT_PAGES;
   const edgePinnedProperties = ["position", "top", "left", "right", "bottom", "width", "transform"];
   const pinEdgeFixedLayers = active => {
@@ -18717,9 +18820,13 @@ function setupEdgeBackAndConversationSwipe() {
     if (target?.hasPointerCapture?.(active.pointerId)) target.releasePointerCapture(active.pointerId);
   };
   const cancelActiveGesture = () => {
+    if (gesture?.nativeEdge) nativeEdgePlugin()?.cancel?.({ generation: nativeChatEdgeGeneration, sequence: gesture.nativeSequence }).catch(() => {});
     releasePointer(gesture);
-    clearPendingEdgeBack();
+    unpinEdgeFixedLayers(gesture);
     gesture = null;
+    clearPendingEdgeBack();
+    flushChatRender();
+    scheduleNativeEdgeSync();
   };
   $app.cancelEdgeBackGesture = () => {
     if (gesture || settlingGesture) cancelActiveGesture();
@@ -18741,10 +18848,19 @@ function setupEdgeBackAndConversationSwipe() {
     paintGesture(active);
   };
   const claimPointer = (active, target) => {
+    if (active.nativeEdge) return;
     active.captureTarget = target;
     target?.setPointerCapture?.(active.pointerId);
   };
-  document.addEventListener("pointerdown", event => {
+  const beginEdgeDrag = active => {
+    active.mode = "edge";
+    active.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
+    claimPointer(active, $app);
+    pinEdgeFixedLayers(active);
+    $app.classList.add("edge-back-dragging");
+  };
+  const onEdgePointerDown = event => {
+    if (nativeChatEdgeReady && state.page === "communityChat" && event.pointerType === "touch" && !event.nativeEdge) return;
     if (!event.isPrimary) { if (gesture || settlingGesture) cancelActiveGesture(); return; }
     if (event.pointerType === "mouse" && event.button !== 0) return;
     suppressPointerClickUntil = 0;
@@ -18773,6 +18889,9 @@ function setupEdgeBackAndConversationSwipe() {
     const bounds = $app.getBoundingClientRect();
     gesture = {
       pointerId: event.pointerId,
+      nativeEdge: Boolean(event.nativeEdge),
+      nativeSequence: event.nativeSequence,
+      page: state.page,
       x: event.clientX,
       y: event.clientY,
       edgeStart: event.clientX - bounds.left,
@@ -18784,10 +18903,12 @@ function setupEdgeBackAndConversationSwipe() {
       peakOffset: 0,
       mode: "pending"
     };
-  }, { passive: true });
-  document.addEventListener("pointermove", event => {
+  };
+  document.addEventListener("pointerdown", onEdgePointerDown, { passive: true });
+  const onEdgePointerMove = event => {
     const active = gesture;
     if (!active || event.pointerId !== active.pointerId || !event.isPrimary) return;
+    if (active.nativeEdge && !event.nativeEdge) return;
     const dx = event.clientX - active.x;
     const dy = event.clientY - active.y;
     const now = performance.now();
@@ -18807,11 +18928,7 @@ function setupEdgeBackAndConversationSwipe() {
         return;
       }
       if (active.edgeStart >= 0 && active.edgeStart <= 24 && dx > 0 && !rootPages.has(state.page) && edgeBackSnapshots.length) {
-        active.mode = "edge";
-        active.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
-        claimPointer(active, $app);
-        pinEdgeFixedLayers(active);
-        $app.classList.add("edge-back-dragging");
+        beginEdgeDrag(active);
       } else {
         active.mode = "horizontal";
         return;
@@ -18824,10 +18941,12 @@ function setupEdgeBackAndConversationSwipe() {
       scheduleGesturePaint();
       if (event.cancelable) event.preventDefault();
     }
-  }, { passive: false });
-  document.addEventListener("pointerup", event => {
+  };
+  document.addEventListener("pointermove", onEdgePointerMove, { passive: false });
+  const onEdgePointerUp = event => {
     const active = gesture;
     if (!active || event.pointerId !== active.pointerId) return;
+    if (active.nativeEdge && !event.nativeEdge) return;
     const dx = event.clientX - active.x;
     const dy = event.clientY - active.y;
     // The release can carry a newer position than the last move event.
@@ -18841,6 +18960,7 @@ function setupEdgeBackAndConversationSwipe() {
       active.edgeOffset = Math.max(0, Math.min(active.width, dx));
       active.peakOffset = Math.max(active.peakOffset, active.edgeOffset);
       active.edgeProgress = active.edgeOffset / active.width;
+      if (event.nativeEdge && Number.isFinite(event.nativeVelocityX)) { active.velocityX = event.nativeVelocityX; active.lastAt = performance.now(); }
     }
     flushGesturePaint(active);
     releasePointer(active);
@@ -18858,7 +18978,21 @@ function setupEdgeBackAndConversationSwipe() {
       // when the user pauses before releasing and velocity has become zero.
       const hasForwardFling = releaseVelocity > .35 && dx >= 12;
       const reversed = releaseVelocity < -.25 || active.peakOffset - edgeOffset >= 12;
-      const shouldComplete = !reversed && (dx >= 24 || hasForwardFling) && Math.abs(dx) > Math.abs(dy) && canLeaveRecordPage();
+      const shouldComplete = !reversed && (dx >= 24 || hasForwardFling) &&
+        (active.page === "communityChat" || Math.abs(dx) > Math.abs(dy));
+      if (shouldComplete && recordPageHasChanges()) {
+        const backSnapshot = edgeBackSnapshots[edgeBackSnapshots.length - 1];
+        // Native confirm can emit delayed blur/resize on dismissal. End the
+        // drag before opening it, and commit an approved return immediately;
+        // otherwise those events cancel the animation after the user says OK.
+        // Cancellation keeps the live form and does not consume its snapshot.
+        cancelActiveGesture();
+        if (canLeaveRecordPage() && state.page === active.page &&
+            edgeBackSnapshots[edgeBackSnapshots.length - 1] === backSnapshot) {
+          navigateBack({ fromEdgeGesture: true });
+        }
+        return;
+      }
       // A UIKit interactive-pop transition continues with the release
       // velocity. Keep the same principle here: the final leg is calculated
       // from distance and finger speed instead of one fixed, mechanical time.
@@ -18888,13 +19022,16 @@ function setupEdgeBackAndConversationSwipe() {
         edgeSettleCleanup = null;
         unpinEdgeFixedLayers(active);
         if (settlingGesture === active) settlingGesture = null;
+        scheduleNativeEdgeSync();
         if (shouldComplete && !rootPages.has(state.page)) {
+          chatRenderDeferred = false;
           // navigateBack owns the offscreen-to-previous-page hand-off.
           navigateBack({ fromEdgeGesture: true });
         } else {
           $app.style.transition = "";
           $app.style.transform = "";
           clearEdgeBackPreview();
+          flushChatRender();
         }
       };
       const handleEdgeTransitionEnd = transitionEvent => {
@@ -18906,11 +19043,42 @@ function setupEdgeBackAndConversationSwipe() {
       edgeSettleTimer = window.setTimeout(finishEdgeSettle, active.reducedMotion ? 0 : settleDuration + 90);
     }
     gesture = null;
-  }, { passive: true });
+  };
+  document.addEventListener("pointerup", onEdgePointerUp, { passive: true });
   document.addEventListener("pointercancel", event => {
     if (!gesture || event.pointerId !== gesture.pointerId) return;
+    if (gesture.nativeEdge) return;
     cancelActiveGesture();
   }, { passive: true });
+  window.addEventListener("turtle-native-edge-back", event => {
+    const detail = event.detail || {};
+    if (detail.generation !== nativeChatEdgeGeneration || state.page !== "communityChat" || !edgeBackSnapshots.length) return;
+    const width = Number(detail.width), height = Number(detail.height);
+    if (!(width > 0 && height > 0) || ![detail.startX, detail.startY, detail.x, detail.y, detail.sequence, detail.velocityX].every(Number.isFinite)) return;
+    const scaleX = window.innerWidth / width, scaleY = window.innerHeight / height;
+    const startX = Math.max(0, Math.min(24, detail.startX * scaleX));
+    const startY = detail.startY * scaleY, pointerId = -1000 - detail.sequence;
+    const nativeEvent = { nativeEdge: true, nativeSequence: detail.sequence, isPrimary: true, pointerType: "touch", pointerId, button: 0,
+      target: document.elementFromPoint(startX, startY) || $app, clientX: startX, clientY: startY, cancelable: false };
+    if (detail.phase === "begin") {
+      if (chatEdgeBlocked()) { nativeEdgePlugin()?.cancel?.({ generation: nativeChatEdgeGeneration, sequence: detail.sequence }).catch(() => {}); return; }
+      nativeChatEdgeReady = true;
+      onEdgePointerDown(nativeEvent);
+      if (!gesture || gesture.pointerId !== pointerId) { nativeEdgePlugin()?.cancel?.({ generation: nativeChatEdgeGeneration, sequence: detail.sequence }).catch(() => {}); return; }
+      beginEdgeDrag(gesture);
+    } else if (!gesture?.nativeEdge || gesture.pointerId !== pointerId) return;
+    nativeEvent.clientX = startX + (detail.x - detail.startX) * scaleX;
+    nativeEvent.clientY = detail.y * scaleY;
+    if (detail.phase === "begin" || detail.phase === "move") onEdgePointerMove(nativeEvent);
+    else if (detail.phase === "end") { nativeEvent.nativeVelocityX = detail.velocityX * scaleX / 1000; onEdgePointerUp(nativeEvent); }
+    else if (detail.phase === "cancel") cancelActiveGesture();
+  });
+  // WebKit may hand a diagonally moving finger to the chat's native scroller
+  // after pointer capture. Once horizontal navigation owns the gesture,
+  // prevent that takeover; vertical gestures retain native scrolling.
+  document.addEventListener("touchmove", event => {
+    if (gesture?.page === "communityChat" && gesture.mode === "edge" && event.touches.length === 1 && event.cancelable) event.preventDefault();
+  }, { passive: false, capture: true });
   document.addEventListener("click", event => {
     // A cancelled drag may otherwise activate the control under the release
     // point. Keyboard/screen-reader activation (detail 0) remains available.

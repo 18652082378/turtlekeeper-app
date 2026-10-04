@@ -58,8 +58,9 @@ assert.ok(project.includes('TurtlePurchasesPlugin.swift in Sources'), 'StoreKit 
 assert.ok(project.includes('com.apple.InAppPurchase = { enabled = 1; }'), 'In-App Purchase capability is missing');
 assert.ok(read('scripts/configure-ios-local-plugins.js').includes('plugins.add("TurtlePurchasesPlugin")'), 'StoreKit plugin registration is missing');
 const localPlugins = fs.readdirSync(path.join(root, 'ios/App/App')).filter(file => /^Turtle\w+Plugin\.swift$/.test(file)).map(file => file.replace(/\.swift$/, ''));
+const sourcePhases = project.slice(project.indexOf('/* Begin PBXSourcesBuildPhase section */'), project.indexOf('/* End PBXSourcesBuildPhase section */'));
 for (const plugin of localPlugins) {
-  assert.ok(project.includes(`${plugin}.swift in Sources`), `${plugin} is not compiled by Xcode`);
+  assert.ok(sourcePhases.includes(`${plugin}.swift in Sources`), `${plugin} is not compiled by Xcode`);
   assert.ok(read('scripts/configure-ios-local-plugins.js').includes(`plugins.add("${plugin}")`), `${plugin} is missing from the local plugin configurator`);
 }
 // Apple lists contentModificationDateKey under FileTimestamp. This plugin

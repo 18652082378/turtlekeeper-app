@@ -6171,6 +6171,11 @@ html[data-theme-color="dark"] .ledger-row .ledger-turtle-meta span {
   gap: 10px;
 }
 
+.community-chat-form.has-send-button { grid-template-columns: minmax(0, 1fr) 42px auto; }
+.community-chat-form .community-chat-send-btn { height: 42px; padding: 0 12px; }
+.community-chat-form .community-chat-send-btn[hidden] { display: none; }
+.community-chat-form .community-chat-send-btn:disabled { opacity: .65; }
+
 .community-chat-form .community-chat-plus-btn {
   width: 42px;
   min-width: 42px;
@@ -15001,6 +15006,7 @@ html[data-theme-color="dark"] .action-panel.care-action-panel.home-module-panel 
 }
 
 .community-chat-page {
+  touch-action: pan-y pinch-zoom;
   min-height: calc(100vh - 74px);
   padding: 12px 0 0 !important;
   display: flex;

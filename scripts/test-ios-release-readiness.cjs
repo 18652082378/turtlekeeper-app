@@ -40,6 +40,16 @@ check('missing video plugin in synced native config is rejected', () => {
   config.packageClassList = config.packageClassList.filter(name => name !== 'TurtleVideoCachePlugin');
   assert.throws(() => verify({ 'ios/App/App/capacitor.config.json': JSON.stringify(config) }, true), /TurtleVideoCachePlugin/);
 });
+check('missing edge back plugin in synced native config is rejected', () => {
+  const config = JSON.parse(read('ios/App/App/capacitor.config.json'));
+  config.packageClassList = config.packageClassList.filter(name => name !== 'TurtleEdgeBackPlugin');
+  assert.throws(() => verify({ 'ios/App/App/capacitor.config.json': JSON.stringify(config) }, true), /TurtleEdgeBackPlugin/);
+});
+check('edge back plugin must be in the Xcode compile phase', () => {
+  const file = 'ios/App/App.xcodeproj/project.pbxproj';
+  const value = read(file).replace(/^\s*D9A6B920F3294F77B80C9401 \/\* TurtleEdgeBackPlugin.swift in Sources \*\/,\r?\n/m, '');
+  assert.throws(() => verify({ [file]: value }, true), /TurtleEdgeBackPlugin/);
+});
 check('plugin configurator restores all local plugins and is idempotent', () => {
   let data = JSON.stringify({ packageClassList: ['AppPlugin', 'PushNotificationsPlugin'] });
   const fakeFs = {
@@ -53,7 +63,7 @@ check('plugin configurator restores all local plugins and is idempotent', () => 
   });
   run(); const first = data; run(); assert.equal(data, first);
   const actual = JSON.parse(data).packageClassList;
-  for (const name of ['AppPlugin','PushNotificationsPlugin','TurtleMediaPickerPlugin','TurtleAppReviewPlugin','TurtlePurchasesPlugin','TurtleVideoCachePlugin']) assert.ok(actual.includes(name), `Missing ${name}`);
+  for (const name of ['AppPlugin','PushNotificationsPlugin','TurtleMediaPickerPlugin','TurtleAppReviewPlugin','TurtlePurchasesPlugin','TurtleVideoCachePlugin','TurtleEdgeBackPlugin']) assert.ok(actual.includes(name), `Missing ${name}`);
 });
 check('absent app privacy manifest is rejected', () => assert.throws(() => verify({ 'ios/App/App/PrivacyInfo.xcprivacy': null }), /PrivacyInfo/));
 check('incorrect file timestamp reason is rejected', () => {

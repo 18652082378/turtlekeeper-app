@@ -3959,6 +3959,21 @@ async function handleCommunityChatSend(req, res) {
   if (marketListingId && !marketListing) return sendJson(res, 400, { ok: false, message: "商品信息无效" });
   if (!content && !mediaUrl && !marketListing) return sendJson(res, 400, { ok: false, message: "请输入消息" });
   if (rejectObjectionableContent(res, content)) return;
+  const clientMessageId = String(body.clientMessageId || "").trim();
+  if (clientMessageId && !/^[a-zA-Z0-9_-]{16,80}$/.test(clientMessageId)) return sendJson(res, 400, { ok: false, message: "消息标识无效" });
+  const fingerprint = crypto.createHash('sha256').update(JSON.stringify([target.phone, content, mediaUrl, posterUrl, mediaType, marketListingId])).digest('hex');
+  const receipts = user.communityChatSendReceipts || {};
+  const receipt = clientMessageId && receipts[clientMessageId];
+  if (receipt) {
+    if (receipt.fingerprint !== fingerprint) return sendJson(res, 409, { ok: false, message: "消息内容已变化，请重新发送" });
+    // Await storage even if another request has only just inserted the receipt.
+    // A failed commit must never acknowledge a message that is not durable.
+    await writeDatabase(db);
+    const messages = communityConversationMessages(db, user.phone, target.phone);
+    return sendJson(res, 200, { ok: true, deduplicated: true,
+      friend: { id: communityUserId(target.phone), name: target.accountName || maskPhone(target.phone), avatar: target.accountAvatar || "", isAdmin: isAdminUser(target) },
+      messages, conversationState: communityConversationState(user), marketListing: latestConversationMarketListing(messages) });
+  }
   [user, target].forEach(account => {
     const otherPhone = account.phone === user.phone ? target.phone : user.phone;
     if (account.data?.hiddenConversationPhones?.includes(otherPhone) && !account.communityConversationClearVersions?.[otherPhone]) clearCommunityConversationHistory(db, account, otherPhone);
@@ -3975,6 +3990,13 @@ async function handleCommunityChatSend(req, res) {
     readAt: "",
     createdAt: new Date().toISOString()
   };
+  if (clientMessageId) {
+    // Receipts contain no message text or media. Keep retry protection after
+    // both participants delete a message, without recreating cleared history.
+    user.communityChatSendReceipts = Object.fromEntries(Object.entries(receipts)
+      .filter(([, item]) => Date.now() - Date.parse(item.at) < 7 * 86400000).slice(-499));
+    user.communityChatSendReceipts[clientMessageId] = { fingerprint, at: message.createdAt };
+  }
   const newMessages = [...(Array.isArray(db.messages) ? db.messages : []), message];
   if (isPriceNegotiationMessage(content) && !hasRecentPlatformTransactionWarning(db, user.phone, target.phone)) {
     newMessages.push({

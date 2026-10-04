@@ -6,35 +6,37 @@ const zlib = require('node:zlib');
 const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { PATCHES, patchServer, deploy } = require('./deploy-chat-delete.cjs');
-const { serverCommand } = require('./copy-chat-delete-server-command.cjs');
+const { PATCHES, patchServer, deploy } = require('./deploy-chat-send-recovery.cjs');
+const { serverCommand } = require('./copy-chat-send-server-command.cjs');
 const workspace = path.resolve(__dirname, '..');
 let before = execFileSync('git', ['show', 'HEAD:server/server.js'], { cwd: workspace, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).replaceAll('\r\n', '\n');
-const sendRecovery = require('./deploy-chat-send-recovery.cjs');
-before = before.replace(sendRecovery.PATCHES[0].after, sendRecovery.PATCHES[0].before);
 // Exercise installation even when HEAD already contains this release.
-if (before.includes('function clearCommunityConversationHistory(')) {
+if (before.includes('const clientMessageId = String(body.clientMessageId')) {
   for (const entry of PATCHES) {
     assert.equal(before.split(entry.after).length, 2, 'reviewed installed function: ' + entry.name);
     before = before.replace(entry.after, entry.before);
   }
 }
 const after = patchServer(before);
-assert.equal(sendRecovery.patchServer(after).replaceAll('\r\n', '\n'), fs.readFileSync(path.join(workspace, 'server/server.js'), 'utf8').replaceAll('\r\n', '\n'), 'deployed chat patches exactly match local source and preserve other modules');
+assert.equal(after.replaceAll('\r\n', '\n'), fs.readFileSync(path.join(workspace, 'server/server.js'), 'utf8').replaceAll('\r\n', '\n'), 'deployed chat patch exactly matches local source and preserves other modules');
 assert.equal(patchServer(after), after);
 assert.equal(patchServer(before.replaceAll('\n', '\r\n')), after.replaceAll('\n', '\r\n'));
-assert.throws(() => patchServer(before.replace('user.data.pinnedConversationPhones = user.data.pinnedConversationPhones.filter(phone => phone !== target.phone);', 'user.data.pinnedConversationPhones = [];')), /Unreviewed/);
+assert.throws(() => patchServer(before.replace('const content = trimPublicText(body.content, 1000);', 'const content = customText(body);')), /Unreviewed/);
+assert.throws(() => patchServer(after.replace('function communityConversationState(user)', 'function customConversationState(user)')), /Unreviewed/);
+let legacy = before;
+for (const p of require('./deploy-chat-send-recovery.cjs').COMPAT_PATCHES) { assert.equal(legacy.split(p.after).length, 2); legacy = legacy.replace(p.after, p.before); }
+assert.equal(patchServer(legacy), after, 'older chat deletion functions receive the reviewed compatibility patch');
 const generated = serverCommand();
-const encoded = generated.split("<<'TURTLE_CHAT_DELETE_PATCH'\n")[1].split('\nTURTLE_CHAT_DELETE_PATCH')[0];
+const encoded = generated.split("<<'TURTLE_CHAT_SEND_PATCH'\n")[1].split('\nTURTLE_CHAT_SEND_PATCH')[0];
 const bytes = Buffer.from(encoded.replaceAll('\n', '\r\n'), 'base64');
 const expected = generated.match(/printf '%s  %s\\n' '([a-f0-9]{64})'/)[1];
 assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), expected);
-assert.deepEqual(zlib.gunzipSync(bytes), fs.readFileSync(path.join(__dirname, 'deploy-chat-delete.cjs')));
-assert.match(generated, /--check\nnode deploy-chat-delete\.cjs --apply/);
+assert.deepEqual(zlib.gunzipSync(bytes), fs.readFileSync(path.join(__dirname, 'deploy-chat-send-recovery.cjs')));
+assert.match(generated, /--check\nnode deploy-chat-send-recovery\.cjs --apply/);
 
 (async () => {
   const fixtureParent = path.join(workspace, 'output'); fs.mkdirSync(fixtureParent, { recursive: true });
-  const fixture = fs.mkdtempSync(path.join(fixtureParent, 'chat-delete-deploy-test-'));
+  const fixture = fs.mkdtempSync(path.join(fixtureParent, 'chat-send-deploy-test-'));
   try {
     async function scenario(mode, fault = '') {
       const root = path.join(fixture, mode.slice(2) + '-' + (fault || 'ok')); fs.mkdirSync(path.join(root, 'server'), { recursive: true });
@@ -52,7 +54,7 @@ assert.match(generated, /--check\nnode deploy-chat-delete\.cjs --apply/);
       };
       const policy = { ok: true, minimumBuild: 117, latestBuild: 119, message: 'existing policy' };
       const health = async (_port, route) => route === '/api/account/load' ? { status: 401, json: { ok: false } } :
-        { status: 200, json: fault === 'policy' && fs.readFileSync(target, 'utf8').includes('function clearCommunityConversationHistory(') ? { ...policy, latestBuild: 999 } : policy };
+        { status: 200, json: fault === 'policy' && fs.readFileSync(target, 'utf8').includes('const clientMessageId = String(body.clientMessageId') ? { ...policy, latestBuild: 999 } : policy };
       const action = () => deploy({ mode, root, platform: 'linux', run, health, wait: async () => {}, attempts: 2, log() {} });
       if (fault) {
         await assert.rejects(action, /health or version-policy/);
@@ -73,7 +75,7 @@ assert.match(generated, /--check\nnode deploy-chat-delete\.cjs --apply/);
     console.log('PASS: exact/idempotent chat patch, preservation of existing server modules, unknown source refusal, CRLF preservation, clipboard payload checksum, read-only preflight, backup, code-only deployment and health-failure rollback. Local fixtures only.');
   } finally {
     assert.equal(path.dirname(fixture), fixtureParent);
-    assert.ok(path.basename(fixture).startsWith('chat-delete-deploy-test-'));
+    assert.ok(path.basename(fixture).startsWith('chat-send-deploy-test-'));
     fs.rmSync(fixture, { recursive: true, force: true });
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

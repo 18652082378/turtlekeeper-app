@@ -19,6 +19,7 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       return route.fulfill({ body: fs.readFileSync(file), contentType: ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.jpg': 'image/jpeg', '.png': 'image/png', '.svg': 'image/svg+xml' })[path.extname(file)] || 'application/octet-stream' });
     });
     async function check(name, test) {
+      if (process.env.NAVIGATION_TEST_FILTER && !name.includes(process.env.NAVIGATION_TEST_FILTER)) return;
       const page = await context.newPage();
       const errors = []; page.on('pageerror', e => errors.push(e.message));
       try {
@@ -224,6 +225,57 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       assert.equal(await page.evaluate(() => state.page), 'rules');
       assert.equal(await page.evaluate(() => $app.style.transform), '');
       assert.equal(await page.locator('.edge-back-preview').count(), 0);
+    });
+    for (const formPage of ['add', 'memos']) for (const interrupt of [false, true]) {
+      await check(`dirty form ${formPage}: accepting swipe confirmation returns once${interrupt ? ' despite dialog lifecycle cancellation' : ''}`, async page => {
+        await page.evaluate(formPage => {
+          setState({ page: 'home' }, { skipSave: true, pageMotion: 'none' });
+          setState({ page: formPage, careTab: 'care', careDraft: null }, { skipSave: true, pageMotion: 'none' });
+        }, formPage);
+        if (formPage === 'memos') await page.locator('[data-new-care="feeding"]').click();
+        const form = formPage === 'add' ? '#turtleForm' : '#careForm';
+        await page.locator(`${form} [name="note"]`).fill('尚未保存的测试数据');
+        const depth = await page.evaluate(() => edgeBackSnapshots.length);
+        if (interrupt) await page.evaluate(() => {
+          const originalConfirm = window.confirm;
+          window.confirm = message => {
+            // Model WKWebView's delayed blur/resize around the native alert.
+            setTimeout(() => { window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('resize')); }, 0);
+            return originalConfirm(message);
+          };
+        });
+        let prompts = 0;
+        page.on('dialog', dialog => { prompts++; return dialog.accept(); });
+        await swipe(page); await page.waitForTimeout(650);
+        assert.equal(prompts, 1);
+        assert.equal(await page.evaluate(() => state.page), 'home');
+        assert.equal(await page.evaluate(() => edgeBackSnapshots.length), depth - 1);
+        assert.equal(await page.locator(form).count(), 0);
+        assert.equal(await page.locator('.edge-back-preview').count(), 0);
+        assert.equal(await page.evaluate(() => $app.style.transform), '');
+        await page.waitForTimeout(250);
+        assert.equal(await page.evaluate(() => state.page), 'home', 'no delayed bounce back or double return');
+      });
+    }
+    await check('dirty form cancel survives dialog blur, keeps fields and allows a subsequent approved return', async page => {
+      await page.evaluate(() => {
+        setState({ page: 'home' }, { skipSave: true, pageMotion: 'none' });
+        setState({ page: 'add' }, { skipSave: true, pageMotion: 'none' });
+        const originalConfirm = window.confirm;
+        window.confirm = message => { setTimeout(() => window.dispatchEvent(new Event('blur')), 0); return originalConfirm(message); };
+      });
+      await page.locator('#turtleForm [name="note"]').fill('取消后保留');
+      const depth = await page.evaluate(() => edgeBackSnapshots.length);
+      page.once('dialog', dialog => dialog.dismiss());
+      await swipe(page); await page.waitForTimeout(600);
+      assert.equal(await page.evaluate(() => state.page), 'add');
+      assert.equal(await page.locator('#turtleForm [name="note"]').inputValue(), '取消后保留');
+      assert.equal(await page.evaluate(() => edgeBackSnapshots.length), depth);
+      assert.equal(await page.evaluate(() => $app.style.transform), '');
+      assert.equal(await page.locator('.edge-back-preview').count(), 0);
+      page.once('dialog', dialog => dialog.accept());
+      await swipe(page); await page.waitForTimeout(600);
+      assert.equal(await page.evaluate(() => state.page), 'home');
     });
     await check('declining an edge return keeps the unsaved form and navigation stack', async page => {
       await secondary(page);

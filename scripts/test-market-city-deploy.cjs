@@ -10,12 +10,15 @@ const { BEFORE, AFTER, patchServer, deploy } = require('./deploy-market-city-ove
 const { serverCommand } = require('./copy-market-city-server-command.cjs');
 const workspace = path.resolve(__dirname, '..');
 let before = execFileSync('git', ['show', 'HEAD:server/server.js'], { cwd: workspace, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).replaceAll('\r\n', '\n');
+const sendRecovery = require('./deploy-chat-send-recovery.cjs');
+before = before.replace(sendRecovery.PATCHES[0].after, sendRecovery.PATCHES[0].before);
 // A committed city patch must still exercise deployment from the older validator.
 before = before.replace(AFTER, BEFORE).replaceAll('const location = verifiedMarketLocation(body, user);', 'const location = verifiedMarketLocation(body);');
 const after = patchServer(before);
 const currentServer = fs.readFileSync(path.join(workspace, 'server/server.js'), 'utf8');
 let expectedServer = currentServer.includes('function marketWantCount(') ? require('./deploy-market-stat-adjustment.cjs').patchServer(after) : after;
 if (currentServer.includes('function clearCommunityConversationHistory(')) expectedServer = require('./deploy-chat-delete.cjs').patchServer(expectedServer);
+if (currentServer.includes('const clientMessageId = String(body.clientMessageId')) expectedServer = sendRecovery.patchServer(expectedServer);
 assert.equal(expectedServer.replaceAll('\r\n', '\n'), currentServer.replaceAll('\r\n', '\n'), 'deployment and local source must implement the same change');
 assert.equal(patchServer(after), after, 'reapplying must not duplicate code');
 assert.equal(patchServer(before.replaceAll('\n', '\r\n')), after.replaceAll('\n', '\r\n'), 'preserve existing line endings');
