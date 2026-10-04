@@ -3946,6 +3946,7 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
   setupCommunityInfiniteScroll();
   updateAccountSaveStatus();
   syncMobileKeyboardUI();
+  $app.syncNativeEdgeBack?.();
   window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
   restoredSnapshotRenderHoldUntil = Date.now() + 520;
   window.requestAnimationFrame(() => {
@@ -8082,7 +8083,7 @@ function placeholder(title) {
 }
 
 function render() {
-  if (!forceUpdateState.required && $app.deferChatGestureRender?.()) return;
+  if (!forceUpdateState.required && $app.deferEdgeGestureRender?.()) return;
   marketSearchRenderDeferred = false;
   rememberRecordFormBaselines();
   // A data refresh can replace the page even without changing its route.
@@ -8684,7 +8685,7 @@ function bindSyncPageActions() {
 }
 
 function bindEvents() {
-  $app.syncNativeChatEdgeBack?.();
+  $app.syncNativeEdgeBack?.();
   bindCareEvents();
   bindWorkspaceUI();
   $app.querySelectorAll("[data-feed-retry]").forEach(button => {
@@ -18705,61 +18706,77 @@ function setupEdgeBackAndConversationSwipe() {
   // Pointer-up ends the drag, but its temporary layer positions still belong
   // to the settling animation. Keep that owner until completion or cancellation.
   let settlingGesture = null;
-  let chatRenderDeferred = false;
-  let nativeChatEdgeReady = false;
-  let nativeChatEdgeGeneration = 0;
-  let nativeChatEdgeConfiguration = "";
+  let edgeRenderDeferred = false;
+  let deferredEdgePage = "";
+  let nativeEdgeReady = false;
+  let nativeEdgeGeneration = 0;
+  let nativeEdgeConfiguration = "";
   const nativeEdgePlugin = () => {
     const capacitor = window.Capacitor;
     if (!capacitor?.isNativePlatform?.() || capacitor.getPlatform?.() !== "ios") return null;
     const plugin = capacitor.Plugins?.TurtleEdgeBack || capacitor.registerPlugin?.("TurtleEdgeBack");
     return typeof plugin?.configure === "function" ? plugin : null;
   };
-  const chatEdgeBlocked = () => Boolean(forceUpdateState.required || state.policyConsentRequired ||
+  const edgeBackBlocked = () => Boolean(forceUpdateState.required || state.policyConsentRequired ||
     [...document.querySelectorAll("[role='dialog'], [aria-modal='true'], [class*='-overlay']")]
       .some(node => !node.closest('.edge-back-preview') && node.getClientRects().length && getComputedStyle(node).visibility !== "hidden"));
-  $app.syncNativeChatEdgeBack = () => {
+  const nativeEdgeEligible = () => !BOTTOM_NAV_ROOT_PAGES.has(state.page) && edgeBackSnapshots.length > 0 &&
+    !edgeBackBlocked() && Math.abs((window.visualViewport?.scale || 1) - 1) < .05;
+  const snapshotIds = new WeakMap();
+  let nextSnapshotId = 0;
+  $app.syncNativeEdgeBack = () => {
     const plugin = nativeEdgePlugin();
     if (!plugin) return;
     const width = Math.max(1, window.innerWidth), height = Math.max(1, window.innerHeight);
-    const enabled = state.page === "communityChat" && edgeBackSnapshots.length > 0 && !chatEdgeBlocked() && Math.abs((window.visualViewport?.scale || 1) - 1) < .05;
+    const enabled = nativeEdgeEligible();
     // Pinning/translating the composer changes its screen rectangle while the
     // finger owns back. Do not turn those animation frames into reconfiguration.
     if (enabled && (gesture?.mode === "edge" || settlingGesture)) return;
-    if (!enabled && gesture?.nativeEdge) cancelActiveGesture();
-    const excludedRegions = enabled ? [...$app.querySelectorAll("input, textarea, select, [contenteditable='true'], [role='slider'], [data-no-edge-back]")]
-      .map(node => node.getBoundingClientRect()).filter(rect => rect.width > 0 && rect.height > 0)
-      .map(rect => ({ x: rect.left / width, y: rect.top / height, width: rect.width / width, height: rect.height / height })) : [];
-    const configuration = JSON.stringify({ enabled, excludedRegions });
-    if (configuration === nativeChatEdgeConfiguration) return;
-    nativeChatEdgeConfiguration = configuration;
-    nativeChatEdgeReady = false;
-    const generation = ++nativeChatEdgeGeneration;
+    if (!enabled && (gesture?.nativeEdge || settlingGesture?.nativeEdge)) cancelActiveGesture();
+    const excludedRegions = enabled ? [...$app.querySelectorAll("*")].flatMap(node => {
+      const rect = node.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0 || rect.left > 24 || rect.right <= 0 || rect.bottom <= 0 || rect.top >= height) return [];
+      const explicitControl = node.matches("input, textarea, select, [contenteditable='true'], [role='slider'], [data-no-edge-back], [data-growth-history-flow], .message-friend-swipe");
+      // The product gallery's separate edge shield belongs to page back.
+      const horizontalControl = !node.matches('.market-detail-gallery') && node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX);
+      if (!explicitControl && !horizontalControl) return [];
+      return [{ x: rect.left / width, y: rect.top / height, width: rect.width / width, height: rect.height / height }];
+    }) : [];
+    const snapshot = edgeBackSnapshots[edgeBackSnapshots.length - 1];
+    if (snapshot && !snapshotIds.has(snapshot)) snapshotIds.set(snapshot, ++nextSnapshotId);
+    const configuration = JSON.stringify({ enabled, excludedRegions, page: state.page, account: state.loggedInPhone, snapshot: snapshot ? snapshotIds.get(snapshot) : 0 });
+    if (configuration === nativeEdgeConfiguration) return;
+    nativeEdgeConfiguration = configuration;
+    nativeEdgeReady = false;
+    const generation = ++nativeEdgeGeneration;
     Promise.resolve(plugin.configure({ enabled, excludedRegions, generation })).then(result => {
-      if (generation === nativeChatEdgeGeneration) nativeChatEdgeReady = enabled && result?.enabled === true;
+      if (generation === nativeEdgeGeneration) nativeEdgeReady = enabled && result?.enabled === true;
     }).catch(() => {
-      if (generation === nativeChatEdgeGeneration) { nativeChatEdgeConfiguration = ""; nativeChatEdgeReady = false; }
+      if (generation === nativeEdgeGeneration) { nativeEdgeConfiguration = ""; nativeEdgeReady = false; }
     });
   };
   // Dialogs can mount outside render(); keep native ownership in sync with them.
   let nativeSyncFrame = 0;
   const scheduleNativeEdgeSync = () => {
     if (nativeSyncFrame) return;
-    nativeSyncFrame = requestAnimationFrame(() => { nativeSyncFrame = 0; $app.syncNativeChatEdgeBack(); });
+    nativeSyncFrame = requestAnimationFrame(() => { nativeSyncFrame = 0; $app.syncNativeEdgeBack(); });
   };
   new MutationObserver(scheduleNativeEdgeSync).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "aria-modal", "hidden", "class"] });
   window.visualViewport?.addEventListener("resize", scheduleNativeEdgeSync);
+  window.visualViewport?.addEventListener("scroll", scheduleNativeEdgeSync);
   window.addEventListener("resize", scheduleNativeEdgeSync);
-  $app.deferChatGestureRender = () => {
-    if (state.page === "communityChat" && (gesture?.mode === "edge" || settlingGesture)) { chatRenderDeferred = true; return true; }
+  document.addEventListener("scroll", scheduleNativeEdgeSync, { passive: true, capture: true });
+  $app.deferEdgeGestureRender = () => {
+    const owner = gesture?.mode === "edge" ? gesture : settlingGesture;
+    if (owner && state.page === owner.page && !edgeBackBlocked()) { edgeRenderDeferred = true; deferredEdgePage = state.page; return true; }
     return false;
   };
-  const flushChatRender = () => {
-    if (!chatRenderDeferred) return;
+  const flushEdgeRender = () => {
+    if (!edgeRenderDeferred) return;
     window.requestAnimationFrame(() => {
       if (gesture?.mode === "edge" || settlingGesture) return;
-      chatRenderDeferred = false;
-      if (state.page === "communityChat") render();
+      edgeRenderDeferred = false;
+      if (state.page === deferredEdgePage) render();
     });
   };
   const rootPages = BOTTOM_NAV_ROOT_PAGES;
@@ -18820,12 +18837,12 @@ function setupEdgeBackAndConversationSwipe() {
     if (target?.hasPointerCapture?.(active.pointerId)) target.releasePointerCapture(active.pointerId);
   };
   const cancelActiveGesture = () => {
-    if (gesture?.nativeEdge) nativeEdgePlugin()?.cancel?.({ generation: nativeChatEdgeGeneration, sequence: gesture.nativeSequence }).catch(() => {});
+    if (gesture?.nativeEdge) nativeEdgePlugin()?.cancel?.({ generation: nativeEdgeGeneration, sequence: gesture.nativeSequence }).catch(() => {});
     releasePointer(gesture);
     unpinEdgeFixedLayers(gesture);
     gesture = null;
     clearPendingEdgeBack();
-    flushChatRender();
+    flushEdgeRender();
     scheduleNativeEdgeSync();
   };
   $app.cancelEdgeBackGesture = () => {
@@ -18860,7 +18877,7 @@ function setupEdgeBackAndConversationSwipe() {
     $app.classList.add("edge-back-dragging");
   };
   const onEdgePointerDown = event => {
-    if (nativeChatEdgeReady && state.page === "communityChat" && event.pointerType === "touch" && !event.nativeEdge) return;
+    if (nativeEdgeReady && nativeEdgeEligible() && event.pointerType === "touch" && !event.nativeEdge) return;
     if (!event.isPrimary) { if (gesture || settlingGesture) cancelActiveGesture(); return; }
     if (event.pointerType === "mouse" && event.button !== 0) return;
     suppressPointerClickUntil = 0;
@@ -18979,7 +18996,7 @@ function setupEdgeBackAndConversationSwipe() {
       const hasForwardFling = releaseVelocity > .35 && dx >= 12;
       const reversed = releaseVelocity < -.25 || active.peakOffset - edgeOffset >= 12;
       const shouldComplete = !reversed && (dx >= 24 || hasForwardFling) &&
-        (active.page === "communityChat" || Math.abs(dx) > Math.abs(dy));
+        (active.nativeEdge || active.page === "communityChat" || Math.abs(dx) > Math.abs(dy));
       if (shouldComplete && recordPageHasChanges()) {
         const backSnapshot = edgeBackSnapshots[edgeBackSnapshots.length - 1];
         // Native confirm can emit delayed blur/resize on dismissal. End the
@@ -19024,14 +19041,14 @@ function setupEdgeBackAndConversationSwipe() {
         if (settlingGesture === active) settlingGesture = null;
         scheduleNativeEdgeSync();
         if (shouldComplete && !rootPages.has(state.page)) {
-          chatRenderDeferred = false;
+          edgeRenderDeferred = false;
           // navigateBack owns the offscreen-to-previous-page hand-off.
           navigateBack({ fromEdgeGesture: true });
         } else {
           $app.style.transition = "";
           $app.style.transform = "";
           clearEdgeBackPreview();
-          flushChatRender();
+          flushEdgeRender();
         }
       };
       const handleEdgeTransitionEnd = transitionEvent => {
@@ -19052,7 +19069,7 @@ function setupEdgeBackAndConversationSwipe() {
   }, { passive: true });
   window.addEventListener("turtle-native-edge-back", event => {
     const detail = event.detail || {};
-    if (detail.generation !== nativeChatEdgeGeneration || state.page !== "communityChat" || !edgeBackSnapshots.length) return;
+    if (detail.generation !== nativeEdgeGeneration || !nativeEdgeEligible()) return;
     const width = Number(detail.width), height = Number(detail.height);
     if (!(width > 0 && height > 0) || ![detail.startX, detail.startY, detail.x, detail.y, detail.sequence, detail.velocityX].every(Number.isFinite)) return;
     const scaleX = window.innerWidth / width, scaleY = window.innerHeight / height;
@@ -19061,10 +19078,10 @@ function setupEdgeBackAndConversationSwipe() {
     const nativeEvent = { nativeEdge: true, nativeSequence: detail.sequence, isPrimary: true, pointerType: "touch", pointerId, button: 0,
       target: document.elementFromPoint(startX, startY) || $app, clientX: startX, clientY: startY, cancelable: false };
     if (detail.phase === "begin") {
-      if (chatEdgeBlocked()) { nativeEdgePlugin()?.cancel?.({ generation: nativeChatEdgeGeneration, sequence: detail.sequence }).catch(() => {}); return; }
-      nativeChatEdgeReady = true;
+      if (edgeBackBlocked()) { nativeEdgePlugin()?.cancel?.({ generation: nativeEdgeGeneration, sequence: detail.sequence }).catch(() => {}); return; }
+      nativeEdgeReady = true;
       onEdgePointerDown(nativeEvent);
-      if (!gesture || gesture.pointerId !== pointerId) { nativeEdgePlugin()?.cancel?.({ generation: nativeChatEdgeGeneration, sequence: detail.sequence }).catch(() => {}); return; }
+      if (!gesture || gesture.pointerId !== pointerId) { nativeEdgePlugin()?.cancel?.({ generation: nativeEdgeGeneration, sequence: detail.sequence }).catch(() => {}); return; }
       beginEdgeDrag(gesture);
     } else if (!gesture?.nativeEdge || gesture.pointerId !== pointerId) return;
     nativeEvent.clientX = startX + (detail.x - detail.startX) * scaleX;
@@ -19077,7 +19094,7 @@ function setupEdgeBackAndConversationSwipe() {
   // after pointer capture. Once horizontal navigation owns the gesture,
   // prevent that takeover; vertical gestures retain native scrolling.
   document.addEventListener("touchmove", event => {
-    if (gesture?.page === "communityChat" && gesture.mode === "edge" && event.touches.length === 1 && event.cancelable) event.preventDefault();
+    if (gesture?.mode === "edge" && event.touches.length === 1 && event.cancelable) event.preventDefault();
   }, { passive: false, capture: true });
   document.addEventListener("click", event => {
     // A cancelled drag may otherwise activate the control under the release

@@ -52,7 +52,7 @@ const root = path.resolve(__dirname, '..');
         configure: async payload => { nativeCalls.push({ method: 'configure', ...payload }); if (unavailable) throw Error('not installed'); return { enabled: payload.enabled, generation: payload.generation }; },
         cancel: async payload => { nativeCalls.push({ method: 'cancel', ...payload }); }
       } } };
-      $app.syncNativeChatEdgeBack();
+      $app.syncNativeEdgeBack();
       window.nativeEvent = (phase, x = 45, y = 220, extra = {}) => window.dispatchEvent(new CustomEvent('turtle-native-edge-back', { detail: {
         phase, generation: nativeCalls.filter(item => item.method === 'configure').at(-1).generation, sequence: 1,
         startX: 5, startY: 220, x, y, velocityX: 0, width: innerWidth, height: innerHeight, ...extra

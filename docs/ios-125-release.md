@@ -1,9 +1,10 @@
 # iOS 1.1.4（125）：聊天发送、返回及龟集市切换修复
 
-日期：2026-10-05。源码和本地验证已完成，尚未执行 Git 推送、正式服务器部署、Xcode 编译或 App Store 发布。
+日期：2026-10-05。按用户要求，包含全局原生返回的源码仍保持 1.1.4（125）。此前 125 源码已提交，聊天服务器补丁据用户部署截图安装成功；本次全局返回改动尚未推送。本机未执行 Xcode 编译或 App Store 发布。
 
 ## 行为变化
 
+- 将聊天页的原生左边缘返回扩展到所有有返回栈的次级页面，五个底部主页不启用返回。页面、账户和快照共同隔离原生事件；连续返回时重新同步配置。输入、弹窗、缩放和横向控件保留交互，所有页面在返回拖动及动画期间延迟刷新，取消后再更新。
 - 修复新增数据页手势返回弹出未保存提示后，点击 OK 仍留在新增页的问题。先结束手势并恢复表单位置，再提示确认；同意后直接返回一次，取消保留字段和返回栈。避免原生提示关闭后的失焦/尺寸变化取消尚未完成的返回动画。
 - 修复从其他底部模块切回龟集市时，先显示本地排序、再切换为服务器推荐排序而闪动的问题。切换模块保留当前推荐会话、商品顺序和已加载分页；首次进入仍加载，下拉刷新、搜索、筛选及发布后仍更新商品。
 - 文字发送在等待响应时显示“发送中…”，同一会话连续点发送或按键盘发送只产生一个请求；完成后可继续发送。等待期间新输入的草稿不会被上一条消息的回执清空。
@@ -11,12 +12,13 @@
 - 服务端每个发送者保留最多 500 个请求回执，新插入时移除超过 7 天的回执；回执仅记录内容指纹及时间。服务重启后仍能识别重试，双方删除历史后重试也不能恢复已删除消息。
 - 右滑方向确认后，聊天页保持手势所有权；手指随后偏向上下方向不会重新改判为滚动。只有返回手势已接管时才阻止原生上下滚动，普通竖向滚动、缩放和输入框交互保留。
 - 聊天数据刷新延迟到返回拖动及动画结束后更新 DOM，避免刷新取消手势、页面抖动。取消或中断返回后恢复输入栏位置并显示期间到达的新消息。
-- 增加 `TurtleEdgeBackPlugin`：iOS 聊天页使用原生左边缘手势；滚动手势等待边缘返回先判定。左边缘收到触摸时立即停止惯性滚动，原生手势识别后冻结纵向滚动并将拖动、速度、结束和取消交给现有页面返回动画。普通竖向滚动、输入区域、弹窗、其他页面和缩放保留原有交互。拖动中不重新配置原生手势，路由代次隔离防止迟到事件误退出新页面。
+- 增加 `TurtleEdgeBackPlugin`：iOS 所有有上一层的次级页面使用原生左边缘手势；滚动手势等待边缘返回先判定。左边缘收到触摸时立即停止惯性滚动，原生手势识别后冻结纵向滚动并将拖动、速度、结束和取消交给现有页面返回动画。普通竖向滚动、输入区域、弹窗和缩放保留原有交互。拖动中不重新配置原生手势，路由代次隔离防止迟到事件误退出新页面。
 
 历史重复消息不会批量删除，因为同文消息可能是用户有意发送。老客户端未传 clientMessageId 时保留原协议；文字发送防重需要部署本次服务器补丁并安装本次客户端。媒体接口可接受该标识，但本次客户端改动集中于文字发送。
 
 ## 本地验证
 
+- 全局返回更新后，`test-navigation-lifecycle.cjs` 在 Chromium 和桌面 WebKit 各 53 项通过；覆盖全部 49 个页面路由的启用规则、原生桥接拖动、连续返回、旧路由事件、控件排除、弹窗中断和未保存确认。聊天发送及手势回归分别 20 项和 19 项通过。下列 41 项导航结果为此前仅聊天页原生返回阶段的历史结果。
 - `node scripts/test-market-pagination-recovery.cjs`：Chromium 和桌面 WebKit 各 19 项通过。新增切回后顺序及 DOM 稳定、详情缓存不混入推荐、重复切换无重置请求、已加载分页及游标保留、主动下拉刷新和首次进入加载验证。修改前复现 3 项失败，修改后通过；包含原有 14 项分页及网络恢复验证。桌面 WebKit 不代表 iPhone 真机验收。
 - `node scripts/test-chat-send-idempotency-api.cjs`：7 项真实 HTTP、隔离 JSON 存储测试，包括 20 个并发重试、服务重启、冲突标识、不同发送者和双方删除后的旧请求。
 - `$env:CHAT_SEND_RECORDS='1'; node scripts/test-chat-send-idempotency-api.cjs`：8 项记录存储驱动替身测试，额外验证事务失败不成功应答、不持久化；不代表真实 MySQL 验收。
@@ -38,9 +40,8 @@ set -e
 cd /c/Users/Administrator/Documents/Codex/2026-06-02/apple-store/outputs/turtlekeeper-app
 git add --pathspec-from-file=scripts/ios-125-release-files.txt
 git diff --cached --check
-git -c gc.auto=0 -c maintenance.auto=false commit --only -m "Fix chat retries, swipe back and market tab flash for iOS 1.1.4 build 125" --pathspec-from-file=scripts/ios-125-release-files.txt
+git -c gc.auto=0 -c maintenance.auto=false commit --only -m "Enable global native priority edge back for iOS 1.1.4 build 125" --pathspec-from-file=scripts/ios-125-release-files.txt
 git -c gc.auto=0 -c maintenance.auto=false push origin main
-node scripts/copy-chat-send-server-command.cjs --clipboard
 )
 ```
 
@@ -48,7 +49,7 @@ node scripts/copy-chat-send-server-command.cjs --clipboard
 
 ## 服务器
 
-上述最后一行将完整服务器补丁命令复制到剪贴板。在已登录的服务器终端粘贴执行，无需公网 IP、手动上传或服务器访问 GitHub。独立补丁以 gzip/Base64 传递并校验 SHA-256，依次执行只读 `--check` 和 `--apply`。
+用户已提供聊天补丁安装成功截图，本次全局返回改动无需服务器补丁。首次安装聊天补丁时，可运行 `node scripts/copy-chat-send-server-command.cjs --clipboard` 复制完整服务器命令，再在已登录的服务器终端粘贴执行；无需公网 IP、手动上传或服务器访问 GitHub。独立补丁以 gzip/Base64 传递并校验 SHA-256，依次执行只读 `--check` 和 `--apply`。
 
 服务器要求 `/www/turtlekeeper-app/server/server.js` 和唯一运行的 PM2 `turtlekeeper-api` 进程。未知函数版本、符号链接或进程配置会拒绝安装。安装前备份到 `server/backups/chat-send-recovery-*`，原子替换代码后短暂重启 API；健康或版本策略检查失败时恢复原代码。脚本不改数据库、环境配置或已有推荐/媒体模块。
 
