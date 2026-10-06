@@ -140,8 +140,8 @@ async function main() {
 
     const health = await fetch(`${base}/api/app/version?build=1`).then(response => response.json());
     assert.equal(health.ok, true);
-    assert.equal(health.minimumBuild, 122, "1.1.2 and earlier builds must require the published 1.1.3 update");
-    assert.equal(health.latestBuild, 124, "published iOS release is 1.1.3 build 124");
+    assert.equal(health.minimumBuild, 125, "1.1.3 and earlier builds must require the published 1.1.4 update");
+    assert.equal(health.latestBuild, 125, "published iOS release is 1.1.4 build 125");
     const androidVersion = await fetch(base + '/api/app/version?platform=android&channel=beta').then(response => response.json());
     assert.equal(androidVersion.platform, 'android');
     assert.equal(androidVersion.channel, 'beta');
@@ -174,8 +174,8 @@ async function main() {
       await response.body?.cancel();
       assert.equal(response.status, 200, `public client resource must remain available: ${pathname}`);
     }
-    for (const build of [95, 99, 117, 119, 120, 121]) assert.ok(build < health.minimumBuild, `Build ${build} must require a forced update`);
-    for (const build of [122, 123, 124]) assert.ok(build >= health.minimumBuild, `1.1.3 build ${build} must remain usable`);
+    for (const build of [95, 99, 117, 119, 120, 121, 122, 123, 124]) assert.ok(build < health.minimumBuild, `Build ${build} must require a forced update`);
+    for (const build of [125, 126]) assert.ok(build >= health.minimumBuild, `1.1.4 build ${build} must remain usable`);
 
     await request("/api/upload/image", { image: "data:image/png;base64,AAAA" }, { status: 401 });
 

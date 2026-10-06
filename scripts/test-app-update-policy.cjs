@@ -10,8 +10,8 @@ const env = {
   ANDROID_BETA_UPDATE_URL: 'https://example.com/android/test.apk'
 };
 const policy = (query, overrides = env, ua = '') => appUpdatePolicy({ url: '/api/app/version?' + query, headers: { 'user-agent': ua } }, overrides);
-assert.equal(policy('platform=ios').minimumBuild, 122);
-assert.equal(policy('').minimumBuild, 122, 'Legacy iOS receives the published 1.1.3 boundary');
+assert.equal(policy('platform=ios').minimumBuild, 125);
+assert.equal(policy('').minimumBuild, 125, 'Legacy iOS receives the published 1.1.4 boundary');
 assert.equal(policy('', env, 'Mozilla/5.0 (Linux; Android 15)').minimumBuild, 0, 'Never gate legacy Android with hardcoded Apple actions');
 assert.equal(policy('platform=android&channel=store').minimumBuild, 12);
 assert.equal(policy('platform=android&channel=beta').minimumBuild, 11);
@@ -43,18 +43,18 @@ async function client({ platform = 'android', channel = 'beta', response, build 
 }
 (async () => {
   const releasedPolicy = policy('platform=ios', {});
-  assert.equal(releasedPolicy.minimumBuild, 122);
-  assert.equal(releasedPolicy.latestBuild, 124);
-  assert.match(releasedPolicy.message, /1\.1\.3/);
-  assert.match(releasedPolicy.message, /1\.1\.2 及更早版本已停止支持/);
-  assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '117', LATEST_APP_BUILD: '119' }).minimumBuild, 122, 'old production env cannot keep 1.1.2 supported');
+  assert.equal(releasedPolicy.minimumBuild, 125);
+  assert.equal(releasedPolicy.latestBuild, 125);
+  assert.match(releasedPolicy.message, /1\.1\.4/);
+  assert.match(releasedPolicy.message, /1\.1\.3 及更早版本已停止支持/);
+  assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '117', LATEST_APP_BUILD: '119' }).minimumBuild, 125, 'old production env cannot keep 1.1.3 supported');
   assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '125', LATEST_APP_BUILD: '126' }).minimumBuild, 125, 'future stricter policy remains configurable');
   assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '125', LATEST_APP_BUILD: '126' }).latestBuild, 126);
-  for (const build of [114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124]) {
+  for (const build of [114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126]) {
     const result = await client({ platform: 'ios', configuredBuild: build, response: releasedPolicy });
-    assert.equal(result.context.forceUpdateState.required, build < 122, `iOS build ${build}: stop 1.1.2 and allow all 1.1.3 builds`);
-    if (build < 122) {
-      assert.match(result.context.forceUpdatePage(), /1\.1\.3/);
+    assert.equal(result.context.forceUpdateState.required, build < 125, `iOS build ${build}: stop 1.1.3 and allow 1.1.4`);
+    if (build < 125) {
+      assert.match(result.context.forceUpdatePage(), /1\.1\.4/);
       result.context.bindForceUpdateActions(); result.callbacks['[data-open-app-store-update]']();
       assert.equal(result.context.window.location.href, 'https://apps.apple.com/app/id6783481335');
     }

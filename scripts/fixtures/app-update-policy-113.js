@@ -18,14 +18,14 @@ function appUpdatePolicy(req, env = process.env) {
   // return the iOS gate to an old Android WebView.
   const platform = requested || (/Android/i.test(ua) ? 'android' : 'ios');
   if (platform === 'ios') {
-    // 1.1.3 ends at build 124; published 1.1.4 uses build 125. Older env
-    // values must not silently disable this published release boundary.
-    const minimumBuild = Math.max(125, buildNumber(env.MIN_SUPPORTED_APP_BUILD ?? 125));
+    // 1.1.2 ends at build 121; 1.1.3 starts at 122. Older deployment env
+    // values must not silently disable the published release boundary.
+    const minimumBuild = Math.max(122, buildNumber(env.MIN_SUPPORTED_APP_BUILD ?? 122));
     const updateUrl = env.IOS_APP_STORE_URL || 'https://apps.apple.com/app/id6783481335';
     return { ok: true, platform, channel: 'store', minimumBuild,
-      latestBuild: Math.max(minimumBuild, 125, buildNumber(env.LATEST_APP_BUILD ?? 125)),
+      latestBuild: Math.max(minimumBuild, 124, buildNumber(env.LATEST_APP_BUILD ?? 124)),
       updateUrl, appStoreUrl: updateUrl,
-      message: '龟友手账 1.1.4 已正式上线。1.1.3 及更早版本已停止支持，请前往 App Store 更新后继续使用。' };
+      message: '龟友手账 1.1.3 已正式上线。1.1.2 及更早版本已停止支持，请前往 App Store 更新后继续使用。' };
   }
   if (platform === 'android') {
     // Legacy Android packages belong to the pre-release testing channel.
