@@ -20,7 +20,10 @@ public class TurtleEdgeBackPlugin: CAPPlugin, CAPBridgedPlugin, UIGestureRecogni
     private var sequence = 0
     private var active = false
     private var origin = CGPoint.zero
+    private var peakOffset: CGFloat = 0
     private var priorScrollEnabled: Bool?
+    private var pendingBridgeEvents: [[String: Any]] = []
+    private var bridgeEventInFlight = false
 
     override public func load() {
         DispatchQueue.main.async { [weak self] in self?.installRecognizer() }
@@ -122,6 +125,7 @@ public class TurtleEdgeBackPlugin: CAPPlugin, CAPBridgedPlugin, UIGestureRecogni
             let point = recognizer.location(in: webView), translation = recognizer.translation(in: webView)
             origin = CGPoint(x: point.x - translation.x, y: point.y - translation.y)
             sequence += 1
+            peakOffset = 0
             active = true
             let scrollView = webView.scrollView
             scrollView.setContentOffset(scrollView.contentOffset, animated: false)
@@ -143,11 +147,46 @@ public class TurtleEdgeBackPlugin: CAPPlugin, CAPBridgedPlugin, UIGestureRecogni
     private func emit(_ phase: String, _ recognizer: UIScreenEdgePanGestureRecognizer) {
         guard let webView = bridge?.webView else { return }
         let translation = recognizer.translation(in: webView), velocity = recognizer.velocity(in: webView)
+        peakOffset = max(peakOffset, max(0, min(webView.bounds.width, translation.x)))
         let detail: [String: Any] = ["phase": phase, "generation": generation, "sequence": sequence,
             "startX": origin.x, "startY": origin.y, "x": origin.x + translation.x, "y": origin.y + translation.y,
-            "velocityX": velocity.x, "width": webView.bounds.width, "height": webView.bounds.height]
-        guard let bytes = try? JSONSerialization.data(withJSONObject: detail), let json = String(data: bytes, encoding: .utf8) else { return }
-        webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('turtle-native-edge-back', {detail: \(json)}));", completionHandler: nil)
+            "velocityX": velocity.x, "peakOffset": peakOffset, "width": webView.bounds.width, "height": webView.bounds.height]
+        enqueueBridgeEvent(detail)
+    }
+
+    private func enqueueBridgeEvent(_ detail: [String: Any]) {
+        // At most one evaluation may be in flight. If WebKit is busy, retain
+        // only the newest movement rather than replaying stale finger positions.
+        // Begin/end/cancel remain ordered; a terminal sample includes the final
+        // coordinates and can replace a movement that has not been delivered.
+        if let last = pendingBridgeEvents.last,
+           last["phase"] as? String == "move",
+           (last["generation"] as? Int) == (detail["generation"] as? Int),
+           (last["sequence"] as? Int) == (detail["sequence"] as? Int) {
+            pendingBridgeEvents.removeLast()
+        }
+        pendingBridgeEvents.append(detail)
+        drainBridgeEvents()
+    }
+
+    private func drainBridgeEvents() {
+        guard !bridgeEventInFlight, !pendingBridgeEvents.isEmpty else { return }
+        guard let webView = bridge?.webView else { pendingBridgeEvents.removeAll(); return }
+        let detail = pendingBridgeEvents.removeFirst()
+        guard let bytes = try? JSONSerialization.data(withJSONObject: detail), let json = String(data: bytes, encoding: .utf8) else {
+            drainBridgeEvents()
+            return
+        }
+        bridgeEventInFlight = true
+        webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('turtle-native-edge-back', {detail: \(json)}));") { [weak self] _, _ in
+            let resume = { [weak self] in
+                guard let self = self else { return }
+                self.bridgeEventInFlight = false
+                self.drainBridgeEvents()
+            }
+            if Thread.isMainThread { resume() }
+            else { DispatchQueue.main.async(execute: resume) }
+        }
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }

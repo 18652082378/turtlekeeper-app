@@ -499,6 +499,52 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
         assert.equal(await page.evaluate(() => $app.style.transform), '');
       });
     }
+    await check('native drag paints latest bridge position without waiting another frame', async page => {
+      await secondary(page); await enableNative(page);
+      const transforms = await page.evaluate(() => {
+        nativeEvent('begin', 20);
+        nativeEvent('move', 125);
+        const forward = $app.style.transform;
+        nativeEvent('move', 55);
+        const reverse = $app.style.transform;
+        nativeEvent('cancel');
+        return { forward, reverse };
+      });
+      assert.equal(transforms.forward, 'translate3d(120px, 0px, 0px)');
+      assert.equal(transforms.reverse, 'translate3d(50px, 0px, 0px)');
+      assert.equal(await page.evaluate(() => state.page), 'rules');
+    });
+    await check('native continuous drag avoids repeated DOM hit testing and modal scans', async page => {
+      await secondary(page); await enableNative(page);
+      const reads = await page.evaluate(() => {
+        nativeEvent('begin', 20);
+        const query = document.querySelectorAll, hitTest = document.elementFromPoint;
+        let scans = 0, hits = 0;
+        document.querySelectorAll = function(selector) { if (selector.includes("[role='dialog']")) scans++; return query.call(this, selector); };
+        document.elementFromPoint = function(...args) { hits++; return hitTest.apply(this, args); };
+        try { for (let i = 0; i < 120; i++) nativeEvent('move', 25 + i, 220 + i / 2); }
+        finally { document.querySelectorAll = query; document.elementFromPoint = hitTest; }
+        const transform = $app.style.transform;
+        nativeEvent('cancel');
+        return { scans, hits, transform };
+      });
+      assert.equal(reads.scans, 0, 'modal ownership is checked at begin/end and on mutations');
+      assert.equal(reads.hits, 0, 'the recognizer already owns the finger');
+      assert.equal(reads.transform, 'translate3d(139px, 0px, 0px)');
+    });
+    await check('coalesced native moves retain pull-back intent after a stationary release', async page => {
+      await secondary(page); await enableNative(page);
+      await page.evaluate(() => {
+        nativeEvent('begin', 20);
+        // WebView was busy during the long outward move and the reversal.
+        // UIKit's final peak must cancel even though end velocity is zero.
+        nativeEvent('end', 45, 220, { velocityX: 0, peakOffset: 160 });
+      });
+      await page.waitForTimeout(500);
+      assert.equal(await page.evaluate(() => state.page), 'rules');
+      assert.equal(await page.evaluate(() => $app.style.transform), '');
+      assert.equal(await page.locator('.edge-back-preview').count(), 0);
+    });
     await check('global native live return updates route generation before the next swipe', async page => {
       await secondary(page); await enableNative(page);
       const oldGeneration = await page.evaluate(() => nativeCalls.filter(item => item.method === 'configure').at(-1).generation);

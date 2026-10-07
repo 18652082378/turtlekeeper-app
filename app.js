@@ -18784,7 +18784,7 @@ function setupEdgeBackAndConversationSwipe() {
   const pinEdgeFixedLayers = active => {
     if (active?.edgePinnedLayers?.length) return;
     const appBounds = $app.getBoundingClientRect();
-    active.edgePinnedLayers = Array.from($app.querySelectorAll(".topbar, .community-chat-product-context, .community-chat-form, .community-chat-tools, .bottom-nav"))
+    const layers = Array.from($app.querySelectorAll(".topbar, .community-chat-product-context, .community-chat-form, .community-chat-tools, .bottom-nav"))
       .filter(layer => getComputedStyle(layer).position === "fixed")
       .map(layer => {
         const bounds = layer.getBoundingClientRect();
@@ -18793,6 +18793,11 @@ function setupEdgeBackAndConversationSwipe() {
           value: layer.style.getPropertyValue(property),
           priority: layer.style.getPropertyPriority(property)
         }));
+        return { layer, previous, bounds };
+      });
+    active.edgePinnedLayers = layers.map(({ layer, previous, bounds }) => {
+        // Measure every layer before changing any styles; alternating reads and
+        // writes forces layout repeatedly as the first drag frame is prepared.
         // A transformed parent turns fixed descendants into scrolling layers on
         // iOS.  Pin them to their current coordinates before #app follows the
         // finger so the chat name, product card and composer cannot disappear.
@@ -18953,9 +18958,12 @@ function setupEdgeBackAndConversationSwipe() {
     }
     if (active.mode === "edge") {
       active.edgeOffset = Math.max(0, Math.min(active.width, dx));
-      active.peakOffset = Math.max(active.peakOffset, active.edgeOffset);
+      active.peakOffset = Math.max(active.peakOffset, active.edgeOffset, event.nativePeakOffset || 0);
       active.edgeProgress = active.edgeOffset / active.width;
-      scheduleGesturePaint();
+      // UIKit positions already crossed an asynchronous WebView bridge. Paint
+      // them now instead of adding another display frame of finger-to-page lag.
+      if (active.nativeEdge) flushGesturePaint(active);
+      else scheduleGesturePaint();
       if (event.cancelable) event.preventDefault();
     }
   };
@@ -18975,7 +18983,7 @@ function setupEdgeBackAndConversationSwipe() {
         active.lastAt = performance.now();
       }
       active.edgeOffset = Math.max(0, Math.min(active.width, dx));
-      active.peakOffset = Math.max(active.peakOffset, active.edgeOffset);
+      active.peakOffset = Math.max(active.peakOffset, active.edgeOffset, event.nativePeakOffset || 0);
       active.edgeProgress = active.edgeOffset / active.width;
       if (event.nativeEdge && Number.isFinite(event.nativeVelocityX)) { active.velocityX = event.nativeVelocityX; active.lastAt = performance.now(); }
     }
@@ -19069,14 +19077,23 @@ function setupEdgeBackAndConversationSwipe() {
   }, { passive: true });
   window.addEventListener("turtle-native-edge-back", event => {
     const detail = event.detail || {};
-    if (detail.generation !== nativeEdgeGeneration || !nativeEdgeEligible()) return;
+    if (detail.generation !== nativeEdgeGeneration) return;
+    if (!["begin", "move", "end", "cancel"].includes(detail.phase)) return;
+    // Eligibility and hit testing belong to acquisition, not every drag sample.
+    // Route changes and modal/viewport observers cancel ownership separately.
+    if (detail.phase === "begin") {
+      if (!nativeEdgeEligible()) return;
+    } else {
+      if (!gesture?.nativeEdge || gesture.page !== state.page) return;
+      if (detail.phase === "end" && !nativeEdgeEligible()) { cancelActiveGesture(); return; }
+    }
     const width = Number(detail.width), height = Number(detail.height);
     if (!(width > 0 && height > 0) || ![detail.startX, detail.startY, detail.x, detail.y, detail.sequence, detail.velocityX].every(Number.isFinite)) return;
     const scaleX = window.innerWidth / width, scaleY = window.innerHeight / height;
     const startX = Math.max(0, Math.min(24, detail.startX * scaleX));
     const startY = detail.startY * scaleY, pointerId = -1000 - detail.sequence;
     const nativeEvent = { nativeEdge: true, nativeSequence: detail.sequence, isPrimary: true, pointerType: "touch", pointerId, button: 0,
-      target: document.elementFromPoint(startX, startY) || $app, clientX: startX, clientY: startY, cancelable: false };
+      target: detail.phase === "begin" ? document.elementFromPoint(startX, startY) || $app : $app, clientX: startX, clientY: startY, cancelable: false };
     if (detail.phase === "begin") {
       if (edgeBackBlocked()) { nativeEdgePlugin()?.cancel?.({ generation: nativeEdgeGeneration, sequence: detail.sequence }).catch(() => {}); return; }
       nativeEdgeReady = true;
@@ -19086,6 +19103,9 @@ function setupEdgeBackAndConversationSwipe() {
     } else if (!gesture?.nativeEdge || gesture.pointerId !== pointerId) return;
     nativeEvent.clientX = startX + (detail.x - detail.startX) * scaleX;
     nativeEvent.clientY = detail.y * scaleY;
+    // Intermediate moves may be coalesced by the bridge. Keep the native peak
+    // so pulling back and pausing still cancels instead of committing a return.
+    nativeEvent.nativePeakOffset = Number.isFinite(detail.peakOffset) ? Math.max(0, Math.min(window.innerWidth, detail.peakOffset * scaleX)) : 0;
     if (detail.phase === "begin" || detail.phase === "move") onEdgePointerMove(nativeEvent);
     else if (detail.phase === "end") { nativeEvent.nativeVelocityX = detail.velocityX * scaleX / 1000; onEdgePointerUp(nativeEvent); }
     else if (detail.phase === "cancel") cancelActiveGesture();

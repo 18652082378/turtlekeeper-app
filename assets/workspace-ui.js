@@ -100,11 +100,33 @@ function completeCareTask(id) {
   toast(localBackupFailed ? '本机保存失败，请前往同步页面重试保存' : '已完成，可在日常养护的养护历史中查看记录');
 }
 
+function skipGrowthTask(id) {
+  if (!requireLogin()) return;
+  const today = formatDate(new Date());
+  const memo = TurtleCare.dueMemos(state.memos || [], today).find(memo => memo.id === id && memo.growthReminder);
+  // Ignore repeat clicks from detached rows after this occurrence is skipped.
+  if (!memo) return;
+  const turtle = state.turtles.find(t => t.id === memo.turtleId);
+  if (!turtle) return toast('关联档案已不存在，请调整提醒');
+  const next = new Date();
+  next.setDate(next.getDate() + 30);
+  const dueDate = formatDate(next);
+  const updatedAt = new Date().toISOString();
+  const nextMemo = { ...memo, dueDate, completedAt: '', updatedAt };
+  setState({
+    memos: state.memos.map(item => item.id === memo.id ? nextMemo : item),
+    turtles: state.turtles.map(item => (item.id === turtle.id || (turtle.batchId && item.batchId === turtle.batchId && TurtleBatches.isActive(item)))
+      ? { ...item, nextGrowthAt: dueDate, updatedAt } : item)
+  });
+  void activateCareReminder(nextMemo);
+  toast(localBackupFailed ? '本机保存失败，请前往同步页面重试保存' : `已取消本次成长提醒，下次提醒 ${dueDate}`);
+}
+
 function homeTasksMarkup() {
   if (!state.loggedInPhone) return '';
   const tasks = TurtleCare.dueMemos(state.memos || [], formatDate(new Date()));
   if (!tasks.length) return '';
-  const row = memo => `<article class="work-task"><div><strong>${escapeHtml(memo.title || '养护提醒')}</strong><small>${memo.dueDate && memo.dueDate < formatDate(new Date()) ? '已到期 · ' : ''}${escapeHtml(memo.remindTime || '今天待办')}${memo.growthReminder ? ' · 成长记录' : ''}</small></div><button type="button" data-start-task="${escapeHtml(memo.id)}">${memo.growthReminder ? '记录成长' : '已完成'}</button></article>`;
+  const row = memo => `<article class="work-task"><div><strong>${escapeHtml(memo.title || '养护提醒')}</strong><small>${memo.dueDate && memo.dueDate < formatDate(new Date()) ? '已到期 · ' : ''}${escapeHtml(memo.remindTime || '今天待办')}${memo.growthReminder ? ' · 成长记录' : ''}</small></div><div class="work-task-actions"><button type="button" data-start-task="${escapeHtml(memo.id)}">${memo.growthReminder ? '记录成长' : '已完成'}</button>${memo.growthReminder ? `<button type="button" class="work-task-cancel" data-skip-growth-task="${escapeHtml(memo.id)}" aria-label="取消本次成长提醒：${escapeHtml(memo.title || '成长记录')}">取消</button>` : ''}</div></article>`;
   return `<section class="fresh-card work-tasks"><div class="work-heading"><h3>今日待办</h3><span>${tasks.length} 项</span></div>${tasks.slice(0, 3).map(row).join('')}${tasks.length > 3 ? `<details><summary>查看其余 ${tasks.length - 3} 项</summary><div class="work-scroll">${tasks.slice(3).map(row).join('')}</div></details>` : ''}</section>`;
 }
 
@@ -203,7 +225,8 @@ function bindWorkspaceUI() {
     setState({ carePlans: state.carePlans.filter(plan => plan.id !== button.dataset.deleteCarePlan), careDraft: readCareDraft() });
   }));
   document.querySelectorAll('[data-start-task]').forEach(button => button.addEventListener('click', () => {
-    const memo = state.memos.find(memo => memo.id === button.dataset.startTask);
+    if (!requireLogin()) return;
+    const memo = TurtleCare.dueMemos(state.memos || [], formatDate(new Date())).find(memo => memo.id === button.dataset.startTask);
     if (!memo) return;
     if (memo.growthReminder) {
       const turtle = state.turtles.find(t => t.id === memo.turtleId);
@@ -213,4 +236,5 @@ function bindWorkspaceUI() {
       completeCareTask(memo.id);
     }
   }));
+  document.querySelectorAll('[data-skip-growth-task]').forEach(button => button.addEventListener('click', () => skipGrowthTask(button.dataset.skipGrowthTask)));
 }

@@ -29,6 +29,9 @@ jobs:
           npm run build
           node scripts/verify-ios-build.js
 
+      - name: Test native edge gesture transport
+        run: node scripts/test-native-edge-transport.cjs
+
       - name: Generate iOS project
         shell: bash
         run: |

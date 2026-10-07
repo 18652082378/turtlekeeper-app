@@ -30,6 +30,7 @@ workflows:
           npx cap sync ios
           node scripts/configure-ios-local-plugins.js
           node scripts/verify-ios-build.js --native
+          node scripts/test-native-edge-transport.cjs
       - name: Apply signing profiles
         script: |
           set -e

@@ -47,6 +47,9 @@ html[data-theme-color="dark"] :is(#turtleForm, #turtleDetailForm, #ledgerForm, #
 :is(.work-plan, .work-task) strong { font-size: 14px; overflow-wrap: anywhere; }
 :is(.work-plan, .work-task) small { display: block; font-size: 11px; margin-top: 5px; color: var(--muted); }
 :is(.work-plan, .work-task) button { flex-shrink: 0; color: var(--green); background: transparent; border: 0; min-height: 44px; padding: 4px; font-size: 13px; }
+.work-task > .work-task-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.work-task-actions button { min-width: 44px; }
+.work-task .work-task-cancel { color: var(--muted); }
 .work-plan [data-delete-care-plan] { color: var(--muted); }
 .care-plan-save { border-top: 1px solid var(--work-border, var(--line)); margin: 0 0 18px; }
 .care-plan-save .secondary { width: 100%; }
