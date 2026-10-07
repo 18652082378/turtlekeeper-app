@@ -1,0 +1,4 @@
+config.js
+ios/App/App.xcodeproj/project.pbxproj
+scripts/ios-127-release-files.txt
+docs/ios-127-release.md
