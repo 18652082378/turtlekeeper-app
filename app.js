@@ -3818,6 +3818,11 @@ function navigationDataKeys(page) {
   const business = ["turtles", "keptSpecies", "customSpecies", "ledgerRecords", "breedingRecords", "memos", "careRecords", "careCustomItems", "carePlans", "turtlePools", "activityLogs"];
   const community = ["communityPosts", "communityProfileStats", "communityFollowedCircleIds", "communityFollowingUsers", "blockedUsers"];
   const market = ["marketListings", "myMarketListings", "marketFavoriteIds", "marketHistoryIds", "selectedMarketListing", "selectedMarketSeller"];
+  // The feed does not display detail selection or browsing history. Favorites
+  // and want counts are patched onto the retained cards when it is restored.
+  const marketFeed = ["marketListings", "marketSearch", "marketStage", "marketRegion", "marketSort", "marketPriceOrder", "marketFreshOnly", "marketDelivery",
+    "marketAssistMenu", "marketSearchLocationCity", "marketSearchLocationStatus", "marketFeedInitialized", "marketFeedSessionId", "marketFeedOrderIds",
+    "marketFeedNextOffset", "marketFeedHasMore", "marketFeedError"];
   const messages = ["communityFriends", "communityFriendsInitialized", "communityFriendsError", "communityNotifications", "communityNotificationSummary", "communityActivityItems", "messageUnreadCount"];
   const groups = {
     mine: [...business, ...community, ...market, ...messages],
@@ -3826,7 +3831,7 @@ function navigationDataKeys(page) {
     communityChat: [...messages, "communityChatMessages", "selectedCommunityFriend"],
     following: ["communityFollowingUsers", "communityFollowingPosts", "communityFollowingListings", "followingInitialized", "followingError"],
     followingProfile: ["selectedFollowingUserId", "selectedCommunityUser", "communityUserPosts", "communityUserListings", ...community],
-    market, marketMy: market, marketFavorites: market, marketHistory: market, marketDetail: market, marketSeller: market,
+    market: marketFeed, marketMy: market, marketFavorites: market, marketHistory: market, marketDetail: market, marketSeller: market,
     satisfaction: ["publicReviews", "publicReviewsInitialized", "publicReviewsError"],
     feedback: ["publicFeedbackItems", "publicFeedbackInitialized", "publicFeedbackError"],
     feedbackDetail: ["publicFeedbackItems"], moderation: ["contentReports"], announcements: ["adminSystemAnnouncements", "systemAnnouncements"], operations: ["operationsOverview"]
@@ -3837,7 +3842,20 @@ function navigationDataKeys(page) {
 function navigationDataSignature(page) {
   // Two independent 32-bit hashes avoid retaining duplicate photo strings in
   // the three-level navigation cache. This is a UI change detector, not auth.
-  const text = JSON.stringify(navigationDataKeys(page).map(key => state[key]));
+  const text = JSON.stringify(navigationDataKeys(page).map(key => {
+    if (page === "market" && key === "marketFeedError") return Boolean(state[key]);
+    if (page !== "market" || key !== "marketListings") return state[key];
+    // Use actual visible order: unrelated cached detail listings and telemetry
+    // receipts must not force a new list DOM at the gesture handoff. Changes to
+    // card content, media or availability still invalidate the snapshot.
+    return marketSearchResultListings().map(item => [
+      ...["id", "title", "speciesName", "stage", "gender", "price", "negotiable", "city", "delivery", "status",
+        "sellerName", "sellerAvatar", "isAdmin", "authorIsAdmin", "sellerIsAdmin", "senderIsAdmin", "photoUrl", "photo"].map(field => item[field]),
+      // Compare original media identity, not optional delivery derivatives or
+      // response key order. Existing decoded thumbnails can remain on screen.
+      marketListingMediaItems(item).map(media => [media.type, media.url, media.posterUrl, media.mediaPosterUrl, media.poster])
+    ]);
+  }));
   let a = 2166136261, b = 5381;
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
@@ -10084,6 +10102,11 @@ function localMarketListing(payload) {
 }
 
 function patchMarketSnapshotDetails(root = $app) {
+  const sentinel = root.querySelector("[data-market-load-sentinel]");
+  if (sentinel && state.marketFeedHasMore) {
+    sentinel.textContent = state.marketFeedLoadingMore ? "正在加载更多商品…"
+      : marketLoadRetryKey === marketFeedRequestKey() ? "加载失败，上滑或点击重试" : "继续上滑，加载更多";
+  }
   const listings = new Map((state.marketListings || []).map(item => [String(item.id), item]));
   const favorites = new Set((state.marketFavoriteIds || []).map(String));
   root.querySelectorAll("[data-market-favorite]").forEach(button => {
@@ -10183,7 +10206,21 @@ async function refreshMarket(force = false) {
     if (!isMarketFeed && state.marketFeedInitialized) {
       (state.marketListings || []).forEach(item => mergedListings.set(item.id, item));
     }
-    [...pending, ...retainedReference, ...remoteListings, ...savedListings].forEach(item => mergedListings.set(item.id, item));
+    [...pending, ...retainedReference, ...remoteListings, ...savedListings].forEach(item => {
+      const previous = mergedListings.get(item.id);
+      // Detail responses omit feed-only thumbnails. Retain a decoded cover
+      // only when its original media is unchanged; a new photo/video must
+      // still invalidate the saved feed and display the new content.
+      if (previous && !isMarketFeed) {
+        item.mediaItems = item.mediaItems.map(media => {
+          if (media.thumbnailUrl) return media;
+          const retained = previous.mediaItems?.find(old => old.url === media.url
+            && old.type === media.type && old.posterUrl === media.posterUrl);
+          return retained?.thumbnailUrl ? { ...media, thumbnailUrl: retained.thumbnailUrl } : media;
+        });
+      }
+      mergedListings.set(item.id, item);
+    });
     const accountPatch = result.accountData ? normalizeAccountData(result.accountData) : {};
     marketLastLoadedAt = Date.now();
     if (incomingMarketShareListingId && incomingMarketShareListingId === String(state.selectedMarketListingId || "")) {
