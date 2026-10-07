@@ -4,6 +4,14 @@
   let splashTimer;
   let startupCancelled = false;
   let foregroundPending = false;
+  const introDayKey = 'turtlekeeper-trade-intro-last-day';
+  let lastShownDay = '';
+  // Use the same Beijing calendar day across launches and phone time zones.
+  const introDay = () => new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  function alreadyShown(day) {
+    if (lastShownDay === day) return true;
+    try { return localStorage.getItem(introDayKey) === day; } catch { return false; }
+  }
   const hideIntro = () => {
     clearTimeout(splashTimer);
     document.querySelector('.trade-intro')?.remove();
@@ -78,13 +86,17 @@
     panel.querySelector('[data-close]').focus();
   };
   window.showTradeIntro = () => {
-    if (startupCancelled || document.hidden || closeGuide || location.search || location.hash || document.querySelector('.trade-intro')) return;
+    if (startupCancelled || document.hidden || closeGuide || location.search || location.hash || document.querySelector('.trade-intro') || document.querySelector('.release-notes-overlay')) return;
+    const day = introDay();
+    if (alreadyShown(day)) return;
     const intro = document.createElement('div');
     intro.className = 'trade-intro';
     intro.innerHTML = `<div class="trade-intro-brand">龟友手账<small>记录相遇 · 陪伴成长</small></div><button class="trade-intro-skip">跳过</button><button class="trade-intro-content" aria-label="查看交易指南"><img class="trade-intro-art" src="assets/trade-guide/intro-turtle.png" alt="抱着信封的小乌龟" fetchpriority="high"><span class="trade-intro-label">给每一次相遇，多一份安心</span><h1>遇见喜欢的龟<br>也懂怎么交易</h1><p>约定清楚，留好凭证</p><strong>查看交易指南 <i aria-hidden="true">→</i></strong></button><div class="trade-intro-footnote">从壳友相遇，到安心相伴</div>`;
     intro.querySelector('.trade-intro-skip').onclick = window.dismissTradeIntro;
     intro.querySelector('.trade-intro-content').onclick = () => window.openTradeGuide();
     document.body.append(intro);
+    lastShownDay = day;
+    try { localStorage.setItem(introDayKey, day); } catch { /* Keep the in-memory daily limit when storage is unavailable. */ }
     splashTimer = setTimeout(window.dismissTradeIntro, 2000);
   };
   const background = () => {

@@ -6102,8 +6102,8 @@ function pageAdd() {
 function careTabs() {
   return `<div class="care-tabs" role="tablist" aria-label="日常养护">
     <button type="button" role="tab" aria-selected="${!["reminders", "weather"].includes(state.careTab)}" data-care-tab="care">养护</button>
-    <button type="button" role="tab" aria-selected="${state.careTab === "reminders"}" data-care-tab="reminders">提醒</button>
     <button type="button" role="tab" aria-selected="${state.careTab === "weather"}" data-care-tab="weather">温度提醒</button>
+    <button type="button" role="tab" aria-selected="${state.careTab === "reminders"}" data-care-tab="reminders">提醒</button>
   </div>`;
 }
 
@@ -11815,7 +11815,7 @@ function sharedMarketListingIdFromUrl(rawUrl) {
 }
 
 function openSharedMarketListing(rawUrl, options = {}) {
-  if (!options.initial) window.dismissTradeIntro?.();
+  if (!options.initial) { window.dismissTradeIntro?.(); window.TurtleReleaseNotes?.cancel(); }
   const listingId = sharedMarketListingIdFromUrl(rawUrl);
   if (!listingId) return false;
   incomingMarketShareListingId = listingId;
@@ -15012,6 +15012,7 @@ function nativePushData(notification) {
 }
 
 function queueNativePushAction(notification) {
+  window.TurtleReleaseNotes?.cancel();
   window.dismissTradeIntro?.();
   const data = nativePushData(notification);
   const senderId = String(data.senderId || data.senderID || data.sender_id || "").trim();
@@ -16103,7 +16104,7 @@ async function shareTurtleProfile(turtleId) {
 }
 
 function openSharedTurtleFromLocation(rawUrl, options = {}) {
-  if (!options.initial) window.dismissTradeIntro?.();
+  if (!options.initial) { window.dismissTradeIntro?.(); window.TurtleReleaseNotes?.cancel(); }
   try {
     const url = new URL(rawUrl, window.location.href);
     const encoded = url.searchParams.get("turtle");
@@ -19312,6 +19313,7 @@ startAppAnalytics();
 // Show on launch; trade-guide also handles returning from the background.
 // Push and share-link routing dismiss it immediately.
 if (!pendingNativePushAction) window.showTradeIntro?.();
+window.TurtleReleaseNotes?.start({ version: window.TURTLE_APP_VERSION, cancelled: () => Boolean(pendingNativePushAction), blocked: () => Boolean(forceUpdateState.required || state.policyConsentRequired) });
 
 function bindDailyPushPreference() {
   const button = document.querySelector('[data-daily-push-preference]');
