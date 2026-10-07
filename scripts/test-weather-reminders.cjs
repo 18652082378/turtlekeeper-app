@@ -19,7 +19,8 @@ function rig({ settings = {}, stamp = '2026-10-07T10:00:00Z', minimum = 16, conf
     assert.equal(W.defaults.remindTime, '18:00'); assert.equal(W.defaults.advanceDays, 1);
     assert.equal(W.futureDate('2026-12-31', 1), '2027-01-01'); assert.equal(W.futureDate('2028-02-28', 1), '2028-02-29');
     assert.equal(W.matches(W.normalizeSettings({}), 17), true); assert.equal(W.matches(W.normalizeSettings({}), 17.1), false); assert.equal(W.matches(W.normalizeSettings({}), -10), true);
-    for (const patch of [{ advanceDays: 0 }, { advanceDays: 8 }, { difference: 0 }, { difference: 1.5 }, { remindTime: '24:00' }, { enabled: 'true' }, { targetTemperature: null }, { targetTemperature: 80 }]) assert.throws(() => W.normalizeSettings(patch));
+    assert.equal(W.normalizeSettings({ advanceDays: 0 }).advanceDays, 0);
+    for (const patch of [{ advanceDays: -1 }, { advanceDays: 1.5 }, { advanceDays: '0' }, { advanceDays: 8 }, { difference: 0 }, { difference: 1.5 }, { remindTime: '24:00' }, { enabled: 'true' }, { targetTemperature: null }, { targetTemperature: 80 }]) assert.throws(() => W.normalizeSettings(patch));
   });
   await check('tomorrow low triggers exact user copy, never today low', async () => {
     const r = rig(); await r.dispatch(); assert.equal(r.sends.length, 1);
@@ -27,8 +28,19 @@ function rig({ settings = {}, stamp = '2026-10-07T10:00:00Z', minimum = 16, conf
     assert.equal(r.sends[0].payload.route, 'weather'); assert.equal(r.get().users.a.weatherNotices[0].forecastDate, '2026-10-08');
     const warm = rig({ minimum: 25 }); await warm.dispatch(); assert.equal(warm.sends.length, 0); assert.equal(warm.get().users.a.weatherLastCheck.status, 'normal');
   });
-  await check('all 1 to 7 day offsets select their future date including day 7', async () => {
-    for (let days = 1; days <= 7; days++) { const r = rig({ settings: { advanceDays: days } }); await r.dispatch(); assert.equal(r.sends[0].payload.forecastDate, W.futureDate('2026-10-07', days)); if (days === 2) assert.match(r.sends[0].payload.aps.alert.body, /后天/); if (days >= 3) assert.match(r.sends[0].payload.aps.alert.body, new RegExp(`10月${7 + days}日`)); }
+  await check('all 0 to 7 day offsets select today or their future date including day 7', async () => {
+    for (let days = 0; days <= 7; days++) { const r = rig({ settings: { advanceDays: days } }); await r.dispatch(); assert.equal(r.sends[0].payload.forecastDate, W.futureDate('2026-10-07', days)); if (days === 0) assert.match(r.sends[0].payload.aps.alert.body, /今天/); if (days === 2) assert.match(r.sends[0].payload.aps.alert.body, /后天/); if (days >= 3) assert.match(r.sends[0].payload.aps.alert.body, new RegExp(`10月${7 + days}日`)); }
+  });
+  await check('same-day reminder uses Shanghai today, custom time and today wording; restart does not duplicate', async () => {
+    const r = rig({ settings: { advanceDays: 0, remindTime: '00:05' }, stamp: '2026-10-06T16:05:00Z' });
+    r.forecast(async () => ({ days: [{ date: '2026-10-07', minimum: 16 }, { date: '2026-10-08', minimum: -20 }], fetchedAt: '2026-10-06T16:05:00Z' }));
+    await r.dispatch(); await r.restart()();
+    assert.equal(r.sends.length, 1);
+    assert.equal(r.sends[0].payload.forecastDate, '2026-10-07');
+    assert.equal(r.sends[0].payload.aps.alert.body, '龟友手账提醒您：今天上海市预计最低气温为16℃，与预设温度相差4℃，请提前做好准备。');
+    const warm = rig({ settings: { advanceDays: 0 } });
+    warm.forecast(async () => ({ days: [{ date: '2026-10-07', minimum: 25 }, { date: '2026-10-08', minimum: -20 }], fetchedAt: '2026-10-07T10:00:00Z' }));
+    await warm.dispatch(); assert.equal(warm.sends.length, 0); assert.equal(warm.get().users.a.weatherLastCheck.forecastDate, '2026-10-07');
   });
   await check('custom time, before schedule, recovery and expired window', async () => {
     const early = rig({ stamp: '2026-10-07T09:59:00Z' }); await early.dispatch(); assert.equal(early.calls.length, 0);

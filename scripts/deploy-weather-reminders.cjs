@@ -36,7 +36,7 @@ async function deploy({ mode, root = ROOT, platform = process.platform, run = ar
     if (relative.endsWith('.js')) new vm.Script(payload.toString('utf8')); else JSON.parse(payload);
     if (fs.existsSync(file)) ensure(fs.realpathSync(file) === file && fs.lstatSync(file).isFile(), 'Unexpected module path');
     const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
-    if (before) ensure(digest(before) === hash || relative === 'server/weather-reminders.js' && digest(before) === manifest.legacy?.moduleHash, 'Unreviewed existing weather module');
+    if (before) ensure(digest(before) === hash || manifest.previousModules?.[relative]?.includes(digest(before)) || relative === 'server/weather-reminders.js' && digest(before) === manifest.legacy?.moduleHash, 'Unreviewed existing weather module');
     return { relative, file, before, after: payload, mode: before ? fs.statSync(file).mode & 0o777 : 0o644 };
   });
   const files = Object.entries(manifest.patches).map(([relative, hunks]) => {
@@ -121,7 +121,7 @@ async function deploy({ mode, root = ROOT, platform = process.platform, run = ar
     throw error;
   }
   log('Backup: ' + backup);
-  log('SUCCESS: Apple WeatherKit reminder API and scheduler installed; data and version policy preserved. Configure WeatherKit credentials and verify on iPhone before release.');
+  log('SUCCESS: Apple WeatherKit reminder API and scheduler installed; credentials, data and version policy preserved. Configure credentials only if not already configured; verify on iPhone before release.');
   return { status: 'installed', backup };
 }
 module.exports = { patchSource, deploy };

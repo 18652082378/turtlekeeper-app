@@ -5,7 +5,7 @@ const root = path.resolve(__dirname, '..');
 const digest = b => crypto.createHash('sha256').update(b).digest('hex');
 // The checked-in manifest is the reviewed patch source. Packaging must work
 // after committing and must not absorb unrelated changes from a working diff.
-const { patches } = JSON.parse(fs.readFileSync(path.join(__dirname, 'weather-reminders-server-patch.json'), 'utf8'));
+const { patches, previousModules = {} } = JSON.parse(fs.readFileSync(path.join(__dirname, 'weather-reminders-server-patch.json'), 'utf8'));
 const { patchSource } = require('./deploy-weather-reminders.cjs');
 for (const [file, hunks] of Object.entries(patches)) {
   if (!['server/server.js', 'privacy.html'].includes(file)) throw Error('Unexpected reviewed target');
@@ -16,7 +16,7 @@ for (const [file, hunks] of Object.entries(patches)) {
 }
 const modules = Object.fromEntries(['server/weather-reminders.js', 'server/weatherkit-provider.js', 'server/weather-cities.json'].map(file => [file, digest(fs.readFileSync(path.join(root, file)))]));
 const legacy = JSON.parse(fs.readFileSync(path.join(__dirname, 'weather-reminders-legacy-patch.json'), 'utf8'));
-fs.writeFileSync(path.join(__dirname, 'weather-reminders-server-patch.json'), JSON.stringify({ modules, patches, legacy }, null, 2) + '\n');
+fs.writeFileSync(path.join(__dirname, 'weather-reminders-server-patch.json'), JSON.stringify({ modules, patches, legacy, previousModules }, null, 2) + '\n');
 const out = path.join(root, 'deploy/patches'); fs.mkdirSync(out, { recursive: true });
 const files = [...Object.keys(modules), 'scripts/deploy-weather-reminders.cjs', 'scripts/weather-reminders-server-patch.json', 'deploy/configure-weatherkit.sh', 'scripts/configure-weatherkit.cjs'];
 const archive = path.join(out, 'turtlekeeper-weather-reminders-v1.tar.gz');
@@ -34,7 +34,7 @@ const command = [
   'tar -xzf patch.tar.gz',
   'node scripts/deploy-weather-reminders.cjs --check',
   'node scripts/deploy-weather-reminders.cjs --apply',
-  `printf 'Configure Apple WeatherKit: bash "%s/deploy/configure-weatherkit.sh"\\n' "$weather_patch_dir"`,
+  `printf 'WeatherKit setup (only if not already configured): bash "%s/deploy/configure-weatherkit.sh"\\n' "$weather_patch_dir"`,
   ')', ''
 ].join('\n');
 fs.writeFileSync(path.join(root, 'deploy/weather-reminders-server.sh'), command);
@@ -58,7 +58,7 @@ const download = [
   'tar -xzf patch.tar.gz',
   'node scripts/deploy-weather-reminders.cjs --check',
   'node scripts/deploy-weather-reminders.cjs --apply',
-  `printf 'Configure Apple WeatherKit: bash "%s/deploy/configure-weatherkit.sh"\\n' "$weather_patch_dir"`,
+  `printf 'WeatherKit setup (only if not already configured): bash "%s/deploy/configure-weatherkit.sh"\\n' "$weather_patch_dir"`,
   ')', ''
 ].join('\n');
 fs.writeFileSync(path.join(root, 'deploy/weather-reminders-github-server.sh'), download);

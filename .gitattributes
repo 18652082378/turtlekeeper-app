@@ -1,6 +1,9 @@
 # Preserve the exact reviewed production bytes used by hotfix regression tests.
 scripts/fixtures/reviewed-server-20260929.js -text
 scripts/fixtures/reviewed-community-daily-push-20261001.js -text
+scripts/fixtures/reviewed-weather-reminders-129.js -text
 scripts/copy-community-recommendation-server-command.sh text eol=lf
 scripts/upload-ios-129.sh text eol=lf
 scripts/ios-129-release-files.txt text eol=lf
+scripts/upload-ios-130.sh text eol=lf
+scripts/ios-130-release-files.txt text eol=lf

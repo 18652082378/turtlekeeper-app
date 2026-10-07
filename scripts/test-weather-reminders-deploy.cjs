@@ -61,6 +61,29 @@ const root = path.resolve(__dirname, '..'), manifest = require('./weather-remind
       assert.ok(messages.some(m => m.includes('verified after 40 seconds')));
     }
   }
+  for (const failure of [false, true]) {
+    const dir = fs.mkdtempSync(path.join(root, 'output/weather-reminders/deploy-apple-upgrade-'));
+    fs.mkdirSync(path.join(dir, 'server/keys'), { recursive: true }); fs.mkdirSync(path.join(dir, 'server/data'));
+    for (const file of Object.keys(manifest.patches)) fs.writeFileSync(path.join(dir, file), fs.readFileSync(path.join(root, file)));
+    const previous = fs.readFileSync(path.join(root, 'scripts/fixtures/reviewed-weather-reminders-129.js'));
+    fs.writeFileSync(path.join(dir, 'server/weather-reminders.js'), previous);
+    for (const file of ['server/weatherkit-provider.js', 'server/weather-cities.json']) fs.writeFileSync(path.join(dir, file), fs.readFileSync(path.join(root, file)));
+    const untouched = { 'server/.env': 'WEATHERKIT_TEAM_ID=SYNTHETIC1\nAPNS_TEAM_ID=SYNTHETIC2\n', 'server/keys/weatherkit-test.p8': 'synthetic-key-fixture', 'server/data/account-fixture.json': '{"accounts":"preserve"}' };
+    for (const [file, content] of Object.entries(untouched)) fs.writeFileSync(path.join(dir, file), content);
+    let pid = 200, restarts = 0;
+    const run = args => { if (args[0] === 'restart') { restarts++; pid++; return ''; } return JSON.stringify([{ name: 'turtlekeeper-api', pid, pm2_env: { status: 'online', exec_mode: 'fork_mode', pm_cwd: dir, pm_exec_path: path.join(dir, 'server/server.js'), PORT: '8787' } }]); };
+    const health = async (_, route) => route === '/api/app/version' ? { status: 200, json: { ok: true, minimumBuild: 125 } } : { status: failure && restarts === 1 && route === '/api/weather/settings' ? 500 : 401, json: { ok: false } };
+    let tick = 0; const params = { root: dir, platform: 'linux', run, health, wait: async ms => { tick += ms; }, nowMs: () => tick, log: () => {} };
+    await deploy({ ...params, mode: '--check' }); assert.equal(restarts, 0);
+    if (failure) {
+      await assert.rejects(deploy({ ...params, mode: '--apply' }), /POST \/api\/weather\/settings HTTP 500/);
+      assert.equal(restarts, 2); assert.ok(fs.readFileSync(path.join(dir, 'server/weather-reminders.js')).equals(previous));
+    } else {
+      await deploy({ ...params, mode: '--apply' }); assert.equal(restarts, 1);
+      assert.ok(fs.readFileSync(path.join(dir, 'server/weather-reminders.js')).equals(fs.readFileSync(path.join(root, 'server/weather-reminders.js'))));
+    }
+    for (const [file, content] of Object.entries(untouched)) assert.equal(fs.readFileSync(path.join(dir, file), 'utf8'), content);
+  }
   const rejected = fs.mkdtempSync(path.join(root, 'output/weather-reminders/deploy-rejected-'));
   fs.mkdirSync(path.join(rejected, 'server'));
   for (const file of Object.keys(manifest.patches)) fs.writeFileSync(path.join(rejected, file), baseline(file));
@@ -73,5 +96,5 @@ const root = path.resolve(__dirname, '..'), manifest = require('./weather-remind
   assert.equal(fs.existsSync(path.join(rejected, 'server/backups')), false);
   for (const relative of Object.keys(manifest.modules)) assert.equal(fs.existsSync(path.join(rejected, relative)), false);
   fs.writeFileSync(path.join(root, 'output/weather-reminders/deploy-tests.json'), JSON.stringify({ pass: true, checks: ['reviewed patch equivalence', 'idempotence', 'unknown source refusal', 'read-only check', 'install and health verification', 'rollback preserves version policy'] }, null, 2));
-  console.log('PASS deployment equivalence, narrow anchors, legacy migration, unrelated source preservation, idempotence, review guard, installation and rollback');
+  console.log('PASS deployment equivalence, narrow anchors, legacy migration, existing Apple module upgrade/rollback with credentials and data preserved, idempotence, review guard, installation and rollback');
 })().catch(e => { console.error(e); process.exitCode = 1; });

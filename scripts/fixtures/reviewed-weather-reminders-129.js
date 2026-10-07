@@ -10,14 +10,14 @@ const futureDate = (date, days) => new Date(Date.parse(`${date}T00:00:00Z`) + da
 const numberText = value => String(Math.round(value * 10) / 10);
 function normalizeSettings(raw = {}) {
   const s = { ...defaults, ...raw };
-  if (typeof s.enabled !== 'boolean' || typeof s.targetTemperature !== 'number' || !Number.isFinite(s.targetTemperature) || s.targetTemperature < -30 || s.targetTemperature > 50 || typeof s.difference !== 'number' || !Number.isInteger(s.difference) || s.difference < 1 || s.difference > 20 || !Number.isInteger(s.advanceDays) || s.advanceDays < 0 || s.advanceDays > 7 || !/^([01]\d|2[0-3]):[0-5]\d$/.test(s.remindTime)) throw Object.assign(new Error('请检查温度、温差、提醒时间和提前天数'), { status: 400 });
+  if (typeof s.enabled !== 'boolean' || typeof s.targetTemperature !== 'number' || !Number.isFinite(s.targetTemperature) || s.targetTemperature < -30 || s.targetTemperature > 50 || typeof s.difference !== 'number' || !Number.isInteger(s.difference) || s.difference < 1 || s.difference > 20 || !Number.isInteger(s.advanceDays) || s.advanceDays < 1 || s.advanceDays > 7 || !/^([01]\d|2[0-3]):[0-5]\d$/.test(s.remindTime)) throw Object.assign(new Error('请检查温度、温差、提醒时间和提前天数'), { status: 400 });
   return { enabled: s.enabled, targetTemperature: Math.round(s.targetTemperature * 10) / 10, difference: s.difference, remindTime: s.remindTime, advanceDays: s.advanceDays, location: s.location || null };
 }
 function matches(settings, minimum) {
   return Number.isFinite(minimum) && minimum <= settings.targetTemperature - settings.difference;
 }
 function reminderBody(settings, forecast, today) {
-  const dateText = forecast.date === today ? '今天' : forecast.date === futureDate(today, 1) ? '明天' : forecast.date === futureDate(today, 2) ? '后天' : `${Number(forecast.date.slice(5, 7))}月${Number(forecast.date.slice(8))}日`;
+  const dateText = forecast.date === futureDate(today, 1) ? '明天' : forecast.date === futureDate(today, 2) ? '后天' : `${Number(forecast.date.slice(5, 7))}月${Number(forecast.date.slice(8))}日`;
   return `龟友手账提醒您：${dateText}${settings.location.name}预计最低气温为${numberText(forecast.minimum)}℃，与预设温度相差${numberText(settings.targetTemperature - forecast.minimum)}℃，请提前做好准备。`;
 }
 function publicWeather(user) {

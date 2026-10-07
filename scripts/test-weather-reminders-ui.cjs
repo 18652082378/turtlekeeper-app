@@ -42,16 +42,46 @@ const root = path.resolve(__dirname, '..');
     finally { await page.close(); }
   }
   try {
-    await check('mobile defaults and responsive form at 320 and 390 pixels', async page => {
+    await check('mobile fields align at 320, 390 and 430 pixels; no redundant intro card', async page => {
       assert.match(await page.locator('.weather-consent').innerText(), /Apple Weather/); assert.equal(await page.locator('.weather-attribution img').getAttribute('src'), 'assets/apple-weather-mark.png'); assert.equal(await page.locator('.weather-attribution > a').getAttribute('href'), 'https://weatherkit.apple.com/legal-attribution.html');
-      assert.equal(await page.locator('[name="remindTime"]').inputValue(), '18:00'); assert.equal(await page.locator('[name="advanceDays"]').inputValue(), '1'); assert.equal(await page.locator('[name="advanceDays"] option').count(), 7);
-      for (const width of [320, 390]) { await page.setViewportSize({ width, height: 844 }); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); }
+      assert.equal(await page.locator('[name="remindTime"]').inputValue(), '18:00'); assert.equal(await page.locator('[name="advanceDays"]').inputValue(), '1'); assert.equal(await page.locator('[name="advanceDays"] option').count(), 8); assert.equal(await page.locator('[name="advanceDays"] option[value="0"]').innerText(), '当天');
+      assert.equal(await page.locator('.weather-content .page-intro').count(), 0);
+      for (const width of [320, 390, 430]) {
+        await page.setViewportSize({ width, height: 844 });
+        const layout = await page.evaluate(() => {
+          const box = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
+          return { overflow: document.documentElement.scrollWidth > innerWidth,
+            controls: ['targetTemperature', 'difference', 'remindTime', 'advanceDays'].map(name => box(`[name="${name}"]`)),
+            consent: box('[data-weather-consent-panel]'), search: box('.weather-search'), searchInput: box('[name="cityQuery"]'), searchButton: box('[data-weather-search]') };
+        });
+        assert.equal(layout.overflow, false, `overflow at ${width}px`);
+        const [temperature, difference, time, days] = layout.controls;
+        for (const control of layout.controls) assert.equal(control.height, 48, `unequal control height at ${width}px`);
+        assert.ok(Math.abs(temperature.y - difference.y) < 1);
+        assert.ok(Math.abs(time.y - days.y) < 1, `time/day vertical alignment at ${width}px`);
+        assert.ok(Math.abs(temperature.x - time.x) < 1);
+        assert.ok(Math.abs(difference.x - days.x) < 1);
+        assert.ok(Math.abs(time.width - days.width) < 1, `time field width at ${width}px`);
+        assert.ok(layout.consent.y + layout.consent.height <= layout.search.y);
+        assert.ok(Math.abs(layout.searchInput.y - layout.searchButton.y) < 1);
+        assert.equal(layout.searchInput.height, layout.searchButton.height);
+        await page.screenshot({ path: path.join(root, 'output/weather-reminders', `redesign-${width}-${engine}.png`), fullPage: true });
+      }
       await page.setViewportSize({ width: 390, height: 844 });
       await page.screenshot({ path: path.join(root, 'output/weather-reminders', `settings-${engine}.png`), fullPage: true });
+      await page.screenshot({ path: path.join(root, 'output/weather-reminders', `redesign-top-${engine}.png`) });
+      await page.evaluate(() => { const section = document.querySelector('.weather-settings'); window.scrollTo(0, section.getBoundingClientRect().top + window.scrollY - 100); });
+      await page.screenshot({ path: path.join(root, 'output/weather-reminders', `redesign-fields-${engine}.png`) });
     });
     await check('city search requires consent, selection preserves unsaved fields and save retains preferences', async page => {
       await page.locator('[name="targetTemperature"]').fill('24'); await page.locator('[name="difference"]').fill('5'); await page.locator('[name="remindTime"]').fill('07:30'); await page.locator('[name="advanceDays"]').selectOption('7');
       await page.locator('[name="cityQuery"]').fill('上海'); await page.locator('[data-weather-search]').click(); assert.equal(await page.evaluate(() => requests.filter(r => r.route.endsWith('/locations')).length), 0);
+      assert.equal(await page.locator('[name="weatherConsent"]').getAttribute('aria-invalid'), 'true');
+      assert.equal(await page.evaluate(() => document.activeElement?.name), 'weatherConsent');
+      assert.equal(await page.locator('#weatherConsentHint').isVisible(), true);
+      assert.equal(await page.locator('[name="cityQuery"]').inputValue(), '上海');
+      assert.equal(await page.locator('[name="targetTemperature"]').inputValue(), '24');
+      assert.equal(await page.evaluate(() => notes.length), 0);
       await page.locator('[name="weatherConsent"]').check(); await page.locator('[data-weather-search]').click(); await page.locator('[data-weather-location]').click();
       assert.equal(await page.locator('[name="targetTemperature"]').inputValue(), '24'); assert.equal(await page.locator('[name="advanceDays"]').inputValue(), '7');
       await page.locator('[name="enabled"]').check(); await page.locator('#weatherForm [type="submit"]').click();
@@ -59,9 +89,36 @@ const root = path.resolve(__dirname, '..');
       const saved = await page.evaluate(() => requests.find(r => r.route.endsWith('/save')).body); assert.equal(saved.settings.locationId, '101020100'); assert.equal(saved.settings.location, undefined); assert.equal(saved.settings.remindTime, '07:30'); assert.equal(saved.settings.advanceDays, 7); assert.equal(saved.weatherConsent, true);
       assert.match(await page.locator('[data-weather-rule]').innerText(), /≤19℃/); assert.equal(await page.evaluate(() => TurtleWeather.hasChanges()), false);
     });
+    await check('first-use location and save guide to visible consent; checking it clears the error', async page => {
+      await page.evaluate(() => { window.locationCalls = 0; getMarketLocationPosition = async () => { locationCalls++; throw Error('test'); }; });
+      await page.locator('[data-weather-locate]').click();
+      assert.equal(await page.evaluate(() => locationCalls), 0);
+      assert.equal(await page.locator('[name="weatherConsent"]').isChecked(), false);
+      assert.equal(await page.evaluate(() => document.activeElement?.name), 'weatherConsent');
+      await page.locator('[name="enabled"]').check();
+      await page.locator('#weatherForm [type="submit"]').click();
+      assert.equal(await page.evaluate(() => requests.some(r => r.route.endsWith('/save'))), false);
+      assert.equal(await page.locator('[data-weather-consent-panel]').evaluate(el => el.classList.contains('needs-attention')), true);
+      await page.locator('[name="weatherConsent"]').check();
+      assert.equal(await page.locator('[name="weatherConsent"]').getAttribute('aria-invalid'), 'false');
+      assert.equal(await page.locator('#weatherConsentHint').isVisible(), false);
+      await page.locator('#weatherForm [type="submit"]').click();
+      assert.equal(await page.evaluate(() => document.activeElement?.name), 'cityQuery');
+      assert.match(await page.locator('[data-weather-location-hint]').innerText(), /点击下方地点/);
+    });
     await check('Enter in city search does not submit reminder settings', async page => {
       await page.locator('[name="weatherConsent"]').check(); await page.locator('[name="cityQuery"]').fill('上海'); await page.locator('[name="cityQuery"]').press('Enter'); await page.waitForSelector('[data-weather-location]');
       assert.equal(await page.evaluate(() => requests.some(r => r.route.endsWith('/save'))), false);
+    });
+    await check('same-day option saves numeric zero, renders today rule and survives reload', async page => {
+      await page.locator('[name="weatherConsent"]').check(); await page.locator('[name="cityQuery"]').fill('上海'); await page.locator('[data-weather-search]').click(); await page.locator('[data-weather-location]').click();
+      await page.locator('[name="advanceDays"]').selectOption('0'); await page.locator('[name="remindTime"]').fill('07:30'); await page.locator('[name="enabled"]').check();
+      assert.match(await page.locator('[data-weather-rule]').innerText(), /每天07:30检查当天的预报/);
+      assert.doesNotMatch(await page.locator('[data-weather-rule]').innerText(), /0天后/);
+      await page.locator('#weatherForm [type="submit"]').click(); await page.waitForFunction(() => notes.includes('温度提醒已保存'));
+      assert.equal(await page.evaluate(() => requests.find(r => r.route.endsWith('/save')).body.settings.advanceDays), 0);
+      await page.locator('[data-weather-retry]').click(); await page.waitForSelector('#weatherForm input:not([disabled])');
+      assert.equal(await page.locator('[name="advanceDays"]').inputValue(), '0'); assert.match(await page.locator('[data-weather-rule]').innerText(), /当天/);
     });
     await check('location refusal permits manual city search', async page => {
       await page.evaluate(() => { getMarketLocationPosition = async () => { throw Error('denied'); }; });

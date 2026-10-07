@@ -1,3 +1,11 @@
+.gitattributes
+package.json
+package-lock.json
+config.js
+ios/App/App.xcodeproj/project.pbxproj
+scripts/ios-130-release-files.txt
+scripts/upload-ios-130.sh
+docs/ios-130-release.md
 app.js
 index.html
 privacy.html
