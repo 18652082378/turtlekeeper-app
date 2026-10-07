@@ -1,4 +1,7 @@
 config.js
+app.js
 ios/App/App.xcodeproj/project.pbxproj
 scripts/ios-127-release-files.txt
+scripts/test-chat-instant-open.cjs
+scripts/test-chat-product-cover-ui.cjs
 docs/ios-127-release.md

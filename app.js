@@ -2,6 +2,7 @@ const $app = document.querySelector("#app");
 const STORAGE = "turtlekeeper-state-v1";
 const AUTH_TOKEN_STORAGE = "turtlekeeper-cloud-auth-v1";
 const PENDING_CLOUD_DATA_STORAGE = "turtlekeeper-pending-cloud-data-v1";
+const CHAT_CACHE_STORAGE = "turtlekeeper-chat-cache-v1:";
 const SERVER_SMS_CODE = "__SERVER_SMS__";
 const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
 const CLOUD_SYNC_DEBOUNCE_MS = 900;
@@ -436,6 +437,10 @@ let communityLastLoadedAt = 0;
 let communityLoadObserver = null;
 let communityChatLoading = false;
 let communityChatLoadedKey = "";
+let communityChatRequestSerial = 0;
+let communityChatActiveRequest = 0;
+let communityChatCachePhone = "";
+let communityChatCache = new Map();
 // A notification can arrive while an existing chat request is still in
 // flight. Remember it so the just-finished (possibly older) response can
 // never be the last refresh the open conversation receives.
@@ -984,6 +989,9 @@ function setState(patch, options = {}) {
   if ((Object.hasOwn(patch, "loggedInPhone") && patch.loggedInPhone !== state.loggedInPhone) ||
       (Object.hasOwn(patch, "cloudToken") && patch.cloudToken !== state.cloudToken)) {
     communityConversationRevision++;
+    communityChatActiveRequest = ++communityChatRequestSerial;
+    communityChatLoading = communityChatOpening = communityChatRefreshPending = false;
+    communityChatLoadedKey = "";
     communityConversationActionPending.clear();
     communityConversationDeleting.clear();
   }
@@ -2944,6 +2952,7 @@ function messageListEmptyMarkup() {
 }
 
 function pageMessages() {
+  ensureCommunityChatCache();
   const chatPreview = latestCommunityMessagePreview(state.communityChatMessages || []);
   const friends = (() => {
     const rows = (state.communityFriends || []).filter(friend => !isCommunityConversationHidden(friend.id));
@@ -3785,7 +3794,7 @@ function pageCommunityChat() {
   const chatMessageList = visibleMessages.map(messageMarkup).join("") || (marketListing
     ? ""
     : communityChatOpening
-      ? `<div class="community-chat-opening" role="status"><i aria-hidden="true"></i><span>正在打开聊天…</span></div>`
+      ? ""
       : `<div class="community-chat-empty">打个招呼，开始聊天吧</div>`);
   const chatHeader = `
     <div class="topbar community-chat-topbar">
@@ -11661,17 +11670,24 @@ async function contactMarketSeller(listingId, buying = false) {
   });
   // Open the conversation before the automatic inquiry request finishes. The
   // old sequence waited on two network calls, so the tap could look ignored.
-  communityChatOpening = true;
+  if (state.selectedCommunityFriendId && state.communityChatMessages?.length) {
+    cacheCommunityChat(state.selectedCommunityFriendId, state.selectedCommunityFriend, state.communityChatMessages, state.communityChatListing);
+  }
+  const cached = readCommunityChatCache(listing.sellerId);
+  communityChatLoadedKey = "";
+  const requestId = ++communityChatRequestSerial;
+  communityChatActiveRequest = requestId;
+  communityChatOpening = !cached;
   communityChatLoading = true;
-  pendingCommunityChatLatestScroll = false;
+  pendingCommunityChatLatestScroll = Boolean(cached?.messages.length);
   setState({
     page: "communityChat",
     selectedCommunityFriendId: listing.sellerId,
     selectedCommunityFriend: initialFriend,
-    communityChatMessages: [],
+    communityChatMessages: cached?.messages || [],
     communityChatListing: initialListing,
     communityChatToolsOpen: false
-  }, { skipCloud: true, pageMotion: "chat" });
+  }, { skipCloud: true, pageMotion: cached ? "none" : "chat" });
   try {
     const sent = await apiPost("/api/community/chat/send", communityAuthPayload({
       userId: listing.sellerId,
@@ -11679,16 +11695,19 @@ async function contactMarketSeller(listingId, buying = false) {
       marketListingId: listing.id
     }));
     if (!isCommunityChatRequestCurrent(requestContext)) return;
+    if (requestId !== communityChatActiveRequest && state.selectedCommunityFriendId === listing.sellerId) return;
     reconcileCommunityConversationState(sent);
     const friend = sent.friend || initialFriend;
-    const messages = sent.messages || [];
+    const messages = mergeCommunityChatMessages(state.selectedCommunityFriendId === listing.sellerId
+      ? state.communityChatMessages : readCommunityChatCache(listing.sellerId)?.messages, sent.messages || []);
     const marketListing = normalizeCommunityChatListing(sent.marketListing) || initialListing;
-    marketChatDraft = "";
-    communityChatLoadedKey = `${listing.sellerId}:${Math.floor(Date.now() / 10000)}`;
+    cacheCommunityChat(listing.sellerId, friend, messages, marketListing);
+    if (state.selectedCommunityFriendId === listing.sellerId) marketChatDraft = "";
     const chatStillVisible = state.page === "communityChat" && state.selectedCommunityFriendId === listing.sellerId;
-    communityChatOpening = false;
+    if (chatStillVisible) communityChatLoadedKey = `${listing.sellerId}:${Math.floor(Date.now() / 10000)}`;
+    if (chatStillVisible) communityChatOpening = false;
     if (chatStillVisible) $app.classList.remove("community-chat-enter-motion");
-    pendingCommunityChatLatestScroll = chatStillVisible;
+    if (chatStillVisible) pendingCommunityChatLatestScroll = true;
     const chatData = {
       selectedCommunityFriendId: listing.sellerId,
       selectedCommunityFriend: friend,
@@ -11702,6 +11721,7 @@ async function contactMarketSeller(listingId, buying = false) {
     refreshMessageUnread(true);
   } catch (error) {
     if (!isCommunityChatRequestCurrent(requestContext)) return;
+    if (requestId !== communityChatActiveRequest) return;
     communityChatOpening = false;
     if (state.page === "communityChat" && state.selectedCommunityFriendId === listing.sellerId) {
       $app.classList.remove("community-chat-enter-motion");
@@ -11709,7 +11729,12 @@ async function contactMarketSeller(listingId, buying = false) {
     }
     toast(error.message === "方法不支持" ? "联系卖家功能将在服务更新后开放" : (error.message || "暂时无法联系卖家"));
   } finally {
+    if (requestId !== communityChatActiveRequest) return;
     communityChatLoading = false;
+    if (communityChatRefreshPending && state.page === "communityChat" && state.selectedCommunityFriendId === listing.sellerId) {
+      communityChatRefreshPending = false;
+      void refreshCommunityChat(true, { scrollLatest: true, silent: true });
+    }
   }
 }
 
@@ -12111,6 +12136,8 @@ function confirmBlockUser({ targetType = "community", targetId = "", userId = ""
     try {
       const result = await apiPost("/api/users/block", communityAuthPayload({ targetType, targetId, userId, mode }));
       close();
+      if (userId) forgetCommunityChatCache(userId);
+      else { ensureCommunityChatCache(); communityChatCache.clear(); persistCommunityChatCache(); }
       setState({
         blockedUsers: Array.isArray(result.blockedUsers) ? result.blockedUsers : state.blockedUsers,
         communityPosts: Array.isArray(result.posts) ? normalizeCommunityPosts(result.posts) : state.communityPosts,
@@ -13290,9 +13317,97 @@ function communityChatMessageKey(message) {
 }
 
 function communityChatMessageSignature(messages = []) {
-  return (Array.isArray(messages) ? messages : [])
-    .map(communityChatMessageKey)
-    .join("\u0002");
+  return JSON.stringify((Array.isArray(messages) ? messages : []).map(message => [communityChatMessageKey(message),
+    message.content, message.rawContent, message.mine, message.recalled, message.createdAt, message.official, message.marketReferenceOnly,
+    message.mediaUrl, message.mediaType, message.posterUrl, message.mediaAspectRatio,
+    message.senderId, message.senderAvatar, message.senderIsAdmin]));
+}
+
+function ensureCommunityChatCache() {
+  const phone = String(state.loggedInPhone || "");
+  if (communityChatCachePhone === phone) return;
+  communityChatCachePhone = phone;
+  communityChatCache = new Map();
+  if (!phone) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(CHAT_CACHE_STORAGE + phone));
+    if (saved?.phone !== phone || !Array.isArray(saved.conversations)) return;
+    for (const [id, entry] of saved.conversations.slice(-40)) {
+      if (typeof id === "string" && entry && Array.isArray(entry.messages)) {
+        communityChatCache.set(id, { ...entry, messages: entry.messages.slice(-200) });
+      }
+    }
+  } catch { /* A missing/corrupt device cache never blocks opening a chat. */ }
+}
+
+function readCommunityChatCache(userId) {
+  ensureCommunityChatCache();
+  const id = String(userId || ""), entry = communityChatCache.get(id);
+  if (!entry || isCommunityConversationHidden(id) || communityConversationDeleting.has(id)
+      || entry.clearVersion !== (state.communityConversationState?.clearVersions?.[id] || "")) return null;
+  return entry;
+}
+
+function persistCommunityChatCache() {
+  if (!communityChatCachePhone || communityChatCachePhone !== String(state.loggedInPhone || "")) return;
+  // Keep recent conversations bounded independently of account/cloud backups.
+  // Only server-confirmed messages are written; pending sends remain in outbox.
+  while (communityChatCache.size > 40) communityChatCache.delete(communityChatCache.keys().next().value);
+  try {
+    let text = JSON.stringify({ phone: communityChatCachePhone, conversations: [...communityChatCache] });
+    while (text.length > 1000000 && communityChatCache.size) {
+      communityChatCache.delete(communityChatCache.keys().next().value);
+      text = JSON.stringify({ phone: communityChatCachePhone, conversations: [...communityChatCache] });
+    }
+    localStorage.setItem(CHAT_CACHE_STORAGE + communityChatCachePhone, text);
+  } catch { /* Quota/storage failures keep the in-memory chat available. */ }
+}
+
+function cacheCommunityChat(userId, friend, messages, listing) {
+  ensureCommunityChatCache();
+  const id = String(userId || "");
+  if (!communityChatCachePhone || !id || communityConversationDeleting.has(id) || isCommunityConversationHidden(id)) return;
+  const previous = communityChatCache.get(id);
+  const entry = { friend, messages: (messages || []).slice(-200), listing: normalizeCommunityChatListing(listing),
+    clearVersion: state.communityConversationState?.clearVersions?.[id] || "" };
+  communityChatCache.delete(id);
+  communityChatCache.set(id, entry);
+  if (previous && entry.clearVersion === previous.clearVersion
+      && communityChatMessageSignature(entry.messages) === communityChatMessageSignature(previous.messages)
+      && JSON.stringify(entry.friend) === JSON.stringify(previous.friend)
+      && JSON.stringify(entry.listing) === JSON.stringify(previous.listing)) return;
+  persistCommunityChatCache();
+}
+
+function forgetCommunityChatCache(userId) {
+  ensureCommunityChatCache();
+  communityChatCache.delete(String(userId));
+  persistCommunityChatCache();
+}
+
+function applyCommunityChatListResult(userId, result, previousFriend, options = {}) {
+  const selected = state.selectedCommunityFriendId === userId;
+  const visible = selected && state.page === "communityChat";
+  const cached = readCommunityChatCache(userId);
+  const friend = result.friend || previousFriend || cached?.friend;
+  const messages = mergeCommunityChatMessages(selected ? state.communityChatMessages : cached?.messages, result.messages || []);
+  const listing = normalizeCommunityChatListing(result.marketListing);
+  cacheCommunityChat(userId, friend, messages, listing);
+  const chatFriends = communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 });
+  patchStoredMessageLists(chatFriends);
+  const friendSignature = item => JSON.stringify([item?.id, item?.name, item?.avatar, Boolean(item?.isAdmin)]);
+  const changed = selected && (communityChatMessageSignature(messages) !== communityChatMessageSignature(state.communityChatMessages)
+    || JSON.stringify(listing) !== JSON.stringify(normalizeCommunityChatListing(state.communityChatListing))
+    || friendSignature(friend) !== friendSignature(state.selectedCommunityFriend) || communityChatOpening);
+  const patch = { communityFriends: chatFriends, ...(selected ? { selectedCommunityFriend: friend,
+    communityChatMessages: messages, communityChatListing: listing } : {}) };
+  if (visible) {
+    communityChatOpening = false;
+    communityChatLoadedKey = `${userId}:${Math.floor(Date.now() / 10000)}`;
+    if (changed && options.scrollLatest) pendingCommunityChatLatestScroll = true;
+  }
+  if (visible && changed) setState(patch, { skipCloud: true, preserveInputValues: true });
+  else { state = { ...state, ...patch }; saveState({ skipCloud: true }); }
 }
 
 function mergeCommunityChatMessages(existingMessages = [], incomingMessages = []) {
@@ -13351,6 +13466,7 @@ function reconcileCommunityConversationState(result) {
     communityChatTextOutbox: Object.fromEntries(Object.entries(state.communityChatTextOutbox || {}).filter(([id]) => !cleared.includes(id))),
     ...(selectedCleared ? { communityChatMessages: [], communityChatListing: null, communityChatToolsOpen: false } : {}) };
   if (cleared.length) {
+    cleared.forEach(forgetCommunityChatCache);
     // No saved chat DOM may show a previous copy after a clear on this or another device.
     edgeBackSnapshots = edgeBackSnapshots.filter(snapshot => snapshot.page !== "communityChat");
     if (selectedCleared) { marketChatDraft = ""; communityChatLoadedKey = ""; closeCommunityChatMessageMenu(); if (state.page === "communityChat") render(); }
@@ -13403,11 +13519,18 @@ function mergeCommunityFriends(incomingFriends = []) {
 
 async function openCommunityChat(userId) {
   if (!canUseCommunity()) return;
+  userId = String(userId || "");
+  if (!userId || communityConversationDeleting.has(userId)) return;
   const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
   const conversationRevision = communityConversationRevision;
+  // Migrate the currently retained timeline before choosing another contact.
+  if (state.selectedCommunityFriendId && (communityChatLoadedKey.startsWith(state.selectedCommunityFriendId + ":") || state.communityChatMessages?.length)) {
+    cacheCommunityChat(state.selectedCommunityFriendId, state.selectedCommunityFriend, state.communityChatMessages, state.communityChatListing);
+  }
+  const cached = readCommunityChatCache(userId);
   marketChatDraft = "";
   communityChatLoadedKey = "";
-  const previousFriend = (state.communityFriends || []).find(item => item.id === userId) || communityUserSnapshot(userId);
+  const previousFriend = (state.communityFriends || []).find(item => item.id === userId) || cached?.friend || communityUserSnapshot(userId);
   // Do not leave a red unread badge visible while the network request is in
   // flight. The server remains the source of truth and will restore it on a
   // later refresh if the request cannot be completed.
@@ -13420,13 +13543,14 @@ async function openCommunityChat(userId) {
     patchStoredMessageLists(locallyReadFriends);
     return;
   }
-  const openingSameConversation = state.selectedCommunityFriendId === userId;
-  const cachedMessages = openingSameConversation ? (state.communityChatMessages || []) : [];
-  const cachedListing = openingSameConversation ? state.communityChatListing : null;
+  const cachedMessages = cached?.messages || [];
+  const cachedListing = cached?.listing || null;
   // Enter immediately. Waiting for image/video metadata here used to add an
   // 850ms pause before the first chat frame was allowed to render.
-  communityChatOpening = true;
+  communityChatOpening = !cached;
   pendingCommunityChatLatestScroll = cachedMessages.length > 0;
+  const requestId = ++communityChatRequestSerial;
+  communityChatActiveRequest = requestId;
   communityChatLoading = true;
   setState({
     page: "communityChat",
@@ -13437,53 +13561,27 @@ async function openCommunityChat(userId) {
     communityChatToolsOpen: false,
     communityFriends: locallyReadFriends,
     messageUnreadCount: locallyReadUnreadCount
-  }, { skipCloud: true, pageMotion: "chat" });
+  }, { skipCloud: true, pageMotion: cached ? "none" : "chat" });
   patchStoredMessageLists(locallyReadFriends);
   try {
     const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
     if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
     if (conversationRevision !== communityConversationRevision || communityConversationDeleting.size) return;
+    if (requestId !== communityChatActiveRequest && state.selectedCommunityFriendId === userId) return;
     reconcileCommunityConversationState(result);
-    communityChatLoadedKey = `${userId}:${Math.floor(Date.now() / 10000)}`;
-    const friend = result.friend || previousFriend;
-    // Message media reserves a stable fallback aspect ratio in CSS. Do not
-    // block the route on metadata probes; they were the visible one-second
-    // delay before a conversation opened.
-    const messages = result.messages || [];
-    const chatStillVisible = state.page === "communityChat" && state.selectedCommunityFriendId === userId;
-    communityChatOpening = false;
-    if (chatStillVisible) $app.classList.remove("community-chat-enter-motion");
-    pendingCommunityChatLatestScroll = chatStillVisible;
-    const chatFriends = communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 });
-    patchStoredMessageLists(chatFriends);
-    const chatData = {
-      selectedCommunityFriendId: userId,
-      selectedCommunityFriend: friend,
-      communityChatMessages: messages,
-      communityChatListing: normalizeCommunityChatListing(result.marketListing),
-      communityChatToolsOpen: false,
-      communityFriends: chatFriends
-    };
-    if (chatStillVisible) {
-      setState({ page: "communityChat", ...chatData }, { skipCloud: true, pageMotion: "chat" });
-    } else {
-      // The user has already gone back to the messages page. Keep that exact
-      // page mounted; a late chat response must never reopen the conversation
-      // or force the message list through a full render.
-      state = { ...state, ...chatData };
-      saveState({ skipCloud: true });
-    }
+    const nearLatest = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 120;
+    applyCommunityChatListResult(userId, result, previousFriend, { scrollLatest: !cached || nearLatest });
     refreshMessageUnread(true);
     refreshCommunity(true);
   } catch (error) {
     if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
-    communityChatOpening = false;
-    if (state.page === "communityChat" && state.selectedCommunityFriendId === userId) {
-      $app.classList.remove("community-chat-enter-motion");
-      render();
+    if (requestId === communityChatActiveRequest && state.page === "communityChat" && state.selectedCommunityFriendId === userId) {
+      communityChatOpening = false;
+      if (!cached) render();
+      if (!cached) toast(error.message || "聊天记录读取失败");
     }
-    toast(error.message || "聊天记录读取失败");
   } finally {
+    if (requestId !== communityChatActiveRequest) return;
     communityChatLoading = false;
     if (communityChatRefreshPending && state.page === "communityChat" && state.selectedCommunityFriendId === userId) {
       communityChatRefreshPending = false;
@@ -13562,6 +13660,8 @@ async function deleteCommunityConversation(userId) {
   const previousChat = selectedWasDeleted ? { selectedCommunityFriendId: userId, selectedCommunityFriend: state.selectedCommunityFriend,
     communityChatMessages: state.communityChatMessages, communityChatListing: state.communityChatListing } : null;
   const previousOutbox = state.communityChatTextOutbox?.[userId];
+  const previousCache = readCommunityChatCache(userId);
+  forgetCommunityChatCache(userId);
   const clearedOutbox = { ...state.communityChatTextOutbox }; delete clearedOutbox[userId];
   communityConversationRevision++;
   communityConversationDeleting.add(userId);
@@ -13598,6 +13698,10 @@ async function deleteCommunityConversation(userId) {
       ...(previousOutbox && !state.communityChatTextOutbox?.[userId] ? { communityChatTextOutbox: { ...state.communityChatTextOutbox, [userId]: previousOutbox } } : {}),
       ...(previousChat && !state.selectedCommunityFriendId ? previousChat : {}),
       messageUnreadCount: Number(state.messageUnreadCount || 0) + unreadRemoved }, { skipCloud: true, forceRender: state.page === "messages" });
+    if (previousCache) {
+      communityChatCache.set(String(userId), previousCache);
+      persistCommunityChatCache();
+    }
     patchStoredMessageLists(restoredFriends);
     console.error("删除会话失败", error);
     toast(error.message || "删除失败，请重试");
@@ -13845,6 +13949,7 @@ async function refreshCommunityChat(force = false, options = {}) {
   const userId = state.selectedCommunityFriendId;
   if (!userId || !hasCloudSession()) return;
   const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
+  const previousFriend = state.selectedCommunityFriend;
   const conversationRevision = communityConversationRevision;
   if (communityChatLoading) {
     if (force) communityChatRefreshPending = true;
@@ -13852,48 +13957,23 @@ async function refreshCommunityChat(force = false, options = {}) {
   }
   const key = `${userId}:${Math.floor(Date.now() / 10000)}`;
   if (!force && communityChatLoadedKey === key) return;
+  const requestId = ++communityChatRequestSerial;
+  communityChatActiveRequest = requestId;
   communityChatLoading = true;
   try {
     const result = await apiPost("/api/community/chat/list", communityAuthPayload({ userId }));
     if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
     if (conversationRevision !== communityConversationRevision || communityConversationDeleting.size) return;
+    if (requestId !== communityChatActiveRequest && state.selectedCommunityFriendId === userId) return;
     reconcileCommunityConversationState(result);
-    communityChatLoadedKey = key;
-    const friend = result.friend || state.selectedCommunityFriend;
-    const messages = mergeCommunityChatMessages(state.selectedCommunityFriendId === userId ? state.communityChatMessages : [], result.messages || []);
-    const chatFriends = communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 });
-    patchStoredMessageLists(chatFriends);
-    const chatStillVisible = state.page === "communityChat" && state.selectedCommunityFriendId === userId;
-    const messagesChanged = communityChatMessageSignature(messages) !== communityChatMessageSignature(state.communityChatMessages || []);
-    if (chatStillVisible && messagesChanged && options.scrollLatest) pendingCommunityChatLatestScroll = true;
-    if (chatStillVisible && messagesChanged) {
-      setState({
-        selectedCommunityFriend: friend,
-        communityChatMessages: messages,
-        communityChatListing: normalizeCommunityChatListing(result.marketListing),
-        communityFriends: chatFriends
-      }, { skipCloud: true });
-    } else if (chatStillVisible) {
-      // Keep the open conversation DOM intact when polling found no new
-      // message. This removes the periodic flash users were seeing.
-      state = {
-        ...state,
-        selectedCommunityFriend: friend,
-        communityChatListing: normalizeCommunityChatListing(result.marketListing),
-        communityFriends: chatFriends
-      };
-      saveState({ skipCloud: true });
-    } else {
-      // A late reply for an old conversation may update the list preview, but
-      // must never overwrite whichever conversation the user opened next.
-      state = { ...state, communityFriends: chatFriends };
-      saveState({ skipCloud: true });
-    }
+    applyCommunityChatListResult(userId, result, previousFriend, options);
     refreshMessageUnread(true);
   } catch (error) {
     if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
-    if (!options.silent) toast(error.message || "聊天记录读取失败");
+    if (requestId !== communityChatActiveRequest) return;
+    if (!options.silent && !readCommunityChatCache(userId)) toast(error.message || "聊天记录读取失败");
   } finally {
+    if (requestId !== communityChatActiveRequest) return;
     communityChatLoading = false;
     if (communityChatRefreshPending && state.page === "communityChat" && state.selectedCommunityFriendId === userId) {
       communityChatRefreshPending = false;
@@ -14097,17 +14177,20 @@ function applyCommunityChatSendResult(result, options = {}) {
   reconcileCommunityConversationState(result);
   if (request) request.revision = communityConversationRevision;
   if (!request || state.selectedCommunityFriendId === request.userId) marketChatDraft = options.draft || "";
-  communityChatLoadedKey = `${state.selectedCommunityFriendId}:${Math.floor(Date.now() / 10000)}`;
-  pendingCommunityChatLatestScroll = true;
-  const friend = result.friend || state.selectedCommunityFriend;
-  const messages = result.messages || [];
   const userId = request?.userId || state.selectedCommunityFriendId;
+  const friend = result.friend || (state.selectedCommunityFriendId === userId ? state.selectedCommunityFriend : readCommunityChatCache(userId)?.friend);
+  const messages = mergeCommunityChatMessages(state.selectedCommunityFriendId === userId
+    ? state.communityChatMessages : readCommunityChatCache(userId)?.messages, result.messages || []);
+  cacheCommunityChat(userId, friend, messages, normalizeCommunityChatListing(result.marketListing)
+    || (state.selectedCommunityFriendId === userId ? state.communityChatListing : readCommunityChatCache(userId)?.listing));
   const chatFriends = communityFriendsWithPreview(userId, friend, messages, { unreadCount: 0 });
   patchStoredMessageLists(chatFriends);
   if (request && state.selectedCommunityFriendId !== userId) {
     setState({ communityFriends: chatFriends }, { skipCloud: true, renderPages: ["messages"] });
     return true;
   }
+  communityChatLoadedKey = `${userId}:${Math.floor(Date.now() / 10000)}`;
+  pendingCommunityChatLatestScroll = true;
   setState({
     selectedCommunityFriend: friend,
     communityChatMessages: messages,
@@ -14774,6 +14857,10 @@ function logoutAccount() {
   const pushAccount = state.loggedInPhone;
   const pushToken = currentCloudToken();
   if (!confirm("确定要退出当前账号吗？")) return;
+  ensureCommunityChatCache();
+  try { if (communityChatCachePhone) localStorage.removeItem(CHAT_CACHE_STORAGE + communityChatCachePhone); } catch {}
+  communityChatCache.clear();
+  communityChatCachePhone = "";
   cloudHydrationComplete = false;
   void unregisterNativePushNotifications(pushAccount, pushToken).catch(() => {}).finally(() => {
     if (CONFIGURED_SMS_BACKEND && pushAccount && pushToken) {

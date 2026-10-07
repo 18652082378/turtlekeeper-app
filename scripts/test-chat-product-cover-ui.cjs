@@ -31,6 +31,9 @@ const root = path.resolve(__dirname, '..');
       await page.evaluate(() => {
         window.dismissTradeIntro?.();
         if (messageUnreadTimer) clearInterval(messageUnreadTimer);
+        // These cases own the product snapshot. The generic empty API fixture
+        // is not a chat synchronization result and must not remove that card.
+        refreshCommunityChat = refreshCommunity = refreshMessageUnread = () => {};
         state = { ...state, ...emptyAccountData(), loggedInPhone: 'cover-test', cloudToken: 'cover-token', registeredUsers: [], page: 'communityChat', policyConsentRequired: false,
           selectedCommunityFriendId: 'seller', selectedCommunityFriend: { id: 'seller', name: '卖家' }, communityChatMessages: [], communityChatListing: null };
         cloudHydrationComplete = true;
