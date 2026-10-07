@@ -14,7 +14,7 @@ const root = path.resolve(__dirname, '..'), manifest = require('./weather-remind
   assert.equal(patchSource('anchor\ninserted\n', [{ before: 'anchor\ninserted\n', after: 'anchor\n' }]), 'anchor\n');
   assert.throws(() => patchSource('anchor\nanchor\n', [{ before: 'anchor\n', after: 'anchor\ninserted\n' }]), /Unreviewed/);
   assert.throws(() => patchSource('anchor\ninserted\nanchor\n', [{ before: 'anchor\n', after: 'anchor\ninserted\n' }]), /Unreviewed/);
-  for (const variant of [false, true]) for (const legacyInstalled of [false, true]) for (const fail of [false, true]) {
+  for (const variant of [false, true]) for (const legacyInstalled of [false, true]) for (const failure of ['none', 'policy', 'weather', 'rollback']) {
     const dir = fs.mkdtempSync(path.join(root, 'output/weather-reminders/deploy-')); fs.mkdirSync(path.join(dir, 'server'));
     for (const file of Object.keys(manifest.patches)) fs.writeFileSync(path.join(dir, file), legacyInstalled ? patchSource(baseline(file), manifest.legacy.patches[file]) : baseline(file));
     if (variant) {
@@ -27,18 +27,25 @@ const root = path.resolve(__dirname, '..'), manifest = require('./weather-remind
     }
     if (legacyInstalled) fs.writeFileSync(path.join(dir, 'server/weather-reminders.js'), manifest.legacy.moduleSource);
     const payloadBefore = fs.readFileSync(path.join(dir, 'server/server.js'), 'utf8');
-    let pid = 100, restarts = 0;
+    let pid = 100, restarts = 0, tick = 0, readyAt = 0; const messages = [];
     const run = args => {
-      if (args[0] === 'restart') { restarts++; pid++; return ''; }
+      if (args[0] === 'restart') { restarts++; pid++; readyAt = tick + 40000; return ''; }
       return JSON.stringify([{ name: 'turtlekeeper-api', pid, pm2_env: { status: 'online', exec_mode: 'fork_mode', pm_cwd: dir, pm_exec_path: path.join(dir, 'server/server.js'), PORT: '8787' } }]);
     };
     const health = async (_, route) => {
       const installed = fs.readFileSync(path.join(dir, 'server/server.js'), 'utf8').includes('attribution: weatherProvider.attribution');
-      return route === '/api/app/version' ? { status: 200, json: { ok: true, minimumBuild: installed && fail ? 999 : 125 } } : { status: installed || route === '/api/account/load' ? 401 : 404, json: { ok: false } };
+      if (tick < readyAt) throw Object.assign(Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+      if (route === '/api/app/version') return { status: 200, json: { ok: true, minimumBuild: installed && ['policy', 'rollback'].includes(failure) ? 999 : 125 } };
+      return { status: installed && failure === 'weather' && route === '/api/weather/settings' ? 405 : !installed && failure === 'rollback' && restarts === 2 ? 500 : installed || route === '/api/account/load' ? 401 : 404, json: { ok: false } };
     };
-    const params = { root: dir, platform: 'linux', run, health, wait: async () => {}, log: () => {} };
+    const params = { root: dir, platform: 'linux', run, health, wait: async ms => { tick += ms; }, nowMs: () => tick, log: text => messages.push(text) };
     await deploy({ ...params, mode: '--check' }); assert.equal(restarts, 0); assert.equal(fs.existsSync(path.join(dir, 'server/weather-reminders.js')), legacyInstalled);
-    if (fail) { await assert.rejects(deploy({ ...params, mode: '--apply' }), /Restart health/); assert.equal(fs.readFileSync(path.join(dir, 'server/server.js'), 'utf8'), payloadBefore); assert.equal(fs.existsSync(path.join(dir, 'server/weather-reminders.js')), legacyInstalled); if (legacyInstalled) assert.equal(fs.readFileSync(path.join(dir, 'server/weather-reminders.js'), 'utf8'), manifest.legacy.moduleSource); assert.equal(fs.existsSync(path.join(dir, 'server/weatherkit-provider.js')), false); assert.equal(restarts, 2); }
+    if (failure !== 'none') {
+      await assert.rejects(deploy({ ...params, mode: '--apply' }), failure === 'rollback' ? /Previous code files restored, but restored service health failed/ : failure === 'weather' ? /POST \/api\/weather\/settings HTTP 405/ : /Version policy differs/);
+      assert.equal(fs.readFileSync(path.join(dir, 'server/server.js'), 'utf8'), payloadBefore); assert.equal(fs.existsSync(path.join(dir, 'server/weather-reminders.js')), legacyInstalled); if (legacyInstalled) assert.equal(fs.readFileSync(path.join(dir, 'server/weather-reminders.js'), 'utf8'), manifest.legacy.moduleSource); assert.equal(fs.existsSync(path.join(dir, 'server/weatherkit-provider.js')), false); assert.equal(restarts, 2);
+      assert.ok(messages.some(m => m.includes('Previous code files restored')));
+      assert.equal(messages.some(m => m.startsWith('ROLLED BACK:')), failure !== 'rollback');
+    }
     else {
       const result = await deploy({ ...params, mode: '--apply' }); assert.equal(result.status, 'installed'); assert.equal(restarts, 1); assert.equal(fs.existsSync(path.join(dir, 'server/weather-reminders.js')), true); assert.ok(result.backup);
       const installed = fs.readFileSync(path.join(dir, 'server/server.js'), 'utf8');
@@ -51,6 +58,7 @@ const root = path.resolve(__dirname, '..'), manifest = require('./weather-remind
         assert.equal(disclosure.includes('<tr><td>龟友手账 API 服务器</td>'), false);
       }
       await deploy({ ...params, mode: '--check' });
+      assert.ok(messages.some(m => m.includes('verified after 40 seconds')));
     }
   }
   const rejected = fs.mkdtempSync(path.join(root, 'output/weather-reminders/deploy-rejected-'));

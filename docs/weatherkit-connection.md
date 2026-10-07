@@ -40,6 +40,10 @@ bash scripts/upload-weather-reminders.sh
 
 打开本机 `deploy/weather-reminders-server.sh`，复制全部内容到ECS服务器终端执行。脚本内嵌了完整服务器补丁，无需GitHub下载、手动传包或填写ECS公网IP。
 
+如果浏览器终端粘贴长代码后显示 `patch.tar.gz: FAILED`，尚未安装服务器代码。可改用 `deploy/weather-reminders-github-server.sh` 的短命令：在Git上传成功后复制该文件到ECS执行，通过 `api.github.com` 按固定Git对象下载补丁，不依赖 `raw.githubusercontent.com`，并校验SHA-256后才解压和安装。校验失败不会写入服务器项目；无需填写服务器IP或手动传包。
+
+重启后的检查最多等待90秒，适应MySQL数据加载，仍须验证进程、版本策略和未登录接口状态。失败会输出具体检查原因并还原代码；只有服务也验证恢复后才显示 `ROLLED BACK`，恢复检查失败会同时保留安装失败原因和备份路径。`SUCCESS`出现之前不能认为安装完成。
+
 Git Bash也可执行 `cat deploy/weather-reminders-server.sh | clip.exe`，把完整服务器代码复制到剪贴板。使用当前修订的补丁，不要重复粘贴此前的旧代码。补丁只匹配天气功能所需的唯一代码锚点，保留相邻的其他功能和隐私说明；若仍不匹配，会显示文件名与片段编号并停止，尚未写入代码或重启服务。
 
 出现SUCCESS后，终端最后会打印实际的配置命令，形如：

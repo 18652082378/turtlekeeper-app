@@ -25,7 +25,7 @@ async function request(port, route, options = {}) {
   const r = await fetch(`http://127.0.0.1:${port}${route}`, { ...options, signal: AbortSignal.timeout(3000), redirect: 'error' });
   const text = await r.text(); ensure(text.length < 32768, 'Unexpected health response'); return { status: r.status, json: JSON.parse(text) };
 }
-async function deploy({ mode, root = ROOT, platform = process.platform, run = args => execFileSync('pm2', args, { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 45000, stdio: ['ignore', 'pipe', 'pipe'] }), health = request, wait = ms => new Promise(r => setTimeout(r, ms)), log = console.log } = {}) {
+async function deploy({ mode, root = ROOT, platform = process.platform, run = args => execFileSync('pm2', args, { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 45000, stdio: ['ignore', 'pipe', 'pipe'] }), health = request, wait = ms => new Promise(r => setTimeout(r, ms)), nowMs = () => Date.now(), log = console.log } = {}) {
   ensure(platform === 'linux' && ['--check', '--apply'].includes(mode), 'Run --check or --apply on the Linux server');
   ensure(fs.realpathSync(root) === root && fs.realpathSync(path.join(root, 'server')) === path.join(root, 'server'), 'Unexpected project path');
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'weather-reminders-server-patch.json'), 'utf8'));
@@ -78,13 +78,30 @@ async function deploy({ mode, root = ROOT, platform = process.platform, run = ar
   const backups = path.join(root, 'server/backups'); fs.mkdirSync(backups, { recursive: true }); ensure(fs.realpathSync(backups) === backups, 'Unexpected backup path');
   const backup = fs.mkdtempSync(path.join(backups, 'weather-reminders-')); fs.chmodSync(backup, 0o700);
   [...files, ...modules].filter(f => f.before).forEach(f => fs.writeFileSync(path.join(backup, f.relative.replaceAll('/', '_')), f.before, { flag: 'wx', mode: 0o600 }));
+  log('Backup: ' + backup);
   const restart = () => run(['restart', SERVICE, '--kill-timeout', '30000']);
   async function verify(pid, installed) {
-    for (let i = 0; i < 12; i++) {
-      try { const version = await health(port, '/api/app/version'); if (info().pid !== pid && version.status === 200 && JSON.stringify(version.json) === policy && (await auth('/api/account/load')).status === 401 && (!installed || (await auth('/api/weather/settings')).status === 401)) return; } catch {}
-      await wait(500);
+    const start = nowMs(); let detail = 'API process not ready', lastReported = '';
+    log('Waiting up to 90 seconds for ' + (installed ? 'installed API' : 'restored API') + ' health checks.');
+    for (let i = 0; i < 90 && nowMs() - start < 90000; i++) {
+      try {
+        ensure(info().pid !== pid, 'API PID has not changed');
+        const version = await health(port, '/api/app/version');
+        ensure(version.status === 200, 'GET /api/app/version HTTP ' + version.status);
+        ensure(JSON.stringify(version.json) === policy, 'Version policy differs from pre-install response');
+        const account = await auth('/api/account/load');
+        ensure(account.status === 401, 'POST /api/account/load HTTP ' + account.status + ' (expected 401)');
+        if (installed) {
+          const weather = await auth('/api/weather/settings');
+          ensure(weather.status === 401, 'POST /api/weather/settings HTTP ' + weather.status + ' (expected 401)');
+        }
+        log('PASS: ' + (installed ? 'installed' : 'restored') + ' API health verified after ' + Math.round((nowMs() - start) / 1000) + ' seconds.');
+        return;
+      } catch (error) { detail = error.message + (error.cause?.code ? ' (' + error.cause.code + ')' : ''); }
+      if (detail !== lastReported) { log('Waiting: ' + detail); lastReported = detail; }
+      if (nowMs() - start < 90000) await wait(1000);
     }
-    throw Error('Restart health check failed');
+    throw Error('Restart health check failed: ' + detail);
   }
   let wrote = false;
   try {
@@ -97,7 +114,9 @@ async function deploy({ mode, root = ROOT, platform = process.platform, run = ar
       ensure([...files, ...modules].every(f => fs.existsSync(f.file) ? [f.before && digest(f.before), digest(f.after)].includes(digest(fs.readFileSync(f.file))) : !f.before), 'Concurrent change; rollback requires review. Backup: ' + backup);
       let pid = original.pid; try { pid = info().pid; } catch {}
       for (const f of [...files, ...modules]) { if (f.before) atomicWrite(f.file, f.before, f.mode); else if (fs.existsSync(f.file)) fs.unlinkSync(f.file); }
-      restart(); await verify(pid, false); log('ROLLED BACK: previous code restored.');
+      log('Previous code files restored; checking restored service.');
+      try { restart(); await verify(pid, false); log('ROLLED BACK: previous code and service restored.'); }
+      catch (rollbackError) { throw Error(`Installation failed: ${error.message}. Previous code files restored, but restored service health failed: ${rollbackError.message}. Backup: ${backup}`); }
     }
     throw error;
   }
