@@ -27,7 +27,7 @@
 
 ## 上传和部署
 
-本机Git Bash运行 scripts/upload-weather-reminders.sh，只提交清单内文件。不会自动修改版本号、构建号或生产最低支持版本；现有源码仍为1.1.5（128），新增功能需要重新确定构建号后再生成新包。
+本机Git Bash运行 scripts/upload-weather-reminders.sh，只提交清单内文件。不会自动修改版本号、构建号或生产最低支持版本；本次iOS客户端版本为1.1.6（129）；上传新构建请运行 scripts/upload-ios-129.sh，详见 docs/ios-129-release.md。
 
 服务器直接粘贴 deploy/weather-reminders-server.sh 的内容。内嵌补丁不依赖GitHub下载，不需要公网IP或手动传包。先验证校验和和现有代码、进程、版本策略；应用前备份服务器代码，安装失败尝试回滚。只安装API模块、定时任务与网页隐私说明，保留服务器其他功能、账号数据和现有版本策略；不替换服务端整份server.js。网页应用的前端更新需按原有网站发布流程执行，新iOS客户端前端由Codemagic构建打包。
 

@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { createWeatherProvider, lookup } = require('../server/weatherkit-provider');
-const { configure } = require('./configure-weatherkit.cjs');
+const { configure, normalizeInput } = require('./configure-weatherkit.cjs');
 const W = require('../server/weather-reminders');
 const root = path.resolve(__dirname, '..'), output = path.join(root, 'output/weather-reminders');
 fs.mkdirSync(output, { recursive: true });
@@ -14,6 +14,17 @@ const days = Array.from({ length: 10 }, (_, i) => ({ forecastStart: W.futureDate
 const reply = () => ({ ok: true, text: async () => JSON.stringify({ forecastDaily: { metadata: { expireTime: '2026-10-08T12:00:00Z' }, days } }) });
 async function check(name, run) { try { await run(); results.push({ name, pass: true }); console.log('PASS ' + name); } catch (e) { results.push({ name, pass: false, error: e.stack }); console.error('FAIL ' + name + ': ' + e.message); } }
 (async () => {
+  await check('paste input identifies each invalid field, accepts whitespace and terminal wrappers, rejects malformed Base64', async () => {
+    const encoded = Buffer.from(pem).toString('base64'), input = { ...env, WEATHERKIT_KEY_INPUT: encoded };
+    assert.deepEqual(normalizeInput(input), { team: env.WEATHERKIT_TEAM_ID, kid: env.WEATHERKIT_KEY_ID, service: env.WEATHERKIT_SERVICE_ID, encoded });
+    const wrapped = Object.fromEntries(Object.entries(input).map(([k, v]) => [k, '\x1b[200~' + v + '\x1b[201~']));
+    wrapped.WEATHERKIT_KEY_INPUT = '\x1b[200~' + encoded.match(/.{1,60}/g).join('\r\n') + '\x1b[201~';
+    assert.deepEqual(normalizeInput(wrapped), normalizeInput(input));
+    for (const [field, message] of [['WEATHERKIT_TEAM_ID', /Team ID格式/], ['WEATHERKIT_KEY_ID', /Key ID格式/], ['WEATHERKIT_SERVICE_ID', /Services ID格式/]]) assert.throws(() => normalizeInput({ ...input, [field]: 'wrong' }), message);
+    assert.throws(() => normalizeInput({ ...input, WEATHERKIT_KEY_INPUT: '' }), /未读到私钥/);
+    for (const value of ['bash scripts/copy-weatherkit-key.sh', 'AB==', encoded + '\x1b[other~']) assert.throws(() => normalizeInput({ ...input, WEATHERKIT_KEY_INPUT: value }), /私钥Base64格式/);
+    assert.throws(() => normalizeInput({ ...input, WEATHERKIT_KEY_INPUT: 'A'.repeat(12001) }), /过长/);
+  });
   await check('local cities support Chinese, ID, pinyin and nearby choices without credentials or network', async () => {
     const sh = (await lookup('上海'))[0]; assert.equal(sh.name, '上海市'); assert.equal(sh.province, '上海市'); assert.equal((await lookup(sh.id))[0].id, sh.id);
     assert.equal((await lookup('Shanghai'))[0].id, sh.id); const nearby = await lookup('121.47,31.23'); assert.equal(nearby[0].province, '上海市'); assert.ok(nearby.some(c => c.id === sh.id));

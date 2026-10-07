@@ -1,11 +1,22 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { createWeatherProvider } = require('../server/weatherkit-provider');
+function normalizeInput(input) {
+  // Some browser terminals wrap pasted text in bracketed-paste control codes.
+  const clean = value => String(value || '').trim().replace(/^\x1b\[200~/, '').replace(/\x1b\[201~$/, '').trim();
+  const team = clean(input.WEATHERKIT_TEAM_ID), kid = clean(input.WEATHERKIT_KEY_ID), service = clean(input.WEATHERKIT_SERVICE_ID);
+  if (!/^[A-Z0-9]{10}$/.test(team)) throw Error('Team ID格式无效：需要苹果后台的10位大写字母或数字');
+  if (!/^[A-Z0-9]{10}$/.test(kid)) throw Error('Key ID格式无效：需要WeatherKit密钥的10位大写字母或数字');
+  if (!/^[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/.test(service) || service.length > 255) throw Error('Services ID格式无效：请填写已注册的服务标识符');
+  if (String(input.WEATHERKIT_KEY_INPUT || '').length > 12000) throw Error('私钥Base64过长，请重新复制密钥');
+  const encoded = clean(input.WEATHERKIT_KEY_INPUT).replace(/[ \t\r\n]/g, '');
+  if (!encoded) throw Error('未读到私钥Base64：请在服务器等待输入时重新运行本机复制密钥脚本，再粘贴并按回车');
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded) || encoded.length > 8192 || Buffer.from(encoded, 'base64').toString('base64') !== encoded) throw Error('私钥Base64格式无效：请重新复制 .p8 文件的Base64，避免混入命令或文件路径');
+  return { team, kid, service, encoded };
+}
 async function configure({ root = '/www/turtlekeeper-app', input = process.env, fetcher = fetch, log = console.log } = {}) {
   if (fs.realpathSync(root) !== root || fs.realpathSync(path.join(root, 'server')) !== path.join(root, 'server')) throw Error('Unexpected server path');
-  const team = String(input.WEATHERKIT_TEAM_ID || '').trim(), kid = String(input.WEATHERKIT_KEY_ID || '').trim(), service = String(input.WEATHERKIT_SERVICE_ID || '').trim();
-  const encoded = String(input.WEATHERKIT_KEY_INPUT || '').trim();
-  if (!/^[A-Z0-9]{10}$/.test(team) || !/^[A-Z0-9]{10}$/.test(kid) || !/^[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/.test(service) || service.length > 255 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded) || encoded.length > 8192) throw Error('Team ID、Key ID、Services ID或私钥Base64格式无效');
+  const { team, kid, service, encoded } = normalizeInput(input);
   let pem, key;
   try { pem = Buffer.from(encoded, 'base64').toString('utf8'); key = crypto.createPrivateKey(pem); } catch { throw Error('无法读取私钥：请复制 .p8 文件的Base64，不是文件名或Key ID'); }
   if (key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') throw Error('需要启用了 WeatherKit 的 Apple P-256 .p8 私钥');
@@ -38,5 +49,5 @@ async function configure({ root = '/www/turtlekeeper-app', input = process.env, 
     return { configured: true, backup };
   } finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); }
 }
-module.exports = { configure };
+module.exports = { configure, normalizeInput };
 if (require.main === module) configure().catch(e => { console.error(e.message); process.exitCode = 1; });
