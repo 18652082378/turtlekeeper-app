@@ -7,8 +7,8 @@
   "patches": {
     "server/server.js": [
       {
-        "before": "const TurtleCare = require('../assets/care-records');\n",
-        "after": "const TurtleCare = require('../assets/care-records');\nconst { normalizeSettings: normalizeWeatherSettings, publicWeather, createWeatherProvider, createWeatherDispatcher } = require('./weather-reminders');\n"
+        "before": "const { mediaUrl: validatedMediaUrl } = require('./media-url');\n",
+        "after": "const { normalizeSettings: normalizeWeatherSettings, publicWeather, createWeatherProvider, createWeatherDispatcher } = require('./weather-reminders');\nconst { mediaUrl: validatedMediaUrl } = require('./media-url');\n"
       },
       {
         "before": "const CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || \"Asia/Shanghai\").trim();\n",

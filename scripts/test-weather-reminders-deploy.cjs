@@ -19,8 +19,11 @@ const root = path.resolve(__dirname, '..'), manifest = require('./weather-remind
     for (const file of Object.keys(manifest.patches)) fs.writeFileSync(path.join(dir, file), legacyInstalled ? patchSource(baseline(file), manifest.legacy.patches[file]) : baseline(file));
     if (variant) {
       const server = path.join(dir, 'server/server.js'), privacy = path.join(dir, 'privacy.html');
-      fs.writeFileSync(server, fs.readFileSync(server, 'utf8').replace("const { createAlipayPurchases } = require('./alipay-team-purchases');\n", '').replace('"壳友手账成交", ', ''));
-      fs.writeFileSync(privacy, fs.readFileSync(privacy, 'utf8').replace('用于发送聊天消息与护理提醒', '用于发送聊天消息、护理提醒与社区推荐'));
+      let source = fs.readFileSync(server, 'utf8').replace("const { createAlipayPurchases } = require('./alipay-team-purchases');\n", '').replace('"壳友手账成交", ', '');
+      // The production screenshot confirms that its imports have no TurtleCare.
+      if (!legacyInstalled) source = source.replace("const TurtleCare = require('../assets/care-records');\n", '');
+      fs.writeFileSync(server, source);
+      fs.writeFileSync(privacy, fs.readFileSync(privacy, 'utf8').replace('用于发送聊天消息与护理提醒', '用于发送聊天消息、护理提醒与社区推荐').split('\n').filter(line => !line.includes('<tr><td>龟友手账 API 服务器</td>')).join('\n'));
     }
     if (legacyInstalled) fs.writeFileSync(path.join(dir, 'server/weather-reminders.js'), manifest.legacy.moduleSource);
     const payloadBefore = fs.readFileSync(path.join(dir, 'server/server.js'), 'utf8');
@@ -42,7 +45,11 @@ const root = path.resolve(__dirname, '..'), manifest = require('./weather-remind
       assert.equal(patchSource(installed, manifest.patches['server/server.js']).replace(/\r/g, ''), installed.replace(/\r/g, ''));
       const disclosure = fs.readFileSync(path.join(dir, 'privacy.html'), 'utf8');
       assert.equal(disclosure.includes('和风天气（QWeather'), false); assert.equal(disclosure.split('Apple Weather（WeatherKit').length, 2);
-      if (variant) { assert.equal(installed.includes("require('./alipay-team-purchases')"), false); assert.ok(disclosure.includes('社区推荐')); }
+      if (variant) {
+        assert.equal(installed.includes("require('./alipay-team-purchases')"), false); assert.ok(disclosure.includes('社区推荐'));
+        if (!legacyInstalled) assert.equal(installed.includes('const TurtleCare ='), false);
+        assert.equal(disclosure.includes('<tr><td>龟友手账 API 服务器</td>'), false);
+      }
       await deploy({ ...params, mode: '--check' });
     }
   }
@@ -50,7 +57,7 @@ const root = path.resolve(__dirname, '..'), manifest = require('./weather-remind
   fs.mkdirSync(path.join(rejected, 'server'));
   for (const file of Object.keys(manifest.patches)) fs.writeFileSync(path.join(rejected, file), baseline(file));
   const sourceFile = path.join(rejected, 'server/server.js');
-  const unknown = fs.readFileSync(sourceFile, 'utf8').replace("const TurtleCare = require('../assets/care-records');", "const TurtleCare = require('../assets/unknown-care-records');");
+  const unknown = fs.readFileSync(sourceFile, 'utf8').replace("const { mediaUrl: validatedMediaUrl } = require('./media-url');", "const { mediaUrl: validatedMediaUrl } = require('./unknown-media-url');");
   fs.writeFileSync(sourceFile, unknown);
   const denied = { root: rejected, platform: 'linux', run: () => { throw Error('Unexpected process mutation'); }, log: () => {} };
   for (const mode of ['--check', '--apply']) await assert.rejects(deploy({ ...denied, mode }), /server\/server.js: Unreviewed source at fragment 1/);
