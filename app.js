@@ -6101,8 +6101,9 @@ function pageAdd() {
 
 function careTabs() {
   return `<div class="care-tabs" role="tablist" aria-label="日常养护">
-    <button type="button" role="tab" aria-selected="${state.careTab !== "reminders"}" data-care-tab="care">养护</button>
+    <button type="button" role="tab" aria-selected="${!["reminders", "weather"].includes(state.careTab)}" data-care-tab="care">养护</button>
     <button type="button" role="tab" aria-selected="${state.careTab === "reminders"}" data-care-tab="reminders">提醒</button>
+    <button type="button" role="tab" aria-selected="${state.careTab === "weather"}" data-care-tab="weather">温度提醒</button>
   </div>`;
 }
 
@@ -6228,6 +6229,8 @@ function bindCareEvents() {
     toast("已新增一条相同的喂食记录");
   }));
   document.querySelectorAll("[data-care-tab]").forEach(button => button.addEventListener("click", () => {
+    if (state.careTab === "weather" && !canLeaveRecordPage()) return;
+    if (button.dataset.careTab === "weather" && !requireLogin()) return;
     setState({ careTab: button.dataset.careTab, careDraft: readCareDraft(), carePickerOpen: false });
   }));
   document.querySelectorAll("[data-new-care]").forEach(button => button.addEventListener("click", () => {
@@ -6340,7 +6343,20 @@ function submitCareRecord(event) {
   toast("养护记录已保存");
 }
 
+function weatherContext() {
+  return {
+    phone: state.loggedInPhone || '', token: currentCloudToken(),
+    currentAuth: () => ({ phone: state.loggedInPhone || '', token: currentCloudToken() }),
+    isVisible: () => state.page === 'memos' && state.careTab === 'weather',
+    api: (...args) => apiPost(...args), render: () => render({ preserveInputValues: true }), toast, escape: escapeHtml,
+    topbar, tabs: careTabs, nav: bottomNav, locate: () => getMarketLocationPosition(),
+    registerPush: () => setupNativePushNotifications(),
+    pushPermission: async () => (await nativePushNotifications()?.checkPermissions?.())?.receive || 'unavailable'
+  };
+}
+
 function pageMemos() {
+  if (state.careTab === "weather") return window.TurtleWeather.page(weatherContext());
   if (state.careTab !== "reminders") return pageCareRecords();
   const list = state.memoTab === "all" ? state.memos : state.memos.filter(m => state.memoTab === "repeat" ? m.repeat : !m.repeat);
   const editingMemo = state.memos.find(m => m.id === state.memoEditingId);
@@ -7936,6 +7952,10 @@ function pagePrivacy() {
         <h3>六、未成年人</h3>
         <p>如你未满十八周岁，请在监护人同意和指导下使用本服务。我们不会故意收集与服务无关的未成年人信息。</p>
       </section>
+      <section class="fresh-card policy-card">
+        <h3>温度提醒的地点使用说明</h3>
+        <p>仅在你使用温度提醒并单独同意后，保存所选养龟地点，向Apple Weather提供保留两位小数的地点坐标以查询预报；城市搜索在服务器本地进行，不发送手机号、账号资料、聊天或乌龟档案，不持续追踪位置。你可直接搜索地点，也可主动授权定位；关闭提醒后停止定时查询和推送。</p>
+      </section>
       <button class="compliance-link-card" type="button" data-page="rules"><span>服务与社区规则</span><b>›</b></button>
     </main>
     ${bottomNav()}
@@ -8714,6 +8734,7 @@ function bindSyncPageActions() {
 function bindEvents() {
   $app.syncNativeEdgeBack?.();
   bindCareEvents();
+  window.TurtleWeather?.bind(weatherContext());
   bindWorkspaceUI();
   $app.querySelectorAll("[data-feed-retry]").forEach(button => {
     button.onclick = () => {
@@ -15016,6 +15037,11 @@ function consumePendingNativePushAction() {
     void refreshMessageUnread(true, { renderMessages: true });
     return;
   }
+  if (action.route === "weather") {
+    pendingNativePushAction = null;
+    setState({ page: "memos", careTab: "weather" }, { skipCloud: true });
+    return;
+  }
   if (action.postId) {
     action.loading = true;
     void openNativePushCommunityPost(action);
@@ -15107,7 +15133,8 @@ async function apiPost(path, payload) {
   const accountSync = /^\/api\/account\/(load|save)$/.test(path);
   const feedRead = /^\/api\/(market\/(list|detail)|community\/list)$/.test(path);
   const chatRequest = /^\/api\/community\/chat\/(list|send|recall)$/.test(path);
-  const controller = accountSync || feedRead || chatRequest || path === "/api/account/session" ? new AbortController() : null;
+  const weatherRequest = path.startsWith('/api/weather/');
+  const controller = accountSync || feedRead || chatRequest || weatherRequest || path === "/api/account/session" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), accountSync ? 20000 : 15000) : null;
   const finishFeedback = window.TurtleUI?.beginRequest(path);
   let response, data;
@@ -15124,6 +15151,7 @@ async function apiPost(path, payload) {
     });
   } catch (error) {
     if (controller?.signal.aborted) {
+      if (weatherRequest) throw new Error('温度提醒连接超时，请稍后重试');
       if (chatRequest) {
         const timeout = new Error(path.endsWith('/send') ? "发送超时，消息可能已送达，请重试确认" : "聊天加载超时，请重试");
         timeout.code = 'CHAT_REQUEST_TIMEOUT';

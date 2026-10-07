@@ -18,6 +18,7 @@ const { createApplePurchases } = require('./apple-team-purchases');
 const { createAlipayPurchases } = require('./alipay-team-purchases');
 const { createBackupStorage } = require('./backup-storage');
 const TurtleCare = require('../assets/care-records');
+const { normalizeSettings: normalizeWeatherSettings, publicWeather, createWeatherProvider, createWeatherDispatcher } = require('./weather-reminders');
 const { mediaUrl: validatedMediaUrl } = require('./media-url');
 
 function loadEnvFile(filePath) {
@@ -112,6 +113,8 @@ const APNS_HOST = String(process.env.APNS_HOST || "api.push.apple.com").trim();
 const APNS_KEY_PATH = String(process.env.APNS_KEY_PATH || "").trim();
 const APNS_KEY_BASE64 = String(process.env.APNS_KEY_BASE64 || "").trim();
 const CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || "Asia/Shanghai").trim();
+const weatherProvider = createWeatherProvider();
+const weatherRequestLimits = new Map();
 const MARKET_SALE_METHODS = ["自有客户成交", "闲鱼成交", "壳友手账成交", "龟友手账成交"];
 const DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);
 
@@ -1013,7 +1016,7 @@ function sendApnsNotification(deviceToken, payload) {
     };
     try {
       client = http2.connect(`https://${APNS_HOST}`);
-      if (payload.route === "communityDaily") client.setTimeout(10000, () => finish({ ok: false, reason: "Daily push timeout" }));
+      if (["communityDaily", "weather"].includes(payload.route)) client.setTimeout(10000, () => finish({ ok: false, reason: "Reminder push timeout" }));
       client.once("error", error => finish({ ok: false, reason: error.message || "APNs connection error" }));
       const request = client.request({
         ":method": "POST",
@@ -1022,7 +1025,7 @@ function sendApnsNotification(deviceToken, payload) {
         "apns-topic": APNS_BUNDLE_ID,
         "apns-push-type": "alert",
         "apns-priority": "10",
-        ...(payload.route === "communityDaily" ? { "apns-expiration": "0", "apns-collapse-id": "community-daily" } : {})
+        ...(["communityDaily", "weather"].includes(payload.route) ? { "apns-expiration": "0", "apns-collapse-id": payload.route === "weather" ? "weather-reminder" : "community-daily" } : {})
       });
       let status = 0;
       let responseBody = "";
@@ -3568,6 +3571,51 @@ async function handleDailyPushPreference(req, res) {
   return sendJson(res, 200, { ok: true, enabled: user.communityDailyPushEnabled !== false });
 }
 
+async function handleWeatherReminder(req, res, action) {
+  const body = await readJson(req);
+  let db = readDatabase();
+  let user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const bucket = weatherRequestLimits.get(user.phone);
+  const fresh = !bucket || Date.now() - bucket.start > 60000;
+  const next = fresh ? { start: Date.now(), count: 1 } : { ...bucket, count: bucket.count + 1 };
+  weatherRequestLimits.delete(user.phone); weatherRequestLimits.set(user.phone, next);
+  while (weatherRequestLimits.size > 5000) weatherRequestLimits.delete(weatherRequestLimits.keys().next().value);
+  if (next.count > 30) return sendJson(res, 429, { ok: false, message: '操作频繁，请稍后再试' });
+  if (action === 'locations') {
+    if (body.weatherConsent !== true) return sendJson(res, 400, { ok: false, message: '请先同意温度提醒的地点使用说明' });
+    const locations = await weatherProvider.lookup(body.query);
+    if (!authenticate(readDatabase(), body.phone, body.token)) return sendJson(res, 401, { ok: false, message: '请重新登录' });
+    return sendJson(res, 200, { ok: true, locations });
+  }
+  if (action === 'save') {
+    if (!body.settings || typeof body.settings !== 'object' || Array.isArray(body.settings)) return sendJson(res, 400, { ok: false, message: '提醒设置无效' });
+    const beforeSettings = JSON.stringify(user.weatherReminder || null);
+    const settings = normalizeWeatherSettings(body.settings);
+    if (settings.enabled && !weatherProvider.configured()) return sendJson(res, 503, { ok: false, message: '天气服务尚未配置，暂不能开启提醒' });
+    if (settings.enabled && body.weatherConsent !== true) return sendJson(res, 400, { ok: false, message: '请先同意温度提醒的地点使用说明' });
+    let location = user.weatherReminder?.location || null;
+    const selectedId = String(body.settings?.locationId || '');
+    if (selectedId && selectedId !== location?.id) {
+      if (!/^[a-z0-9-]{1,40}$/i.test(selectedId)) return sendJson(res, 400, { ok: false, message: '请重新选择养龟地点' });
+      location = (await weatherProvider.lookup(selectedId)).find(item => item.id === selectedId);
+    }
+    if (settings.enabled && !location) return sendJson(res, 400, { ok: false, message: '请选择养龟地点' });
+    db = readDatabase(); user = requireReviewUser(db, body, res);
+    if (!user) return;
+    if (JSON.stringify(user.weatherReminder || null) !== beforeSettings) return sendJson(res, 409, { ok: false, message: '提醒设置已在其他设备修改，请重新读取后再保存' });
+    // The city is resolved by the provider, never copied from client labels.
+    user.weatherReminder = { ...settings, location, updatedAt: new Date().toISOString() };
+    if (settings.enabled) { user.weatherConsentAt = new Date().toISOString(); user.weatherConsentProvider = 'apple-weather'; }
+    user.updatedAt = new Date().toISOString();
+    await writeDatabase(db);
+  }
+  db = readDatabase(); user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const result = publicWeather(user);
+  return sendJson(res, 200, { ok: true, ...result, attribution: weatherProvider.attribution, providerConfigured: weatherProvider.configured(), pushConfigured: apnsConfigured(), hasPushDevice: normalizedPushDevices(user.pushDevices).length > 0 });
+}
+
 async function handleCommunityAdminAction(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
@@ -5043,6 +5091,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/notifications/device/register") return await handlePushDeviceRegister(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/device/unregister") return await handlePushDeviceUnregister(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/test") return await handlePushNotificationTest(req, res);
+    if (req.method === "POST" && url.pathname === "/api/weather/settings") return await handleWeatherReminder(req, res, 'settings');
+    if (req.method === "POST" && url.pathname === "/api/weather/locations") return await handleWeatherReminder(req, res, 'locations');
+    if (req.method === "POST" && url.pathname === "/api/weather/save") return await handleWeatherReminder(req, res, 'save');
     if (req.method === "POST" && url.pathname === "/api/announcements/list") return await handleSystemAnnouncementList(req, res);
     if (req.method === "POST" && url.pathname === "/api/announcements/create") return await handleSystemAnnouncementCreate(req, res);
     if (req.method === "POST" && url.pathname === "/api/announcements/action") return await handleSystemAnnouncementAction(req, res);
@@ -5124,6 +5175,12 @@ setInterval(() => {
 // Remote care reminders are checked twice a minute, allowing a short recovery
 // window if the timer runs close to the minute boundary.
 setInterval(() => { if (!shuttingDown) void dispatchDueCareReminders(); }, 30 * 1000).unref();
+const dispatchWeatherReminders = createWeatherDispatcher({
+  read: readDatabase, write: writeDatabase, provider: weatherProvider,
+  configured: apnsConfigured, devices: user => normalizedPushDevices(user.pushDevices),
+  send: sendApnsNotification, invalidDevice: removeInvalidPushDevice
+});
+setInterval(() => { if (!shuttingDown) dispatchWeatherReminders().catch(() => console.warn('温度提醒本轮检查失败')); }, 30 * 1000).unref();
 const dispatchDailyCommunityPush = createDailyCommunityDispatcher({
   read: readDatabase, write: writeDatabase,
   configured: () => apnsConfigured(),
@@ -5160,6 +5217,7 @@ process.on("SIGINT", shutdownDatabaseServer);
 
 void initializeMysqlDatabase().then(() => {
   void dispatchDueCareReminders();
+  void dispatchWeatherReminders().catch(() => console.warn('温度提醒启动检查失败'));
   try {
     backupStorage.maintain();
     if (!hasBackupForDate()) createServerBackup("startup");

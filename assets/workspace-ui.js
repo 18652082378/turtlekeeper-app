@@ -23,7 +23,9 @@ function recordPageHasChanges() {
 }
 
 function canLeaveRecordPage() {
-  return !recordPageHasChanges() || confirm('本页有尚未保存的内容，确定返回上一页吗？');
+  const allowed = !(recordPageHasChanges() || window.TurtleWeather?.hasChanges()) || confirm('本页有尚未保存的内容，确定返回上一页吗？');
+  if (allowed) window.TurtleWeather?.discardDraft();
+  return allowed;
 }
 
 function careHistoryTurtleRefs() {
