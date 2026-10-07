@@ -1,0 +1,4 @@
+config.js
+ios/App/App.xcodeproj/project.pbxproj
+scripts/ios-128-release-files.txt
+docs/ios-128-release.md
