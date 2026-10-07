@@ -3,22 +3,17 @@ const fs = require('node:fs'), path = require('node:path'), crypto = require('no
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const digest = b => crypto.createHash('sha256').update(b).digest('hex');
-function buildPatches(file) {
-  const diff = execFileSync('git', ['diff', '--unified=3', '--', file], { cwd: root, encoding: 'utf8' }).replace(/\r/g, '');
-  const hunks = [];
-  for (const block of diff.split(/^@@ .*@@.*\n/m).slice(1)) {
-    let before = '', after = '';
-    for (const line of block.split('\n')) {
-      if (line.startsWith(' ')) { before += line.slice(1) + '\n'; after += line.slice(1) + '\n'; }
-      else if (line.startsWith('-')) before += line.slice(1) + '\n';
-      else if (line.startsWith('+')) after += line.slice(1) + '\n';
-    }
-    if (before && after) hunks.push({ before, after });
-  }
-  if (!hunks.length) throw Error('Missing reviewed diff for ' + file);
-  return hunks;
+// The checked-in manifest is the reviewed patch source. Packaging must work
+// after committing and must not absorb unrelated changes from a working diff.
+const { patches } = JSON.parse(fs.readFileSync(path.join(__dirname, 'weather-reminders-server-patch.json'), 'utf8'));
+const { patchSource } = require('./deploy-weather-reminders.cjs');
+for (const [file, hunks] of Object.entries(patches)) {
+  if (!['server/server.js', 'privacy.html'].includes(file)) throw Error('Unexpected reviewed target');
+  const source = fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n');
+  if (patchSource(source, hunks) !== source) throw Error('Reviewed patch is not installed locally: ' + file);
+  const restored = patchSource(source, hunks.map(h => ({ before: h.after, after: h.before })));
+  if (patchSource(restored, hunks) !== source) throw Error('Reviewed patch does not round-trip: ' + file);
 }
-const patches = { 'server/server.js': buildPatches('server/server.js'), 'privacy.html': buildPatches('privacy.html') };
 const modules = Object.fromEntries(['server/weather-reminders.js', 'server/weatherkit-provider.js', 'server/weather-cities.json'].map(file => [file, digest(fs.readFileSync(path.join(root, file)))]));
 const legacy = JSON.parse(fs.readFileSync(path.join(__dirname, 'weather-reminders-legacy-patch.json'), 'utf8'));
 fs.writeFileSync(path.join(__dirname, 'weather-reminders-server-patch.json'), JSON.stringify({ modules, patches, legacy }, null, 2) + '\n');

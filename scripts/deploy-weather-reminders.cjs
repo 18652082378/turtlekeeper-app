@@ -6,9 +6,13 @@ const digest = b => crypto.createHash('sha256').update(b).digest('hex');
 const ensure = (yes, text) => { if (!yes) throw Error(text); };
 function patchSource(source, hunks) {
   const crlf = source.includes('\r\n'); let result = source.replace(/\r\n/g, '\n');
-  for (const { before, after } of hunks) {
-    if (result.includes(after)) { ensure(result.split(after).length === 2, 'Duplicate installed patch'); continue; }
-    ensure(result.split(before).length === 2, 'Unreviewed source; nothing changed'); result = result.replace(before, after);
+  for (const [index, { before, after }] of hunks.entries()) {
+    const oldCount = result.split(before).length - 1, newCount = result.split(after).length - 1;
+    // Insertions contain their original anchor; removals contain the restored
+    // anchor. Prefer the larger matching form so migration can remove a patch.
+    if (newCount === 1 && (oldCount === 0 || after.includes(before) && oldCount === 1)) continue;
+    ensure(oldCount === 1 && (newCount === 0 || before.includes(after) && newCount === 1), `Unreviewed source at fragment ${index + 1} (original=${oldCount}, installed=${newCount}); nothing changed`);
+    result = result.replace(before, after);
   }
   return crlf ? result.replace(/\n/g, '\r\n') : result;
 }
@@ -39,10 +43,18 @@ async function deploy({ mode, root = ROOT, platform = process.platform, run = ar
     ensure(['server/server.js', 'privacy.html'].includes(relative), 'Unexpected patch target');
     const file = path.join(root, relative); ensure(fs.realpathSync(file) === file && fs.lstatSync(file).isFile(), 'Target must be a regular file');
     const before = fs.readFileSync(file); let patched;
-    try { patched = patchSource(before.toString('utf8'), hunks); }
+    try {
+      const source = before.toString('utf8');
+      // Retire the reviewed QWeather disclosure before inserting Apple Weather.
+      const legacyPrivacy = relative === 'privacy.html' && source.includes('和风天气（QWeather，仅在使用温度提醒时）');
+      patched = patchSource(legacyPrivacy ? patchSource(source, manifest.legacy.patches[relative].map(h => ({ before: h.after, after: h.before }))) : source, hunks);
+    }
     catch (error) {
-      const legacy = manifest.legacy?.patches?.[relative]; if (!legacy) throw error;
-      patched = patchSource(patchSource(before.toString('utf8'), legacy.map(h => ({ before: h.after, after: h.before }))), hunks);
+      const legacy = manifest.legacy?.patches?.[relative];
+      try {
+        if (!legacy) throw error;
+        patched = patchSource(patchSource(before.toString('utf8'), legacy.map(h => ({ before: h.after, after: h.before }))), hunks);
+      } catch { throw Error(`${relative}: ${error.message}`); }
     }
     const after = Buffer.from(patched);
     if (relative.endsWith('.js')) new vm.Script(after.toString('utf8'));

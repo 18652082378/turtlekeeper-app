@@ -40,6 +40,8 @@ bash scripts/upload-weather-reminders.sh
 
 打开本机 `deploy/weather-reminders-server.sh`，复制全部内容到ECS服务器终端执行。脚本内嵌了完整服务器补丁，无需GitHub下载、手动传包或填写ECS公网IP。
 
+Git Bash也可执行 `cat deploy/weather-reminders-server.sh | clip.exe`，把完整服务器代码复制到剪贴板。使用当前修订的补丁，不要重复粘贴此前的旧代码。补丁只匹配天气功能所需的唯一代码锚点，保留相邻的其他功能和隐私说明；若仍不匹配，会显示文件名与片段编号并停止，尚未写入代码或重启服务。
+
 出现SUCCESS后，终端最后会打印实际的配置命令，形如：
 
 ```bash

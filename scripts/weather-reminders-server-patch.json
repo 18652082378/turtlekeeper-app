@@ -7,12 +7,12 @@
   "patches": {
     "server/server.js": [
       {
-        "before": "const { createAlipayPurchases } = require('./alipay-team-purchases');\nconst { createBackupStorage } = require('./backup-storage');\nconst TurtleCare = require('../assets/care-records');\nconst { mediaUrl: validatedMediaUrl } = require('./media-url');\n\nfunction loadEnvFile(filePath) {\n",
-        "after": "const { createAlipayPurchases } = require('./alipay-team-purchases');\nconst { createBackupStorage } = require('./backup-storage');\nconst TurtleCare = require('../assets/care-records');\nconst { normalizeSettings: normalizeWeatherSettings, publicWeather, createWeatherProvider, createWeatherDispatcher } = require('./weather-reminders');\nconst { mediaUrl: validatedMediaUrl } = require('./media-url');\n\nfunction loadEnvFile(filePath) {\n"
+        "before": "const TurtleCare = require('../assets/care-records');\n",
+        "after": "const TurtleCare = require('../assets/care-records');\nconst { normalizeSettings: normalizeWeatherSettings, publicWeather, createWeatherProvider, createWeatherDispatcher } = require('./weather-reminders');\n"
       },
       {
-        "before": "const APNS_KEY_PATH = String(process.env.APNS_KEY_PATH || \"\").trim();\nconst APNS_KEY_BASE64 = String(process.env.APNS_KEY_BASE64 || \"\").trim();\nconst CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || \"Asia/Shanghai\").trim();\nconst MARKET_SALE_METHODS = [\"自有客户成交\", \"闲鱼成交\", \"壳友手账成交\", \"龟友手账成交\"];\nconst DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);\n\n",
-        "after": "const APNS_KEY_PATH = String(process.env.APNS_KEY_PATH || \"\").trim();\nconst APNS_KEY_BASE64 = String(process.env.APNS_KEY_BASE64 || \"\").trim();\nconst CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || \"Asia/Shanghai\").trim();\nconst weatherProvider = createWeatherProvider();\nconst weatherRequestLimits = new Map();\nconst MARKET_SALE_METHODS = [\"自有客户成交\", \"闲鱼成交\", \"壳友手账成交\", \"龟友手账成交\"];\nconst DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);\n\n"
+        "before": "const CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || \"Asia/Shanghai\").trim();\n",
+        "after": "const CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || \"Asia/Shanghai\").trim();\nconst weatherProvider = createWeatherProvider();\nconst weatherRequestLimits = new Map();\n"
       },
       {
         "before": "    };\n    try {\n      client = http2.connect(`https://${APNS_HOST}`);\n      if (payload.route === \"communityDaily\") client.setTimeout(10000, () => finish({ ok: false, reason: \"Daily push timeout\" }));\n      client.once(\"error\", error => finish({ ok: false, reason: error.message || \"APNs connection error\" }));\n      const request = client.request({\n        \":method\": \"POST\",\n",
@@ -49,8 +49,8 @@
         "after": "        <h2>二、权限说明</h2>\n        <ul>\n          <li>相机、相册：仅在你拍摄或选择图片、视频时使用。</li>\n          <li>位置：仅在你同意后读取用于城市级展示、筛选或选择温度提醒地点；拒绝后可手动搜索养龟地点，不影响其他基础记录功能。</li>\n          <li>通知：仅在你同意后用于消息提醒；拒绝后仍可在 App 内查看消息。</li>\n        </ul>\n\n"
       },
       {
-        "before": "            <tr><td>Apple Push Notification service（APNs）</td><td>在你授权通知后处理通知设备标识，用于发送聊天消息与护理提醒；不用于广告或画像。</td></tr>\n            <tr><td>阿里云短信服务（仅在启用短信验证时）</td><td>处理手机号与验证码发送/核验请求，用于注册、登录和账号安全；不用于营销。</td></tr>\n            <tr><td>龟友手账 API 服务器</td><td>由个人信息处理者运营，保存账号资料、业务记录、公开内容、聊天内容、举报记录及你主动上传的媒体，用于同步、展示、内容安全与故障恢复。</td></tr>\n          </tbody>\n        </table>\n        <p>如后续新增会接触个人信息的第三方服务、改变处理目的或发生跨境传输，我们会先更新本政策并在需要时取得你的单独同意。</p>\n",
-        "after": "            <tr><td>Apple Push Notification service（APNs）</td><td>在你授权通知后处理通知设备标识，用于发送聊天消息与护理提醒；不用于广告或画像。</td></tr>\n            <tr><td>阿里云短信服务（仅在启用短信验证时）</td><td>处理手机号与验证码发送/核验请求，用于注册、登录和账号安全；不用于营销。</td></tr>\n            <tr><td>龟友手账 API 服务器</td><td>由个人信息处理者运营，保存账号资料、业务记录、公开内容、聊天内容、举报记录及你主动上传的媒体，用于同步、展示、内容安全与故障恢复。</td></tr>\n            <tr><td>Apple Weather（WeatherKit，仅在使用温度提醒时）</td><td>在你单独同意后接收保留两位小数的所选地点坐标，用于天气预报；城市搜索在服务器本地进行，不向Apple发送手机号、账号资料、聊天或乌龟档案。关闭提醒后停止定时查询和推送。</td></tr>\n          </tbody>\n        </table>\n        <p>如后续新增会接触个人信息的第三方服务、改变处理目的或发生跨境传输，我们会先更新本政策并在需要时取得你的单独同意。</p>\n"
+        "before": "          </tbody>\n        </table>\n        <p>如后续新增会接触个人信息的第三方服务、改变处理目的或发生跨境传输，我们会先更新本政策并在需要时取得你的单独同意。</p>\n",
+        "after": "            <tr><td>Apple Weather（WeatherKit，仅在使用温度提醒时）</td><td>在你单独同意后接收保留两位小数的所选地点坐标，用于天气预报；城市搜索在服务器本地进行，不向Apple发送手机号、账号资料、聊天或乌龟档案。关闭提醒后停止定时查询和推送。</td></tr>\n          </tbody>\n        </table>\n        <p>如后续新增会接触个人信息的第三方服务、改变处理目的或发生跨境传输，我们会先更新本政策并在需要时取得你的单独同意。</p>\n"
       }
     ]
   },
@@ -59,12 +59,12 @@
     "patches": {
       "server/server.js": [
         {
-          "before": "const { createAlipayPurchases } = require('./alipay-team-purchases');\nconst { createBackupStorage } = require('./backup-storage');\nconst TurtleCare = require('../assets/care-records');\nconst { mediaUrl: validatedMediaUrl } = require('./media-url');\n\nfunction loadEnvFile(filePath) {\n",
-          "after": "const { createAlipayPurchases } = require('./alipay-team-purchases');\nconst { createBackupStorage } = require('./backup-storage');\nconst TurtleCare = require('../assets/care-records');\nconst { normalizeSettings: normalizeWeatherSettings, publicWeather, createWeatherProvider, createWeatherDispatcher } = require('./weather-reminders');\nconst { mediaUrl: validatedMediaUrl } = require('./media-url');\n\nfunction loadEnvFile(filePath) {\n"
+          "before": "const TurtleCare = require('../assets/care-records');\n",
+          "after": "const TurtleCare = require('../assets/care-records');\nconst { normalizeSettings: normalizeWeatherSettings, publicWeather, createWeatherProvider, createWeatherDispatcher } = require('./weather-reminders');\n"
         },
         {
-          "before": "const APNS_KEY_PATH = String(process.env.APNS_KEY_PATH || \"\").trim();\nconst APNS_KEY_BASE64 = String(process.env.APNS_KEY_BASE64 || \"\").trim();\nconst CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || \"Asia/Shanghai\").trim();\nconst MARKET_SALE_METHODS = [\"自有客户成交\", \"闲鱼成交\", \"壳友手账成交\", \"龟友手账成交\"];\nconst DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);\n\n",
-          "after": "const APNS_KEY_PATH = String(process.env.APNS_KEY_PATH || \"\").trim();\nconst APNS_KEY_BASE64 = String(process.env.APNS_KEY_BASE64 || \"\").trim();\nconst CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || \"Asia/Shanghai\").trim();\nconst weatherProvider = createWeatherProvider();\nconst weatherRequestLimits = new Map();\nconst MARKET_SALE_METHODS = [\"自有客户成交\", \"闲鱼成交\", \"壳友手账成交\", \"龟友手账成交\"];\nconst DEFAULT_ACCOUNT_AVATARS = Array.from({ length: 10 }, (_, index) => `/assets/default-avatars/avatar-${index + 1}.png`);\n\n"
+          "before": "const CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || \"Asia/Shanghai\").trim();\n",
+          "after": "const CARE_REMINDER_TIME_ZONE = String(process.env.CARE_REMINDER_TIME_ZONE || \"Asia/Shanghai\").trim();\nconst weatherProvider = createWeatherProvider();\nconst weatherRequestLimits = new Map();\n"
         },
         {
           "before": "    };\n    try {\n      client = http2.connect(`https://${APNS_HOST}`);\n      if (payload.route === \"communityDaily\") client.setTimeout(10000, () => finish({ ok: false, reason: \"Daily push timeout\" }));\n      client.once(\"error\", error => finish({ ok: false, reason: error.message || \"APNs connection error\" }));\n      const request = client.request({\n        \":method\": \"POST\",\n",
@@ -101,8 +101,8 @@
           "after": "        <h2>二、权限说明</h2>\n        <ul>\n          <li>相机、相册：仅在你拍摄或选择图片、视频时使用。</li>\n          <li>位置：仅在你同意后读取用于城市级展示、筛选或选择温度提醒地点；拒绝后可手动搜索养龟地点，不影响其他基础记录功能。</li>\n          <li>通知：仅在你同意后用于消息提醒；拒绝后仍可在 App 内查看消息。</li>\n        </ul>\n\n"
         },
         {
-          "before": "            <tr><td>Apple Push Notification service（APNs）</td><td>在你授权通知后处理通知设备标识，用于发送聊天消息与护理提醒；不用于广告或画像。</td></tr>\n            <tr><td>阿里云短信服务（仅在启用短信验证时）</td><td>处理手机号与验证码发送/核验请求，用于注册、登录和账号安全；不用于营销。</td></tr>\n            <tr><td>龟友手账 API 服务器</td><td>由个人信息处理者运营，保存账号资料、业务记录、公开内容、聊天内容、举报记录及你主动上传的媒体，用于同步、展示、内容安全与故障恢复。</td></tr>\n          </tbody>\n        </table>\n        <p>如后续新增会接触个人信息的第三方服务、改变处理目的或发生跨境传输，我们会先更新本政策并在需要时取得你的单独同意。</p>\n",
-          "after": "            <tr><td>Apple Push Notification service（APNs）</td><td>在你授权通知后处理通知设备标识，用于发送聊天消息与护理提醒；不用于广告或画像。</td></tr>\n            <tr><td>阿里云短信服务（仅在启用短信验证时）</td><td>处理手机号与验证码发送/核验请求，用于注册、登录和账号安全；不用于营销。</td></tr>\n            <tr><td>龟友手账 API 服务器</td><td>由个人信息处理者运营，保存账号资料、业务记录、公开内容、聊天内容、举报记录及你主动上传的媒体，用于同步、展示、内容安全与故障恢复。</td></tr>\n            <tr><td>和风天气（QWeather，仅在使用温度提醒时）</td><td>在你单独同意后处理搜索的城市名称或保留两位小数的城市坐标，用于地点查询及天气预报；不发送手机号、账号资料、聊天或乌龟档案。关闭提醒后停止定时查询和推送。</td></tr>\n          </tbody>\n        </table>\n        <p>如后续新增会接触个人信息的第三方服务、改变处理目的或发生跨境传输，我们会先更新本政策并在需要时取得你的单独同意。</p>\n"
+          "before": "          </tbody>\n        </table>\n        <p>如后续新增会接触个人信息的第三方服务、改变处理目的或发生跨境传输，我们会先更新本政策并在需要时取得你的单独同意。</p>\n",
+          "after": "            <tr><td>和风天气（QWeather，仅在使用温度提醒时）</td><td>在你单独同意后处理搜索的城市名称或保留两位小数的城市坐标，用于地点查询及天气预报；不发送手机号、账号资料、聊天或乌龟档案。关闭提醒后停止定时查询和推送。</td></tr>\n          </tbody>\n        </table>\n        <p>如后续新增会接触个人信息的第三方服务、改变处理目的或发生跨境传输，我们会先更新本政策并在需要时取得你的单独同意。</p>\n"
         }
       ]
     },
