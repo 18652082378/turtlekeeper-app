@@ -1,0 +1,118 @@
+/* Full application refinement. Native chat scrolling and page-transition shells
+   keep their existing geometry; content width is bounded inside the shell. */
+html .phone-shell .content:not(.community-chat-page) { box-sizing: border-box; width: 100%; max-width: 1000px; margin-inline: auto; }
+html .phone-shell .content > .page-intro { padding: 8px 2px 16px; border: 0; border-radius: 0; background: transparent !important; box-shadow: none; margin-bottom: 0; gap: 12px; }
+html .phone-shell .content > .page-intro .eyebrow { display: none; }
+html .phone-shell .content > .page-intro h2 { font-size: 21px !important; margin: 0 0 5px; overflow-wrap: anywhere; }
+html .phone-shell .content > .page-intro p { margin: 0; font-size: 13px; }
+html .phone-shell .content > .page-intro > div { min-width: 0; }
+html .phone-shell .content > .page-intro .round-action { flex-shrink: 0; width: 44px !important; height: 44px !important; border-radius: 12px; }
+
+/* The dashboard should expose actual records sooner. */
+html .phone-shell .home-redesign .home-hero { min-height: 0; padding: 16px 16px 30px; }
+html .phone-shell .home-redesign .home-hero h2 { font-size: 22px !important; }
+html .phone-shell .home-hero .hero-add { width: 44px; height: 44px; border-radius: 12px; }
+html .phone-shell .metric-strip.home-overview-metrics { margin: -16px 8px 12px; padding-block: 6px; }
+html .phone-shell .home-overview-metrics > div { min-height: 46px; }
+html .phone-shell .action-panel.care-action-panel.home-module-panel { margin-bottom: 12px; gap: 8px; }
+html .phone-shell .action-panel.care-action-panel.home-module-panel > .care-action { min-height: 66px !important; padding: 10px 12px !important; row-gap: 2px !important; }
+html .phone-shell .home-redesign .work-tasks { padding: 14px; margin-bottom: 12px; }
+html .phone-shell .home-redesign .work-task { padding-block: 9px; }
+
+/* Photo and key measurements belong on the same first screen. */
+html .phone-shell .detail-summary-card { position: relative; padding-right: 48px !important; }
+html .phone-shell .detail-summary-card .detail-more { min-width: 44px; min-height: 44px; }
+html .phone-shell .turtle-detail-hero.detail-photo-card { position: relative; margin-bottom: 12px; }
+html .phone-shell .turtle-detail-hero.detail-photo-card > img { width: 100%; height: 180px; max-height: 180px; object-fit: contain; background: var(--ui-raised); }
+.detail-photo-hint { position: absolute; right: 10px; bottom: 10px; padding: 4px 8px; border-radius: 8px; background: #17352cd9; color: #fff; font-size: 11px; pointer-events: none; }
+html .phone-shell .detail-grid-card { padding: 12px; }
+html .phone-shell .detail-grid-card > div { min-width: 0; padding: 10px 12px; }
+html .phone-shell .detail-grid-card strong { overflow-wrap: anywhere; }
+html .phone-shell .growth-filter-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+html .phone-shell .growth-filter-row > button { min-width: 0; min-height: 44px; padding: 8px 2px; font-size: 12px; }
+html .phone-shell .growth-history-delete { width: 44px; min-width: 44px; height: 44px; }
+.growth-list-status { display: flex; justify-content: space-between; gap: 8px; margin: 12px 2px; color: var(--ui-muted); font-size: 12px; }
+
+/* Publish controls stay prominent without a full-height promotional banner. */
+html .phone-shell .community-refined-page .community-invite { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 12px; padding: 14px 14px 0; margin-bottom: 12px; border-radius: 16px; }
+html .phone-shell .community-refined-page .community-invite-copy { grid-column: 1; min-width: 0; }
+html .phone-shell .community-refined-page .community-invite-eyebrow { display: none; }
+html .phone-shell .community-refined-page .community-invite h2 { margin: 0 0 4px; font-size: 18px; }
+html .phone-shell .community-refined-page .community-invite p { font-size: 11px; line-height: 1.6; }
+html .phone-shell .community-refined-page .community-invite-publish { grid-column: 2; grid-row: 1; align-self: center; min-height: 44px; padding: 10px 12px; font-size: 12px; border-radius: 12px; }
+html .phone-shell .community-refined-page .community-invite-publish > span { display: none; }
+html .phone-shell .community-refined-page .community-invite-shortcuts > button { min-height: 44px; justify-content: center; font-size: 11px; }
+html .phone-shell .community-refined-page .forum-circle-strip button { min-height: 44px; }
+html .phone-shell .community-refined-page .forum-sort-tabs button { min-height: 44px; }
+
+/* Product text gets the same surface and alignment as its photo. */
+html .phone-shell .market-grid { gap: 12px; }
+html .phone-shell .market-card-wrap { min-width: 0; }
+html .phone-shell .market-card { display: block; width: 100%; border: 1px solid var(--ui-line); border-radius: 14px !important; padding: 0; overflow: hidden; }
+html .phone-shell .market-card-photo { border-radius: 0; }
+html .phone-shell .market-card-body { padding: 10px 8px; }
+html .phone-shell .market-card-body > strong { font-size: 14px; line-height: 1.5; }
+html .phone-shell .market-stage-tabs > button { min-height: 44px; }
+html .phone-shell .market-card-seller { gap: 4px; flex-wrap: wrap; }
+html .phone-shell .market-card-seller > em { margin-left: 0; }
+
+/* Inbox boundaries remain compatible with horizontal conversation actions. */
+html .phone-shell .message-page { padding: 14px 14px 24px !important; }
+html .phone-shell .message-activity-summary .message-activity-row { min-height: 76px; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 10px; padding: 12px; }
+html .phone-shell .message-activity-row .message-activity-icon { width: 40px; height: 40px; }
+html .phone-shell .message-activity-icon svg { width: 24px; height: 24px; }
+html .phone-shell .message-list-heading { margin: 12px 0 8px; padding: 0 2px; min-height: 24px; background: transparent !important; }
+html .phone-shell .message-friend-list { border: 1px solid var(--ui-line); border-radius: 16px; overflow: hidden; }
+
+/* Frequent personal actions precede appearance settings. */
+html .phone-shell .fresh-profile h2 { font-size: 22px !important; overflow-wrap: anywhere; }
+html .phone-shell .space-profile-card { padding-block: 20px; }
+html .phone-shell .account-brief > div { padding-block: 10px; }
+html .phone-shell .space-social-links { padding: 10px 4px; }
+html .phone-shell .mine-row { min-height: 54px; padding-block: 12px; }
+html .phone-shell .theme-row .theme-dot { min-height: 44px; }
+html .phone-shell .settings-card details > summary { min-height: 44px; padding-block: 10px; }
+html .phone-shell .report-profit-card { padding: 18px; background: var(--ui-primary-fill) !important; color: #fff !important; }
+html .phone-shell .report-profit-card.negative { background: #964856 !important; }
+html .phone-shell .report-profit-card :is(strong, span, b, small) { color: inherit !important; }
+html .phone-shell .report-profit-card::after, html .phone-shell .report-intro::after { display: none; }
+html[data-theme-color="dark"] .phone-shell .report-profit-card { background: var(--ui-surface) !important; color: var(--ui-text) !important; }
+html .phone-shell .report-profit-copy > strong { font-size: clamp(24px, 6vw, 32px); overflow-wrap: anywhere; }
+html .phone-shell .report-section-head { flex-wrap: wrap; gap: 8px; }
+html .phone-shell .species-search-card { padding: 12px; }
+html .phone-shell .content.species-page { padding-right: 56px !important; }
+html .phone-shell .species-alpha-nav { top: 90px; bottom: auto; transform: none; align-content: start; grid-auto-rows: 44px; right: max(10px, calc((100vw - 1000px) / 2 + 10px)); width: 32px; max-height: calc(100dvh - 110px); overflow-y: auto; overflow-x: hidden; }
+html .phone-shell .species-row { display: grid; grid-template-columns: 54px minmax(0, 1fr) 48px; gap: 10px; align-items: center; padding: 12px; min-height: 80px; }
+html .phone-shell .species-row > img { grid-column: 1; grid-row: 1; width: 54px; height: 54px; }
+html .phone-shell .species-row > div { grid-column: 2; grid-row: 1; min-width: 0; }
+html .phone-shell .species-row strong { display: block; font-size: 14px; overflow-wrap: anywhere; }
+html .phone-shell .species-row .species-add { grid-column: 3; grid-row: 1; width: 48px; min-height: 44px; padding: 8px 2px; font-size: 12px; }
+html .phone-shell .species-alpha-nav a, html .phone-shell .species-alpha-nav button { min-width: 32px; min-height: 44px; }
+html .phone-shell .community-search-shell button[data-community-search-clear] { width: 44px; height: 44px; }
+/* Search focus follows the rounded control boundary rather than the inner input. */
+html :is(.phone-shell, .modal-overlay, .archive-directory-dialog, [role="dialog"]) :is(.market-search-wrap, .community-search-shell > label, .directory-search, .market-species-search-row):focus-within,
+html .phone-shell .content :is(input.fresh-search, input[type="search"]):focus {
+  border-color: #1f7961 !important; outline: none !important; box-shadow: inset 0 0 0 1px #1f7961 !important;
+}
+html :is(.phone-shell, .modal-overlay, .archive-directory-dialog, [role="dialog"]) :is(.market-search-wrap, .community-search-shell > label, .directory-search, .market-species-search-row) input[type="search"]:focus {
+  border: 0 !important; outline: none !important; box-shadow: none !important; background: transparent !important;
+}
+html[data-theme-color="dark"] .phone-shell .content :is(input.fresh-search, input[type="search"]):focus,
+html[data-theme-color="dark"] :is(.phone-shell, .modal-overlay, .archive-directory-dialog, [role="dialog"]) :is(.market-search-wrap, .community-search-shell > label, .directory-search, .market-species-search-row):focus-within {
+  border-color: #6bd0aa !important; box-shadow: inset 0 0 0 1px #6bd0aa !important;
+}
+html[data-theme-color="dark"] :is(.phone-shell, .modal-overlay, .archive-directory-dialog, [role="dialog"]) :is(.market-search-wrap, .community-search-shell > label, .directory-search, .market-species-search-row) input[type="search"]:focus { box-shadow: none !important; }
+html .phone-shell .team-space .ts-panel { padding: 16px; margin-block: 12px; }
+html .phone-shell .team-space .ts-workhero { padding: 18px; }
+html .phone-shell .team-space .ts-tabs { gap: 6px; margin-bottom: 14px; }
+html .phone-shell .team-space .ts-tabs > button { min-height: 56px; }
+@media (min-width: 700px) {
+  html .phone-shell .turtle-detail-hero.detail-photo-card > img { height: 240px; max-height: 240px; }
+  html .phone-shell .market-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 360px) {
+  html .phone-shell .community-refined-page .community-invite { grid-template-columns: minmax(0, 1fr) 92px; gap: 8px; padding-inline: 12px; }
+  html .phone-shell .community-refined-page .community-invite h2 { font-size: 16px; }
+  html .phone-shell .community-refined-page .community-invite-publish { padding-inline: 6px; font-size: 11px; }
+  html .phone-shell .community-refined-page .community-invite-publish svg { display: none; }
+}

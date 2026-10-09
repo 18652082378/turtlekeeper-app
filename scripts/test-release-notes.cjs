@@ -21,6 +21,19 @@ const root = path.resolve(__dirname, '..');
     finally { await ctx.close(); }
   }
   try {
+    await check('upgrading from 1.1.6 shows 1.1.7 notes after the ad, once only', async (page, setup) => {
+      await setup({ seen: '1.1.6' });
+      await page.evaluate(() => { showTradeIntro(); TurtleReleaseNotes.start({ version: '1.1.7' }); });
+      assert.equal(await page.locator('.release-notes-dialog').count(), 0);
+      await page.locator('.trade-intro-skip').click(); await page.waitForSelector('.release-notes-dialog');
+      const content = await page.locator('.release-notes-dialog').innerText();
+      assert.match(content, /龟友手账 1\.1\.7/); assert.match(content, /养护记录更清晰/); assert.match(content, /•••/);
+      assert.doesNotMatch(content, /启动广告每天一次/);
+      await page.getByRole('button', { name: '我知道了' }).click();
+      assert.equal(await page.evaluate(() => localStorage.getItem('turtlekeeper-release-notes-seen-version')), '1.1.7');
+      await setup(); await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.1.7' }));
+      assert.equal(await page.locator('.release-notes-dialog').count(), 0);
+    });
     await check('startup advertisement finishes before release notes, acknowledgment persists across restart', async (page, setup) => {
       await setup({ seen: '1.1.5' });
       await page.evaluate(() => { showTradeIntro(); TurtleReleaseNotes.start({ version: '1.1.6' }); });

@@ -383,7 +383,8 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       assert.equal(await page.evaluate(() => document.documentElement.classList.contains('keyboard-open')), false);
     });
     await check('form rerender preserves typing and keyboard detection', async page => {
-      await page.locator('[data-market-search]').fill('未提交搜索');
+      await page.locator('[data-open-search="market"]').click();
+      await page.locator('[data-workspace-search]').fill('未提交搜索');
       await page.evaluate(() => syncMobileKeyboardUI());
       await page.setViewportSize({ width: 390, height: 500 });
       await page.evaluate(() => {
@@ -391,7 +392,7 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
         setState({}, { skipSave: true, preserveInputValues: true });
       });
       await page.evaluate(() => new Promise(requestAnimationFrame));
-      assert.equal(await page.locator('[data-market-search]').inputValue(), '未提交搜索');
+      assert.equal(await page.locator('[data-workspace-search]').inputValue(), '未提交搜索');
       assert.equal(await page.evaluate(() => document.documentElement.classList.contains('keyboard-open')), true);
     });
     await check('ordinary pull refresh still starts and finishes', async page => {

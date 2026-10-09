@@ -55,7 +55,7 @@ function careFilterMarkup() {
 
 function carePlansMarkup() {
   const plans = state.carePlans || [];
-  return `<details class="work-plans"><summary>常用喂食方案 <small>${plans.length} 个</small></summary>
+  return `<details class="work-plans"><summary>喂食方案 <small>${plans.length} 个</small></summary>
     <p class="work-hint">填写喂食内容后可存为方案，使用时先确认再保存记录。</p>
     ${plans.map(plan => `<article class="work-plan"><div><strong>${escapeHtml(plan.name)}</strong><small>${plan.turtleRefs.length} 只龟 · ${escapeHtml(plan.poolName || '未关联龟池')}</small></div><button type="button" data-use-care-plan="${escapeHtml(plan.id)}">使用</button><button type="button" data-delete-care-plan="${escapeHtml(plan.id)}" aria-label="删除方案 ${escapeHtml(plan.name)}">删除</button></article>`).join('') || '<p class="work-hint">还没有方案，可在“记喂食”中创建。</p>'}</details>`;
 }
@@ -196,7 +196,9 @@ function bindWorkspaceUI() {
       button.type = 'button'; button.className = 'work-save-status'; button.dataset.accountSaveStatus = '';
       button.setAttribute('aria-label', '查看保存和同步状态');
       button.onclick = () => setState({ page: 'sync' });
-      main.prepend(button);
+      const inlineStatus = main.querySelector('.care-workbench .workspace-heading');
+      if (inlineStatus) inlineStatus.append(button);
+      else main.prepend(button);
     }
     updateAccountSaveStatus();
   }
@@ -211,7 +213,7 @@ function bindWorkspaceUI() {
     careHistoryFilter = { ...filter, turtle: '' };
     careHistoryLimit = 40; setState({ careDraft: readCareDraft() }, { skipCloud: true });
   });
-  document.querySelector('[data-reset-care-filter]')?.addEventListener('click', () => { careHistoryFilter = {}; careHistoryLimit = 40; setState({ careDraft: readCareDraft() }, { skipCloud: true }); });
+  document.querySelectorAll('[data-reset-care-filter]').forEach(button => button.addEventListener('click', () => { careHistoryFilter = {}; careHistoryLimit = 40; setState({ careDraft: readCareDraft() }, { skipCloud: true }); }));
   document.querySelector('[data-more-care]')?.addEventListener('click', () => { careHistoryLimit += 40; setState({ careDraft: readCareDraft() }, { skipCloud: true }); });
   document.querySelector('[data-save-care-plan]')?.addEventListener('click', saveCarePlan);
   document.querySelectorAll('[data-use-care-plan]').forEach(button => button.addEventListener('click', () => {

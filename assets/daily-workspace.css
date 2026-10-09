@@ -1,0 +1,110 @@
+/* Daily work: compact records, explicit actions and readable desktop columns.
+   This layer does not change native scroll, viewport or edge-back geometry. */
+html .phone-shell .workspace-page { box-sizing: border-box; width: 100%; max-width: 1000px; margin-inline: auto; }
+html .phone-shell .workspace-page > .page-intro { display: flex; justify-content: space-between; gap: 16px; padding: 8px 2px 16px; margin-bottom: 0; border: 0; border-radius: 0; background: transparent !important; box-shadow: none; }
+html .phone-shell .workspace-page > .page-intro > div { min-width: 0; }
+html .phone-shell .workspace-page > .page-intro .eyebrow { display: none; }
+html .phone-shell .workspace-page > .page-intro h2 { margin: 0 0 5px; font-size: 21px !important; }
+html .phone-shell .workspace-page > .page-intro p { margin: 0; font-size: 13px; line-height: 1.6; }
+html .phone-shell .workspace-page > .page-intro .round-action { flex-shrink: 0; width: 44px; height: 44px; font-size: 26px; border-radius: 14px; }
+.workspace-add { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 44px; padding: 8px 14px; border-radius: 12px; color: #fff; background: var(--ui-primary-fill); font-size: 14px; font-weight: 600; }
+.workspace-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.workspace-heading h2 { margin: 0; font-size: 21px; line-height: 1.4; }
+.workspace-heading p { margin: 4px 0 0; font-size: 13px; line-height: 1.6; color: var(--ui-muted); }
+.care-workbench { padding: 6px 2px 0; margin-bottom: 12px; }
+html .phone-shell .care-workbench { background: transparent !important; }
+html .phone-shell .care-workbench .workspace-heading { background: transparent !important; }
+html .phone-shell .care-workbench .work-save-status { flex-shrink: 0; width: auto; min-width: 90px; min-height: 44px; margin: 0; padding: 0; font-size: 11px; }
+html .phone-shell .care-workbench .care-quick-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 16px 0 0; }
+html .phone-shell .care-workbench .care-quick-actions button { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 12px 4px; min-height: 48px; border: 1px solid var(--ui-line); border-radius: 12px; color: var(--ui-accent); background: var(--ui-surface); font-size: 14px; }
+.care-quick-actions svg { flex-shrink: 0; width: 18px; height: 18px; }
+.care-utilities { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 10px; margin-bottom: 18px; }
+.care-utilities > :only-child, .care-utilities > details[open] { grid-column: 1 / -1; }
+html .phone-shell .care-utilities :is(.work-plans, .work-filters) { margin: 0; padding: 0 14px; border-radius: 14px !important; box-shadow: none !important; }
+.care-utilities :is(.work-plans, .work-filters) > summary { box-sizing: border-box; min-height: 48px; padding-block: 14px; font-size: 13px; line-height: 20px; }
+.care-utilities .work-fields { padding-bottom: 14px; }
+html .phone-shell .care-history .section-title { margin: 0 0 12px; }
+html .phone-shell .care-date { margin: 0 0 8px; gap: 8px; font-weight: 600; }
+.care-date small { margin-left: auto; font-size: 11px; font-weight: 400; }
+.care-day-group + .care-day-group { margin-top: 18px; }
+html .phone-shell .care-day-group { background: transparent !important; }
+html .phone-shell .care-day-records { border: 1px solid var(--ui-line); border-radius: 16px; background: var(--ui-surface) !important; }
+html .phone-shell .care-day-records .care-record { position: relative; display: grid; grid-template-columns: 32px minmax(0, 1fr) 36px; column-gap: 10px; padding: 14px 12px; margin: 0; border: 0; border-radius: 0 !important; background: transparent !important; }
+html .phone-shell .care-day-records .care-record + .care-record { border-top: 1px solid var(--ui-line); }
+.care-record-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; color: var(--ui-accent); background: var(--ui-raised); }
+.care-record-icon svg { width: 21px; height: 21px; }
+.care-record-main { min-width: 0; }
+html .phone-shell .care-record-heading { display: block; }
+html .phone-shell .care-record-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 8px; }
+html .phone-shell .care-record-title strong { font-size: 15px; line-height: 1.4; }
+html .phone-shell .care-record .care-record-pool { margin: 6px 0 0; font-size: 12px; line-height: 1.6; color: var(--ui-muted); overflow-wrap: anywhere; }
+html .phone-shell .care-record .care-record-body { display: block; margin-top: 6px; }
+html .phone-shell .care-record-body .care-record-turtles { font-size: 12px; line-height: 1.7; }
+html .phone-shell .care-record .care-turtle-summary { margin: 0; }
+html .phone-shell .care-record .care-turtle-summary strong { font-size: 12px; }
+html .phone-shell .care-record .care-record-note { margin: 6px 0 0; color: var(--ui-text); font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+html .phone-shell .care-record footer { display: flex; justify-content: flex-start; flex-wrap: wrap; gap: 4px 10px; margin: 8px 0 0; padding: 0; border: 0; }
+html .phone-shell .care-record footer:not(:has(button)) { display: none; }
+html .phone-shell .care-record footer button { min-height: 44px; padding: 8px 0; font-size: 12px; }
+html .phone-shell .care-record footer .care-repeat { padding: 8px 12px; border: 1px solid var(--ui-line); border-radius: 10px; background: var(--ui-raised); }
+.record-menu { position: relative; align-self: start; margin-top: -6px; }
+.record-menu > summary { display: grid; place-items: center; width: 44px; height: 44px; margin-left: -4px; border-radius: 10px; list-style: none; cursor: pointer; color: var(--ui-muted); font-size: 15px; letter-spacing: 2px; }
+.record-menu > summary::-webkit-details-marker { display: none; }
+.record-menu > summary::marker { content: ''; }
+.record-menu[open] { z-index: 20; }
+.record-menu[open] > summary { color: var(--ui-accent); background: var(--ui-raised); }
+.record-menu-panel { position: absolute; z-index: 20; top: 44px; right: 0; width: 136px; padding: 4px; border: 1px solid var(--ui-line); border-radius: 12px; background: var(--ui-surface); box-shadow: 0 8px 24px #10281e20; }
+.record-menu.opens-up .record-menu-panel { top: auto; bottom: 44px; }
+.record-menu-panel button { box-sizing: border-box; display: block; width: 100%; min-height: 44px; padding: 10px 12px; border-radius: 8px; text-align: left; color: var(--ui-text); background: transparent; font-size: 14px; }
+.record-menu-panel button:active { background: var(--ui-raised); }
+.record-menu-panel .danger-link { color: var(--ui-danger); }
+html .phone-shell .reminders-page .memo-tabs { padding: 4px; margin: 0 0 14px; gap: 4px; border: 1px solid var(--ui-line); border-radius: 14px; background: var(--ui-raised); box-shadow: none; }
+html .phone-shell .reminders-page .memo-tabs .tab { min-width: 0; min-height: 40px; border-radius: 10px; font-size: 13px; color: var(--ui-muted); background: transparent; box-shadow: none; }
+html .phone-shell .reminders-page .memo-tabs .tab.active { background: var(--ui-surface); color: var(--ui-accent); font-weight: 650; }
+html .phone-shell .reminders-page .memo-row { position: relative; display: grid; grid-template-columns: 64px minmax(0, 1fr) 36px; align-items: start; gap: 12px; padding: 16px 12px; margin-bottom: 10px; }
+.memo-time { display: grid; align-content: center; gap: 4px; min-height: 52px; border-right: 1px solid var(--ui-line); padding-right: 10px; }
+.memo-time strong { font-size: 17px; font-variant-numeric: tabular-nums; color: var(--ui-accent); }
+.memo-time span { color: var(--ui-muted); font-size: 11px; }
+.memo-main { min-width: 0; }
+.memo-main > strong { font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+html .phone-shell .memo-main p { margin: 5px 0; font-size: 13px; line-height: 1.6; color: var(--ui-text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.memo-main small { display: block; margin-top: 5px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.workspace-empty { display: grid; justify-items: center; align-content: center; gap: 12px; min-height: 230px; padding: 28px 20px; border: 1px dashed var(--ui-line); border-radius: 16px; text-align: center; background: var(--ui-surface); }
+.workspace-empty-icon { display: grid; place-items: center; width: 48px; height: 48px; color: var(--ui-accent); border-radius: 14px; background: var(--ui-raised); }
+.workspace-empty-icon svg { width: 26px; height: 26px; }
+.workspace-empty strong { font-size: 16px; }
+.workspace-empty p { max-width: 34em; margin: 0; font-size: 13px; line-height: 1.7; color: var(--ui-muted); }
+.workspace-empty button { min-height: 44px; margin-top: 4px; }
+html .phone-shell .ledger-workspace .ledger-profit-card { padding: 16px; margin-bottom: 12px; min-height: 0; }
+html .phone-shell .ledger-workspace .ledger-summary > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 8px 6px; min-width: 0; min-height: 0; padding: 12px; }
+html .phone-shell .ledger-workspace .ledger-summary > div > span { margin: 0 !important; }
+html .phone-shell .ledger-workspace .ledger-summary > div > small { grid-column: 2; grid-row: 1; margin: 0; font-size: 10px; }
+html .phone-shell .ledger-workspace .ledger-summary > div > strong { grid-column: 1 / -1; margin: 0; white-space: normal; }
+html .phone-shell .ledger-workspace .ledger-summary { margin-bottom: 12px; background: transparent !important; }
+html .phone-shell .ledger-workspace .ledger-summary-value { flex-wrap: wrap; overflow-wrap: anywhere; font-size: 19px; }
+html .phone-shell .ledger-workspace .ledger-command-grid[aria-label="新增账本记录"] { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+html .phone-shell .ledger-workspace .ledger-command-grid[aria-label="新增账本记录"] button { padding: 8px 2px; height: auto; min-height: 44px; font-size: 12px; }
+html .phone-shell .ledger-workspace .memo-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; padding: 4px; margin-bottom: 12px; border: 1px solid var(--ui-line); border-radius: 14px; background: var(--ui-raised); box-shadow: none; }
+html .phone-shell .ledger-workspace .memo-tabs .tab { min-width: 0; min-height: 40px; padding-inline: 2px; border-radius: 10px; font-size: 12px; color: var(--ui-muted); background: transparent; box-shadow: none; }
+html .phone-shell .ledger-workspace .memo-tabs .tab.active { background: var(--ui-surface); color: var(--ui-accent); font-weight: 650; }
+html .phone-shell .workspace-page :is(button, summary):focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+html .phone-shell .workspace-page .work-save-status { height: 30px; line-height: 1.4; }
+html .phone-shell .workspace-page .care-tabs button { min-height: 44px; }
+html .phone-shell :is(.reminders-page, .ledger-workspace) .memo-tabs .tab { min-height: 44px; }
+@media (max-width: 360px) {
+  .care-workbench { padding-inline: 0; }
+  html .phone-shell .care-workbench .care-quick-actions button { font-size: 13px; }
+  html .phone-shell .care-day-records .care-record { grid-template-columns: 28px minmax(0, 1fr) 32px; column-gap: 8px; padding-inline: 10px; }
+  .care-record-icon { width: 28px; height: 30px; }
+  .record-menu > summary { margin-left: -8px; }
+  html .phone-shell .reminders-page .memo-row { grid-template-columns: 56px minmax(0, 1fr) 32px; gap: 8px; padding-inline: 10px; }
+  .memo-time strong { font-size: 16px; }
+}
+@media (min-width: 700px) {
+  .care-utilities { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .care-utilities > :only-child { grid-column: 1 / -1; }
+  html .phone-shell .care-record-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
+  html .phone-shell .care-day-records .care-record { grid-template-columns: 36px minmax(0, 1fr) 40px; padding: 16px; }
+  html .phone-shell .care-workbench .care-quick-actions button { gap: 10px; min-height: 48px; }
+  html .phone-shell .ledger-workspace .ledger-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}

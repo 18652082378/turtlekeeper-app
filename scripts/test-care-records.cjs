@@ -137,6 +137,7 @@ async function main() {
     await page.waitForFunction(() => state.careRecords.length === 1);
     assert.match(await page.locator('.care-record').innerText(), /喂食[\s\S]*1号苗池[\s\S]*龟粮/);
     assert.match(await page.locator('.care-record-turtles').innerText(), /关联 2 只.*小果.*小红/);
+    await page.locator('.care-record .record-menu > summary').click();
     await page.locator('[data-edit-care]').click();
     assert.equal(await page.locator('[data-care-remove-turtle]').count(), 2);
     await page.locator('#careForm .archive-directory-trigger').click();
@@ -175,6 +176,7 @@ async function main() {
     await page.locator('[data-care-picker]').click();
     await page.locator('[data-cancel-care]').click();
     // Editing a historical record must not recreate a deleted suggestion.
+    await page.locator('.care-record').filter({ hasText: '第二次记录' }).locator('.record-menu > summary').click();
     await page.locator('.care-record').filter({ hasText: '第二次记录' }).locator('[data-edit-care]').click();
     await page.locator('[name="note"]').fill('修改后的说明');
     await page.getByRole('button', { name: '保存修改', exact: true }).click();
@@ -207,6 +209,7 @@ async function main() {
     assert.equal(await page.locator('.care-record').count(), 4);
     assert.equal(await page.evaluate(() => state.careCustomItems.length), 0);
     assert.match(await page.locator('.care-record-turtles').innerText(), /小果/);
+    await page.locator('.care-record').filter({ hasText: '龟粮，食欲正常' }).locator('.record-menu > summary').click();
     await page.locator('.care-record').filter({ hasText: '龟粮，食欲正常' }).locator('[data-edit-care]').click();
     assert.equal(await page.locator('[data-care-remove-turtle]').count(), 2, 'deleted archives keep their historical links');
     await page.locator('#careForm .archive-directory-trigger').click();
@@ -233,6 +236,7 @@ async function main() {
     // Deleting the fixed options is blocked at the handler as well as the UI.
     await page.evaluate(() => { deleteCareChoice('feeding'); deleteCareChoice('water'); });
     assert.equal(await page.evaluate(() => TurtleCare.builtins.length), 2);
+    await page.locator('.care-record').filter({ hasText: '龟粮，食欲正常' }).locator('.record-menu > summary').click();
     await page.locator('.care-record').filter({ hasText: '龟粮，食欲正常' }).locator('[data-delete-care]').click();
     assert.equal(await page.evaluate(() => state.careRecords.some(r => r.note === '龟粮，食欲正常')), false);
     // Repeat a bulk feeding without changing its original content or timestamp.
@@ -262,13 +266,15 @@ async function main() {
     for (const width of [320, 390, 1280]) {
       await page.setViewportSize({ width, height: 844 });
       const buttons = repeatedCard.locator('footer button');
-      const boxes = await Promise.all([0, 1, 2].map(i => buttons.nth(i).boundingBox()));
-      assert.ok(boxes.every(box => Math.abs(box.y - boxes[0].y) < 2), `actions share one row at ${width}`);
+      const boxes = await Promise.all(Array.from({ length: await buttons.count() }, (_, i) => buttons.nth(i).boundingBox()));
+      assert.ok(boxes.every(box => box.height >= 44 && box.x >= 0 && box.x + box.width <= width), `actions remain usable at ${width}`);
+      assert.ok(boxes.length === 2 && (boxes[0].x + boxes[0].width <= boxes[1].x + 1 || boxes[0].y + boxes[0].height <= boxes[1].y + 1), `actions do not overlap at ${width}`);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await repeatedCard.scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(root, 'output/care-repeat-record.png'), animations: 'disabled' });
+    await repeatedCard.locator('.record-menu > summary').click();
     await repeatedCard.locator('[data-edit-care]').click();
     await page.locator('[name="note"]').fill('修改新记录');
     await page.getByRole('button', { name: '保存修改', exact: true }).click();
@@ -277,7 +283,9 @@ async function main() {
     const savedRepeat = (await post('/api/account/load', auth)).user.data.careRecords.find(r => r.id === repeated.id);
     assert.equal(savedRepeat.createdAt, repeated.createdAt);
     assert.deepEqual(savedRepeat.turtleRefs, original.turtleRefs);
+    await page.locator(`[data-delete-care="${repeated.id}"]`).locator('xpath=ancestor::details').locator('summary').click();
     await page.locator(`[data-delete-care="${repeated.id}"]`).click();
+    await page.locator(`[data-delete-care="${original.id}"]`).locator('xpath=ancestor::details').locator('summary').click();
     await page.locator(`[data-delete-care="${original.id}"]`).click();
     assert.match(await page.evaluate(() => careRecordTime({ createdAt: '' })), /记录时间未保存/);
     // Plans are account data, and survive old clients which omit the collection.

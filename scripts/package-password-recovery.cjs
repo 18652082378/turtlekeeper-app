@@ -1,0 +1,12 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),vm=require('node:vm');
+const {execFileSync}=require('node:child_process');
+const root=path.resolve(__dirname,'..'),out=path.join(root,'deploy/patches'),name='turtlekeeper-password-recovery.tar.gz';
+fs.mkdirSync(out,{recursive:true});
+for(const file of ['server/password-recovery.js','scripts/deploy-password-recovery.cjs'])new vm.Script(fs.readFileSync(path.join(root,file),'utf8'));
+const manifest=JSON.parse(fs.readFileSync(path.join(__dirname,'password-recovery-server-patch.json'),'utf8'));
+const hash=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,'server/password-recovery.js'))).digest('hex');
+if(hash!==manifest.moduleHash)throw Error('Module hash mismatch');
+execFileSync('tar',['-czf',path.join(out,name),'-C',root,'server/password-recovery.js','scripts/password-recovery-server-patch.json','scripts/deploy-password-recovery.cjs'],{windowsHide:true});
+fs.writeFileSync(path.join(out,name+'.sha256'),crypto.createHash('sha256').update(fs.readFileSync(path.join(out,name))).digest('hex')+'  '+name+'\n');
+console.log('Prepared '+path.join(out,name));

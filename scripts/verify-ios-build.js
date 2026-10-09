@@ -30,6 +30,7 @@ assert.ok(versions.length && versions.every(value => value === version), "Debug/
 assert.ok(builds.length && builds.every(value => value === builds[0]), "Debug/Release build numbers must match");
 for (const file of ["config.js", "www/config.js"]) {
   assert.equal(Number(read(file).match(/TURTLE_APP_BUILD\s*=\s*(\d+)/)?.[1]), builds[0], `${file} build number differs from Xcode`);
+  assert.equal(read(file).match(/TURTLE_APP_VERSION\s*=\s*["']([^"']+)/)?.[1], version, `${file} update notes version differs from package.json`);
 }
 function filesUnder(folder) {
   return fs.readdirSync(path.join(root, folder), { withFileTypes: true }).flatMap(item => {

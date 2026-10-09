@@ -29,6 +29,10 @@ async function main() {
       function patchSystemAnnouncementOverlay(){}
       function savedMarketListingIds(){return []} function hasCloudSession(){return true} function marketAuthPayload(x){return x}
       function normalizeMarketListings(x){return x} function normalizeAccountData(x){return x} function marketRegionCities(){return []}
+      // This harness isolates navigation DOM/scroll restoration; filtering and
+      // ranking are covered by the full-app market search tests.
+      function marketSearchResultListings(){return state.marketListings || []}
+      function marketListingMediaItems(){return []}
       async function apiPost(){return {listings:[{id:'0',title:'updated'}],myListings:[]}}
       function bindEvents(){document.querySelector('[data-back]')?.addEventListener('click',()=>navigateBack())}
       function render(){

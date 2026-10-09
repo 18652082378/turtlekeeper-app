@@ -1,0 +1,50 @@
+html .phone-shell .search-page-entry { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 46px; padding: 0 12px; border: 1px solid var(--ui-line); border-radius: 13px !important; background: var(--ui-surface); color: var(--ui-muted); text-align: left; box-shadow: none; }
+.search-page-entry > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.search-page-entry > svg, .search-workspace-control > svg, .search-suggestion-list svg { width: 19px; height: 19px; flex: 0 0 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+/* Keep each feed's search entry attached to its title, outside animated content. */
+html .phone-shell .feed-search-dock { position: fixed; top: var(--fixed-topbar-height, 78px); left: 50%; transform: translateX(-50%); z-index: 80; box-sizing: border-box; width: min(100vw, 1000px); height: 75px; display: flex; align-items: center; margin: 0; padding: 12px 14px; background: var(--ui-page); border-bottom: 1px solid var(--ui-line); }
+html .phone-shell .content.feed-search-content { margin-top: var(--fixed-topbar-height, 78px) !important; padding-top: 91px !important; }
+html .phone-shell .market-results-search-dock { top: 0; height: calc(75px + max(env(safe-area-inset-top), 16px)); padding-top: calc(12px + max(env(safe-area-inset-top), 16px)); gap: 8px; }
+html .phone-shell .content.market-search-results-content { margin-top: 0 !important; padding-top: calc(91px + max(env(safe-area-inset-top), 16px)) !important; }
+html .phone-shell .market-results-search-dock .search-page-entry { flex: 1; min-width: 0; }
+.market-search-exit { display: flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; height: 46px; padding: 0; background: transparent; color: var(--ui-accent); }
+.market-search-exit svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* Match the fixed navigation's safe-area height; only discovery/results scroll. */
+html .phone-shell .content.search-workspace { margin-top: var(--fixed-topbar-height, 78px) !important; padding: 86px 14px max(32px, calc(env(safe-area-inset-bottom, 0px) + 16px)) !important; }
+.search-workspace-form { position: fixed; top: var(--fixed-topbar-height, 78px); left: 50%; transform: translateX(-50%); z-index: 80; box-sizing: border-box; width: min(100vw, 1000px); display: flex; align-items: center; gap: 10px; margin: 0; padding: 16px 14px 12px; background: var(--ui-page); border-bottom: 1px solid var(--ui-line); }
+.search-workspace-control { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; height: 46px; padding: 0 11px; border: 1px solid var(--ui-line); border-radius: 13px; background: var(--ui-surface); color: var(--ui-muted); }
+html .phone-shell .search-workspace-control:focus-within { border-color: #1f7961 !important; box-shadow: inset 0 0 0 1px #1f7961 !important; }
+html .phone-shell .search-workspace-form .search-workspace-control input[type="search"] { min-width: 0; flex: 1; width: 100%; height: 44px; padding: 0; border: 0 !important; border-radius: 0; background: transparent !important; color: var(--ui-text); font-size: 16px; outline: none !important; box-shadow: none !important; }
+.search-workspace-control input::-webkit-search-cancel-button { display: none; }
+.search-workspace-control > button { flex: 0 0 44px; width: 44px; min-height: 44px; padding: 0; background: transparent; color: var(--ui-muted); font-size: 22px; }
+.search-workspace-control > button[hidden] { display: none; }
+.search-workspace-submit { min-width: 44px; min-height: 46px; padding: 0 2px; background: transparent; color: var(--ui-accent); font-size: 15px; font-weight: 700; }
+.search-workspace :is(section > header) { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.search-workspace h2 { font-size: 16px; margin: 0; color: var(--ui-text); }
+.search-workspace header p { margin: 6px 0 0; font-size: 12px; line-height: 1.6; color: var(--ui-muted); }
+.search-workspace :is(.search-clear-history, .search-refresh) { min-width: 44px; min-height: 44px; padding: 0 4px; flex-shrink: 0; font-size: 13px; background: transparent; color: var(--ui-accent); }
+.search-history { margin-bottom: 28px; }
+.search-history-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.search-history-chips > button { max-width: 100%; min-height: 44px; padding: 10px 13px; border-radius: 12px; background: var(--ui-raised); color: var(--ui-text); font-size: 13px; overflow-wrap: anywhere; text-align: left; }
+.search-empty-history { margin: 0; color: var(--ui-muted); font-size: 13px; }
+.search-species-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px 10px; }
+.search-species-card { min-width: 0; padding: 0; text-align: left; background: transparent; color: var(--ui-text); }
+.search-species-card > img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; border-radius: 12px; background: var(--ui-raised); }
+.search-species-card > strong { display: block; margin-top: 7px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.search-species-card > small { display: block; margin-top: 3px; color: var(--ui-muted); font-size: 11px; }
+.search-suggestion-list { display: grid; }
+.search-suggestion-list > button { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 10px 2px; border-bottom: 1px solid var(--ui-line); background: transparent; color: var(--ui-text); text-align: left; }
+.search-suggestion-list > button > span { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
+.search-suggestion-list small, .search-result-list header > span { color: var(--ui-muted); font-size: 12px; }
+.search-result-list > button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 88px; padding: 14px 0; border-bottom: 1px solid var(--ui-line); background: transparent; color: var(--ui-text); text-align: left; }
+.search-result-list > button > div { flex: 1; min-width: 0; }
+.search-result-list > button strong { display: block; font-size: 15px; overflow-wrap: anywhere; }
+.search-result-list > button p { margin: 6px 0; font-size: 13px; color: var(--ui-muted); line-height: 1.6; overflow-wrap: anywhere; }
+.search-result-list > button small { color: var(--ui-muted); font-size: 12px; }
+.search-result-list > button img { width: 64px; height: 64px; border-radius: 10px; object-fit: cover; }
+.search-feedback { padding: 28px 8px; text-align: center; color: var(--ui-muted); font-size: 14px; }
+.search-feedback p { margin: 8px 0; line-height: 1.6; }
+.search-feedback button { min-height: 44px; padding: 8px 16px; border-radius: 12px; color: var(--ui-accent); background: var(--ui-raised); }
+html[data-theme-color="dark"] .phone-shell .search-workspace-control:focus-within { border-color: #6bd0aa !important; box-shadow: inset 0 0 0 1px #6bd0aa !important; }
+html[data-theme-color="dark"] .phone-shell .search-workspace-form .search-workspace-control input[type="search"]:focus { box-shadow: none !important; }
+@media (min-width: 700px) { .search-species-grid { grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 14px; } }

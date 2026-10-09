@@ -20,6 +20,7 @@ const { createBackupStorage } = require('./backup-storage');
 const TurtleCare = require('../assets/care-records');
 const { normalizeSettings: normalizeWeatherSettings, publicWeather, createWeatherProvider, createWeatherDispatcher } = require('./weather-reminders');
 const { mediaUrl: validatedMediaUrl } = require('./media-url');
+const { createPasswordRecovery } = require('./password-recovery');
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -1415,8 +1416,20 @@ async function checkAliyunPnvsSms(phone, code) {
   return result.Model && result.Model.VerifyResult === "PASS";
 }
 
+const passwordRecovery = createPasswordRecovery({
+  smsCodes, readDatabase, writeDatabase, validPhone, sendJson, storeCode, forgetCode,
+  persistSmsState, verifiedPhones, hashPassword,
+  sms: {
+    mode: () => process.env.SMS_MOCK !== 'true' && process.env.SMS_PROVIDER === 'aliyun-pnvs' && aliyunPnvsConfigured() ? 'aliyun-pnvs'
+      : process.env.SMS_MOCK !== 'true' && process.env.SMS_PROVIDER === 'aliyun' && aliyunConfigured() ? 'aliyun' : 'mock',
+    send: (phone, code, mode) => mode === 'aliyun-pnvs' ? sendAliyunPnvsSms(phone) : mode === 'aliyun' ? sendAliyunSms(phone, code) : Promise.resolve(),
+    check: checkAliyunPnvsSms
+  }
+});
+
 async function handleSendSms(req, res) {
   const body = await readJson(req);
+  if (body.purpose === 'reset_password') return passwordRecovery.send(req, res, body);
   const phone = String(body.phone || "").trim();
   if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
   if (body.purpose === "register") {
@@ -1449,6 +1462,7 @@ async function handleVerifySms(req, res) {
   const body = await readJson(req);
   const phone = String(body.phone || "").trim();
   const code = String(body.code || "").trim();
+  if (smsCodes.get(phone)?.purpose === 'reset_password') return sendJson(res, 400, { ok: false, message: '请在找回密码页面核对此验证码' });
   if (process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured() && process.env.SMS_MOCK !== "true") {
     if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
     if (!code) return sendJson(res, 400, { ok: false, message: "请输入验证码" });
@@ -5080,6 +5094,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/sms/verify") return await handleVerifySms(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/register") return await handleRegister(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/login") return await handleLogin(req, res);
+    if (req.method === "POST" && url.pathname === "/api/account/password/reset") return await passwordRecovery.reset(req, res, await readJson(req));
     if (req.method === "POST" && url.pathname === "/api/account/logout") return await handleLogout(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/session") return await handleAccountSession(req, res);
     if (req.method === "POST" && url.pathname === "/api/account/load") return await handleLoadAccount(req, res);

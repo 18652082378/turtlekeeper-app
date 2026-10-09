@@ -9,3 +9,5 @@ scripts/upload-ios-130.sh text eol=lf
 scripts/ios-130-release-files.txt text eol=lf
 scripts/upload-ios-131.sh text eol=lf
 scripts/ios-131-release-files.txt text eol=lf
+scripts/upload-ios-132.sh text eol=lf
+scripts/ios-132-release-files.txt text eol=lf

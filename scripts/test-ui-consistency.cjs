@@ -17,10 +17,22 @@ const widths = (process.env.UI_AUDIT_WIDTHS || '320,390,430,1280').split(',').ma
 const themes = (process.env.UI_AUDIT_THEMES || 'teal,dark').split(',');
 const states = routes.map(route => ({ id: route, route, patch: {} }));
 states.push(
+  { id: 'growth-many-archives', route: 'growth', patch: { breedingRecords: [], turtles: Array.from({ length: 105 }, (_, i) => ({ ...fixture().turtles[0], id: `ui-growing-${i}`, code: `成长档案 ${i}`, measureHistory: [{ id: `ui-measure-${i}`, updatedAt: '2026-10-07T10:00:00Z', oldSnapshot: { weight: 80, carapaceLength: 6 }, newSnapshot: { weight: 90, carapaceLength: 6.2 } }] })) } },
+  { id: 'turtleDetail-zero', route: 'turtleDetail', patch: { turtles: [{ ...fixture().turtles[0], weight: 0, carapaceLength: 0 }] } },
+  { id: 'market-no-match', route: 'market', expectedSelector: '[data-market-search-reset]', patch: { marketSearch: '没有匹配的关键词', marketStage: 'hatchling' } },
+  { id: 'mine-long-name', route: 'mine', patch: { accountName: '龟友昵称'.repeat(12) } },
+  { id: 'reports-large-values', route: 'reports', patch: { ledgerRecords: [{ id: 'ui-large-report', type: 'purchase', amount: 99999999.99, recordDate: '2026-09-28' }] } },
+  { id: 'species-long-name', route: 'species', patch: { customSpecies: [{ code: 'CUS-long-ui', name: '自建品种名称'.repeat(6), letter: 'C', photo: fixture().turtles[0].photo }] } },
   { id: 'turtleDetail-batch', route: 'turtleDetail', patch: { selectedTurtleId: 'ui-batch-0' } },
   { id: 'turtleDetail-edit', route: 'turtleDetail', patch: { updatingTurtleId: 'ui-turtle' } },
   { id: 'add-batch', route: 'add', patch: { archivePurchaseMode: 'batch' } },
   { id: 'memos-reminders', route: 'memos', patch: { careTab: 'reminders' } },
+  { id: 'memos-weather', route: 'memos', patch: { careTab: 'weather' } },
+  { id: 'memos-care-empty', route: 'memos', patch: { careRecords: [], carePlans: [] } },
+  { id: 'memos-reminders-empty', route: 'memos', patch: { careTab: 'reminders', memos: [] } },
+  { id: 'memos-care-many', route: 'memos', patch: { careRecords: Array.from({ length: 45 }, (_, i) => ({ id: `ui-care-${i}`, title: i === 0 ? '照料事项'.repeat(10) : i % 2 ? '喂食' : '换水', itemId: i % 2 ? 'feeding' : 'water', date: i < 35 ? '2026-09-28' : '2026-09-27', createdAt: '2026-09-28T10:00:00Z', note: i === 0 ? '饲养观察与环境变化'.repeat(45) : '', turtleRefs: [], poolName: i === 0 ? '养龟地点'.repeat(20) : '' })) } },
+  { id: 'memos-reminders-long', route: 'memos', patch: { careTab: 'reminders', memos: [{ id: 'ui-long-memo', title: '养护提醒名称'.repeat(8), content: '记录每天养护过程中的注意事项'.repeat(20), remindTime: '18:00', repeat: true, weekdays: ['1', '3', '5'], reminderEnabled: false }] } },
+  { id: 'ledger-large-values', route: 'ledger', patch: { ledgerRecords: [{ id: 'ui-large-ledger', type: 'purchase', title: '批次收购'.repeat(15), amount: 99999999.99, recordDate: '2026-09-28', createdAt: '2026-09-28T10:00:00Z' }] } },
   { id: 'memos-reminder-form', route: 'memos', patch: { careTab: 'reminders', memoDraftOpen: true } },
   { id: 'memos-care-form', route: 'memos', patch: { careDraft: { itemId: 'feeding', title: '喂食', date: '2026-09-28', turtleRefs: [], note: '' } } },
   { id: 'memos-care-type-picker', route: 'memos', patch: { carePickerOpen: true, careDraft: { itemId: 'feeding', title: '喂食', date: '2026-09-28', turtleRefs: [], note: '' } } },

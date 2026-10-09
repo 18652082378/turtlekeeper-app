@@ -26,7 +26,38 @@
   const visible = el => el.isConnected && !el.hidden && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
   const usable = el => visible(el) && !el.disabled && !el.closest('[inert]');
 
+  function closeRecordMenus(except) {
+    document.querySelectorAll('[data-record-menu][open]').forEach(menu => { if (menu !== except) menu.open = false; });
+  }
+  document.addEventListener('toggle', event => {
+    const menu = event.target;
+    if (!menu.matches?.('[data-record-menu]') || !menu.open) return;
+    closeRecordMenus(menu);
+    const bottom = menu.querySelector('summary').getBoundingClientRect().bottom;
+    const nav = document.querySelector('.bottom-nav');
+    const availableBottom = Math.min(window.innerHeight, nav?.getBoundingClientRect().top || window.innerHeight);
+    menu.classList.toggle('opens-up', bottom + 110 > availableBottom && bottom > 160);
+  }, true);
+  document.addEventListener('pointerdown', event => closeRecordMenus(event.target.closest?.('[data-record-menu]')));
+  document.addEventListener('focusin', event => closeRecordMenus(event.target.closest?.('[data-record-menu]')));
+  window.addEventListener('resize', () => closeRecordMenus());
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !event.defaultPrevented) {
+      const menu = document.querySelector('[data-record-menu][open]');
+      if (menu) { event.preventDefault(); menu.open = false; menu.querySelector('summary')?.focus({ preventScroll: true }); }
+    }
+    const tab = event.target.closest?.('.care-tabs [role="tab"]');
+    if (!tab || event.defaultPrevented || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const tabs = [...tab.parentElement.querySelectorAll('[role="tab"]')];
+    const index = tabs.indexOf(tab);
+    const next = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs.at(-1) : tabs[(index + (event.key === 'ArrowLeft' ? -1 : 1) + tabs.length) % tabs.length];
+    next.click();
+    document.querySelector('.care-tabs [aria-selected="true"]')?.focus({ preventScroll: true });
+  });
+
   function enhance(container = document, updateModalState = true) {
+    container.querySelectorAll('.care-tabs [role="tab"]').forEach(tab => { tab.tabIndex = tab.getAttribute('aria-selected') === 'true' ? 0 : -1; });
     container.querySelectorAll('.bottom-nav').forEach(nav => {
       nav.setAttribute('aria-label', '主导航');
       nav.querySelectorAll('button').forEach(button => {
