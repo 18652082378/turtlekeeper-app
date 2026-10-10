@@ -81,7 +81,7 @@ function saveCarePlan() {
 function completeCareTask(id) {
   if (!requireLogin()) return;
   const today = formatDate(new Date());
-  const memo = TurtleCare.dueMemos(state.memos || [], today).find(memo => memo.id === id);
+  const memo = TurtleCare.dueMemos(state.memos || [], today, state.turtles).find(memo => memo.id === id);
   // Recheck live state so a second click on the previous DOM cannot duplicate it.
   if (!memo || memo.growthReminder) return;
   const now = new Date().toISOString();
@@ -105,11 +105,11 @@ function completeCareTask(id) {
 function skipGrowthTask(id) {
   if (!requireLogin()) return;
   const today = formatDate(new Date());
-  const memo = TurtleCare.dueMemos(state.memos || [], today).find(memo => memo.id === id && memo.growthReminder);
+  const memo = TurtleCare.dueMemos(state.memos || [], today, state.turtles).find(memo => memo.id === id && memo.growthReminder);
   // Ignore repeat clicks from detached rows after this occurrence is skipped.
   if (!memo) return;
   const turtle = state.turtles.find(t => t.id === memo.turtleId);
-  if (!turtle) return toast('关联档案已不存在，请调整提醒');
+  if (!turtle) return;
   const next = new Date();
   next.setDate(next.getDate() + 30);
   const dueDate = formatDate(next);
@@ -126,7 +126,7 @@ function skipGrowthTask(id) {
 
 function homeTasksMarkup() {
   if (!state.loggedInPhone) return '';
-  const tasks = TurtleCare.dueMemos(state.memos || [], formatDate(new Date()));
+  const tasks = TurtleCare.dueMemos(state.memos || [], formatDate(new Date()), state.turtles);
   if (!tasks.length) return '';
   const row = memo => `<article class="work-task"><div><strong>${escapeHtml(memo.title || '养护提醒')}</strong><small>${memo.dueDate && memo.dueDate < formatDate(new Date()) ? '已到期 · ' : ''}${escapeHtml(memo.remindTime || '今天待办')}${memo.growthReminder ? ' · 成长记录' : ''}</small></div><div class="work-task-actions"><button type="button" data-start-task="${escapeHtml(memo.id)}">${memo.growthReminder ? '记录成长' : '已完成'}</button>${memo.growthReminder ? `<button type="button" class="work-task-cancel" data-skip-growth-task="${escapeHtml(memo.id)}" aria-label="取消本次成长提醒：${escapeHtml(memo.title || '成长记录')}">取消</button>` : ''}</div></article>`;
   return `<section class="fresh-card work-tasks"><div class="work-heading"><h3>今日待办</h3><span>${tasks.length} 项</span></div>${tasks.slice(0, 3).map(row).join('')}${tasks.length > 3 ? `<details><summary>查看其余 ${tasks.length - 3} 项</summary><div class="work-scroll">${tasks.slice(3).map(row).join('')}</div></details>` : ''}</section>`;
@@ -230,11 +230,11 @@ function bindWorkspaceUI() {
   }));
   document.querySelectorAll('[data-start-task]').forEach(button => button.addEventListener('click', () => {
     if (!requireLogin()) return;
-    const memo = TurtleCare.dueMemos(state.memos || [], formatDate(new Date())).find(memo => memo.id === button.dataset.startTask);
+    const memo = TurtleCare.dueMemos(state.memos || [], formatDate(new Date()), state.turtles).find(memo => memo.id === button.dataset.startTask);
     if (!memo) return;
     if (memo.growthReminder) {
       const turtle = state.turtles.find(t => t.id === memo.turtleId);
-      if (!turtle) return toast('关联档案已不存在，请调整提醒');
+      if (!turtle) return;
       setState({ page: 'turtleDetail', selectedTurtleId: turtle.id, updatingTurtleId: turtle.id, turtleDetailDraftId: turtle.id, turtleDetailDraft: null, growthTaskMemoId: memo.id });
     } else {
       completeCareTask(memo.id);

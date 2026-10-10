@@ -23,9 +23,9 @@ scripts/test-market-back-scroll.js
 scripts/test-ui-consistency.cjs
 scripts/test-release-notes.cjs
 scripts/verify-ios-build.js
-scripts/ios-132-release-files.txt
-scripts/upload-ios-132.sh
-docs/ios-132-release.md
+scripts/ios-133-release-files.txt
+scripts/upload-ios-133.sh
+docs/ios-133-release.md
 assets/password-recovery.js
 assets/password-recovery.css
 server/server.js
@@ -46,3 +46,5 @@ scripts/deploy-orphan-reminders.cjs
 scripts/package-orphan-reminders.cjs
 scripts/test-orphan-reminders-deploy.cjs
 docs/orphan-reminders.md
+scripts/ios-132-release-files.txt
+docs/ios-132-release.md

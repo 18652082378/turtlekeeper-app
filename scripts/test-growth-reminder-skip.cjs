@@ -81,12 +81,12 @@ const root = path.resolve(__dirname, '..');
     assert.equal(await page.evaluate(() => state.memos[0].dueDate), baseline.next, 'double click must not skip two cycles');
     const saved = await page.evaluate(() => loadState());
     assert.equal(saved.memos[0].dueDate, baseline.next, 'persisted across app restart');
-    assert.equal(Care.dueMemos(saved.memos, baseline.today).some(m => m.id === 'growth'), false);
-    assert.equal(Care.dueMemos(saved.memos, baseline.next).some(m => m.id === 'growth'), true);
+    assert.equal(Care.dueMemos(saved.memos, baseline.today, saved.turtles).some(m => m.id === 'growth'), false);
+    assert.equal(Care.dueMemos(saved.memos, baseline.next, saved.turtles).some(m => m.id === 'growth'), true);
     const source = fs.readFileSync(path.join(root, 'server/server.js'), 'utf8');
     const serverDue = vm.runInNewContext('(' + source.slice(source.indexOf('function careReminderDue('), source.indexOf('\nasync function notifyCareReminder')) + ')');
-    assert.equal(serverDue(saved.memos[0], { date: baseline.today, time: '09:00' }), false);
-    assert.equal(serverDue(saved.memos[0], { date: baseline.next, time: '09:00' }), true, 'existing server schedules next cycle');
+    assert.equal(serverDue(saved.memos[0], { date: baseline.today, time: '09:00' }, saved.turtles), false);
+    assert.equal(serverDue(saved.memos[0], { date: baseline.next, time: '09:00' }, saved.turtles), true, 'existing server schedules next cycle');
     const merged = Merge.merge({ data: baseline.data }, { data: after }, { data: baseline.data });
     assert.equal(merged.conflicts.length, 0);
     assert.equal(merged.snapshot.data.memos[0].dueDate, baseline.next, 'stale other-device snapshot cannot resurrect skipped occurrence');
@@ -100,6 +100,42 @@ const root = path.resolve(__dirname, '..');
     assert.equal(await page.evaluate(() => state.page), 'turtleDetail');
     assert.equal(await page.evaluate(() => state.growthTaskMemoId), 'growth');
     assert.equal(await page.evaluate(() => state.updatingTurtleId), 'a');
+    await page.evaluate(today => {
+      const liveGrowth = { id: 'live', title: '有效成长提醒', growthReminder: true, turtleId: 'a', dueDate: today, remindTime: '09:00' };
+      const ghost = { ...liveGrowth, id: 'ghost', title: '不存在档案的成长提醒', turtleId: 'removed' };
+      setState({ page: 'home', growthTaskMemoId: '', memos: [liveGrowth, ghost,
+        { id: 'care', title: '喂食', remindTime: '10:00', repeat: true },
+        { id: 'orphan-linked', title: '不存在档案的关联提醒', turtleId: 'removed', remindTime: '10:00' }] });
+      window.liveRecordBeforeDeletion = document.querySelector('[data-start-task="live"]');
+      window.liveCancelBeforeDeletion = document.querySelector('[data-skip-growth-task="live"]');
+    }, baseline.today);
+    assert.equal(await page.locator('[data-start-task="ghost"]').count(), 0);
+    assert.equal(await page.locator('[data-start-task="orphan-linked"]').count(), 0);
+    assert.equal(await page.locator('.work-tasks .work-heading span').textContent(), '2 项');
+    await page.evaluate(() => {
+      // Keep the old DOM to exercise a click that races with an archive refresh.
+      state.turtles = state.turtles.filter(turtle => turtle.id !== 'a');
+      liveRecordBeforeDeletion.click();
+      liveCancelBeforeDeletion.click();
+      render();
+    });
+    assert.equal(await page.evaluate(() => state.page), 'home');
+    assert.equal(await page.evaluate(() => state.growthTaskMemoId), '');
+    assert.equal(await page.locator('[data-start-task="live"]').count(), 0);
+    assert.equal(await page.locator('[data-start-task="care"]').count(), 1);
+    assert.equal(await page.locator('.work-tasks .work-heading span').textContent(), '1 项');
+    assert.doesNotMatch(await page.locator('body').textContent(), /关联档案已不存在/);
+    await page.evaluate(() => setState({ page: 'memos', careTab: 'reminders', memoTab: 'all' }));
+    assert.equal(await page.locator('.memo-row').count(), 1);
+    assert.equal(await page.locator('.memo-row .memo-main strong').textContent(), '喂食');
+    const persistedOrphans = await page.evaluate(() => {
+      state = { ...state, ...loadState(), page: 'home' };
+      render();
+      return { memos: state.memos, records: state.careRecords };
+    });
+    assert.equal(await page.locator('[data-start-task="live"]').count(), 0, 'restart still suppresses orphan reminder');
+    assert.equal(persistedOrphans.memos.length, 4, 'filtering does not silently delete synced reminder records');
+    assert.equal(persistedOrphans.memos.find(m => m.id === 'live').dueDate, baseline.today, 'missing archive cannot be postponed by stale cancel');
     assert.deepEqual(errors, []);
     console.log(`PASS (${engine}): skip, no fake growth records, persistence, sync merge, server next cycle, batch, stale clicks, record entry and mobile layouts.`);
   } finally { await browser.close(); }

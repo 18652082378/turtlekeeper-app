@@ -1254,8 +1254,10 @@ function careReminderClock(date = new Date()) {
   };
 }
 
-function careReminderDue(memo, clock) {
+function careReminderDue(memo, clock, turtles = []) {
   if (!memo || memo.reminderEnabled === false || memo.lastCompletedDate === clock.date || (!memo.repeat && memo.completedAt) || !/^\d{2}:\d{2}$/.test(String(memo.remindTime || ""))) return false;
+  const turtleId = String(memo.turtleId || "").trim();
+  if ((memo.growthReminder || turtleId) && (!turtleId || !Array.isArray(turtles) || !turtles.some(turtle => String(turtle?.id || "").trim() === turtleId))) return false;
   if (String(memo.remindTime) !== clock.time) return false;
   if (memo.dueDate && String(memo.dueDate) !== clock.date) return false;
   if (!memo.repeat) return true;
@@ -1299,7 +1301,7 @@ async function dispatchDueCareReminders() {
     for (const user of Object.values(db.users || {})) {
       const memos = Array.isArray(user?.data?.memos) ? user.data.memos : [];
       for (const memo of memos) {
-        if (!careReminderDue(memo, clock)) continue;
+        if (!careReminderDue(memo, clock, user.data?.turtles)) continue;
         const revision = String(memo.updatedAt || memo.createdAt || "");
         const deliveryKey = memo.repeat
           ? `repeat:${user.phone}:${memo.id}:${revision}:${clock.occurrence}`

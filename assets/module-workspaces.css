@@ -116,3 +116,21 @@ html .phone-shell .team-space .ts-tabs > button { min-height: 56px; }
   html .phone-shell .community-refined-page .community-invite-publish { padding-inline: 6px; font-size: 11px; }
   html .phone-shell .community-refined-page .community-invite-publish svg { display: none; }
 }
+
+/* Keep known single-archive gender beside the species even on narrow screens. */
+.turtle-row-species > .turtle-individual-species {
+  display: flex;
+  align-items: baseline;
+  flex: 1;
+  gap: 4px;
+}
+.turtle-individual-species > .turtle-species-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.turtle-individual-species > .turtle-gender {
+  flex-shrink: 0;
+  white-space: nowrap;
+}

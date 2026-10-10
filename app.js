@@ -1539,7 +1539,7 @@ async function requestCareReminderPermission() {
 
 async function scheduleNativeCareReminder(memo) {
   // Scheduling happens on the server so reminders work after the app exits.
-  return Boolean(memo?.remindTime);
+  return Boolean(memo?.remindTime) && TurtleCare.hasReminderArchive(memo, state.turtles);
 }
 
 async function cancelNativeCareReminder(memo) {
@@ -1548,7 +1548,7 @@ async function cancelNativeCareReminder(memo) {
 }
 
 async function activateCareReminder(memo) {
-  if (!memo?.remindTime) return;
+  if (!memo?.remindTime || !TurtleCare.hasReminderArchive(memo, state.turtles)) return;
   const permitted = await requestCareReminderPermission();
   if (!permitted) {
     toast("提醒已保存，系统通知权限未开启");
@@ -5655,7 +5655,7 @@ function turtleListRow(t) {
           <span class="turtle-pool-title-meta">龟池 ${escapeHtml(turtlePoolName(t.poolId))}</span>
         </div>
         <div class="turtle-row-species">
-          <p>${escapeHtml(t.speciesName)}</p>
+          <p class="turtle-individual-species"><span class="turtle-species-name">${escapeHtml(t.speciesName)}</span>${["公", "母"].includes(t.gender) ? `<span class="turtle-gender">· ${escapeHtml(t.gender)}</span>` : ""}</p>
           ${totalCost > 0 ? `<span class="turtle-price" aria-label="总成本 ${money(totalCost)} 元">¥${money(totalCost)}</span>` : ""}
         </div>
         <div class="turtle-row-bottom">
@@ -6385,15 +6385,16 @@ function weatherContext() {
 function pageMemos() {
   if (state.careTab === "weather") return window.TurtleWeather.page(weatherContext());
   if (state.careTab !== "reminders") return pageCareRecords();
-  const list = state.memoTab === "all" ? state.memos : state.memos.filter(m => state.memoTab === "repeat" ? m.repeat : !m.repeat);
-  const editingMemo = state.memos.find(m => m.id === state.memoEditingId);
+  const reminders = state.memos.filter(memo => TurtleCare.hasReminderArchive(memo, state.turtles));
+  const list = state.memoTab === "all" ? reminders : reminders.filter(m => state.memoTab === "repeat" ? m.repeat : !m.repeat);
+  const editingMemo = reminders.find(m => m.id === state.memoEditingId);
   const selectedWeekdays = memoWeekdays(editingMemo);
   return `
     ${topbar("日常养护", true)}
     <main class="content page-fresh workspace-page reminders-page">
       ${careTabs()}
       <section class="page-intro">
-        <div><h2>养护提醒</h2><p>${state.memos.length} 条提醒 · 让照料更有计划</p></div>
+        <div><h2>养护提醒</h2><p>${reminders.length} 条提醒 · 让照料更有计划</p></div>
         <button class="workspace-add" type="button" data-new-memo aria-label="新增养护提醒"><span aria-hidden="true">＋</span> 新增</button>
       </section>
       ${state.memoDraftOpen ? `
@@ -6429,7 +6430,7 @@ function pageMemos() {
           <div class="memo-main"><strong>${escapeHtml(m.title)}</strong>${m.content ? `<p>${escapeHtml(m.content)}</p>` : ""}<small class="muted">${m.dueDate ? `${escapeHtml(m.dueDate)} · ` : ""}${m.repeat ? (!memoWeekdays(m).length || memoWeekdays(m).length === 7 ? "每天" : "每周" + WEEKDAY_OPTIONS.filter(day => memoWeekdays(m).includes(day.value)).map(day => day.label).join("、")) : "只执行一次"}${m.reminderEnabled === false ? " · 通知已关闭" : ""}</small></div>
           <details class="record-menu" data-record-menu><summary aria-label="${escapeHtml(m.title)}的更多操作"><span aria-hidden="true">•••</span></summary><div class="record-menu-panel"><button type="button" data-edit-memo="${escapeHtml(m.id)}">调整</button><button type="button" class="danger-link" data-delete-memo="${escapeHtml(m.id)}">移除</button></div></details>
         </article>
-      `).join("") || `<div class="workspace-empty"><span class="workspace-empty-icon">${careRecordIcon("manual")}</span><strong>${state.memos.length ? "没有这类提醒" : "还没有养护提醒"}</strong><p>${state.memos.length ? "切换到全部，查看已设置的提醒。" : "给喂食、换水或复查设置时间，照料更从容。"}</p></div>`}
+      `).join("") || `<div class="workspace-empty"><span class="workspace-empty-icon">${careRecordIcon("manual")}</span><strong>${reminders.length ? "没有这类提醒" : "还没有养护提醒"}</strong><p>${reminders.length ? "切换到全部，查看已设置的提醒。" : "给喂食、换水或复查设置时间，照料更从容。"}</p></div>`}
     </main>
     ${bottomNav()}
   `;

@@ -1,0 +1,12 @@
+{
+  "hunks": [
+    {
+      "before": "function careReminderDue(memo, clock) {\n  if (!memo || memo.reminderEnabled === false || memo.lastCompletedDate === clock.date || (!memo.repeat && memo.completedAt) || !/^\\d{2}:\\d{2}$/.test(String(memo.remindTime || \"\"))) return false;\n  if (String(memo.remindTime) !== clock.time) return false;\n  if (memo.dueDate && String(memo.dueDate) !== clock.date) return false;\n  if (!memo.repeat) return true;\n  const weekdays = Array.isArray(memo.weekdays) ? memo.weekdays.map(String) : [];\n  return !weekdays.length || weekdays.includes(clock.weekday);\n}",
+      "after": "function careReminderDue(memo, clock, turtles = []) {\n  if (!memo || memo.reminderEnabled === false || memo.lastCompletedDate === clock.date || (!memo.repeat && memo.completedAt) || !/^\\d{2}:\\d{2}$/.test(String(memo.remindTime || \"\"))) return false;\n  const turtleId = String(memo.turtleId || \"\").trim();\n  if ((memo.growthReminder || turtleId) && (!turtleId || !Array.isArray(turtles) || !turtles.some(turtle => String(turtle?.id || \"\").trim() === turtleId))) return false;\n  if (String(memo.remindTime) !== clock.time) return false;\n  if (memo.dueDate && String(memo.dueDate) !== clock.date) return false;\n  if (!memo.repeat) return true;\n  const weekdays = Array.isArray(memo.weekdays) ? memo.weekdays.map(String) : [];\n  return !weekdays.length || weekdays.includes(clock.weekday);\n}"
+    },
+    {
+      "before": "        if (!careReminderDue(memo, clock)) continue;",
+      "after": "        if (!careReminderDue(memo, clock, user.data?.turtles)) continue;"
+    }
+  ]
+}

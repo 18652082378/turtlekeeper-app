@@ -19,8 +19,11 @@ function patch(source) {
   s = s.replace(f, () => f.replace('next.turtlePools.slice(0, 200).map', 'next.turtlePools.map'));
   f = extract(s, 'careReminderDue');
   const guard = 'memo.reminderEnabled === false || memo.lastCompletedDate === clock.date || (!memo.repeat && memo.completedAt) || ';
-  check(hash(f.replace(guard, '')) === 'ea28fd8579b0dfccaab825e07ab75d12f50e17cd8079a253ca5984e9088bfa7a', 'Unknown reminder code; no change');
-  if (!f.includes(guard)) s = s.replace(f, () => f.replace('if (!memo || ', 'if (!memo || ' + guard));
+  // Keep the reviewed archive-aware reminder guard when applying this older hotfix.
+  if (hash(f) !== 'a4c5392c2fc5317f29f1f9947fd529e5ad41990b4ed4b87a7845155cf17ed937') {
+    check(hash(f.replace(guard, '')) === 'ea28fd8579b0dfccaab825e07ab75d12f50e17cd8079a253ca5984e9088bfa7a', 'Unknown reminder code; no change');
+    if (!f.includes(guard)) s = s.replace(f, () => f.replace('if (!memo || ', 'if (!memo || ' + guard));
+  }
   return s;
 }
 function verify(source) {

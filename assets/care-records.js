@@ -60,9 +60,16 @@
         && (!query || [record.title, record.note, record.poolName, ...refs.flatMap(ref => [ref.code, ref.speciesName])].join(' ').toLocaleLowerCase().includes(query));
     }).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   }
-  function dueMemos(memos, today) {
+  function hasReminderArchive(memo, turtles = []) {
+    if (!memo) return false;
+    const id = String(memo.turtleId || '').trim();
+    if (!memo.growthReminder && !id) return true;
+    return Boolean(id) && Array.isArray(turtles) && turtles.some(turtle => String(turtle?.id || '').trim() === id);
+  }
+  function dueMemos(memos, today, turtles = []) {
     const weekday = String(new Date(`${today}T12:00:00`).getDay());
     return memos.filter(memo => {
+      if (!hasReminderArchive(memo, turtles)) return false;
       if (memo.reminderEnabled === false || memo.lastCompletedDate === today || (!memo.repeat && memo.completedAt)) return false;
       if (memo.dueDate && memo.dueDate > today) return false;
       if (memo.repeat && (memo.weekdays || []).length && !memo.weekdays.map(String).includes(weekday)) return false;
@@ -76,7 +83,7 @@
     return memos.map(memo => memo.id !== memoId ? memo : { ...memo,
       lastCompletedDate: latest?.date || '', completedAt: !memo.repeat && latest ? latest.createdAt || latest.updatedAt || latest.date : '' });
   }
-  const api = { builtins, validDate, normalizeItems, normalizeRecords, normalizeTurtleRefs, normalizePlans, filterRecords, dueMemos, reconcileCompletion };
+  const api = { builtins, validDate, normalizeItems, normalizeRecords, normalizeTurtleRefs, normalizePlans, filterRecords, hasReminderArchive, dueMemos, reconcileCompletion };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.TurtleCare = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

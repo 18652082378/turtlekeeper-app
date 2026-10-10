@@ -1,0 +1,13 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),vm=require('node:vm');
+const {execFileSync}=require('node:child_process');
+const {patchSource}=require('./deploy-orphan-reminders.cjs');
+const root=path.resolve(__dirname,'..'),out=path.join(root,'deploy/patches'),name='turtlekeeper-orphan-reminders.tar.gz';
+const manifest=JSON.parse(fs.readFileSync(path.join(__dirname,'orphan-reminders-server-patch.json'),'utf8'));
+const source=fs.readFileSync(path.join(root,'server/server.js'),'utf8');
+if(patchSource(source,manifest.hunks)!==source)throw Error('Reminder source differs from reviewed installed patch');
+new vm.Script(source);
+fs.mkdirSync(out,{recursive:true});
+execFileSync('tar',['-czf',path.join(out,name),'-C',root,'scripts/orphan-reminders-server-patch.json','scripts/deploy-orphan-reminders.cjs'],{windowsHide:true});
+fs.writeFileSync(path.join(out,name+'.sha256'),crypto.createHash('sha256').update(fs.readFileSync(path.join(out,name))).digest('hex')+'  '+name+'\n');
+console.log('Prepared '+path.join(out,name));
