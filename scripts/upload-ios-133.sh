@@ -10,8 +10,8 @@ git add --pathspec-from-file=scripts/ios-133-release-files.txt
 git diff --cached --check -- "${release_files[@]}"
 if ! git diff --cached --quiet -- "${release_files[@]}"; then
   git -c gc.auto=0 -c maintenance.auto=false commit --only \
-    -m "Polish archive display and reminder handling in iOS 1.1.7 build 133" \
+    -m "Polish archive display and reminder handling in iOS 1.1.8 build 133" \
     --pathspec-from-file=scripts/ios-133-release-files.txt
 fi
 git -c gc.auto=0 -c maintenance.auto=false push origin main
-printf '%s\n' 'Upload complete. In Codemagic, build main using the iOS TestFlight workflow for 1.1.7 (133).'
+printf '%s\n' 'Upload complete. In Codemagic, build main using the iOS TestFlight workflow for 1.1.8 (133).'

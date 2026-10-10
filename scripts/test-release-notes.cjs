@@ -21,6 +21,21 @@ const root = path.resolve(__dirname, '..');
     finally { await ctx.close(); }
   }
   try {
+    await check('upgrading from 1.1.7 shows only 1.1.8 fixes after the ad, once only', async (page, setup) => {
+      await setup({ seen: '1.1.7' });
+      await page.evaluate(() => { showTradeIntro(); TurtleReleaseNotes.start({ version: '1.1.8' }); });
+      assert.equal(await page.locator('.release-notes-dialog').count(), 0);
+      await page.locator('.trade-intro-skip').click(); await page.waitForSelector('.release-notes-dialog');
+      const content = await page.locator('.release-notes-dialog').innerText();
+      assert.match(content, /龟友手账 1\.1\.8/);
+      assert.match(content, /品种旁显示公母/); assert.match(content, /关联档案已删除/);
+      assert.doesNotMatch(content, /新增忘记密码|新增独立搜索页|启动广告每天一次/);
+      assert.equal(await page.locator('.release-notes-dialog li').count(), 2);
+      await page.getByRole('button', { name: '我知道了' }).click();
+      assert.equal(await page.evaluate(() => localStorage.getItem('turtlekeeper-release-notes-seen-version')), '1.1.8');
+      await setup(); await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.1.8' }));
+      assert.equal(await page.locator('.release-notes-dialog').count(), 0);
+    });
     await check('upgrading from 1.1.6 shows 1.1.7 notes after the ad, once only', async (page, setup) => {
       await setup({ seen: '1.1.6' });
       await page.evaluate(() => { showTradeIntro(); TurtleReleaseNotes.start({ version: '1.1.7' }); });
