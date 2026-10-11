@@ -48,3 +48,12 @@ scripts/test-orphan-reminders-deploy.cjs
 docs/orphan-reminders.md
 scripts/ios-132-release-files.txt
 docs/ios-132-release.md
+assets/market-inquiry.js
+server/market-ranking.js
+scripts/test-market-inquiry.cjs
+scripts/test-market-inquiry-ui.cjs
+scripts/market-inquiry-server-patch.json
+scripts/deploy-market-inquiry.cjs
+scripts/package-market-inquiry.cjs
+scripts/test-market-inquiry-deploy.cjs
+docs/market-inquiry-search.md

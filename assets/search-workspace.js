@@ -5,7 +5,7 @@
   let results = [], error = '', batch = 0, serial = 0, revision = 0;
   const account = () => String(state.loggedInPhone || 'guest');
   const session = () => `${account()}:${state.cloudToken || ''}`;
-  const clean = value => String(value || '').trim().slice(0, 60);
+  const clean = value => (source === 'market' ? TurtleMarketInquiry.parse(value) : '') || String(value || '').trim().slice(0, 60);
   const key = () => `turtlekeeper-search-history-v1:${encodeURIComponent(account())}:${source}`;
   function reset() {
     owner = account(); ownerSession = session(); source = 'market'; query = ''; submitted = loading = false;
@@ -87,7 +87,7 @@
   function renderPage() {
     ensureOwner();
     return `${topbar(source === 'market' ? '搜索商品' : '搜索龟友圈', true)}<form class="search-workspace-form" role="search" data-workspace-search-form>
-      <label class="search-workspace-control">${icon}<input type="search" name="workspaceQuery" maxlength="60" value="${escapeHtml(query)}" placeholder="${source === 'market' ? '搜索品种、标题或城市' : '搜索帖子、品种或龟友'}" aria-label="${source === 'market' ? '搜索龟集市商品' : '搜索龟友圈'}" autocomplete="off" enterkeyhint="search" data-workspace-search><button type="button" data-clear-workspace-search aria-label="清除关键词" ${query ? '' : 'hidden'}>×</button></label>
+      <label class="search-workspace-control">${icon}<input type="search" name="workspaceQuery" maxlength="${source === 'market' ? 240 : 60}" value="${escapeHtml(query)}" placeholder="${source === 'market' ? '搜索品种、标题、城市或咨询码' : '搜索帖子、品种或龟友'}" aria-label="${source === 'market' ? '搜索龟集市商品' : '搜索龟友圈'}" autocomplete="off" enterkeyhint="search" data-workspace-search><button type="button" data-clear-workspace-search aria-label="清除关键词" ${query ? '' : 'hidden'}>×</button></label>
       <button type="submit" class="search-workspace-submit">搜索</button></form><main class="content search-workspace"><div data-workspace-search-body>${body()}</div></main>`;
   }
   function refreshBody() {
@@ -111,7 +111,7 @@
     if (source === 'market') {
       navigateBack();
       if (state.page !== 'market') setState({ page: 'market' }, { skipCloud: true, skipEdgeSnapshot: true });
-      const patch = { marketSearch: term, marketAssistMenu: '' };
+      const patch = { marketSearch: term, marketAssistMenu: '', ...(TurtleMarketInquiry.parse(term) ? { marketStage: 'all', marketRegion: '', marketDelivery: '', marketFreshOnly: false } : {}) };
       if (hasCloudSession()) resetMarketFeed(patch);
       else setState({ ...patch, marketFeedGeneration: (state.marketFeedGeneration || 0) + 1 }, { skipCloud: true });
       return;
@@ -169,6 +169,12 @@
       form.querySelector('[data-clear-workspace-search]').hidden = !input.value;
       if (!composing) refreshBody();
     };
+    input.addEventListener('paste', event => {
+      if (source !== 'market') return;
+      const code = TurtleMarketInquiry.parse(event.clipboardData?.getData('text') || '');
+      if (!code) return;
+      event.preventDefault(); input.value = code; composing = false; update();
+    });
     input.addEventListener('input', update);
     input.addEventListener('compositionstart', () => { composing = true; serial++; });
     input.addEventListener('compositionend', () => { composing = false; update(); });

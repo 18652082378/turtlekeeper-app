@@ -1,0 +1,37 @@
+{
+  "patches": {
+    "server/market-ranking.js": [
+      {
+        "before": "const { randomUUID } = require('node:crypto');",
+        "after": "const { randomUUID } = require('node:crypto');\nconst inquiry = require('../assets/market-inquiry');"
+      },
+      {
+        "before": "    keyword: text(body.keyword).slice(0, 80),",
+        "after": "    keyword: inquiry.parse(body.keyword) || text(body.keyword).slice(0, 80),"
+      },
+      {
+        "before": "  if (!keyword) return 1;",
+        "after": "  if (!keyword) return 1;\n  if (inquiry.parse(keyword)) return inquiry.matches(item, keyword) ? 5 : 0;"
+      },
+      {
+        "before": "  if (item.status !== 'active') return false;",
+        "after": "  if (item.status !== 'active') return false;\n  if (inquiry.parse(opts.keyword)) return inquiry.matches(item, opts.keyword);"
+      }
+    ],
+    "server/server.js": [
+      {
+        "before": "const { createMarketRankPager } = require(\"./market-ranking\");",
+        "after": "const { createMarketRankPager } = require(\"./market-ranking\");\nconst marketInquiry = require(\"../assets/market-inquiry\");"
+      },
+      {
+        "before": "  const keyword = trimPublicText(body.keyword, 80).toLowerCase();",
+        "after": "  const keyword = marketInquiry.parse(body.keyword) || trimPublicText(body.keyword, 80).toLowerCase();"
+      },
+      {
+        "before": "  const allListings = visibleListings.filter(item => {\n    if (stage",
+        "after": "  const allListings = visibleListings.filter(item => {\n    if (marketInquiry.parse(keyword)) return marketInquiry.matches(item, keyword);\n    if (stage"
+      }
+    ]
+  },
+  "moduleHash": "53043a4a5f6c983f093c7685cf40a9d4f85f18caef2b2cacdce9839ae287ec19"
+}

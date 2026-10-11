@@ -4505,6 +4505,7 @@ function marketListingCard(item) {
       <span class="market-card-body">
         <strong>${escapeHtml(item.title || `${item.speciesName || "乌龟"}在售`)}</strong>
         <small>${escapeHtml(item.speciesName || "品种未填写")} · ${marketStageLabel(item.stage)}${item.gender ? ` · ${escapeHtml(item.gender)}` : ""}</small>
+        ${TurtleMarketInquiry.parse(state.marketSearch) ? `<small class="market-card-inquiry-code">${escapeHtml(marketInquiryCode(item))}</small>` : ""}
         <span class="market-card-price"><b><i>¥</i>${money(item.price)}</b><small data-market-want-count="${escapeHtml(item.id)}">${Math.max(0, Number(item.wantCount || 0))}人想要</small></span>
         <span class="market-card-seller">${marketSellerAvatar(item, "market-seller-avatar")}<i>${escapeHtml(item.sellerName || "壳友卖家")}${platformAdminBadge(item)}</i>${item.delivery ? `<b class="market-card-delivery">${escapeHtml(item.delivery)}</b>` : ""}<em>${escapeHtml(item.city || "全国")}</em></span>
       </span>
@@ -4586,12 +4587,14 @@ function marketSearchResultListings() {
   const regionCities = marketRegionCities();
   const delivery = String(state.marketDelivery || "").trim();
   const freshAfter = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const inquiryCode = TurtleMarketInquiry.parse(keyword);
   const listings = (state.marketListings || []).filter(item => {
     // The public market only contains listings currently for sale. Saved
     // history/chat references can coexist in local state, so treat the
     // client-side filter as the last line of defence against sold or offline
     // items flashing into the public grid before a remote refresh completes.
     if (item.status !== "active") return false;
+    if (inquiryCode) return TurtleMarketInquiry.matches(item, inquiryCode);
     const matchesStage = stage === "all" || item.stage === stage;
     const haystack = `${item.title || ""} ${item.speciesName || ""} ${item.city || ""}`.toLowerCase();
     const matchesKeyword = !keyword || haystack.includes(keyword);
@@ -4796,6 +4799,7 @@ function pageMarket() {
   const keyword = String(state.marketSearch || "").trim().toLowerCase();
   const stage = state.marketStage || "all";
   const listings = marketSearchResultListings();
+  const inquiryCode = TurtleMarketInquiry.parse(keyword);
   const regions = [...new Set((state.marketListings || []).map(item => String(item.city || "").trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
   const showAssistSearch = Boolean(keyword || state.marketPriceOrder || state.marketFreshOnly || state.marketRegion || state.marketDelivery);
   const marketRequiresLogin = CONFIGURED_SMS_BACKEND ? !hasCloudSession() : !state.loggedInPhone;
@@ -4805,7 +4809,7 @@ function pageMarket() {
   const marketEmptyMarkup = marketRequiresLogin
     ? ""
     : hasSearchFilters
-      ? `<div class="market-empty"><span>龟</span><strong>没有找到合适的商品</strong><p>试试其他关键词，或清除筛选查看全部商品。</p><button type="button" data-market-search-reset>清除筛选</button></div>`
+      ? `<div class="market-empty"><span>龟</span><strong>没有找到合适的商品</strong><p>${inquiryCode ? "没有找到此咨询码对应的在售商品，请核对完整代码；商品可能已售出或下架。" : "试试其他关键词，或清除筛选查看全部商品。"}</p><button type="button" data-market-search-reset>清除筛选</button></div>`
       : `<div class="market-empty"><span>龟</span><strong>龟集市还没有商品</strong><p>从自己的乌龟档案一键发布，尺寸和状态会自动带入。</p><button type="button" data-page="marketAdd">发布第一只</button></div>`;
   return `
     ${marketPublishProgressMarkup()}
@@ -4813,17 +4817,18 @@ function pageMarket() {
       <div class="market-search-area feed-search-dock ${keyword ? "market-results-search-dock" : ""}">
         ${keyword ? `<button type="button" class="market-search-exit" data-market-search-exit aria-label="返回龟集市"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"></path></svg></button>` : ""}
         <button type="button" class="market-search-wrap search-page-entry" data-open-search="market" aria-label="搜索龟集市商品">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"></circle><path d="m15.5 15.5 4.2 4.2"></path></svg><span>${escapeHtml(state.marketSearch || "搜索品种、标题或城市")}</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"></circle><path d="m15.5 15.5 4.2 4.2"></path></svg><span>${escapeHtml(state.marketSearch || "搜索品种、标题、城市或咨询码")}</span>
         </button>
       </div>
     <main class="content page-fresh market-page feed-search-content ${keyword ? "market-search-results-content" : ""}">
       <section class="market-promise-strip">
         <span><b>实拍</b> 一龟一图</span><span><b>直聊</b> 买卖双方沟通</span><span><b>透明</b> 状态尺寸清晰</span>
       </section>
-      ${showAssistSearch ? marketAssistControls(regions) : ""}
-      <section class="market-stage-tabs">
+      ${inquiryCode ? `<section class="market-inquiry-summary" role="status"><strong>商品咨询码 ${escapeHtml(inquiryCode)}</strong><p>${listings.length > 1 ? "此码匹配多个商品，请核对图片、标题和卖家后选择。" : "按咨询码查找在售商品，点击商品查看详情。"}</p></section>` : ""}
+      ${showAssistSearch && !inquiryCode ? marketAssistControls(regions) : ""}
+      ${!inquiryCode ? `<section class="market-stage-tabs">
         ${[["all", "全部"], ["hatchling", "苗子"], ["juvenile", "亚成"], ["adult", "种龟"]].map(([value, label]) => `<button class="${stage === value ? "active" : ""}" type="button" data-market-stage="${value}">${label}</button>`).join("")}
-      </section>
+      </section>` : ""}
       <section class="market-grid ${marketInitialLoading ? "is-initial-loading" : ""}">
         ${marketInitialLoading ? `<div class="market-feed-initial-loading">${uiLoadingMarkup("正在加载商品…")}</div>` : ""}
         ${feedNotice}
@@ -11810,8 +11815,7 @@ async function contactMarketSeller(listingId, buying = false) {
 }
 
 function marketInquiryCode(listing) {
-  const id = String(listing?.id || "").replace(/[^a-zA-Z0-9]/g, "").slice(-6).toUpperCase();
-  return `KM-${id || "咨询"}`;
+  return TurtleMarketInquiry.code(listing) || "KM-咨询";
 }
 
 async function copyText(text, successText = "已复制") {

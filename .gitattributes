@@ -13,3 +13,6 @@ scripts/upload-ios-132.sh text eol=lf
 scripts/ios-132-release-files.txt text eol=lf
 scripts/upload-ios-133.sh text eol=lf
 scripts/ios-133-release-files.txt text eol=lf
+assets/market-inquiry.js text eol=lf
+scripts/upload-ios-134.sh text eol=lf
+scripts/ios-134-release-files.txt text eol=lf

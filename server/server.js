@@ -10,6 +10,7 @@ const path = require("path");
 const { URL } = require("url");
 const { appUpdatePolicy } = require("./app-update-policy");
 const { createMarketRankPager } = require("./market-ranking");
+const marketInquiry = require("../assets/market-inquiry");
 const { MysqlRecordStore, assertLegacyMode, acquireWriter } = require("./mysql-record-store");
 const { reviewHash, advertisingRisk, createDailyCommunityDispatcher } = require("./community-daily-push");
 const marketRankPage = createMarketRankPager();
@@ -4346,7 +4347,7 @@ async function handleMarketList(req, res) {
     }
   }
   if (changed && !user) writeDatabase(db);
-  const keyword = trimPublicText(body.keyword, 80).toLowerCase();
+  const keyword = marketInquiry.parse(body.keyword) || trimPublicText(body.keyword, 80).toLowerCase();
   const stage = ["hatchling", "juvenile", "adult"].includes(body.stage) ? body.stage : "all";
   const regionCities = [...new Set((Array.isArray(body.regionCities) ? body.regionCities : [])
     .map(city => trimPublicText(city, 24))
@@ -4357,6 +4358,7 @@ async function handleMarketList(req, res) {
   const visibleListings = publicMarketListings(db, user);
   const ranked = body.rankingVersion === 1 ? marketRankPage({ listings: visibleListings, body, owner: user?.phone || "", account: user?.data || {} }) : null;
   const allListings = visibleListings.filter(item => {
+    if (marketInquiry.parse(keyword)) return marketInquiry.matches(item, keyword);
     if (stage !== "all" && item.stage !== stage) return false;
     if (regionCities.length && !regionCities.includes(String(item.city || "").trim())) return false;
     if (!keyword) return true;

@@ -1,4 +1,5 @@
 const { randomUUID } = require('node:crypto');
+const inquiry = require('../assets/market-inquiry');
 const DAY = 86400000;
 const text = value => String(value || '').trim().toLowerCase();
 const number = value => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
@@ -6,7 +7,7 @@ const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : 0
 
 function normalizeMarketRankOptions(body = {}) {
   return {
-    keyword: text(body.keyword).slice(0, 80),
+    keyword: inquiry.parse(body.keyword) || text(body.keyword).slice(0, 80),
     stage: ['hatchling', 'juvenile', 'adult'].includes(body.stage) ? body.stage : 'all',
     regionCities: [...new Set((Array.isArray(body.regionCities) ? body.regionCities : []).map(x => String(x).trim().slice(0, 24)).filter(Boolean))].sort().slice(0, 60),
     delivery: ['可快递', '仅自提', '可面交'].includes(body.delivery) ? body.delivery : '',
@@ -18,6 +19,7 @@ function normalizeMarketRankOptions(body = {}) {
 
 function relevance(item, keyword) {
   if (!keyword) return 1;
+  if (inquiry.parse(keyword)) return inquiry.matches(item, keyword) ? 5 : 0;
   const title = text(item.title), species = text(item.speciesName);
   if (title === keyword || species === keyword || text(item.speciesCode) === keyword) return 4;
   if (`${title} ${species}`.includes(keyword)) return 3;
@@ -29,6 +31,7 @@ function relevance(item, keyword) {
 
 function matches(item, opts, now) {
   if (item.status !== 'active') return false;
+  if (inquiry.parse(opts.keyword)) return inquiry.matches(item, opts.keyword);
   if (opts.stage !== 'all' && item.stage !== opts.stage) return false;
   if (opts.regionCities.length && !opts.regionCities.includes(String(item.city || '').trim())) return false;
   if (opts.delivery && item.delivery !== opts.delivery) return false;
