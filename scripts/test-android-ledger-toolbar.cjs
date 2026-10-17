@@ -43,7 +43,7 @@ const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
         }, { theme, populated, records });
         const geometry = await frame.evaluate(() => {
           const rect = e => { const r = e.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }; };
-          return { width: innerWidth, documentWidth: document.documentElement.scrollWidth, groups: ['[data-ledger-tab]', '[data-ledger-date-preset]', '[data-new-ledger]'].map(selector => [...document.querySelectorAll(selector)].map(e => {
+          return { width: innerWidth, documentWidth: document.documentElement.scrollWidth, groups: ['.ledger-workspace > .memo-tabs [data-ledger-tab]', '.ledger-command-grid [data-ledger-date-preset]', '.ledger-command-grid [data-new-ledger]'].map(selector => [...document.querySelectorAll(selector)].map(e => {
             const range = document.createRange(); range.selectNodeContents(e);
             const text = range.getBoundingClientRect(); const r = rect(e);
             return { ...r, label: e.textContent, clipped: text.left < r.left - 1 || text.right > r.right + 1 || text.height > r.height + 1 };
@@ -54,6 +54,7 @@ const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
           assert.equal(geometry.width, width);
           assert(geometry.documentWidth <= width + 1, 'No horizontal document overflow');
           assert.deepEqual(geometry.groups.map(g => g.length), [5, 3, 4]);
+          assert.equal(await frame.locator('.visual-empty [data-new-ledger="other"]').count(), populated ? 0 : 1, 'The separate empty-state action is not a toolbar button');
           for (const group of geometry.groups) {
             assert(group.every(r => Math.abs(r.top - group[0].top) < 1), 'Ledger toolbar buttons must stay on one aligned row');
             assert(group.every(r => !r.clipped && r.height >= 44), 'Full labels and at least 44px button height');

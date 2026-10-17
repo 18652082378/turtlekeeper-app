@@ -40,6 +40,20 @@ if (!args.includes('--prepare-only')) {
   for (const script of ['scripts/test-android-fixed-navigation.cjs', 'scripts/test-android-native-boundaries.cjs', 'scripts/test-file-export.js', 'scripts/test-android-push-client.cjs', 'scripts/test-android-push.cjs', 'scripts/test-app-update-policy.cjs']) {
     try { run(script); } catch (e) { failures.push(e.message); }
   }
-  if (failures.length) throw Error('Mobile release checks failed:\n' + failures.join('\n'));
+  if (failures.length) {
+    // Keep actionable page details next to the final failure, even when later
+    // checks produced several screens of otherwise successful output.
+    for (const [platform, engine] of [['ios', 'webkit'], ['android', 'chromium']]) {
+      const file = path.join(root, 'output/mobile-qa', platform + '-' + engine, 'results.json');
+      if (!fs.existsSync(file)) continue;
+      const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (report.status !== 'failed') continue;
+      console.error('FAILED PAGE DETAILS ' + platform + '/' + engine + ': ' + JSON.stringify({
+        errors: report.errors,
+        failures: report.failures.map(({ dataset, route, width, height, theme, problems }) => ({ dataset, route, width, height, theme, problems }))
+      }));
+    }
+    throw Error('Mobile release checks failed:\n' + failures.join('\n'));
+  }
   console.log('PASS mobile release checks: current shared resources, iOS/WebKit and Android/Chromium layouts, push and update isolation. Native-device testing is still required.');
 }

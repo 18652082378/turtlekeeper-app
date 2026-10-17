@@ -115,6 +115,7 @@ const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
         checks.push(result);
         if (problems.length) {
           failures.push(result);
+          console.error(JSON.stringify({ platform, engine, dataset: dataset.name, route: test.name, width, height, theme, problems }));
           if (failures.length <= 20) await page.screenshot({ path: path.join(output, 'failure-' + dataset.name + '-' + test.name + '-' + width + '-' + theme + '.png') });
         } else if (dataset.name === 'populated' && theme === 'teal' && ((strictAndroid && [360, 720].includes(width)) || (width === 390 && ['home', 'market', 'community', 'memos', 'weather', 'login', 'search'].includes(test.name)) || (width === 320 && ['communityAdd', 'operations'].includes(test.name)))) {
           await page.screenshot({ path: path.join(output, test.name + '-' + width + '.png') });

@@ -64,6 +64,12 @@ workflows:
       - build/ios/ipa/*.ipa
       # Keep the full Xcode archive log. Codemagic's summary only shows exit code 65.
       - /tmp/xcodebuild_logs/*.log
+      - output/mobile-qa/**/*.json
+      - output/mobile-qa/**/failure-*.png
+      - output/ios/ledger-toolbar/results.json
+      - output/ios/ledger-toolbar/failure.png
+      - output/android/ledger-toolbar/results.json
+      - output/android/ledger-toolbar/failure.png
       - /Users/builder/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
     publishing:
       app_store_connect:
