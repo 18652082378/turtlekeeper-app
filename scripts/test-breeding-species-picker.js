@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const assert = require('node:assert/strict');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const source = fs.readFileSync('app.js', 'utf8');
+const covers = source.slice(source.indexOf('function breedingCoverArtwork('), source.indexOf('function pageBreeding('));
 const picker = source.slice(source.indexOf('function breedingTargetOptions('), source.indexOf('function breedingRow('));
 const draft = source.slice(source.indexOf('function readBreedingDraft()'), source.indexOf('\nfunction ', source.indexOf('function readBreedingDraft()') + 1));
 const motherBinding = source.slice(source.indexOf('  document.querySelector("[data-breeding-mother]")'), source.indexOf('  document.querySelectorAll("#breedingForm [name=\'date\']'));
@@ -30,6 +31,7 @@ const directory = source.slice(source.indexOf('function bindArchiveDirectoryPick
       const speciesByCode = () => null; const speciesPhoto = () => defaultPhoto;
       const turtleBatchLabel = turtle => turtle.batchName;
       const turtleLabel = turtle => turtle.code;
+      ${covers}
       ${picker}
       ${draft}
       ${directory}

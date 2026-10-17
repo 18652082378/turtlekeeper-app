@@ -12,5 +12,6 @@ server/backups/
 *.p8
 keys/
 .android-build-tools/
+.browser-tests/
 *.jks
 *.keystore

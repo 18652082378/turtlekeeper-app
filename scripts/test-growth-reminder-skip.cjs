@@ -6,6 +6,7 @@ const { launchBrowser, artifactName, engine } = require('./browser-test-engine.c
 const Care = require('../assets/care-records');
 const Merge = require('../assets/account-merge');
 const root = path.resolve(__dirname, '..');
+const assetRoot = process.env.UI_TEST_ASSET_ROOT ? path.resolve(process.env.UI_TEST_ASSET_ROOT) : root;
 
 (async () => {
   const browser = await launchBrowser();
@@ -17,10 +18,15 @@ const root = path.resolve(__dirname, '..');
       const url = new URL(route.request().url());
       if (url.hostname !== 'workspace.test') return route.abort();
       if (url.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: 'window.TURTLE_API_BASE_URL="";' });
-      const file = path.resolve(root, '.' + (url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname)));
-      if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
+      const file = path.resolve(assetRoot, '.' + (url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname)));
+      if (!file.startsWith(assetRoot + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
       return route.fulfill({ body: fs.readFileSync(file), contentType: ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.png': 'image/png', '.svg': 'image/svg+xml' })[path.extname(file)] || 'application/octet-stream' });
     });
+    if (process.env.UI_TEST_ASSET_ROOT) await page.addInitScript(() => {
+ const app={getInfo:async()=>({build:'16'}),getLaunchUrl:async()=>({}),addListener:async()=>({remove(){}}),minimizeApp:async()=>{}};
+ const bars={getDisplayMetrics:async()=>({}),setTheme:async()=>{},addListener:async(_name,cb)=>{cb({visible:false});return {remove(){}};}};
+ window.Capacitor={getPlatform:()=>'android',isNativePlatform:()=>true,Plugins:{App:app,TurtleAndroidWindow:bars},registerPlugin:name=>name==='App'?app:name==='TurtleAndroidWindow'?bars:{}};
+});
     await page.goto('https://workspace.test/?skipIntro=1');
     const baseline = await page.evaluate(() => {
       const today = formatDate(new Date());
@@ -135,7 +141,25 @@ const root = path.resolve(__dirname, '..');
     });
     assert.equal(await page.locator('[data-start-task="live"]').count(), 0, 'restart still suppresses orphan reminder');
     assert.equal(persistedOrphans.memos.length, 4, 'filtering does not silently delete synced reminder records');
-    assert.equal(persistedOrphans.memos.find(m => m.id === 'live').dueDate, baseline.today, 'missing archive cannot be postponed by stale cancel');
+    const cancelledOrphan = persistedOrphans.memos.find(m => m.id === 'live');
+    assert.equal(cancelledOrphan.dueDate, baseline.today, 'missing archive is not postponed or retargeted');
+    assert.equal(cancelledOrphan.reminderEnabled, false, 'stale cancel always disables an orphan memo');
+    assert.match(await page.locator('.toast').textContent(), /已取消该成长提醒/);
+    assert.equal(serverDue(cancelledOrphan, { date: baseline.today, time: '09:00' }, saved.turtles), false, 'disabled memo never sends a reminder even if its old archive returns');
+    const orphanMerged = Merge.merge({ data: { ...after, memos: [{ ...cancelledOrphan, reminderEnabled: true }] } }, { data: { ...after, memos: [cancelledOrphan] } }, { data: { ...after, memos: [{ ...cancelledOrphan, reminderEnabled: true }] } });
+    assert.equal(orphanMerged.conflicts.length, 0);
+    assert.equal(orphanMerged.snapshot.data.memos[0].reminderEnabled, false, 'stale sync cannot resurrect an explicitly cancelled orphan');
+    await page.evaluate(() => { window.orphanCancelState = JSON.stringify(state.memos); liveCancelBeforeDeletion.click(); });
+    assert.equal(await page.evaluate(() => JSON.stringify(state.memos)), await page.evaluate(() => orphanCancelState), 'repeat orphan cancellation is idempotent');
+    const snapshots = await page.evaluate(() => ({ turtles: state.turtles, records: state.careRecords, ledger: state.ledgerRecords, activity: state.activityLogs }));
+    await page.evaluate(() => { skipGrowthTask('ghost'); skipGrowthTask('unknown-id'); });
+    assert.equal(await page.evaluate(() => state.memos.find(m => m.id === 'ghost').reminderEnabled), false, 'a ghost absent from the due list can still be cancelled by its ID');
+    assert.deepEqual(await page.evaluate(() => ({ turtles: state.turtles, records: state.careRecords, ledger: state.ledgerRecords, activity: state.activityLogs })), snapshots, 'orphan cancel edits no business records or remaining archives');
+    await page.evaluate(today => {
+      setState({ memos: [...state.memos, { id: 'missing-link', growthReminder: true, remindTime: '09:00', dueDate: today }] });
+      skipGrowthTask('missing-link');
+    }, baseline.today);
+    assert.equal(await page.evaluate(() => state.memos.find(m => m.id === 'missing-link').reminderEnabled), false, 'growth memo with missing ID can also be cancelled');
     assert.deepEqual(errors, []);
     console.log(`PASS (${engine}): skip, no fake growth records, persistence, sync merge, server next cycle, batch, stale clicks, record entry and mobile layouts.`);
   } finally { await browser.close(); }

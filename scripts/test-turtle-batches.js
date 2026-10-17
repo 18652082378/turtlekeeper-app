@@ -22,6 +22,7 @@ const ctx = { TurtleBatches, TurtleLossAccounting, crypto,
 ctx.turtlePoolName = id => ctx.state.turtlePools.find(pool => pool.id === id)?.name || '未关联';
 vm.createContext(ctx);
 for (const [start, end] of [
+  ['function matchesArchiveFilters(', 'function stats('],
   ['function turtleBatchLabel(', 'function turtleListRow('],
   ['function sortedTurtles()', 'function archiveDashboardSection()'],
   ['function submitBatchTurtles(', 'function appReviewStorageKey()']
@@ -75,7 +76,8 @@ assert.equal(TurtleBatches.poolCount(ctx.state.turtlePools[1], ctx.state.turtles
 ctx.state.turtles[0].poolId = 'p1';
 ctx.state.turtlePoolFilter = 'p1';
 assert.equal(ctx.sortedTurtles().length, 1);
-assert.equal(ctx.sortedTurtles()[0].batchMembers.length, 400, 'Pool filtering retains the complete batch');
+assert.equal(ctx.sortedTurtles()[0].batchMembers.length, 1, 'Pool-filtered batch cards show only the members in that pool');
+assert.equal(ctx.state.turtles.filter(t => t.batchId === leader.batchId).length, 400, 'Filtering never changes the complete underlying batch');
 ctx.state.turtlePoolFilter = 'all';
 ctx.state.updatingTurtleId = ctx.state.selectedTurtleId;
 const detail = ctx.pageTurtleBatchDetail(ctx.state.turtles.find(t => t.id === ctx.state.selectedTurtleId));

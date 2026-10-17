@@ -6,7 +6,7 @@ const { serverCommand } = require('./copy-ios-114-policy-command.cjs');
 const workspace = path.resolve(__dirname, '..');
 const oldModule = fs.readFileSync(path.join(__dirname, 'fixtures/app-update-policy-113.js'), 'utf8').replaceAll('\r\n', '\n');
 const moduleAfter = patchModule(oldModule);
-assert.equal(moduleAfter, fs.readFileSync(path.join(workspace, 'server/app-update-policy.js'), 'utf8').replaceAll('\r\n', '\n'));
+assert.equal(moduleAfter, fs.readFileSync(path.join(__dirname, 'fixtures/app-update-policy-114.js'), 'utf8').replaceAll('\r\n', '\n'));
 assert.equal(patchModule(moduleAfter), moduleAfter); assert.equal(patchLegacyServer(LEGACY_AFTER), LEGACY_AFTER);
 assert.equal(patchModule(oldModule.replaceAll('\n', '\r\n')), moduleAfter.replaceAll('\n', '\r\n'));
 assert.equal(patchLegacyServer(LEGACY_BEFORE.replaceAll('\n', '\r\n')), LEGACY_AFTER.replaceAll('\n', '\r\n'));

@@ -548,6 +548,10 @@
       const plugin = capacitor.Plugins?.TurtleMediaPicker || capacitor.registerPlugin?.('TurtleMediaPicker');
       await plugin.shareImage({ filename: cardFilename, dataUrl: cardImage }); return;
     }
+    if (capacitor?.isNativePlatform?.() && capacitor.getPlatform?.() === 'android') {
+      const plugin = capacitor.Plugins?.TurtleAndroidFiles || capacitor.registerPlugin?.('TurtleAndroidFiles');
+      await plugin.shareImage({ filename: cardFilename, dataUrl: cardImage }); return;
+    }
     const a = document.createElement('a'); a.href = cardImage; a.download = cardFilename;
     document.body.appendChild(a); a.click(); a.remove(); host.toast('已发起图片下载');
   }

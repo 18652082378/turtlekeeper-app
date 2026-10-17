@@ -73,6 +73,7 @@ assert.match(message,/已经记录损耗/);
 // Loss status dominates pinning and every sort option.
 ctx.turtleTotalCost=t=>Number(t.price);ctx.state.turtleFilter='all';ctx.state.turtlePoolFilter='all';
 ctx.state.turtles=[{...turtle,id:'lost',status:'已死亡',pinned:true,price:999}, {...turtle,id:'alive',pinned:false,price:1}];
+vm.runInContext(source.slice(source.indexOf('function matchesArchiveFilters('),source.indexOf('function stats(')),ctx);
 vm.runInContext(source.slice(source.indexOf('function sortedTurtles()'),source.indexOf('function archiveDashboardSection()')),ctx);
 for(const sort of ['default','latest','weight','shellLength','valueAsc','valueDesc']) {ctx.state.turtleSort=sort;assert.equal(ctx.sortedTurtles().at(-1).id,'lost');}
 ctx.defaultPhoto='default.jpg';

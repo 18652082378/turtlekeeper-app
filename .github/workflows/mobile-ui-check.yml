@@ -1,0 +1,30 @@
+name: iOS and Android UI check
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+jobs:
+  mobile-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Install both rendering engines
+        run: npx playwright install --with-deps chromium webkit
+      - name: Prepare and check both app bundles
+        run: npm run check:mobile
+      - name: Save layout reports and failure screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-ui-reports
+          path: output/mobile-qa/
+          if-no-files-found: warn

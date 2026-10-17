@@ -31,9 +31,19 @@ const root=path.resolve(__dirname,'..'),output=path.join(root,'output/password-r
     await context.route('**/*',route=>{
       const u=new URL(route.request().url()); if(u.origin!==origin)return route.abort();
       if(u.pathname==='/config.js')return route.fulfill({contentType:'text/javascript',body:'window.TURTLE_API_BASE_URL='+JSON.stringify(origin)+';window.TURTLE_APP_BUILD=132;'});
+      if (process.env.UI_TEST_ASSET_ROOT && !u.pathname.startsWith('/api/') && !u.pathname.startsWith('/uploads/')) {
+        const dir=path.resolve(process.env.UI_TEST_ASSET_ROOT),file=path.resolve(dir,'.'+(u.pathname==='/'?'/index.html':decodeURIComponent(u.pathname)));
+        if(!file.startsWith(dir+path.sep)||!fs.existsSync(file)||!fs.statSync(file).isFile())return route.fulfill({status:404,body:''});
+        return route.fulfill({body:fs.readFileSync(file),contentType:({'.html':'text/html','.js':'text/javascript','.css':'text/css','.png':'image/png','.jpg':'image/jpeg','.svg':'image/svg+xml','.ttf':'font/ttf'})[path.extname(file)]||'application/octet-stream'});
+      }
       return route.continue();
     });
     const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(7000);
+    if (process.env.UI_TEST_ASSET_ROOT) await page.addInitScript(() => {
+ const app={getInfo:async()=>({build:'16'}),getLaunchUrl:async()=>({}),addListener:async()=>({remove(){}}),minimizeApp:async()=>{}};
+ const bars={getDisplayMetrics:async()=>({}),setTheme:async()=>{},addListener:async(_name,cb)=>{cb({visible:false});return {remove(){}};}};
+ window.Capacitor={getPlatform:()=>'android',isNativePlatform:()=>true,Plugins:{App:app,TurtleAndroidWindow:bars},registerPlugin:name=>name==='App'?app:name==='TurtleAndroidWindow'?bars:{}};
+});
     await page.goto(origin+'/?skipIntro=1');
     await page.evaluate(()=>{dismissTradeIntro?.();state.page='account';state.accountMode='login';state.policyConsentRequired=false;render();});
     for(const theme of ['teal','dark'])for(const width of [320,390,1280]){

@@ -10,14 +10,14 @@ if (!/^\d+\.\d+\.\d+$/.test(version) || !Number.isInteger(build) || build < 1) t
 const entries = ['package.json', 'package-lock.json', 'capacitor.config.json', 'codemagic.yaml', '.gitignore', '.gitattributes', '.github', '.well-known',
   'app.js', 'index.html', 'config.js', 'styles.css', 'chat-tools.css', 'dark-surface-audit.css', 'species-data.js',
   'official.html', 'privacy.html', 'terms.html', 'support.html', 'apple-app-site-association', 'README.md',
-  'server.js', 'ecosystem.config.cjs', 'assets', 'server', 'scripts', 'ios', 'deploy',
+  'server.js', 'ecosystem.config.cjs', 'assets', 'server', 'scripts', 'ios', 'android', 'deploy',
   'docs'];
 // A working directory can contain unrelated, untracked platform tools. Include
 // established source plus only explicitly reviewed additions for this release.
 const releaseList = `scripts/ios-${build}-release-files.txt`;
 const approved = fs.readFileSync(path.join(root, releaseList), 'utf8').split(/\r?\n/).map(file => file.trim()).filter(file => file && !file.startsWith('#'));
 const raw = execFileSync('git', ['ls-files', '-z', '--cached', '--', ...entries], { cwd: root, maxBuffer: 16 * 1024 * 1024 }).toString('utf8');
-const forbidden = /(^|\/)(?:\.git|node_modules|output|www|build|dist|data|uploads|backups|keys|Pods|DerivedData|xcuserdata)(?:\/|$)|(^|\/)\.env(?:$|\.(?!example$|sample$))|\.(?:p8|p12|jks|keystore|pem|key|log)$/i;
+const forbidden = /(^|\/)(?:\.git|\.gradle|\.cxx|node_modules|output|www|build|dist|data|uploads|backups|keys|Pods|DerivedData|xcuserdata)(?:\/|$)|(^|\/)\.env(?:$|\.(?!example$|sample$))|(^|\/)local\.properties$|\.(?:p8|p12|jks|keystore|pem|key|log)$/i;
 for (const file of approved) {
   if (path.isAbsolute(file) || file.includes('\\') || file.split('/').includes('..') || forbidden.test(file) || !entries.some(entry => file === entry || file.startsWith(entry + '/'))) throw Error('Invalid approved release path: ' + file);
   if (!fs.existsSync(path.join(root, file))) throw Error('Missing approved release source: ' + file);

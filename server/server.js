@@ -961,13 +961,30 @@ function normalizedPushDevices(devices) {
   const seen = new Set();
   return (Array.isArray(devices) ? devices : [])
     .map(item => ({
-      token: normalizeApnsDeviceToken(item?.token || item),
-      platform: item?.platform === "ios" ? "ios" : "ios",
+      token: item?.platform === 'android' ? normalizeAndroidDeviceId(item?.token) : (!item?.platform || item.platform === 'ios') ? normalizeApnsDeviceToken(item?.token || item) : '',
+      platform: item?.platform === 'android' ? 'android' : 'ios',
       updatedAt: String(item?.updatedAt || ""),
       ...(item?.sessionHash ? { sessionHash: String(item.sessionHash) } : {})
     }))
-    .filter(item => item.token && !seen.has(item.token) && Boolean(seen.add(item.token)))
+    .filter(item => item.token && !seen.has(item.platform + ':' + item.token) && Boolean(seen.add(item.platform + ':' + item.token)))
     .slice(0, 8);
+}
+
+const { createAndroidPush, normalizeDeviceId: normalizeAndroidDeviceId } = require('./android-push');
+const androidPush = createAndroidPush();
+function pushConfigured() { return apnsConfigured() || androidPush.configured(); }
+function availablePushDevices(user) {
+  return normalizedPushDevices(user?.pushDevices)
+    .filter(d => d.platform === 'android' ? androidPush.configured() : apnsConfigured())
+    .map(d => ({ ...d, recipientPhone: user.phone }));
+}
+async function sendDeviceNotification(device, payload) {
+  // Recheck ownership/session after any previous asynchronous delivery.
+  const user = readDatabase().users?.[device.recipientPhone];
+  if (!user || !normalizedPushDevices(user.pushDevices).some(d => d.platform === device.platform && d.token === device.token && d.sessionHash === device.sessionHash)) return { ok: false, skipped: true };
+  if (device.sessionHash && !(user.tokens || []).some(t => t.hash === device.sessionHash)) return { ok: false, skipped: true };
+  const addressedPayload = { ...payload, recipientId: communityUserId(user.phone) };
+  return device.platform === 'android' ? androidPush.send(device.token, addressedPayload) : sendApnsNotification(device.token, addressedPayload);
 }
 
 function apnsConfigured() {
@@ -1051,14 +1068,14 @@ function sendApnsNotification(deviceToken, payload) {
   });
 }
 
-function removeInvalidPushDevice(phone, deviceToken) {
-  const token = normalizeApnsDeviceToken(deviceToken);
+function removeInvalidPushDevice(phone, deviceToken, platform = 'ios') {
+  const token = platform === 'android' ? normalizeAndroidDeviceId(deviceToken) : normalizeApnsDeviceToken(deviceToken);
   if (!token || !phone) return;
   const db = readDatabase();
   const user = db.users?.[phone];
   if (!user) return;
   const devices = normalizedPushDevices(user.pushDevices);
-  const next = devices.filter(item => item.token !== token);
+  const next = devices.filter(item => item.platform !== platform || item.token !== token);
   if (next.length === devices.length) return;
   user.pushDevices = next;
   user.updatedAt = new Date().toISOString();
@@ -1168,7 +1185,7 @@ async function handleCommunityNotifications(req, res) {
 // read from another device or inside the app.
 async function syncCommunityUnreadBadge(db, user) {
   if (!apnsConfigured() || !user) return;
-  const devices = normalizedPushDevices(user.pushDevices);
+  const devices = normalizedPushDevices(user.pushDevices).filter(d => d.platform === "ios");
   if (!devices.length) return;
   const badge = Math.min(99, Math.max(0, communityTotalUnreadCount(db, user)));
   const payload = { aps: { badge } };
@@ -1180,8 +1197,8 @@ async function syncCommunityUnreadBadge(db, user) {
 }
 
 async function notifyCommunityMessage(db, message, sender, recipient) {
-  if (!apnsConfigured() || !recipient) return;
-  const devices = normalizedPushDevices(recipient.pushDevices);
+  if (!pushConfigured() || !recipient) return;
+  const devices = availablePushDevices(recipient);
   if (!devices.length) return;
   const unreadCount = communityUnreadMessageCount(db, recipient);
   const preview = communityMessagePreview(message) || "发来一条新消息";
@@ -1197,9 +1214,9 @@ async function notifyCommunityMessage(db, message, sender, recipient) {
     senderId: communityUserId(sender?.phone || ""),
     route: "communityChat"
   };
-  const results = await Promise.all(devices.map(item => sendApnsNotification(item.token, payload)));
+  const results = await Promise.all(devices.map(item => sendDeviceNotification(item, payload)));
   results.forEach((result, index) => {
-    if (result.invalid) removeInvalidPushDevice(recipient.phone, devices[index].token);
+    if (result.invalid) removeInvalidPushDevice(recipient.phone, devices[index].token, devices[index].platform);
     else if (!result.ok && !result.skipped) console.warn("APNs push failed:", result.reason || result.status || "unknown");
   });
 }
@@ -1210,8 +1227,8 @@ async function notifyCommunityActivity(db, notification) {
   if (["like", "comment"].includes(notification?.type)) return;
   const recipient = db.users?.[notification?.recipientPhone];
   const actor = db.users?.[notification?.actorPhone];
-  if (!apnsConfigured() || !recipient || !actor) return;
-  const devices = normalizedPushDevices(recipient.pushDevices);
+  if (!pushConfigured() || !recipient || !actor) return;
+  const devices = availablePushDevices(recipient);
   if (!devices.length) return;
   const actorName = actor.accountName || maskPhone(actor.phone) || "壳友";
   const body = notification.type === "like"
@@ -1228,9 +1245,9 @@ async function notifyCommunityActivity(db, notification) {
     route: "messages",
     postId: notification.postId || ""
   };
-  const results = await Promise.all(devices.map(item => sendApnsNotification(item.token, payload)));
+  const results = await Promise.all(devices.map(item => sendDeviceNotification(item, payload)));
   results.forEach((result, index) => {
-    if (result.invalid) removeInvalidPushDevice(recipient.phone, devices[index].token);
+    if (result.invalid) removeInvalidPushDevice(recipient.phone, devices[index].token, devices[index].platform);
     else if (!result.ok && !result.skipped) console.warn("APNs activity push failed:", result.reason || result.status || "unknown");
   });
 }
@@ -1267,7 +1284,7 @@ function careReminderDue(memo, clock, turtles = []) {
 }
 
 async function notifyCareReminder(user, memo) {
-  const devices = normalizedPushDevices(user.pushDevices);
+  const devices = availablePushDevices(user);
   if (!devices.length) return false;
   const payload = {
     aps: {
@@ -1280,11 +1297,11 @@ async function notifyCareReminder(user, memo) {
     route: "memos",
     memoId: String(memo.id || "")
   };
-  const results = await Promise.all(devices.map(item => sendApnsNotification(item.token, payload)));
+  const results = await Promise.all(devices.map(item => sendDeviceNotification(item, payload)));
   let delivered = false;
   results.forEach((result, index) => {
     if (result.ok) delivered = true;
-    if (result.invalid) removeInvalidPushDevice(user.phone, devices[index].token);
+    if (result.invalid) removeInvalidPushDevice(user.phone, devices[index].token, devices[index].platform);
     else if (!result.ok && !result.skipped) console.warn("Care reminder push failed:", result.reason || result.status || "unknown");
   });
   return delivered;
@@ -1292,7 +1309,7 @@ async function notifyCareReminder(user, memo) {
 
 let careReminderDispatching = false;
 async function dispatchDueCareReminders() {
-  if (careReminderDispatching || !apnsConfigured()) return;
+  if (careReminderDispatching || !pushConfigured()) return;
   careReminderDispatching = true;
   try {
     const db = readDatabase();
@@ -1980,25 +1997,27 @@ async function handlePushDeviceRegister(req, res) {
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
-  const deviceToken = normalizeApnsDeviceToken(body.deviceToken);
+  const platform = body.platform || 'ios';
+  if (!['ios', 'android'].includes(platform)) return sendJson(res, 400, { ok: false, message: '不支持的通知平台' });
+  const deviceToken = platform === 'android' ? normalizeAndroidDeviceId(body.deviceToken) : normalizeApnsDeviceToken(body.deviceToken);
   if (!deviceToken) return sendJson(res, 400, { ok: false, message: "通知设备信息无效" });
   const now = new Date().toISOString();
   // A physical iPhone may be used by a different account after logout. Keep the
   // token with exactly one user so messages are never delivered to the old one.
   Object.values(db.users || {}).forEach(account => {
     const devices = normalizedPushDevices(account.pushDevices);
-    account.pushDevices = devices.filter(item => item.token !== deviceToken);
+    account.pushDevices = devices.filter(item => item.platform !== platform || item.token !== deviceToken);
   });
   user.pushDevices = [
     ...normalizedPushDevices(user.pushDevices),
-    { token: deviceToken, platform: "ios", updatedAt: now, sessionHash: hashValue(String(body.token || "")) }
-  ].filter((item, index, list) => list.findIndex(other => other.token === item.token) === index).slice(-8);
+    { token: deviceToken, platform, updatedAt: now, sessionHash: hashValue(String(body.token || "")) }
+  ].filter((item, index, list) => list.findIndex(other => other.token === item.token && other.platform === item.platform) === index).slice(-8);
   user.updatedAt = now;
-  writeDatabase(db);
+  await writeDatabase(db);
   // Correct an icon badge left by a previous session as soon as this iPhone
   // registers again, even before the user opens a conversation.
   void syncCommunityUnreadBadge(db, user);
-  return sendJson(res, 200, { ok: true, registered: true });
+  return sendJson(res, 200, { ok: true, registered: true, platform, recipientId: communityUserId(user.phone) });
 }
 
 async function handlePushDeviceUnregister(req, res) {
@@ -2006,10 +2025,13 @@ async function handlePushDeviceUnregister(req, res) {
   const db = readDatabase();
   const user = requireReviewUser(db, body, res);
   if (!user) return;
-  const deviceToken = normalizeApnsDeviceToken(body.deviceToken);
-  if (deviceToken) user.pushDevices = normalizedPushDevices(user.pushDevices).filter(item => item.token !== deviceToken);
+  const platform = body.platform || 'ios';
+  if (!['ios', 'android'].includes(platform)) return sendJson(res, 400, { ok: false, message: '不支持的通知平台' });
+  const deviceToken = platform === 'android' ? normalizeAndroidDeviceId(body.deviceToken) : normalizeApnsDeviceToken(body.deviceToken);
+  const sessionHash = hashValue(String(body.token || ''));
+  if (deviceToken) user.pushDevices = normalizedPushDevices(user.pushDevices).filter(item => item.platform !== platform || item.token !== deviceToken || Boolean(item.sessionHash && item.sessionHash !== sessionHash));
   user.updatedAt = new Date().toISOString();
-  writeDatabase(db);
+  await writeDatabase(db);
   return sendJson(res, 200, { ok: true });
 }
 
@@ -2019,10 +2041,10 @@ async function handlePushNotificationTest(req, res) {
   const user = requireReviewUser(db, body, res);
   if (!user) return;
   if (!isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "仅平台管理员可发送推送测试" });
-  if (!apnsConfigured()) {
-    return sendJson(res, 503, { ok: false, message: "服务器尚未完成 Apple 推送密钥配置" });
+  if (!pushConfigured()) {
+    return sendJson(res, 503, { ok: false, message: "服务器尚未完成通知推送配置" });
   }
-  const devices = normalizedPushDevices(user.pushDevices);
+  const devices = availablePushDevices(user);
   if (!devices.length) {
     return sendJson(res, 400, { ok: false, message: "当前设备尚未注册通知。请使用真机登录并允许通知后重试" });
   }
@@ -2037,13 +2059,13 @@ async function handlePushNotificationTest(req, res) {
   };
   const delayMs = Math.min(10_000, Math.max(0, Number(body.delayMs || 0)));
   const deliver = async () => {
-    const results = await Promise.all(devices.map(item => sendApnsNotification(item.token, payload)));
+    const results = await Promise.all(devices.map(item => sendDeviceNotification(item, payload)));
     results.forEach((result, index) => {
-      if (result.invalid) removeInvalidPushDevice(user.phone, devices[index].token);
+      if (result.invalid) removeInvalidPushDevice(user.phone, devices[index].token, devices[index].platform);
     });
     const delivered = results.filter(item => item.ok).length;
     if (!delivered) {
-      const reason = results.find(item => item.reason)?.reason || "Apple 推送服务未接受请求";
+      const reason = results.find(item => item.reason)?.reason || "推送服务未接受请求";
       console.warn("APNs test push failed:", reason);
     } else {
       console.log(`APNs test push accepted for ${delivered} device(s).`);
@@ -2059,7 +2081,7 @@ async function handlePushNotificationTest(req, res) {
   }
   const result = await deliver();
   if (!result.delivered) {
-    const reason = result.results.find(item => item.reason)?.reason || "Apple 推送服务未接受请求";
+    const reason = result.results.find(item => item.reason)?.reason || "推送服务未接受请求";
     return sendJson(res, 502, { ok: false, message: `测试通知未送达：${reason}` });
   }
   return sendJson(res, 200, { ok: true, message: `已向 ${result.delivered} 台本机设备发送测试通知。` });
@@ -2085,8 +2107,8 @@ function publicSystemAnnouncements(db, includeInactive = false) {
 }
 
 async function notifySystemAnnouncement(db, announcement) {
-  if (!apnsConfigured()) return 0;
-  const recipients = Object.values(db.users || {}).filter(user => normalizedPushDevices(user.pushDevices).length);
+  if (!pushConfigured()) return 0;
+  const recipients = Object.values(db.users || {}).filter(user => availablePushDevices(user).length);
   const payload = {
     aps: {
       alert: {
@@ -2100,11 +2122,11 @@ async function notifySystemAnnouncement(db, announcement) {
   };
   let delivered = 0;
   await Promise.all(recipients.map(async user => {
-    const devices = normalizedPushDevices(user.pushDevices);
-    const results = await Promise.all(devices.map(item => sendApnsNotification(item.token, payload)));
+    const devices = availablePushDevices(user);
+    const results = await Promise.all(devices.map(item => sendDeviceNotification(item, payload)));
     results.forEach((result, index) => {
       if (result.ok) delivered += 1;
-      if (result.invalid) removeInvalidPushDevice(user.phone, devices[index].token);
+      if (result.invalid) removeInvalidPushDevice(user.phone, devices[index].token, devices[index].platform);
       else if (!result.ok && !result.skipped) console.warn("System announcement push failed:", result.reason || result.status || "unknown");
     });
   }));
@@ -3630,7 +3652,7 @@ async function handleWeatherReminder(req, res, action) {
   db = readDatabase(); user = requireReviewUser(db, body, res);
   if (!user) return;
   const result = publicWeather(user);
-  return sendJson(res, 200, { ok: true, ...result, attribution: weatherProvider.attribution, providerConfigured: weatherProvider.configured(), pushConfigured: apnsConfigured(), hasPushDevice: normalizedPushDevices(user.pushDevices).length > 0 });
+  return sendJson(res, 200, { ok: true, ...result, attribution: weatherProvider.attribution, providerConfigured: weatherProvider.configured(), pushConfigured: body.platform === "android" ? androidPush.configured() : apnsConfigured(), hasPushDevice: normalizedPushDevices(user.pushDevices).some(d => d.platform === (body.platform === "android" ? "android" : "ios")) });
 }
 
 async function handleCommunityAdminAction(req, res) {
@@ -5109,6 +5131,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/account/delete") return await handleDeleteAccount(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/device/register") return await handlePushDeviceRegister(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/device/unregister") return await handlePushDeviceUnregister(req, res);
+    if (req.method === "POST" && url.pathname === "/api/notifications/android/device/register") return await handlePushDeviceRegister(req, res);
+    if (req.method === "POST" && url.pathname === "/api/notifications/android/device/unregister") return await handlePushDeviceUnregister(req, res);
     if (req.method === "POST" && url.pathname === "/api/notifications/test") return await handlePushNotificationTest(req, res);
     if (req.method === "POST" && url.pathname === "/api/weather/settings") return await handleWeatherReminder(req, res, 'settings');
     if (req.method === "POST" && url.pathname === "/api/weather/locations") return await handleWeatherReminder(req, res, 'locations');
@@ -5196,17 +5220,17 @@ setInterval(() => {
 setInterval(() => { if (!shuttingDown) void dispatchDueCareReminders(); }, 30 * 1000).unref();
 const dispatchWeatherReminders = createWeatherDispatcher({
   read: readDatabase, write: writeDatabase, provider: weatherProvider,
-  configured: apnsConfigured, devices: user => normalizedPushDevices(user.pushDevices),
-  send: sendApnsNotification, invalidDevice: removeInvalidPushDevice
+  configured: pushConfigured, devices: availablePushDevices,
+  send: (token, payload, device) => sendDeviceNotification(device, payload), invalidDevice: removeInvalidPushDevice
 });
 setInterval(() => { if (!shuttingDown) dispatchWeatherReminders().catch(() => console.warn('温度提醒本轮检查失败')); }, 30 * 1000).unref();
 const dispatchDailyCommunityPush = createDailyCommunityDispatcher({
   read: readDatabase, write: writeDatabase,
-  configured: () => apnsConfigured(),
-  devices: user => normalizedPushDevices(user.pushDevices),
+  configured: pushConfigured,
+  devices: availablePushDevices,
   canReceive: (db, post, user) => canViewCommunityPost(db, post, user) && !blockedPhoneSet(user).has(post.authorPhoneRaw),
-  send: async (token, payload) => {
-    const result = await sendApnsNotification(token, payload);
+  send: async (token, payload, device) => {
+    const result = await sendDeviceNotification(device, payload);
     if (!result.ok && !result.skipped) console.warn("Daily community push failed:", result.reason || result.status || "unknown");
   }
 });

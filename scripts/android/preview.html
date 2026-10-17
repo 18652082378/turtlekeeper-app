@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>龟友手账 · 安卓本地预览</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#e9eeed;color:#203b41;font:14px system-ui,sans-serif}
+    header{padding:16px 24px;background:#fff;border-bottom:1px solid #d4dfdc}h1{font-size:18px;margin:0 0 12px}
+    .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}select,input,button,a{font:inherit}
+    select,input,button{padding:8px;border:1px solid #bfcfca;border-radius:6px;background:white;color:inherit}
+    input{width:85px}button{cursor:pointer}a{color:#176d60}p{color:#627674;margin:12px 0 0;line-height:1.6}
+    main{padding:20px;overflow:auto}iframe{display:block;width:360px;height:800px;border:0;background:#fff;box-shadow:0 3px 20px #203b4120;margin:auto}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>龟友手账 · 安卓本地预览</h1>
+    <div class="controls">
+      <label>窗口 <select id="preset"><option value="360,800">普通手机 360 × 800</option><option value="320,850">窄外屏 320 × 850</option><option value="414,896">宽手机 414 × 896</option><option value="720,900">双折叠展开 720 × 900</option><option value="1100,850">三折叠展开 1100 × 850</option></select></label>
+      <label>宽 <input id="width" type="number" min="280" max="1600" value="360"></label>
+      <label>高 <input id="height" type="number" min="400" max="1600" value="800"></label>
+      <button id="apply">应用尺寸</button><button id="reload">刷新页面</button>
+      <a href="/app/index.html" target="_blank" rel="noopener">单独打开安卓页面</a>
+    </div>
+    <p>使用安卓打包页面及专用字体、样式。尺寸为网页逻辑像素，切换尺寸不刷新页面。登录后连接现有云端数据；系统返回键、原生权限和实际折叠切换请用 APK 验证。</p>
+  </header>
+  <main><iframe id="preview" title="安卓应用页面" src="/app/index.html" allow="geolocation; camera; microphone"></iframe></main>
+  <script>
+    const frame=document.querySelector('#preview'), width=document.querySelector('#width'), height=document.querySelector('#height');
+    function resize(){frame.style.width=Math.min(1600,Math.max(280,Number(width.value)||360))+'px';frame.style.height=Math.min(1600,Math.max(400,Number(height.value)||800))+'px';}
+    document.querySelector('#preset').addEventListener('change',event=>{[width.value,height.value]=event.target.value.split(',');resize();});
+    document.querySelector('#apply').addEventListener('click',resize);
+    document.querySelector('#reload').addEventListener('click',()=>frame.contentWindow.location.reload());
+  </script>
+</body></html>

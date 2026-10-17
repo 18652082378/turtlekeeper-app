@@ -2,7 +2,7 @@
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const {launchBrowser}=require('./browser-test-engine.cjs'),fixture=require('./ui-audit-fixture.cjs');
 const {rankMarketListings}=require('../server/market-ranking');
-const root=path.resolve(__dirname,'..'),out=path.join(root,'output/market-inquiry');
+const repo=path.resolve(__dirname,'..'),root=process.env.UI_TEST_ASSET_ROOT?path.resolve(process.env.UI_TEST_ASSET_ROOT):repo,out=path.join(repo,process.env.UI_TEST_ASSET_ROOT?'output/android/inquiry-qa':'output/market-inquiry');
 (async()=>{
  fs.mkdirSync(out,{recursive:true});const browser=await launchBrowser();
  try {
@@ -24,6 +24,11 @@ const root=path.resolve(__dirname,'..'),out=path.join(root,'output/market-inquir
     return r.fulfill({body:fs.readFileSync(file),contentType:({'.js':'text/javascript','.css':'text/css','.html':'text/html','.jpg':'image/jpeg','.png':'image/png','.svg':'image/svg+xml'})[path.extname(file)]||'application/octet-stream'});
    });
    const page=await ctx.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(8000);
+   if (process.env.UI_TEST_ASSET_ROOT) await page.addInitScript(() => {
+ const app={getInfo:async()=>({build:'16'}),getLaunchUrl:async()=>({}),addListener:async()=>({remove(){}}),minimizeApp:async()=>{}};
+ const bars={getDisplayMetrics:async()=>({}),setTheme:async()=>{},addListener:async(_name,cb)=>{cb({visible:false});return {remove(){}};}};
+ window.Capacitor={getPlatform:()=>'android',isNativePlatform:()=>true,Plugins:{App:app,TurtleAndroidWindow:bars},registerPlugin:name=>name==='App'?app:name==='TurtleAndroidWindow'?bars:{}};
+});
    await page.goto('https://inquiry.test/?skipIntro=1');
    const base=fixture(),model=base.marketListings[0];
    products=[{...model,id:'first-abc123'},{...model,id:'second-abc123',title:'第二只测试龟',sellerName:'另一位虚构卖家'},{...model,id:'title-zzzzzz',title:'KM-ABC123'},{...model,id:'sold-abc123',status:'sold'},{...model,id:'off-abc123',status:'inactive'}];

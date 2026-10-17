@@ -21,6 +21,8 @@
     "test:release119-compat": "node scripts/test-data-reliability.cjs --release --compat --hotfix",
     "test:ui": "node scripts/test-ui-consistency.cjs",
     "test:ui-interactions": "node scripts/test-ui-experience.cjs",
+    "check:mobile": "node scripts/check-mobile-release.cjs",
+    "check:mobile:prepared": "node scripts/check-mobile-release.cjs --prepared",
     "test:client-mutations": "node scripts/test-client-mutation-races.cjs",
     "test:media-safety": "node scripts/test-media-attribute-safety.cjs",
     "test:postrelease-server": "node scripts/test-postrelease-server-audit.cjs --workflows && node scripts/test-postrelease-growth-delete.cjs && node scripts/test-postrelease-registration-race.cjs",
@@ -49,7 +51,8 @@
     "undici": "7.29.1"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.4.0"
+    "@capacitor/cli": "8.4.0",
+    "playwright": "1.62.1"
   },
   "engines": {
     "node": ">=22"

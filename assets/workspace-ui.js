@@ -105,11 +105,23 @@ function completeCareTask(id) {
 function skipGrowthTask(id) {
   if (!requireLogin()) return;
   const today = formatDate(new Date());
-  const memo = TurtleCare.dueMemos(state.memos || [], today, state.turtles).find(memo => memo.id === id && memo.growthReminder);
-  // Ignore repeat clicks from detached rows after this occurrence is skipped.
-  if (!memo) return;
-  const turtle = state.turtles.find(t => t.id === memo.turtleId);
-  if (!turtle) return;
+  const memo = (state.memos || []).find(memo => memo.id === id && memo.growthReminder);
+  if (!memo) { render(); return; }
+  const turtle = (Array.isArray(state.turtles) ? state.turtles : []).find(t => String(t?.id || '').trim() === String(memo.turtleId || '').trim());
+  // Cancellation operates on the memo itself, even after its archive disappears.
+  if (!TurtleCare.hasReminderArchive(memo, state.turtles) || !turtle) {
+    if (memo.reminderEnabled !== false) {
+      const updatedAt = new Date().toISOString();
+      setState({ memos: state.memos.map(item => item.id === memo.id ? { ...item, reminderEnabled: false, updatedAt } : item) });
+      void cancelNativeCareReminder(memo);
+    } else render();
+    toast(localBackupFailed ? '本机保存失败，请前往同步页面重试保存' : '已取消该成长提醒');
+    return;
+  }
+  // A stale double click must not postpone the next occurrence again.
+  if (!TurtleCare.dueMemos([memo], today, state.turtles).length) {
+    render(); toast('本次成长提醒已取消或处理'); return;
+  }
   const next = new Date();
   next.setDate(next.getDate() + 30);
   const dueDate = formatDate(next);
@@ -231,7 +243,7 @@ function bindWorkspaceUI() {
   document.querySelectorAll('[data-start-task]').forEach(button => button.addEventListener('click', () => {
     if (!requireLogin()) return;
     const memo = TurtleCare.dueMemos(state.memos || [], formatDate(new Date()), state.turtles).find(memo => memo.id === button.dataset.startTask);
-    if (!memo) return;
+    if (!memo) { render(); return; }
     if (memo.growthReminder) {
       const turtle = state.turtles.find(t => t.id === memo.turtleId);
       if (!turtle) return;

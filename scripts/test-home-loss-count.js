@@ -52,3 +52,26 @@ ctx.state.turtles = [];
 assert.equal(ctx.stats().healthy, 0);
 assert.equal(ctx.stats().sick, 0);
 console.log('Home loss and active health counts passed.');
+ctx.state.turtlePools = [{ id: 'one' }, { id: 'two' }];
+ctx.state.turtles = [
+  { id: 'a', speciesCode: 'A', poolId: 'one', status: '正常饲养', health: '健康' },
+  { id: 'b', speciesCode: 'A', poolId: 'two', status: '正常饲养', health: '生病' },
+  { id: 'c', speciesCode: 'B', poolId: 'one', status: '已死亡' },
+  { id: 'd', speciesCode: 'B', poolId: 'deleted', status: '正常饲养', health: '健康' }
+];
+ctx.state.ledgerRecords = [
+  { type: 'loss', turtleId: 'removed', turtleSnapshot: { id: 'removed', speciesCode: 'A', poolId: 'one' } },
+  { type: 'loss', turtleId: 'removed', turtleSnapshot: { id: 'removed', speciesCode: 'A', poolId: 'one' } },
+  { type: 'loss', turtleId: 'c', turtleSnapshot: { id: 'c', speciesCode: 'A', poolId: 'two' } },
+  { type: 'loss', turtleId: 'legacy' }
+];
+ctx.state.turtleFilter = 'A'; ctx.state.turtlePoolFilter = 'one';
+assert.deepEqual(JSON.parse(JSON.stringify(ctx.stats())), { total: 1, active: 1, healthy: 1, sick: 0, loss: 1, species: 1 });
+ctx.state.turtleFilter = 'B'; ctx.state.turtlePoolFilter = 'one';
+assert.equal(ctx.stats().loss, 1, 'Current archive metadata wins over an outdated loss snapshot');
+ctx.state.turtlePoolFilter = 'two'; assert.equal(ctx.stats().total, 0); assert.equal(ctx.stats().loss, 0);
+ctx.state.turtleFilter = 'all'; ctx.state.turtlePoolFilter = 'unassigned';
+assert.equal(ctx.stats().total, 1, 'Deleted pools count as unassigned'); assert.equal(ctx.stats().loss, 0);
+ctx.state.turtlePoolFilter = 'all'; assert.equal(ctx.stats().loss, 3, 'Unattributed legacy losses remain in overall totals');
+assert.equal(ctx.stats().total, 4); assert.equal(ctx.stats().species, 2);
+console.log('Home species/pool intersection, historical losses, missing pools and reset counts passed.');

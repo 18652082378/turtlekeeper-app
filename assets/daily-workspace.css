@@ -85,12 +85,16 @@ html .phone-shell .ledger-workspace .ledger-summary-value { flex-wrap: wrap; ove
 html .phone-shell .ledger-workspace .ledger-command-grid[aria-label="新增账本记录"] { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
 html .phone-shell .ledger-workspace .ledger-command-grid[aria-label="新增账本记录"] button { padding: 8px 2px; height: auto; min-height: 44px; font-size: 12px; }
 html .phone-shell .ledger-workspace .memo-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; padding: 4px; margin-bottom: 12px; border: 1px solid var(--ui-line); border-radius: 14px; background: var(--ui-raised); box-shadow: none; }
-html .phone-shell .ledger-workspace .memo-tabs .tab { min-width: 0; min-height: 40px; padding-inline: 2px; border-radius: 10px; font-size: 12px; color: var(--ui-muted); background: transparent; box-shadow: none; }
+html .phone-shell .ledger-workspace .memo-tabs .tab { grid-column: auto; min-width: 0; min-height: 44px; padding: 8px 0; white-space: nowrap; border-radius: 10px; font-size: 12px; color: var(--ui-muted); background: transparent; box-shadow: none; }
 html .phone-shell .ledger-workspace .memo-tabs .tab.active { background: var(--ui-surface); color: var(--ui-accent); font-weight: 650; }
 html .phone-shell .workspace-page :is(button, summary):focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
 html .phone-shell .workspace-page .work-save-status { height: 30px; line-height: 1.4; }
 html .phone-shell .workspace-page .care-tabs button { min-height: 44px; }
 html .phone-shell :is(.reminders-page, .ledger-workspace) .memo-tabs .tab { min-height: 44px; }
+@media (max-width: 319px) {
+  html .phone-shell .ledger-workspace .memo-tabs .tab { font-size: 11px; }
+  html .phone-shell .ledger-workspace .ledger-command-grid[aria-label="新增账本记录"] button { font-size: 11px; }
+}
 @media (max-width: 360px) {
   .care-workbench { padding-inline: 0; }
   html .phone-shell .care-workbench .care-quick-actions button { font-size: 13px; }

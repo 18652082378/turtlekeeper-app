@@ -12,7 +12,7 @@
   }
   const isCurrent = (id, ctx) => owner === id && ctx.currentAuth().phone === ctx.phone && ctx.currentAuth().token === ctx.token;
   const repaint = ctx => { if (ctx.isVisible()) ctx.render(); };
-  async function request(ctx, route, extra = {}) { return ctx.api(`/api/weather/${route}`, { phone: ctx.phone, token: ctx.token, ...extra }); }
+  async function request(ctx, route, extra = {}) { return ctx.api(`/api/weather/${route}`, { phone: ctx.phone, token: ctx.token, platform: window.TURTLE_APP_PLATFORM === 'android' ? 'android' : 'ios', ...extra }); }
   function accept(result) {
     model.settings = { ...defaults(), ...result.settings };
     model.draft = { ...model.settings };
@@ -121,7 +121,7 @@
         <p class="weather-rule" data-weather-rule>${e(ruleText(d))}</p>
         </section>
         ${m.loaded && !m.providerConfigured ? '<p class="weather-feedback">天气服务尚未配置，暂不能开启提醒。</p>' : ''}
-        ${m.loaded && (!m.pushConfigured || !m.hasPushDevice) ? '<p class="muted">系统提醒需要在手机中开启通知，并完成设备注册。</p>' : ''}
+        ${window.TURTLE_ANDROID_PUSH_PROVIDER === 'unconfigured' ? '<p class="muted" role="status">安卓系统通知暂未开通；此处可保存提醒设置。</p>' : m.loaded && (!m.pushConfigured || !m.hasPushDevice) ? '<p class="muted">系统提醒需要在手机中开启通知，并完成设备注册。</p>' : ''}
         <div class="weather-actions"><button type="submit" class="primary" ${m.busy || !m.loaded ? 'disabled' : ''}>${m.busy ? '处理中…' : '保存设置'}</button><button type="button" class="text-green" data-weather-retry>重新读取设置</button></div>
       </fieldset></form>`}
       <section class="fresh-card weather-history"><h3>最近提醒</h3>${checkText ? `<p>${e(checkText)}${check.checkedAt ? `<small>检查时间：${e(new Date(check.checkedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }))}</small>` : ''}</p>` : ''}

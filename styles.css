@@ -18246,6 +18246,9 @@ html[data-theme-color="dark"] .turtle-row-drag-preview {
   gap: 10px;
 }
 
+.operations-page .section-title { flex-wrap: wrap; row-gap: 8px; }
+.operations-page .section-title > small { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+
 .operations-metric {
   min-width: 0;
   padding: 15px;
@@ -18881,8 +18884,10 @@ html[data-theme-color="dark"] .community-page .forum-thread-card { box-shadow: 0
 .forum-publish-circle-strip {
   display: flex;
   gap: 8px;
-  margin: 0 -18px;
-  padding: 10px 18px 14px;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 10px 0 14px;
   overflow-x: auto;
   border-bottom: 1px solid var(--divider);
   scrollbar-width: none;
@@ -19638,6 +19643,9 @@ html[data-theme-color="dark"] .archive-directory-dialog { background: #202020 !i
 .archive-search .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .archive-search .field { width: 100%; box-sizing: border-box; }
 .archive-page-count { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+.archive-species-count { display: block; line-height: 1.7; overflow-wrap: anywhere; }
+.archive-species-count > span { display: inline-block; white-space: nowrap; }
+.archive-species-pagination { display: block; margin-top: 2px; line-height: 1.6; }
 .archive-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 16px 0; }
 .archive-pagination .secondary { width: auto; min-width: 88px; }
 .archive-pagination button:disabled { opacity: .4; cursor: default; }

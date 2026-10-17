@@ -40,7 +40,7 @@ function filesUnder(folder) {
 }
 // Check all shipped web files, not a hand-picked subset that misses new UI
 // modules, policy pages or binary assets. Hash comparisons keep errors concise.
-const bundledSources = ["index.html", "official.html", "config.js", "species-data.js", "app.js", "styles.css", "chat-tools.css", "dark-surface-audit.css", "privacy.html", "terms.html", "support.html", ...filesUnder("assets")].sort();
+const bundledSources = [...require('./web-asset-manifest.cjs'), ...filesUnder("assets")].sort();
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex');
 for (const file of bundledSources) {
   assert.equal(hash(`www/${file}`), hash(file), `Stale web asset: ${file}`);

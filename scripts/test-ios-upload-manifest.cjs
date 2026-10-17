@@ -1,0 +1,10 @@
+'use strict';
+const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+const { verifyUploadManifest } = require('./verify-ios-upload-manifest.cjs');
+const root = path.resolve(__dirname, '..');
+const files = fs.readFileSync(path.join(root, 'scripts/ios-135-release-files.txt'), 'utf8').split(/\r?\n/).filter(Boolean);
+assert.equal(verifyUploadManifest(files), files.length);
+assert.throws(() => verifyUploadManifest([...files, 'android/app/src/main/res/xml/config.xml']), /Git-ignored/, 'Reject the generated file that blocked build 135');
+assert.throws(() => verifyUploadManifest([...files, 'config.js']), /Duplicate/);
+assert.throws(() => verifyUploadManifest([...files, '../config.js']), /Invalid release path/);
+console.log('PASS: release manifest plus ignored generated-file, duplicate and traversal regressions; no Git writes.');

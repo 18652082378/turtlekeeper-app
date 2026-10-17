@@ -1,0 +1,293 @@
+/* Android only. Bundle real Chinese weights instead of relying on OEM fallbacks. */
+@font-face {
+  font-family: "Turtle Noto Sans SC";
+  src: url("android-fonts/NotoSansSC-VF.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+/* Native window insets already exclude system bars and keyboard. */
+html:root { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; --android-shell-width: 1280px; --app-font: "Turtle Noto Sans SC", system-ui, sans-serif; }
+html body, html .phone-shell, html .phone-shell *, html button, html input, html select, html textarea { font-synthesis-weight: auto; }
+html, body { min-width: 0; }
+/* No edge stretch or scroll chaining of the Android viewport/preview frame.
+   Pull-to-refresh still observes ordinary touch events in app.js. */
+html { overscroll-behavior-y: none; }
+/* Match the native surface exposed behind the clock and system navigation. */
+html .phone-shell > .topbar,
+html .phone-shell > .bottom-nav { background: var(--android-system-bar-bg, var(--topbar-bg)) !important; }
+html .phone-shell {
+  width: min(100%, var(--android-shell-width)); max-width: var(--android-shell-width); margin-inline: auto;
+  --fixed-topbar-height: var(--android-topbar-height, 60px);
+  --fixed-tabbar-content-height: 60px;
+  --fixed-tabbar-safe: 4px;
+  --fixed-tabbar-height: var(--android-tabbar-height, 64px);
+}
+html .topbar {
+  width: min(100%, var(--android-shell-width)) !important; max-width: var(--android-shell-width) !important;
+  height: auto !important; min-height: 60px !important; padding-top: 0 !important;
+}
+html .topbar .nav-title {
+  height: auto !important; min-height: 60px !important;
+  padding: 8px 12px !important; gap: 4px; box-sizing: border-box;
+  grid-template-columns: 48px minmax(0, 1fr) 48px !important;
+}
+html .topbar .nav-title.nav-title-with-trade-guide {
+  grid-template-columns: 80px minmax(0, 1fr) 80px !important;
+}
+html .topbar .nav-title h1 {
+  min-width: 0; max-width: 100%; margin-inline: 0 !important;
+  font-size: clamp(18px, 5vw, 22px) !important;
+  white-space: normal; overflow-wrap: anywhere; line-height: 1.25 !important;
+}
+html .market-top-service.market-trade-guide-entry {
+  min-width: 0; width: 80px; height: auto; min-height: 44px;
+  padding: 8px 0; font-size: 14px !important; font-weight: 600 !important;
+  white-space: normal; overflow-wrap: anywhere; line-height: 1.4;
+}
+html .phone-shell .bottom-nav { height: auto !important; min-height: 64px; align-items: stretch !important; }
+html .phone-shell .bottom-nav > button {
+  height: auto !important; min-height: 60px !important; padding-block: 6px !important;
+  white-space: normal !important; overflow-wrap: anywhere; line-height: 1.3 !important;
+  align-content: center !important; gap: 3px !important;
+}
+html .phone-shell .bottom-nav > button > span { max-width: 100%; white-space: normal !important; }
+html .phone-shell .bottom-nav,
+html .community-chat-form, html .community-chat-tools,
+html .community-chat-product-context, html .feedback-detail-comment, html .guest-login-slot {
+  width: min(100%, var(--android-shell-width)) !important; max-width: var(--android-shell-width) !important;
+  margin-inline: 0 !important; left: 50% !important; right: auto !important;
+  transform: translateX(-50%); box-sizing: border-box;
+}
+html .forum-reply-composer, html .market-detail-actions {
+  left: max(0px, calc((100vw - var(--android-shell-width)) / 2)) !important;
+  right: max(0px, calc((100vw - var(--android-shell-width)) / 2)) !important;
+  width: auto !important; max-width: var(--android-shell-width) !important;
+}
+html .topbar.community-detail-topbar { width: min(100%, var(--android-shell-width)) !important; }
+html .forum-publish-nav.community-compose-nav { width: min(100%, var(--android-shell-width)) !important; margin-inline: auto !important; }
+html .content { min-width: 0; }
+html .home-redesign .home-hero { gap: 12px; padding: 18px 14px 46px !important; grid-template-columns: minmax(0, 1fr) 48px; }
+html .home-redesign .home-hero > div { min-width: 0; }
+html .home-redesign .home-hero h2 { font-size: clamp(21px, 5.8vw, 26px) !important; overflow-wrap: anywhere; }
+html .home-redesign .hero-add { flex-shrink: 0; width: 48px !important; height: 48px !important; }
+html .home-overview-metrics { gap: 4px !important; margin: -28px 8px 16px !important; position: relative; }
+html .home-overview-metrics > div { min-width: 0; padding-inline: 2px !important; }
+html .home-overview-metrics > div > span { font-size: 11px !important; white-space: normal !important; }
+html #app .home-archive-section .filter-dock { gap: 6px; grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+html #app .home-archive-section .filter-dock .select {
+  font-size: 12px !important; padding-left: 6px !important; padding-right: 20px !important;
+  appearance: none; -webkit-appearance: none; min-width: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='m1 1 4 4 4-4' fill='none' stroke='%23818b8d' stroke-width='1.5'/%3E%3C/svg%3E") !important;
+  background-position: right 6px center !important; background-size: 10px 6px !important; background-repeat: no-repeat !important;
+}
+html .action-panel.care-action-panel.home-module-panel .care-action > small { white-space: normal; overflow: visible; }
+/* Archive cards: a fixed drawing for the menu, with a separate touch target.
+   Text bullets vary in advance width across Android font renderers. */
+html .home-archive-section .turtle-row .more-btn {
+  top: 0 !important; right: 4px !important;
+  width: 44px !important; min-width: 44px !important;
+  height: 44px !important; min-height: 44px !important;
+}
+html .home-archive-section .turtle-row .more-btn > span {
+  width: 20px; height: 20px; font-size: 0 !important;
+  display: grid; place-items: center; transform: none;
+}
+html .home-archive-section .turtle-row .more-btn > span::before {
+  content: ""; width: 3px; height: 3px; border-radius: 50%;
+  background: currentColor; box-shadow: -6px 0 currentColor, 6px 0 currentColor;
+}
+/* Identity and measurements share a column; pool/price/days share another.
+   The last track plus outer padding reserve the menu, including space below it. */
+html .home-archive-section .turtle-row {
+  grid-template-columns: 58px minmax(0, 1fr) max-content 36px !important;
+  padding: 10px 8px !important;
+  grid-template-rows: minmax(24px, auto) minmax(28px, auto) minmax(22px, auto);
+  gap: 4px; align-content: start; align-items: start;
+}
+html .home-archive-section .turtle-row > .turtle-row-content,
+html .home-archive-section .turtle-row .turtle-row-title,
+html .home-archive-section .turtle-row .turtle-row-species,
+html .home-archive-section .turtle-row .turtle-row-bottom { display: contents; }
+html .home-archive-section .turtle-row > img {
+  grid-column: 1; grid-row: 1 / 4; align-self: center;
+  width: 58px !important; height: 58px !important;
+}
+html .home-archive-section .turtle-row .turtle-row-title > strong {
+  grid-column: 2; grid-row: 1; margin: 0 !important; align-self: center;
+}
+html .home-archive-section .turtle-row .turtle-row-species > p {
+  grid-column: 2; grid-row: 2; margin: 0 !important; align-self: center;
+}
+html .home-archive-section .turtle-row .turtle-row-meta {
+  grid-column: 2; grid-row: 3; min-width: 0; max-width: 100%;
+  display: flex; flex-wrap: nowrap; justify-content: flex-start; gap: 4px;
+}
+html .home-archive-section .turtle-row .turtle-row-meta > span,
+html .home-archive-section .turtle-row .turtle-keeping-days {
+  min-height: 22px; padding: 2px 6px; line-height: 16px; box-sizing: border-box;
+}
+html .home-archive-section .turtle-row .turtle-row-meta > span {
+  padding-inline: 3px; flex-shrink: 0;
+}
+html .home-archive-section .turtle-row .turtle-pool-title-meta,
+html .home-archive-section .turtle-row .turtle-price,
+html .home-archive-section .turtle-row .turtle-keeping-days {
+  grid-column: 3; justify-self: end; align-self: center; margin: 0;
+}
+html .home-archive-section .turtle-row .turtle-pool-title-meta { grid-row: 1; max-width: 108px; }
+html .home-archive-section .turtle-row .turtle-price { grid-row: 2; }
+html .home-archive-section .turtle-row .turtle-keeping-days { grid-row: 3; align-self: start; }
+html .home-archive-section .turtle-row .more-btn {
+  right: 0 !important; width: 44px !important; min-width: 44px !important;
+}
+html .home-archive-section .turtle-row .turtle-row-status-badge {
+  grid-column: 3; grid-row: 4; justify-self: end;
+  position: static; transform: none; width: auto; padding: 2px 6px;
+}
+/* Extremely narrow windows retain the photo beside the identity. Measurements
+   stay together; days get their own row, still aligned beneath pool and price. */
+@media (max-width: 359px) {
+  html .home-archive-section .turtle-row {
+    grid-template-columns: 58px minmax(0, 1fr) max-content 36px !important;
+    grid-template-rows: minmax(24px, auto) minmax(28px, auto) minmax(22px, auto) minmax(22px, auto);
+  }
+  html .home-archive-section .turtle-row .turtle-row-meta { grid-column: 2 / 4; }
+  html .home-archive-section .turtle-row .turtle-keeping-days { grid-row: 4; }
+  html .home-archive-section .turtle-row .turtle-row-status-badge { grid-row: 5; }
+}
+/* Origin badges use the reserved menu column without covering data. */
+html .home-archive-section .turtle-row .turtle-row-status-badge {
+  grid-area: auto !important; position: absolute; inset: auto 0 10px auto;
+  transform: none; width: 44px; min-width: 44px; max-width: 44px; min-height: 22px;
+  margin: 0; padding: 2px 1px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+/* Batch names and species use the full identity width. Separate cost/pool
+   and summary rows retain full text beside the 44px menu target. */
+html .home-archive-section .turtle-batch-row {
+  grid-template-rows: minmax(24px, auto) minmax(28px, auto) minmax(22px, auto) minmax(22px, auto);
+}
+html .home-archive-section .turtle-batch-row > img { grid-row: 1 / 5; }
+html .home-archive-section .turtle-batch-row .turtle-row-title > strong {
+  grid-column: 2 / 4; grid-row: 1; white-space: normal; overflow-wrap: anywhere; line-height: 1.35;
+}
+html .home-archive-section .turtle-batch-row .turtle-row-species > p {
+  grid-column: 2 / 4; grid-row: 2; white-space: normal !important; overflow: visible; overflow-wrap: anywhere;
+}
+html .home-archive-section .turtle-batch-row .batch-count-badge { display: inline-block; white-space: normal; }
+html .home-archive-section .turtle-batch-row .more-btn { font-size: 0 !important; display: grid; place-items: center; }
+html .home-archive-section .turtle-batch-row .more-btn > span { display: none; }
+html .home-archive-section .turtle-batch-row .more-btn::before {
+  content: ""; width: 3px; height: 3px; border-radius: 50%;
+  background: currentColor; box-shadow: -6px 0 currentColor, 6px 0 currentColor;
+}
+html .home-archive-section .turtle-batch-row .turtle-pool-title-meta { grid-column: 3; grid-row: 3; align-self: start; }
+html .home-archive-section .turtle-batch-row .turtle-price { grid-column: 2; grid-row: 3; justify-self: start; align-self: start; }
+html .home-archive-section .turtle-batch-row .turtle-row-meta { grid-column: 2; grid-row: 4; flex-wrap: wrap; align-self: start; }
+html .home-archive-section .turtle-batch-row .turtle-row-meta > span { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+html .home-archive-section .turtle-batch-row:has(.turtle-row-status-badge) .turtle-row-meta > span:nth-child(2) { display: none; }
+html .home-archive-section .turtle-batch-row .turtle-keeping-days { grid-column: 3; grid-row: 4; align-self: start; }
+html .home-archive-section .turtle-batch-row .turtle-row-status-badge {
+  grid-area: 4 / 4 / 5 / 5 !important; position: static; inset: auto; align-self: start; justify-self: start;
+}
+@media (max-width: 359px) {
+  html .home-archive-section .turtle-batch-row:has(.turtle-price) { grid-template-rows: minmax(24px, auto) minmax(28px, auto) minmax(22px, auto) minmax(28px, auto) minmax(22px, auto); }
+  html .home-archive-section .turtle-batch-row:has(.turtle-price) > img { grid-row: 1 / 6; }
+  html .home-archive-section .turtle-batch-row:has(.turtle-price) .turtle-price { grid-column: 2 / 4; grid-row: 4; justify-self: end; }
+  html .home-archive-section .turtle-batch-row:has(.turtle-price) .turtle-row-meta,
+  html .home-archive-section .turtle-batch-row:has(.turtle-price) .turtle-keeping-days { grid-row: 5; }
+}
+/* Ledger menu glyphs use the same fixed drawing as archive menus. */
+html .content .ledger-row {
+  grid-template-columns: 54px minmax(0, 1fr) max-content !important;
+  grid-template-rows: minmax(30px, auto) minmax(24px, auto) minmax(22px, auto);
+  grid-auto-rows: minmax(18px, auto);
+  padding: 10px 8px !important; gap: 4px; align-items: start;
+}
+html .content .ledger-row-main,
+html .content .ledger-row-title-line,
+html .content .ledger-row-side { display: contents !important; }
+html .content .ledger-row .ledger-thumb { grid-column: 1; grid-row: 1 / 4; align-self: center; }
+html .content .ledger-row-title { grid-column: 2 / 4; grid-row: 1; min-width: 0; margin: 0 24px 0 0 !important; }
+html .content .ledger-row-species { grid-column: 2; grid-row: 2; padding: 0; align-self: center; }
+html .content .ledger-row-side .ledger-amount {
+  grid-column: 3; grid-row: 2; margin: 0; padding: 0 !important; justify-self: end; align-self: center;
+}
+html .content .ledger-row .ledger-turtle-meta {
+  grid-column: 2; grid-row: 3; min-width: 0;
+  overflow: visible; flex-wrap: wrap; gap: 4px; align-self: start;
+}
+html .content .ledger-row .ledger-turtle-meta > span {
+  max-width: 100%; min-width: 0; padding: 2px 5px; box-sizing: border-box;
+  white-space: normal; overflow-wrap: anywhere; line-height: 16px;
+}
+html .content .ledger-row-side .ledger-linked-status {
+  grid-column: 2; grid-row: 4; margin: 0; justify-self: start;
+}
+html .content .ledger-row-date {
+  grid-column: 3; grid-row: 3; margin: 0; justify-self: end; align-self: start; line-height: 22px;
+}
+html .content .ledger-row .ledger-more-btn {
+  top: 0 !important; right: 0 !important;
+  width: 28px !important; min-width: 28px !important;
+  height: 44px !important; min-height: 44px !important;
+}
+html .content .ledger-row .ledger-more-btn > span {
+  width: 20px; height: 20px; font-size: 0 !important;
+  display: grid; place-items: center; transform: none;
+}
+html .content .ledger-row .ledger-more-btn > span::before {
+  content: ""; width: 3px; height: 3px; border-radius: 50%;
+  background: currentColor; box-shadow: -6px 0 currentColor, 6px 0 currentColor;
+}
+/* Intrinsic form/control widths must never force a narrow window wider. */
+html #app form, html #app form > *, html .market-form-card > *,
+html .market-field-group, html .market-field-group > *, html .forum-publish-settings > * { min-width: 0; }
+html .market-form-card label, html .market-price-input { min-width: 0; max-width: 100%; box-sizing: border-box; }
+html .market-price-input input { width: 0; flex: 1 1 0; }
+html #app form input:not([type="checkbox"]):not([type="radio"]),
+html #app form select, html #app form textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
+html .market-form-heading, html .operations-page .section-title { flex-wrap: wrap; }
+html .market-form-heading > *, html .operations-page small { min-width: 0; overflow-wrap: anywhere; }
+html .forum-publish-circle-strip { width: 100%; max-width: 100%; min-width: 0; margin-inline: 0; padding-inline: 0; box-sizing: border-box; }
+html .market-media-add { height: auto !important; min-height: 90px; aspect-ratio: auto; padding-block: 10px; }
+html .community-media-preview.community-media-add { height: auto !important; aspect-ratio: auto; padding-block: 10px; }
+html .market-sale-overlay, html .market-service-overlay { left: 0 !important; right: 0 !important; }
+html .market-sale-dialog, html .market-service-dialog, html .content-report-dialog,
+html .market-detail-more-sheet, html .community-visibility-sheet, html .system-announcement-dialog {
+  max-width: min(560px, 100%); margin-inline: auto;
+  max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain;
+  box-sizing: border-box;
+}
+html .trade-intro { overflow-y: auto; }
+html .species-alpha-nav { right: max(6px, calc((100vw - var(--android-shell-width)) / 2 + 6px)); }
+html .market-floating-add {
+  right: max(18px, calc((100vw - var(--android-shell-width)) / 2 + 18px));
+  bottom: calc(var(--android-tabbar-height, 64px) + 12px);
+}
+html .guest-login-slot {
+  height: clamp(140px, 26dvh, 300px);
+  max-height: calc(100dvh - var(--android-topbar-height, 60px) - var(--android-tabbar-height, 64px));
+  overflow-y: auto;
+}
+/* Use the unfolded window for additional columns rather than stretching cards. */
+@media (min-width: 600px) {
+  html .content { padding-inline: 24px; }
+  html .action-panel.care-action-panel.home-module-panel { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 12px !important; }
+  html .action-panel.care-action-panel.home-module-panel .care-action { min-height: 112px !important; }
+  html .home-overview-metrics { gap: 12px !important; }
+  html .home-archive-section {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 310px), 1fr)); gap: 12px;
+  }
+  html .home-archive-section > :not(.turtle-row) { grid-column: 1 / -1; }
+  html .home-archive-section .turtle-row { margin: 0; min-width: 0; }
+  html .market-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  html .content:has(> form), html .content.community-detail-page,
+  html .content:has(> .policy-card) { max-width: 760px; width: 100%; margin-inline: auto; }
+}
+@media (max-width: 359px) {
+  html .market-form-two { grid-template-columns: minmax(0, 1fr); }
+}
+
+html #app .home-archive-section .filter-dock > :last-child { grid-column: auto !important; }

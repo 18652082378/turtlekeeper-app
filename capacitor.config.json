@@ -3,6 +3,9 @@
   "appName": "龟友手账",
   "webDir": "www",
   "bundledWebRuntime": false,
+  "android": {
+    "includePlugins": ["@capacitor/app", "@capacitor/network"]
+  },
   "ios": {
     "scheme": "TurtleKeeper",
     "handleApplicationNotifications": true

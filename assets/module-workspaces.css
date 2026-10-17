@@ -30,6 +30,11 @@ html .phone-shell .detail-grid-card > div { min-width: 0; padding: 10px 12px; }
 html .phone-shell .detail-grid-card strong { overflow-wrap: anywhere; }
 html .phone-shell .growth-filter-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
 html .phone-shell .growth-filter-row > button { min-width: 0; min-height: 44px; padding: 8px 2px; font-size: 12px; }
+/* Six operations sections form complete rows rather than a 4+2 or 5+1 split. */
+html .phone-shell .operations-page .operations-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (min-width: 600px) {
+  html .phone-shell .operations-page .operations-tabs { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
 html .phone-shell .growth-history-delete { width: 44px; min-width: 44px; height: 44px; }
 .growth-list-status { display: flex; justify-content: space-between; gap: 8px; margin: 12px 2px; color: var(--ui-muted); font-size: 12px; }
 
@@ -133,4 +138,75 @@ html .phone-shell .team-space .ts-tabs > button { min-height: 56px; }
 .turtle-individual-species > .turtle-gender {
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+/* A local illustration is the final fallback, never a fabricated record photo. */
+.breeding-cover {
+  --breed-cover-bg: #eaf4ee;
+  --breed-cover-ink: #397d67;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 11px;
+  color: var(--breed-cover-ink);
+  background: var(--breed-cover-bg);
+  isolation: isolate;
+}
+.breeding-cover-art { display: block; width: 100%; height: 100%; }
+.breeding-cover > img { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; border-radius: inherit; object-fit: cover; }
+.breeding-row .breeding-cover { width: 54px; height: 54px; }
+.breeding-row .breeding-cover, .breeding-photo-box > .breeding-cover, .breeding-history-snapshot .breeding-cover {
+  color: var(--breed-cover-ink); background: var(--breed-cover-bg);
+}
+.breeding-row .breeding-cover > img { width: 100%; height: 100%; }
+.breeding-cover .breeding-cover-source {
+  position: absolute; right: 2px; bottom: 2px; z-index: 1;
+  padding: 0 3px; border-radius: 4px;
+  background: #fffef8; color: #285c48;
+  font-size: 9px; font-weight: 600; font-style: normal;
+  line-height: 15px; white-space: nowrap;
+  box-shadow: 0 1px 3px #152f2526;
+}
+html[data-theme-color="dark"] .breeding-cover {
+  --breed-cover-bg: #263b33;
+  --breed-cover-ink: #a6d1b8;
+  color: #a6d1b8; background: #263b33;
+}
+html[data-theme-color="dark"] .breeding-history-snapshot .breeding-cover { color: var(--breed-cover-ink); background: var(--breed-cover-bg); }
+html[data-theme-color="dark"] .breeding-cover .breeding-cover-source { color: #c8ead4; background: #203a2f; }
+
+/* One quiet visual language for missing media and helpful empty states. */
+.placeholder-art { display: block; width: 100%; height: 100%; flex: 0 0 auto; }
+.visual-avatar { overflow: hidden; background: #e8efdf; }
+.visual-avatar > .placeholder-art { width: 92%; height: 92%; margin: auto; }
+.turtle-pool-mark > .placeholder-art { width: 88%; height: 88%; }
+.ledger-thumb-placeholder > .placeholder-art { width: 86%; height: 86%; }
+.photo-uploader > .visual-photo-placeholder {
+  display: grid; place-items: center; flex: 0 0 auto;
+  width: 64px; height: 64px; overflow: hidden; border-radius: 12px;
+  background: #edf2e7;
+}
+.visual-photo-placeholder > .placeholder-art { width: 88%; height: 88%; }
+html .phone-shell .visual-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-width: 0; width: 100%; gap: 10px; padding: 24px 16px;
+}
+html .phone-shell .visual-empty > .visual-empty-art {
+  display: block; width: 84px; height: 84px; flex: 0 0 auto;
+  margin: 0 0 2px; padding: 8px; border-radius: 26px;
+  background: #edf2e7;
+}
+.visual-empty-art > img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: 16px; }
+html .phone-shell .visual-empty > p { max-width: 320px; overflow-wrap: anywhere; }
+.visual-empty > button { max-width: 100%; white-space: normal; }
+html[data-theme-color="dark"] .visual-avatar,
+html[data-theme-color="dark"] .visual-photo-placeholder,
+html[data-theme-color="dark"] .visual-empty > .visual-empty-art { background: #304238; }
+@media (max-width: 320px) {
+  html .phone-shell .visual-empty { padding: 20px 12px; }
+  html .phone-shell .visual-empty > .visual-empty-art { width: 72px; height: 72px; padding: 6px; border-radius: 22px; }
 }

@@ -88,11 +88,11 @@ function createWeatherDispatcher({ read, write, provider, configured, devices, s
           const deliveryClock = clock(now());
           if (!user || deliveryClock.date !== time.date || minute(deliveryClock.time) - minute(settings.remindTime) > 15 || JSON.stringify(user.weatherReminder) !== revision || !devices(user).some(d => d.token === device.token)) break;
           let result;
-          try { result = await send(device.token, payload); } catch { result = { ok: false }; }
-          if (result.invalid) invalidDevice(phone, device.token);
+          try { result = await send(device.token, payload, device); } catch { result = { ok: false }; }
+          if (result.invalid) invalidDevice(phone, device.token, device.platform || 'ios');
           db = read(); user = db.users?.[phone];
           if (!user?.weatherDeliveries?.[key]) continue;
-          user.weatherDeliveries[key].results.push({ deviceHash: crypto.createHash('sha256').update(device.token).digest('hex'), ok: Boolean(result.ok) });
+          user.weatherDeliveries[key].results.push({ deviceHash: crypto.createHash('sha256').update((device.platform === 'android' ? 'android:' : '') + device.token).digest('hex'), ok: Boolean(result.ok) });
           if (user.weatherLastCheck?.key === key) user.weatherLastCheck.status = user.weatherDeliveries[key].results.some(r => r.ok) ? 'sent' : 'failed';
           await write(db);
         }

@@ -4,11 +4,11 @@ const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
 const script = source.slice(source.indexOf('async function downloadTextFile('), source.indexOf('function exportAccountData('));
-function setup(native = true) {
+function setup(native = true, platform = 'ios') {
   const messages = [];
   let clicks = 0;
   const ctx = {
-    window: { Capacitor: { isNativePlatform: () => native, getPlatform: () => 'ios', Plugins: { TurtleMediaPicker: {} } } },
+    window: { Capacitor: { isNativePlatform: () => native, getPlatform: () => platform, Plugins: { TurtleMediaPicker: {}, TurtleAndroidFiles: {} } } },
     toast: text => messages.push(text), Blob,
     URL: { createObjectURL: () => 'blob:export', revokeObjectURL() {} },
     setTimeout() {},
@@ -45,5 +45,16 @@ function setup(native = true) {
   assert.equal(await web.ctx.downloadTextFile('经营报表.csv', '损耗,450', 'text/csv'), true);
   assert.equal(web.clicks(), 1);
   assert.match(web.messages[0], /浏览器下载列表/);
+  const android = setup(true, 'android');
+  android.ctx.window.Capacitor.Plugins.TurtleAndroidFiles.exportText = async ({ content }) => {
+    assert.equal(content, '\ufeff{}'); return { saved: true };
+  };
+  assert.equal(await android.ctx.downloadTextFile('backup.json', '{}'), true);
+  android.ctx.window.Capacitor.Plugins.TurtleAndroidFiles.exportText = async () => ({ cancelled: true });
+  assert.equal(await android.ctx.downloadTextFile('backup.json', '{}'), false);
+  android.ctx.window.Capacitor.Plugins.TurtleAndroidFiles.exportText = async () => { throw new Error('保存位置不可写'); };
+  assert.equal(await android.ctx.downloadTextFile('backup.json', '{}'), false);
+  assert.match(android.messages.at(-1), /保存位置不可写/);
+  assert.equal(android.clicks(), 0, 'Android must never fall through to a blob download on save/cancel/error');
   console.log('Export checks passed: native save confirmation, cancel, unsupported build, failure, and browser download.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

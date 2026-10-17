@@ -92,12 +92,12 @@ function createDailyCommunityDispatcher({ read, write, send, devices, canReceive
         const user = db.users[phone];
         if (!user || user.communityDailyPushEnabled === false || !canReceive(db, post, user)) continue;
         for (const device of devices(user)) {
-          const key = crypto.createHash('sha256').update(device.token).digest('hex');
+          const key = crypto.createHash('sha256').update((device.platform === 'android' ? 'android:' : '') + device.token).digest('hex');
           if (delivery.attempted[key]) continue;
           delivery.attempted[key] = now().toISOString();
           await write(db);
           const payload = recommendationPayload(post);
-          await send(device.token, payload);
+          await send(device.token, payload, device);
           // Re-read after each await: do not overwrite newer user/account changes.
           db = read(); delivery = db.communityDailyDeliveries[day];
         }

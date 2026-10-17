@@ -140,8 +140,8 @@ async function main() {
 
     const health = await fetch(`${base}/api/app/version?build=1`).then(response => response.json());
     assert.equal(health.ok, true);
-    assert.equal(health.minimumBuild, 125, "1.1.3 and earlier builds must require the published 1.1.4 update");
-    assert.equal(health.latestBuild, 125, "published iOS release is 1.1.4 build 125");
+    assert.equal(health.minimumBuild, 132, "Older installed builds must require the App Store 1.1.5 release at build 132");
+    assert.equal(health.latestBuild, 132, "App Store 1.1.5 ships package 1.1.7 build 132");
     const androidVersion = await fetch(base + '/api/app/version?platform=android&channel=beta').then(response => response.json());
     assert.equal(androidVersion.platform, 'android');
     assert.equal(androidVersion.channel, 'beta');
@@ -174,8 +174,8 @@ async function main() {
       await response.body?.cancel();
       assert.equal(response.status, 200, `public client resource must remain available: ${pathname}`);
     }
-    for (const build of [95, 99, 117, 119, 120, 121, 122, 123, 124]) assert.ok(build < health.minimumBuild, `Build ${build} must require a forced update`);
-    for (const build of [125, 126]) assert.ok(build >= health.minimumBuild, `1.1.4 build ${build} must remain usable`);
+    for (const build of [95, 99, 117, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131]) assert.ok(build < health.minimumBuild, `Build ${build} must require a forced update`);
+    for (const build of [132, 133, 134]) assert.ok(build >= health.minimumBuild, `Installed build ${build} must remain usable`);
 
     await request("/api/upload/image", { image: "data:image/png;base64,AAAA" }, { status: 401 });
 
