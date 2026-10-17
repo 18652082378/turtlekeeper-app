@@ -22,7 +22,7 @@ git add --pathspec-from-file=scripts/ios-135-release-files.txt
 git diff --cached --check -- "${release_files[@]}"
 if ! git diff --cached --quiet -- "${release_files[@]}"; then
   git -c gc.auto=0 -c maintenance.auto=false commit --only \
-    -m "Release iOS 1.1.8 build 135: responsive pages and visual placeholders" \
+    -m "Fix narrow market publish form for iOS 1.1.8 build 135" \
     --pathspec-from-file=scripts/ios-135-release-files.txt
 fi
 node - <<'NODE'

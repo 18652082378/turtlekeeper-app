@@ -70,6 +70,8 @@ workflows:
       - output/ios/ledger-toolbar/failure.png
       - output/android/ledger-toolbar/results.json
       - output/android/ledger-toolbar/failure.png
+      - output/market-publish-layout/**/*.png
+      - output/market-publish-layout-*.json
       - /Users/builder/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
     publishing:
       app_store_connect:

@@ -53,6 +53,20 @@ html .phone-shell .community-refined-page .forum-sort-tabs button { min-height: 
 /* Product text gets the same surface and alignment as its photo. */
 html .phone-shell .market-grid { gap: 12px; }
 html .phone-shell .market-card-wrap { min-width: 0; }
+/* Native form controls have wider intrinsic sizes in Mac WebKit. An implicit
+   auto grid column lets one control expand every publish card offscreen. */
+.market-publish-form {
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%; min-width: 0; max-width: 100%;
+}
+.market-publish-form > *,
+.market-publish-form :is(.market-fields-card, .market-field-group, label, .market-form-two, .market-price-input, .market-species-picker, .market-title-templates) {
+  min-width: 0; max-width: 100%;
+}
+.market-publish-form :is(.market-fields-card, .market-fields-card label, .market-field-group) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.market-publish-form :is(.field, .select, textarea) { min-width: 0; max-width: 100%; }
 html .phone-shell .market-card { display: block; width: 100%; border: 1px solid var(--ui-line); border-radius: 14px !important; padding: 0; overflow: hidden; }
 html .phone-shell .market-card-photo { border-radius: 0; }
 html .phone-shell .market-card-body { padding: 10px 8px; }
