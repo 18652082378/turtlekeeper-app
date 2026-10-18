@@ -19,7 +19,7 @@ android {
         applicationId "com.turtlekeeper.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 26
+        versionCode 27
         versionName "1.1.8"
         buildConfigField 'String', 'PUSH_APP_KEY', groovy.json.JsonOutput.toJson(pushConfig.appKey.toString())
         buildConfigField 'String', 'PUSH_APP_SECRET', groovy.json.JsonOutput.toJson(pushConfig.appSecret.toString())

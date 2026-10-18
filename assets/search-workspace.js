@@ -101,6 +101,11 @@
     setState({ page: 'search' }, { skipCloud: true });
     document.querySelector('[data-workspace-search]')?.focus({ preventScroll: true });
   }
+  function search(kind, term, code = '') {
+    reset(); source = kind === 'community' ? 'community' : 'market';
+    setState({ page: 'search' }, { skipCloud: true });
+    return submit(term, code);
+  }
   async function submit(value = query, code = '', rememberHistory = true) {
     if (state.page !== 'search' || owner !== account() || ownerSession !== session()) return;
     const term = clean(value); if (!term) return;
@@ -186,5 +191,5 @@
     serial++;
     if (loading) { loading = false; submitted = false; results = []; revision++; }
   }
-  window.TurtleSearch = { open, render: renderPage, bind, reset, leave, source: () => source, signature: () => `${source}:${query}:${revision}` };
+  window.TurtleSearch = { open, search, render: renderPage, bind, reset, leave, source: () => source, signature: () => `${source}:${query}:${revision}` };
 })();

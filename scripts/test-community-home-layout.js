@@ -16,12 +16,14 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await page.setContent('<html data-theme-color="dark"><head></head><body><div id="app" class="phone-shell"></div></body></html>');
     await page.addStyleTag({ content: fs.readFileSync(path.join(root, 'styles.css'), 'utf8') });
+    for (const file of ['assets/ui-system.css', 'assets/module-workspaces.css', 'assets/discovery-workspace.css']) await page.addStyleTag({ content: fs.readFileSync(path.join(root, file), 'utf8') });
     const photo = 'data:image/jpeg;base64,' + fs.readFileSync(path.join(root, 'assets/species/ABQ.jpg')).toString('base64');
     await page.addScriptTag({ content: `
       var state={page:'community', turtles:[], communityFollowedCircleIds:['general']};
       ${source.match(/let communityForumSort = .*;/)[0]}
       var communitySelectedCircleId='all', communitySearchQuery='',communitySearchResults=[];
-      var communityDraftTopic='',communityDraftTurtleId='',communityDraftQuestion='',communityDraftTitle='',communityDraftCircleId='',communityDraftVisibility='',communityVisibilitySheetOpen=false,communityDraftText='';
+      var communityDraftTopic='',communityDraftTurtleId='',communityDraftQuestion='',communityDraftTitle='',communityDraftCircleId='',communityDraftVisibility='',communityVisibilitySheetOpen=false,communityDraftText='',communityDraftOwner='',communityDraftMediaItems=[],communityPublishInFlight=false,communityPublishFingerprint='',communityPublishSubmissionId='';
+      function currentCloudToken(){return ''} function clearCommunityDraftMedia(){communityDraftMediaItems=[]}
       var CONFIGURED_SMS_BACKEND=false, canCompose=true;
       function canUseCommunity(){return canCompose} function setState(patch){Object.assign(state,patch)}
       function communityPublishProgressMarkup(){return ''} function platformServiceTopButton(){return ''}

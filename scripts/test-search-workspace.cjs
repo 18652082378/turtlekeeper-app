@@ -64,7 +64,7 @@ const root = path.resolve(__dirname, '..'), output = path.join(root, 'output/sea
       const header = await page.locator('.topbar').boundingBox();
       assert.ok(Math.abs(original.y - header.y - header.height) < 1, 'feed search must touch the bottom of its title bar');
       assert.ok(Math.abs(original.x - main.x) < 1 && Math.abs(original.width - main.width) < 1, 'feed search uses the same centered content width');
-      const first = await page.locator(source === 'market' ? '.market-promise-strip' : '.community-invite').boundingBox();
+      const first = await page.locator(source === 'market' ? '.discovery-market-entry' : '.community-invite').boundingBox();
       assert.ok(first.y >= original.y + original.height, 'feed search must not cover the first content block');
       await page.evaluate(() => scrollTo(0, 500)); await page.waitForTimeout(50);
       assert.ok(await page.evaluate(() => scrollY > 400), 'the real feed must actually scroll');

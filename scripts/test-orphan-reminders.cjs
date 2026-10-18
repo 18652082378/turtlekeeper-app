@@ -34,7 +34,7 @@ assert.equal(Care.hasReminderArchive(null, []), false);
   }, careReminderDeliveries: {} };
   const before = JSON.stringify(db.users), sent = [], warnings = [];
   let writes = 0;
-  const context = vm.createContext({ careReminderDispatching: false, apnsConfigured: () => true, readDatabase: () => db,
+  const context = vm.createContext({ careReminderDispatching: false, pushConfigured: () => true, readDatabase: () => db,
     careReminderClock: () => clock, careReminderDue: due, notifyCareReminder: async (user, memo) => { sent.push(user.phone + ':' + memo.id); return true; },
     writeDatabase: () => { writes++; }, console: { warn: (...v) => warnings.push(v) }, Date });
   vm.runInContext(extract(source, 'dispatchDueCareReminders'), context);

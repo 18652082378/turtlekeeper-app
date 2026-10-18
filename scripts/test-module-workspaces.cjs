@@ -77,7 +77,9 @@ const root = path.resolve(__dirname, '..'), output = path.join(root, 'output/ui-
       assert.equal(new Set(ids).size, 105); assert.deepEqual(ids.slice(0, 40), before);
       assert.equal(await page.evaluate(() => state.turtles.length), 105);
       await page.locator('[data-growth-filter="breeding"]').click(); assert.equal(await page.locator('.growth-update-card').count(), 0);
-      await page.locator('[data-growth-filter="all"]').click(); assert.equal(await page.locator('.growth-update-card').count(), 40);
+      await page.locator('.growth-filter-row [data-growth-filter="all"]').click(); assert.equal(await page.locator('.growth-update-card').count(), 40);
+      await page.locator('[data-growth-filter="breeding"]').click();
+      await page.locator('.visual-empty [data-growth-filter="all"]').click(); assert.equal(await page.locator('.growth-update-card').count(), 40);
       density.push({ archives: 105, initialCards: 40, afterTwoLoads: 105 });
     });
     await check('an empty market search offers clearing filters, retains local data and returns the original product', async () => {

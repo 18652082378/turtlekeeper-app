@@ -26,6 +26,19 @@ html .phone-shell .care-utilities :is(.work-plans, .work-filters) { margin: 0; p
 html .phone-shell .care-history .section-title { margin: 0 0 12px; }
 html .phone-shell .care-date { margin: 0 0 8px; gap: 8px; font-weight: 600; }
 .care-date small { margin-left: auto; font-size: 11px; font-weight: 400; }
+
+/* Seven fixed circles exceed a narrow reminder card even when the page itself
+   does not scroll sideways. Keep touch targets separate and fully inside it. */
+html .phone-shell .memo-form .weekday-picker .weekday-chip {
+  width: 44px !important; height: 44px !important;
+}
+html .phone-shell .memo-form .form-head > div { flex: 1; min-width: 0; }
+html .phone-shell .memo-form .form-head > button {
+  flex: 0 0 auto; min-width: 44px; min-height: 44px; white-space: nowrap;
+}
+@media (max-width: 440px) {
+  html .phone-shell .memo-form .weekday-picker { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+}
 .care-day-group + .care-day-group { margin-top: 18px; }
 html .phone-shell .care-day-group { background: transparent !important; }
 html .phone-shell .care-day-records { border: 1px solid var(--ui-line); border-radius: 16px; background: var(--ui-surface) !important; }

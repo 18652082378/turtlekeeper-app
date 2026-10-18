@@ -1,0 +1,42 @@
+/* Shared discovery controls: keep intrinsic native widths inside narrow shells. */
+html .phone-shell :is(.discovery-community-entry, .discovery-market-entry, .discovery-compose-prompts, .discovery-growth-share, .discovery-archive-photo) {
+  box-sizing: border-box; min-width: 0; max-width: 100%; color: var(--ui-text);
+}
+.discovery-community-entry { margin: 0 0 12px; }
+.discovery-pending { padding: 16px; min-width: 0; }
+.discovery-pending p { color: var(--ui-muted); font-size: 13px; line-height: 1.7; }
+html .phone-shell .discovery-pending > button { min-height: 44px; max-width: 100%; padding: 10px 14px; border-radius: 12px; background: var(--ui-primary-fill); color: white; font-size: 13px; }
+html .phone-shell .market-assist-bar { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; min-width: 0; }
+html .phone-shell .market-assist-bar > button { min-width: 0; min-height: 44px; padding-inline: 2px; font-size: 12px; white-space: nowrap; }
+.discovery-market-entry { margin: 0 0 12px; padding: 12px; border: 1px solid var(--ui-line); border-radius: 14px; background: var(--ui-surface); }
+.discovery-species > span { display: block; margin-bottom: 6px; color: var(--ui-muted); font-size: 11px; }
+.discovery-species-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+html .phone-shell .discovery-species-chips > button { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 44px; padding: 8px 11px; border: 1px solid var(--ui-line); border-radius: 12px; background: var(--ui-surface); color: var(--ui-text); font-size: 12px; text-align: left; overflow-wrap: anywhere; white-space: normal; }
+.discovery-species-chips small { flex: none; color: var(--ui-accent); font-size: 10px; }
+.discovery-market-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+html .phone-shell .discovery-market-links > button { display: flex; align-items: center; justify-content: space-between; min-width: 0; min-height: 44px; padding: 8px 10px; background: var(--ui-raised); border-radius: 10px; color: var(--ui-accent); font-size: 12px; }
+.discovery-compose-prompts { padding: 12px; margin: 8px 0 16px; border: 1px solid var(--ui-line); border-radius: 12px; background: var(--ui-raised); }
+.discovery-compose-prompts > span { font-size: 12px; color: var(--ui-text); }
+.discovery-compose-prompts > div { display: flex; flex-wrap: wrap; gap: 6px; margin-block: 8px; }
+html .phone-shell .discovery-compose-prompts button { min-width: 44px; min-height: 44px; padding: 8px 12px; background: var(--ui-surface); border: 1px solid var(--ui-line); border-radius: 10px; color: var(--ui-accent); font-size: 12px; }
+.discovery-compose-prompts small, .discovery-archive-photo > span { display: block; color: var(--ui-muted); font-size: 11px; line-height: 1.7; }
+.discovery-archive-photo { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+html .phone-shell .discovery-archive-photo > button { min-height: 44px; padding: 8px 10px; border: 1px solid var(--ui-line); border-radius: 10px; background: var(--ui-raised); color: var(--ui-accent); font-size: 12px; }
+html .phone-shell .discovery-archive-photo > button:disabled { color: var(--ui-muted); }
+.discovery-growth-share { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0; padding: 14px; background: var(--ui-surface); border: 1px solid var(--ui-line); border-radius: 14px; }
+.discovery-growth-share > div { flex: 1 1 180px; min-width: 0; }
+.discovery-growth-share strong { font-size: 14px; }
+.discovery-growth-share p, .discovery-feed-note { color: var(--ui-muted); font-size: 11px; line-height: 1.7; margin: 4px 0; }
+html .phone-shell .discovery-growth-share > button { min-height: 44px; padding: 10px 12px; border-radius: 12px; background: var(--ui-primary-fill); color: white; font-size: 12px; }
+html .phone-shell .discovery-empty { display: block; }
+.discovery-empty p { margin: 8px 0; line-height: 1.7; }
+html .phone-shell .discovery-empty button { min-height: 44px; max-width: 100%; padding: 10px 14px; border-radius: 12px; background: var(--ui-raised); color: var(--ui-accent); font-size: 12px; white-space: normal; }
+html .phone-shell .community-refined-page .community-feed-toolbar { flex-wrap: wrap; }
+html .phone-shell .community-refined-page .forum-sort-tabs { flex: 1 1 280px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; padding: 0; }
+html .phone-shell .community-refined-page .forum-sort-tabs > button { min-width: 0; min-height: 44px; font-size: 13px; white-space: nowrap; }
+html .phone-shell .community-refined-page .community-toolbar-publish { margin-left: auto; min-height: 44px; }
+@media (max-width: 440px) {
+  /* The publish hub above is already a full-size entry; do not duplicate it at
+     the cost of the feed's first row on a small screen. */
+  html .phone-shell .community-refined-page .community-toolbar-publish { display: none; }
+}

@@ -18,5 +18,7 @@ scripts/upload-ios-134.sh text eol=lf
 scripts/ios-134-release-files.txt text eol=lf
 scripts/upload-ios-135.sh text eol=lf
 scripts/ios-135-release-files.txt text eol=lf
+scripts/upload-ios-136.sh text eol=lf
+scripts/ios-136-release-files.txt text eol=lf
 scripts/fixtures/app-update-policy-114.js -text
 scripts/ios-115-policy-release-files.txt text eol=lf

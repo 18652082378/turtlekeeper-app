@@ -69,6 +69,8 @@ app.js
 assets/breeding-hatchling-rounded-v1.png
 assets/care-records.js
 assets/daily-workspace.css
+assets/discovery-workspace.css
+assets/discovery-workspace.js
 assets/market-inquiry.js
 assets/module-workspaces.css
 assets/password-recovery.css
@@ -84,6 +86,8 @@ assets/workspace-ui.js
 capacitor.config.json
 codemagic.yaml
 config.js
+docs/additional-ui-audit-20261018.md
+docs/discovery-engagement-20261018.md
 docs/android-118-18-release.md
 docs/android-118-19-release.md
 docs/android-118-20-release.md
@@ -161,8 +165,11 @@ scripts/test-app-update-policy.cjs
 scripts/test-breeding-covers-ui.cjs
 scripts/test-breeding-species-picker.js
 scripts/test-care-records.cjs
+scripts/test-community-home-layout.js
 scripts/test-daily-workspace.cjs
+scripts/test-discovery-workspace.cjs
 scripts/test-file-export.js
+scripts/test-form-intrinsic-layout.cjs
 scripts/test-growth-reminder-skip.cjs
 scripts/test-home-filter-stats-ui.cjs
 scripts/test-home-loss-count.js

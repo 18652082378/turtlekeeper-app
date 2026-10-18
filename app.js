@@ -424,6 +424,7 @@ let publicFeedbackLoading = false;
 let publicFeedbackLastLoadedAt = 0;
 let communityLoading = false;
 let communityLastLoadedAt = 0;
+let communityPublicationRevision = 0;
 let communityLoadObserver = null;
 let communityChatLoading = false;
 let communityChatLoadedKey = "";
@@ -472,6 +473,7 @@ let communityTopicFilter = "all";
 let communityDraftTitle = "";
 let communityDraftCircleId = "general";
 let communityDraftVisibility = "public";
+let communityDraftOwner = "";
 let communityVisibilitySheetOpen = false;
 let communityForumSort = "latest";
 let communitySelectedCircleId = "all";
@@ -1941,14 +1943,15 @@ function requireCloudImageSession() {
   if (!state.loggedInPhone || !currentCloudToken()) throw new Error("请先登录账号后再上传图片");
 }
 
-async function uploadDataUrlToCloud(image, kind = "image") {
+async function uploadDataUrlToCloud(image, kind = "image", options = {}) {
   requireCloudImageSession();
   const uploadImage = isEmbeddedImage(image) && String(image).length > 260000
     ? await compressImageDataUrl(image, kind === "avatar" ? 768 : 960, kind === "avatar" ? 0.78 : 0.66, 260000)
     : image;
+  if (options.owner && (state.loggedInPhone !== options.owner.phone || currentCloudToken() !== options.owner.token)) throw new Error("账号已变更，本次上传已停止");
   const result = await apiPost("/api/upload/image", {
-    phone: state.loggedInPhone,
-    token: currentCloudToken(),
+    phone: options.owner?.phone || state.loggedInPhone,
+    token: options.owner?.token || currentCloudToken(),
     kind,
     image: uploadImage
   });
@@ -3074,26 +3077,50 @@ function communityGrowthTemplate(turtle) {
   const newWeight = Number(latest?.newSnapshot?.weight || turtle.weight || 0);
   const oldLength = Number(latest?.oldLength || latest?.oldSnapshot?.carapaceLength || 0);
   const newLength = Number(latest?.newLength || latest?.newSnapshot?.carapaceLength || turtle.carapaceLength || 0);
-  const lines = [`${turtle.code || turtle.speciesName || "我的龟"}完成第 ${Math.max(1, history.length)} 次成长记录`];
+  const lines = [`${turtle.code || turtle.speciesName || "我的龟"}完成第 ${history.length + 1} 次成长记录`];
   if (newWeight > 0) lines.push(oldWeight > 0 ? `体重 ${oldWeight}g → ${newWeight}g（${newWeight - oldWeight >= 0 ? "+" : ""}${Number((newWeight - oldWeight).toFixed(2))}g）` : `当前体重 ${newWeight}g`);
   if (newLength > 0) lines.push(oldLength > 0 ? `背甲 ${oldLength}cm → ${newLength}cm（${newLength - oldLength >= 0 ? "+" : ""}${Number((newLength - oldLength).toFixed(2))}cm）` : `当前背甲 ${newLength}cm`);
   return lines.join("\n");
 }
 
-function openCommunityComposer(topic = "daily") {
+function ensureCommunityDraftOwner() {
+  const owner = `${state.loggedInPhone || ""}:${currentCloudToken() || ""}`;
+  if (communityDraftOwner === owner) return;
+  clearCommunityDraftMedia();
+  communityDraftText = communityDraftQuestion = communityDraftTitle = communityDraftTurtleId = "";
+  communityDraftTopic = "daily"; communityDraftCircleId = "general"; communityDraftVisibility = "public";
+  communityVisibilitySheetOpen = false;
+  communityPublishFingerprint = communityPublishSubmissionId = "";
+  communityDraftOwner = owner;
+  window.TurtleDiscovery?.resetDraft();
+}
+
+function openCommunityComposer(topic = "daily", options = {}) {
   if (!canUseCommunity()) return;
+  if (communityPublishInFlight) return toast("帖子正在发布，完成后再写下一篇");
+  ensureCommunityDraftOwner();
+  const hasDraft = Boolean(communityDraftTitle.trim() || communityDraftText.trim() || communityDraftQuestion.trim() || communityDraftMediaItems.length);
+  if (hasDraft && !Object.keys(options).length && communityDraftTopic === topic) {
+    setState({ page: "communityAdd" }, { skipCloud: true });
+    return;
+  }
+  if (hasDraft && !confirm("还有未发布的帖子，是否用本次内容替换？取消可保留原草稿。")) return;
+  clearCommunityDraftMedia();
   communityDraftTopic = COMMUNITY_TOPICS[topic] ? topic : "daily";
+  window.TurtleDiscovery?.resetDraft();
+  if (options.turtleId && (state.turtles || []).some(item => item.id === options.turtleId)) communityDraftTurtleId = options.turtleId;
   if (!communityDraftTurtleId || !(state.turtles || []).some(item => item.id === communityDraftTurtleId)) {
     communityDraftTurtleId = state.turtles?.[0]?.id || "";
   }
-  communityDraftQuestion = "";
-  communityDraftTitle = "";
-  communityDraftCircleId = inferredCommunityCircle(communityDraftTopic);
+  communityDraftQuestion = options.question || "";
+  const sourceTurtle = (state.turtles || []).find(item => item.id === communityDraftTurtleId);
+  communityDraftTitle = options.title || (communityDraftTopic === "growth" && sourceTurtle ? [...`${sourceTurtle.speciesName || "我的龟龟"}的成长记录`].slice(0, 31).join("") : "");
+  communityDraftCircleId = COMMUNITY_CIRCLES.some(item => item.id === options.circleId) ? options.circleId : inferredCommunityCircle(communityDraftTopic);
   communityDraftVisibility = "public";
   communityVisibilitySheetOpen = false;
-  communityDraftText = communityDraftTopic === "growth"
+  communityDraftText = options.content || (communityDraftTopic === "growth"
     ? communityGrowthTemplate((state.turtles || []).find(item => item.id === communityDraftTurtleId))
-    : "";
+    : "");
   setState({ page: "communityAdd" }, { skipCloud: true });
 }
 
@@ -3110,7 +3137,7 @@ function communityCreateHub() {
 }
 
 function communityTopicTabs() {
-  const tabs = [["latest", "最新"], ["hot", "热门"], ["featured", "精华"], ["followed", "关注"]];
+  const tabs = [["latest", "最新"], ["unanswered", "待回复"], ["hot", "热门"], ["featured", "精华"], ["followed", "关注"]];
   return `<div class="community-feed-toolbar"><nav class="community-topic-tabs forum-sort-tabs" aria-label="帖子排序">${tabs.map(([value, label]) => `<button class="${communityForumSort === value ? "active" : ""}" type="button" data-community-forum-sort="${value}" aria-pressed="${communityForumSort === value}">${label}</button>`).join("")}</nav><button class="community-toolbar-publish" type="button" data-community-compose="daily"><span aria-hidden="true">＋</span>写帖子</button></div>`;
 }
 
@@ -3120,6 +3147,7 @@ function communityCircleStrip(posts = []) {
 
 function communityForumPosts(posts = []) {
   let result = [...posts];
+  if (communityForumSort === "unanswered") result = result.filter(item => ["question", "identify"].includes(item.topic) && !(item.comments || []).length);
   if (communitySelectedCircleId !== "all") result = result.filter(item => communityPostCircleId(item) === communitySelectedCircleId);
   if (communityForumSort === "featured") result = result.filter(item => item.isFeatured);
   if (communityForumSort === "followed") {
@@ -3250,9 +3278,11 @@ function pageCommunity() {
     <main class="content page-fresh community-page community-moments-page community-refined-page feed-search-content">
       <input class="hidden-file" type="file" accept="image/jpeg,image/png,image/webp" multiple data-community-quick-media>
       ${communityCreateHub()}
+      ${window.TurtleDiscovery?.communityEntry() || ""}
       ${communityCircleStrip(posts)}
       ${selectedCircle ? `<section class="forum-selected-circle"><div><i>${selectedCircle.icon}</i><span><strong>${selectedCircle.name}</strong><small>${selectedCircle.note}</small></span></div><button class="${followed ? "active" : ""}" type="button" data-toggle-community-circle="${selectedCircle.id}">${followed ? "已关注" : "+ 关注"}</button></section>` : ""}
       ${communityTopicTabs()}
+      ${communityForumSort === "unanswered" ? `<p class="discovery-feed-note">看看已加载帖子中还没收到回复的求助和鉴定，分享你的经验。</p>` : ""}
       <section class="community-feed ${communityInitialLoading ? "is-initial-loading" : ""}">${feedNotice || (communityInitialLoading ? `<div class="community-feed-initial-loading">${uiLoadingMarkup("正在加载帖子…")}</div>` : "")}${!communityInitialLoading && (visiblePosts.length || !feedNotice) ? communityFeedMarkup(visiblePosts) : ""}</section>
       ${posts.length ? `<div class="community-feed-status" data-community-load-sentinel>${state.communityFeedLoadingMore ? "正在加载更多动态…" : state.communityFeedHasMore ? "继续上滑，加载更多" : "已经到底了"}</div>` : ""}
     </main>
@@ -3262,7 +3292,7 @@ function pageCommunity() {
 
 function communityFeedMarkup(posts = state.communityPosts || [], options = {}) {
   if (options.allowDetail) return posts.map(item => communityFeedCard(item, options)).join("");
-  return posts.map(communityForumCard).join("") || `<div class="empty small-empty"><div><strong>这里还没有帖子</strong><br>发布第一篇讨论，邀请同好来回复</div></div>`;
+  return posts.map(communityForumCard).join("") || (window.TurtleDiscovery?.communityEmpty() || `<div class="empty small-empty"><div><strong>这里还没有帖子</strong><br>发布第一篇讨论，邀请同好来回复</div></div>`);
 }
 
 function communityFeedSignature(posts = []) {
@@ -3458,10 +3488,12 @@ function patchVisibleCommunityFeed(posts, previousPosts = []) {
 }
 
 function pageCommunityAdd() {
+  ensureCommunityDraftOwner();
+  if (communityPublishInFlight) return `${communityPublishProgressMarkup()}${topbar("帖子发布中", true)}<main class="content page-fresh"><section class="fresh-card discovery-pending"><strong>帖子正在发布，请稍候</strong><p>可以继续浏览，发布完成后会收到提示。</p><button type="button" data-page="community">返回龟友圈</button></section></main>`;
   const mediaItems = communityDraftMediaItems;
   const topic = communityTopicConfig(communityDraftTopic);
   const titleLength = [...communityDraftTitle.trim()].length;
-  const canPublish = titleLength >= 5 && titleLength <= 31;
+  const canPublish = titleLength >= 5 && titleLength <= 31 && (window.TurtleDiscovery?.canPublishDraft() ?? true);
   const canAddMedia = mediaItems.length < 9;
   const visibilityOption = communityVisibilityOption();
   return `
@@ -3469,13 +3501,15 @@ function pageCommunityAdd() {
     <main class="community-compose-page forum-publish-page">
       <form class="community-publish-form" id="communityPostForm">
         <label class="forum-compose-title"><input name="title" minlength="5" maxlength="31" value="${escapeHtml(communityDraftTitle)}" placeholder="请输入完整帖子标题（5–31个字）" required></label>
-        <label class="community-compose-copy"><textarea name="content" maxlength="2000" placeholder="请输入正文（建议200–2000字）">${escapeHtml(communityDraftText)}</textarea></label>
+        <label class="community-compose-copy"><textarea name="content" maxlength="2000" placeholder="${escapeHtml(topic.prompt)}">${escapeHtml(communityDraftText)}</textarea></label>
+        ${window.TurtleDiscovery?.composePrompts() || ""}
         <div class="community-draft-media-grid">
           ${mediaItems.map((media, index) => `<div class="community-draft-media-item"><img src="${escapeHtml(media.previewUrl)}" alt="待发布图片 ${index + 1}"><button type="button" data-remove-community-media="${index}" aria-label="移除图片">×</button></div>`).join("")}
           ${canAddMedia ? `<button class="community-media-preview community-media-add" type="button" data-community-media-button aria-label="添加图片"><span>＋<small>${mediaItems.length}/9</small></span></button>` : ""}
         </div>
         <p class="community-draft-media-tip">最多选择 9 张图片，发布页展示前三张</p>
         ${communityDraftTopic === "growth" ? `<section class="community-growth-source forum-publish-growth"><span>关联龟档案</span>${state.turtles?.length ? `<select class="select" data-community-turtle-source data-archive-directory aria-label="关联龟档案">${state.turtles.map(turtle => `<option value="${escapeHtml(turtle.id)}" ${communityDraftTurtleId === turtle.id ? "selected" : ""}>${escapeHtml(turtle.code || "未命名")} · ${escapeHtml(turtle.speciesName || "未填写品种")}</option>`).join("")}</select>` : `<button class="community-create-archive" type="button" data-page="turtleAdd">先建立一份龟档案 ›</button>`}</section>` : ""}
+        ${window.TurtleDiscovery?.archivePhotoChoice() || ""}
         <section class="forum-publish-settings">
           <div class="forum-publish-setting-head"><span><i>◉</i><b>选择圈子</b></span><small>${communityCircle(communityDraftCircleId).name} ›</small></div>
           <div class="forum-publish-circle-strip">${COMMUNITY_CIRCLES.map(circle => `<button class="${communityDraftCircleId === circle.id ? "active" : ""}" type="button" data-community-draft-circle="${circle.id}"><i>${circle.icon}</i>${circle.name}</button>`).join("")}</div>
@@ -3841,13 +3875,13 @@ function pageCommunityChat() {
 // Keep detached pages only while the data they display is unchanged.
 function navigationDataKeys(page) {
   const business = ["turtles", "keptSpecies", "customSpecies", "ledgerRecords", "breedingRecords", "memos", "careRecords", "careCustomItems", "carePlans", "turtlePools", "activityLogs"];
-  const community = ["communityPosts", "communityProfileStats", "communityFollowedCircleIds", "communityFollowingUsers", "blockedUsers"];
+  const community = ["communityPosts", "communityProfileStats", "communityFollowedCircleIds", "communityFollowingUsers", "blockedUsers", "turtles", "keptSpecies", "customSpecies"];
   const market = ["marketListings", "myMarketListings", "marketFavoriteIds", "marketHistoryIds", "selectedMarketListing", "selectedMarketSeller"];
   // The feed does not display detail selection or browsing history. Favorites
   // and want counts are patched onto the retained cards when it is restored.
   const marketFeed = ["marketListings", "marketSearch", "marketStage", "marketRegion", "marketSort", "marketPriceOrder", "marketFreshOnly", "marketDelivery",
     "marketAssistMenu", "marketSearchLocationCity", "marketSearchLocationStatus", "marketFeedInitialized", "marketFeedSessionId", "marketFeedOrderIds",
-    "marketFeedNextOffset", "marketFeedHasMore", "marketFeedError"];
+    "marketFeedNextOffset", "marketFeedHasMore", "marketFeedError", "turtles", "keptSpecies", "customSpecies"];
   const messages = ["communityFriends", "communityFriendsInitialized", "communityFriendsError", "communityNotifications", "communityNotificationSummary", "communityActivityItems", "messageUnreadCount"];
   const groups = {
     mine: [...business, ...community, ...market, ...messages],
@@ -3869,6 +3903,7 @@ function navigationDataSignature(page) {
   // Two independent 32-bit hashes avoid retaining duplicate photo strings in
   // the three-level navigation cache. This is a UI change detector, not auth.
   const text = JSON.stringify(navigationDataKeys(page).map(key => {
+    if (["market", "community"].includes(page) && key === "turtles") return (state.turtles || []).map(item => [item.speciesCode, item.status, Boolean(item.lossRecordId)]);
     if (page === "market" && key === "marketFeedError") return Boolean(state[key]);
     if (page !== "market" || key !== "marketListings") return state[key];
     // Use actual visible order: unrelated cached detail listings and telemetry
@@ -3881,7 +3916,9 @@ function navigationDataSignature(page) {
       // response key order. Existing decoded thumbnails can remain on screen.
       marketListingMediaItems(item).map(media => [media.type, media.url, media.posterUrl, media.mediaPosterUrl, media.poster])
     ]);
-  }));
+  }).concat(page === "communityAdd" ? [currentCloudToken(), communityPublishInFlight, communityDraftOwner, communityDraftTopic,
+    communityDraftTitle, communityDraftText, communityDraftQuestion, communityDraftCircleId, communityDraftVisibility,
+    communityDraftTurtleId, communityDraftMediaItems.map(media => [media.previewUrl, media.type])] : []));
   let a = 2166136261, b = 5381;
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
@@ -4816,7 +4853,6 @@ function pageMarket() {
   const listings = marketSearchResultListings();
   const inquiryCode = TurtleMarketInquiry.parse(keyword);
   const regions = [...new Set((state.marketListings || []).map(item => String(item.city || "").trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
-  const showAssistSearch = Boolean(keyword || state.marketPriceOrder || state.marketFreshOnly || state.marketRegion || state.marketDelivery);
   const marketRequiresLogin = CONFIGURED_SMS_BACKEND ? !hasCloudSession() : !state.loggedInPhone;
   const feedNotice = feedLoadNotice("market");
   const marketInitialLoading = Boolean(!feedNotice && !marketRequiresLogin && CONFIGURED_SMS_BACKEND && !state.marketFeedInitialized && !listings.length);
@@ -4836,11 +4872,12 @@ function pageMarket() {
         </button>
       </div>
     <main class="content page-fresh market-page feed-search-content ${keyword ? "market-search-results-content" : ""}">
-      <section class="market-promise-strip">
+      ${keyword ? `<section class="market-promise-strip">
         <span><b>实拍</b> 一龟一图</span><span><b>直聊</b> 买卖双方沟通</span><span><b>透明</b> 状态尺寸清晰</span>
-      </section>
+      </section>` : ""}
       ${inquiryCode ? `<section class="market-inquiry-summary" role="status"><strong>商品咨询码 ${escapeHtml(inquiryCode)}</strong><p>${listings.length > 1 ? "此码匹配多个商品，请核对图片、标题和卖家后选择。" : "按咨询码查找在售商品，点击商品查看详情。"}</p></section>` : ""}
-      ${showAssistSearch && !inquiryCode ? marketAssistControls(regions) : ""}
+      ${!keyword ? window.TurtleDiscovery?.marketEntry() || "" : ""}
+      ${!inquiryCode ? marketAssistControls(regions) : ""}
       ${!inquiryCode ? `<section class="market-stage-tabs">
         ${[["all", "全部"], ["hatchling", "苗子"], ["juvenile", "亚成"], ["adult", "种龟"]].map(([value, label]) => `<button class="${stage === value ? "active" : ""}" type="button" data-market-stage="${value}">${label}</button>`).join("")}
       </section>` : ""}
@@ -5461,6 +5498,7 @@ function pageTurtleReward() {
         <footer><span>每一次记录，都在见证生命成长</span><b>龟友手账</b></footer>
       </article>
       <div class="reward-actions"><button class="primary" type="button" data-share-growth-card><span aria-hidden="true">↗</span>${hasGrowth ? "分享成长报告" : "分享档案卡"}</button><button class="secondary" type="button" data-save-growth-card><span aria-hidden="true">↓</span>保存图片</button></div>
+      <section class="discovery-growth-share"><div><strong>和同品种龟友聊聊成长</strong><p>带入本次测量，编辑确认后再发布。</p></div><button type="button" data-community-growth-source="${escapeHtml(turtle.id)}">分享到龟友圈</button></section>
       <section class="next-growth-card fresh-card"><div class="next-growth-date"><strong>${nextDate.slice(5, 7)}<small>月</small>${nextDate.slice(8)}<small>日</small></strong><span>${reminderEnabled ? "上午 09:00" : "成长计划"}</span></div><div class="next-growth-copy"><div><small>下一次记录</small><button class="reminder-on ${reminderEnabled ? "is-on" : "is-off"}" type="button" data-toggle-growth-reminder="${escapeHtml(turtle.id)}" aria-pressed="${reminderEnabled ? "true" : "false"}" aria-label="${reminderEnabled ? "关闭成长记录提醒" : "开启成长记录提醒"}"><i></i>${reminderEnabled ? "提醒已开启" : "提醒已关闭"}</button></div><h3>30 天后，再看看它长大多少</h3><p>拍一张新照片，记录体重和背甲，即可生成第一次成长对比。</p></div></section>
       ${hasGrowth ? `<section class="growth-report-card fresh-card"><div class="growth-report-heading"><div><small>累计成长报告</small><h3>${history.length + 1} 次记录 · ${escapeHtml(turtle.code || turtle.speciesName)}</h3></div><strong class="${weightGain >= 0 ? "positive" : ""}">${weightGain >= 0 ? "+" : ""}${weightGain.toFixed(1)}g</strong></div>${growthSparkline(weightPoints)}<div class="growth-report-legend"><span>初始 ${firstWeight}g</span><span>现在 ${turtle.weight}g</span></div><div class="photo-compare"><figure><img src="${escapeHtml(latest?.oldPhoto || turtle.photo || defaultPhoto)}" alt="上次照片"><figcaption>上次</figcaption></figure><b>→</b><figure><img src="${escapeHtml(latest?.newPhoto || turtle.photo || defaultPhoto)}" alt="本次照片"><figcaption>本次</figcaption></figure></div></section>` : `<section class="reward-preview-lock fresh-card"><div class="reward-lock-head"><span>成长奖励</span><small>再记录 1 次解锁</small></div><h3>下次回来，会自动生成</h3><div class="reward-unlock-list"><span><i>↗</i>成长曲线</span><span><i>＋</i>增重变化</span><span><i>◫</i>照片对比</span></div><p>无需整理数据，每次记录都会自动累积。</p></section>`}
       <button class="text-green reward-finish" type="button" data-page="home">完成，返回看板</button>
@@ -9327,11 +9365,9 @@ function bindEvents() {
   document.querySelector("[data-community-media-input]")?.addEventListener("change", readCommunityMedia);
   document.querySelectorAll("[data-remove-community-media]").forEach(button => button.addEventListener("click", () => removeCommunityDraftMedia(Number(button.dataset.removeCommunityMedia))));
   document.querySelector("[data-community-camera-button]")?.addEventListener("click", () => {
+    if (communityPublishInFlight) return toast("帖子正在发布，完成后再选择照片");
     if (!requireLogin()) return;
-    communityDraftTopic = "daily";
-    communityDraftQuestion = "";
-    communityDraftTitle = "";
-    communityDraftCircleId = "general";
+    ensureCommunityDraftOwner();
     document.querySelector("[data-community-quick-media]")?.click();
   });
   document.querySelector("[data-community-quick-media]")?.addEventListener("change", readCommunityMedia);
@@ -9348,6 +9384,7 @@ function bindEvents() {
     communityForumSort = button.dataset.communityForumSort || "latest";
     render();
   }));
+  window.TurtleDiscovery?.bind();
   document.querySelectorAll("[data-community-circle]").forEach(button => button.addEventListener("click", () => {
     communitySelectedCircleId = button.dataset.communityCircle || "all";
     render();
@@ -9412,10 +9449,16 @@ function bindEvents() {
     if (results) results.innerHTML = "";
   });
   document.querySelector("[data-community-turtle-source]")?.addEventListener("change", event => {
-    const previousTemplate = communityGrowthTemplate((state.turtles || []).find(item => item.id === communityDraftTurtleId));
+    const previousTurtle = (state.turtles || []).find(item => item.id === communityDraftTurtleId);
+    const previousTemplate = communityGrowthTemplate(previousTurtle);
+    const previousTitle = previousTurtle ? [...`${previousTurtle.speciesName || "我的龟龟"}的成长记录`].slice(0, 31).join("") : "";
     const currentText = document.querySelector("#communityPostForm textarea[name='content']")?.value || communityDraftText;
     communityDraftTurtleId = event.target.value || "";
-    communityDraftText = !currentText.trim() || currentText === previousTemplate ? communityGrowthTemplate((state.turtles || []).find(item => item.id === communityDraftTurtleId)) : currentText;
+    const nextTurtle = (state.turtles || []).find(item => item.id === communityDraftTurtleId);
+    communityDraftText = !currentText.trim() || currentText === previousTemplate ? communityGrowthTemplate(nextTurtle) : currentText;
+    if (!communityDraftTitle.trim() || communityDraftTitle === previousTitle) communityDraftTitle = nextTurtle ? [...`${nextTurtle.speciesName || "我的龟龟"}的成长记录`].slice(0, 31).join("") : "";
+    communityDraftMediaItems = communityDraftMediaItems.filter(media => !media.archiveSource);
+    syncCommunityDraftMediaLegacyState();
     render();
   });
   document.querySelector("#communityPostForm textarea[name='content']")?.addEventListener("input", event => {
@@ -10247,6 +10290,7 @@ function localMarketListing(payload) {
 }
 
 function patchMarketSnapshotDetails(root = $app) {
+  window.TurtleDiscovery?.patchMarketEntry(root);
   const sentinel = root.querySelector("[data-market-load-sentinel]");
   if (sentinel && state.marketFeedHasMore) {
     sentinel.textContent = state.marketFeedLoadingMore ? "正在加载更多商品…"
@@ -12426,9 +12470,11 @@ async function refreshCommunity(force = false) {
   const requestPhone = state.loggedInPhone;
   const requestToken = currentCloudToken();
   const conversationRevision = communityConversationRevision;
+  const publicationRevision = communityPublicationRevision;
   try {
     const result = await apiPost("/api/community/list", communityAuthPayload({ offset: 0, limit: 10, sort: "latest" }));
     if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
+    if (publicationRevision !== communityPublicationRevision) return;
     if (conversationRevision !== communityConversationRevision || communityConversationDeleting.size) return;
     reconcileCommunityConversationState(result);
     communityLastLoadedAt = Date.now();
@@ -12479,7 +12525,7 @@ async function refreshCommunity(force = false) {
     }
   } catch (error) {
     console.warn(error.message || "龟友圈读取失败");
-    if (state.loggedInPhone === requestPhone && currentCloudToken() === requestToken) {
+    if (state.loggedInPhone === requestPhone && currentCloudToken() === requestToken && publicationRevision === communityPublicationRevision) {
       communityLastLoadedAt = Date.now();
       state = { ...state, communityFeedError: "load_failed" };
       if (state.page === "community") render();
@@ -12492,7 +12538,9 @@ async function refreshCommunity(force = false) {
 async function loadMoreCommunityPosts() {
   if (!hasCloudSession() || state.page !== "community" || communityLoading || state.communityFeedLoadingMore || !state.communityFeedHasMore) return;
   const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
-  const isCurrent = () => requestPhone === state.loggedInPhone && requestToken === currentCloudToken();
+  const publicationRevision = communityPublicationRevision;
+  const sameAccount = () => requestPhone === state.loggedInPhone && requestToken === currentCloudToken();
+  const isCurrent = () => sameAccount() && publicationRevision === communityPublicationRevision;
   communityLoading = true;
   state = { ...state, communityFeedLoadingMore: true };
   saveState({ skipCloud: true });
@@ -12527,7 +12575,7 @@ async function loadMoreCommunityPosts() {
     console.warn(error.message || "加载更多龟友圈动态失败");
   } finally {
     communityLoading = false;
-    if (!isCurrent()) return;
+    if (!sameAccount()) return;
     state.communityFeedLoadingMore = false;
     if (state.page !== "community") return;
     const nextStatus = $app.querySelector("[data-community-load-sentinel]");
@@ -13091,7 +13139,7 @@ function syncCommunityPublishButton() {
   }
   const title = document.querySelector("#communityPostForm input[name='title']")?.value.trim() || "";
   const titleLength = [...title].length;
-  const ready = titleLength >= 5 && titleLength <= 31;
+  const ready = titleLength >= 5 && titleLength <= 31 && (window.TurtleDiscovery?.canPublishDraft() ?? true);
   submit.classList.toggle("is-ready", ready);
   submit.dataset.ready = ready ? "true" : "false";
   if (ready) submit.removeAttribute("disabled");
@@ -13128,6 +13176,8 @@ function removeCommunityDraftMedia(index) {
 async function readCommunityMedia(event) {
   const files = Array.from(event.target.files || []);
   if (!files.length) return;
+  if (communityPublishInFlight) { event.target.value = ""; toast("帖子正在发布，完成后再选择照片"); return; }
+  ensureCommunityDraftOwner();
   const openComposerAfterRead = event.currentTarget.hasAttribute("data-community-quick-media");
   communityDraftText = document.querySelector("#communityPostForm textarea")?.value || communityDraftText;
   event.target.value = "";
@@ -13173,20 +13223,26 @@ async function submitCommunityPost(event) {
   const linkedTurtle = topic === "growth" ? (state.turtles || []).find(item => item.id === communityDraftTurtleId) : null;
   const visibility = COMMUNITY_VISIBILITY_OPTIONS[communityDraftVisibility] ? communityDraftVisibility : "public";
   const draftMedia = [...communityDraftMediaItems];
+  const circleId = communityDraftCircleId;
+  const publishOwner = state.loggedInPhone, publishToken = currentCloudToken();
+  const samePublisher = () => state.loggedInPhone === publishOwner && currentCloudToken() === publishToken;
   const titleLength = [...title].length;
   if (titleLength < 5 || titleLength > 31) return toast("帖子标题需为 5–31 个字");
+  if (window.TurtleDiscovery && !TurtleDiscovery.canPublishDraft()) return toast("先在提纲里写下你的真实情况，再发布给龟友");
   if (draftMedia.some(media => media.type !== "image")) return toast("龟友圈只允许发布图片");
   const fingerprint = JSON.stringify({
     content,
     title,
     question,
     topic,
-    circleId: communityDraftCircleId,
+    circleId,
+    linkedTurtleId: linkedTurtle?.id || "",
     visibility,
     media: draftMedia.map(media => ({
       name: String(media?.file?.name || ""),
       size: Number(media?.file?.size || 0),
-      modifiedAt: Number(media?.file?.lastModified || 0)
+      modifiedAt: Number(media?.file?.lastModified || 0),
+      archiveSource: media?.archiveSource || ""
     }))
   });
   if (fingerprint !== communityPublishFingerprint) {
@@ -13218,9 +13274,12 @@ async function submitCommunityPost(event) {
   try {
     const mediaItems = [];
     for (let index = 0; index < draftMedia.length; index += 1) {
+      if (!samePublisher()) throw new Error("账号已变更，本次发布已停止");
       const media = draftMedia[index];
       setPublishingLabel(`正在上传第 ${index + 1} 张图片（共 ${draftMedia.length} 张）…`, index + 1);
-      const uploaded = await apiUploadMediaFile(media.file, media.duration || 0);
+      const uploaded = media.archiveSource
+        ? { url: isEmbeddedImage(media.archiveSource) ? await uploadDataUrlToCloud(media.archiveSource, "image", { owner: { phone: publishOwner, token: publishToken } }) : apiAssetUrl(media.archiveSource) }
+        : await apiUploadMediaFile(media.file, media.duration || 0, { owner: { phone: publishOwner, token: publishToken } });
       if (!uploaded?.url) throw new Error("媒体上传失败，请稍后重试");
       mediaItems.push({
         url: uploaded.url,
@@ -13229,6 +13288,7 @@ async function submitCommunityPost(event) {
       });
     }
     const primaryMedia = mediaItems[0] || null;
+    if (!samePublisher()) throw new Error("账号已变更，本次发布已停止");
     setPublishingLabel("正在发布帖子…", draftMedia.length);
     const result = await apiPost("/api/community/create", communityAuthPayload({
       submissionId,
@@ -13238,13 +13298,15 @@ async function submitCommunityPost(event) {
       mediaType: primaryMedia?.type || "",
       mediaItems,
       title,
-      circleId: communityDraftCircleId,
+      circleId,
       topic,
       question,
       speciesCode: linkedTurtle?.speciesCode || "",
       speciesName: linkedTurtle?.speciesName || "",
       visibility
     }));
+    if (!samePublisher()) { clearCommunityPublishProgress(); return; }
+    communityPublicationRevision++;
     clearCommunityDraftMedia();
     communityDraftText = "";
     communityDraftQuestion = "";
@@ -13256,54 +13318,17 @@ async function submitCommunityPost(event) {
     communityPublishFingerprint = "";
     communityPublishSubmissionId = "";
     communityLastLoadedAt = Date.now();
+    window.TurtleDiscovery?.resetDraft();
     clearCommunityPublishProgress();
-    setState({ page: "community", communityPosts: normalizeCommunityPosts(result.posts || []), communityFriends: result.friends || state.communityFriends }, { skipCloud: true });
+    communitySelectedCircleId = "all";
+    communityForumSort = "latest";
+    setState({ ...(state.page === "communityAdd" ? { page: "community" } : {}), communityPosts: normalizeCommunityPosts(result.posts || []), communityFriends: result.friends || state.communityFriends, communityFeedInitialized: true, communityFeedLoadingMore: false, communityFeedError: "" }, { skipCloud: true, preserveInputValues: true, renderPages: ["community"] });
     toast("帖子已发布");
   } catch (error) {
+    if (!samePublisher()) { clearCommunityPublishProgress(); return; }
     if (error.status === 405 || error.message === "方法不支持") {
-      const localMediaItems = draftMedia.map(media => ({
-        url: media.previewUrl,
-        posterUrl: "",
-        type: media.type
-      }));
-      const primaryMedia = localMediaItems[0] || null;
-      const localPost = {
-        id: `local-${Date.now()}`,
-        content,
-        mediaUrl: primaryMedia?.url || "",
-        mediaType: primaryMedia?.type || "",
-        mediaItems: localMediaItems,
-        title,
-        circleId: communityDraftCircleId,
-        topic,
-        question,
-        speciesCode: linkedTurtle?.speciesCode || "",
-        speciesName: linkedTurtle?.speciesName || "",
-        visibility,
-        authorId: state.loggedInPhone,
-        authorName: state.accountName || "龟友",
-        authorAvatar: state.accountAvatar || "",
-        createdAt: new Date().toISOString(),
-        likeCount: 0,
-        liked: false,
-        isOwn: true,
-        isFriend: false,
-        comments: [],
-        pendingLocal: true
-      };
-      clearCommunityDraftMedia({ revoke: false });
-      communityDraftText = "";
-      communityDraftQuestion = "";
-      communityDraftTopic = "daily";
-      communityDraftVisibility = "public";
-      communityVisibilitySheetOpen = false;
-      communityDraftTitle = "";
-      communityDraftCircleId = "general";
-      communityPublishFingerprint = "";
-      communityPublishSubmissionId = "";
       clearCommunityPublishProgress();
-      setState({ page: "community", communityPosts: [localPost, ...(state.communityPosts || [])] }, { skipCloud: true });
-      toast("帖子已发布");
+      toast("服务暂不支持发布，草稿已保留，请稍后重试或联系平台");
       return;
     }
     clearCommunityPublishProgress();
@@ -13321,6 +13346,7 @@ async function submitCommunityPost(event) {
       publishButton.setAttribute("aria-disabled", "false");
       publishButton.textContent = publishButtonText;
     }
+    if (state.page === "communityAdd" && document.querySelector(".discovery-pending")) render();
   }
 }
 
@@ -15442,10 +15468,11 @@ async function apiUploadMediaFile(file, duration = 0, options = {}) {
   let lastError;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
+      if (options.owner && (state.loggedInPhone !== options.owner.phone || currentCloudToken() !== options.owner.token)) throw new Error("账号已变更，本次上传已停止");
       if (typeof options.onProgress === "function") {
         return await uploadMediaFileRequest(`${base}/api/upload/media`, file, { contentType, duration, onProgress: options.onProgress });
       }
-      const phone = state.loggedInPhone, token = currentCloudToken();
+      const phone = options.owner?.phone || state.loggedInPhone, token = options.owner?.token || currentCloudToken();
       const response = await fetch(`${base}/api/upload/media`, {
         method: "POST",
         headers: {
