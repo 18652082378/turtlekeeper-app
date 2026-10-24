@@ -36,11 +36,12 @@ console.log('Checked: release 1.1.9 (137), Node.js and PM2 target.');
 NODE
 if [[ "$mode" == --check ]]; then printf '%s\n' 'Check complete; no code installation, dependency changes or restart.'; exit 0; fi
 umask 077
-backup_root="$(dirname -- "$root")/.turtlekeeper-release-backups"
+backup_root="${HOME:?HOME is required}/.turtlekeeper-release-backups"
 if [[ -L "$backup_root" || ( -e "$backup_root" && ! -d "$backup_root" ) ]]; then
   printf '%s\n' 'Invalid backup directory.' >&2; exit 1
 fi
 mkdir -p -- "$backup_root"
+chmod 700 -- "$backup_root"
 backup="$(mktemp -d "$backup_root/release-137-XXXXXXXX")"
 git rev-parse HEAD > "$backup/previous-commit.txt"
 git archive --format=tar --output="$backup/source-before.tar" HEAD
