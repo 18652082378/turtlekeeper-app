@@ -59,6 +59,7 @@ async function main() {
   const feed = { innerHTML: 'spinner', classList: { remove: () => { loading = false; } } };
   Object.assign(ctx, {
     communityLoading: false, communityLastLoadedAt: 0, communityAuthPayload: x => x,
+    communityConversationRevision: 0, communityPublicationRevision: 0, communityConversationDeleting: new Set(), reconcileCommunityConversationState() {},
     mergeCommunityFriends: x => x, deferMessageListRefreshWhileDragging: () => false,
     normalizeCommunityPosts: x => x, communityFeedSignature: x => JSON.stringify(x),
     saveState() {}, syncPersistentBottomNav() {},

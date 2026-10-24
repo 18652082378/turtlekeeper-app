@@ -12,7 +12,7 @@
     '/api/account/login', '/api/account/register', '/api/account/delete', '/api/account/terms/accept',
     '/api/account/species/create', '/api/account/growth-record/delete', '/api/sms/send', '/api/sms/verify',
     '/api/upload/image', '/api/upload/media', '/api/market/want', '/api/market/create', '/api/market/update',
-    '/api/market/status', '/api/market/delete', '/api/market/refresh', '/api/market/offline',
+    '/api/market/status', '/api/market/delete', '/api/market/refresh', '/api/market/confirm', '/api/market/offline',
     '/api/reviews/create', '/api/reviews/comment', '/api/reviews/delete', '/api/reviews/comment/delete',
     '/api/community/create', '/api/community/delete', '/api/community/like', '/api/community/comment',
     '/api/community/comment/like', '/api/community/comment/delete', '/api/community/follow/toggle',

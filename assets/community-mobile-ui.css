@@ -1,0 +1,306 @@
+/* Community screens bundled into iOS, Android and the browser test build. */
+/* A transformed main would make its fixed reply bar follow the document instead of the viewport. */
+html.community-mobile-ui #app.page-enter-motion .content.web-community-detail {
+  animation: none; transform: none; will-change: auto;
+}
+html.community-mobile-ui #app .mobile-community-reply-preview {
+  display: grid; gap: 4px; width: calc(100% - 24px); min-height: 48px; margin: 0 12px 10px;
+  padding: 10px 12px; border: 0; border-radius: 10px; text-align: left;
+  color: var(--text); background: color-mix(in srgb, var(--primary) 6%, var(--card-bg));
+  font-size: 12px; line-height: 1.6; overflow-wrap: anywhere;
+}
+html.community-mobile-ui #app .mobile-community-reply-preview small { color: var(--muted); font-size: 10px; }
+html.community-mobile-ui #app .mobile-community-reply-preview > span {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+html.community-mobile-ui #app .mobile-community-comment-target {
+  background: color-mix(in srgb, var(--primary) 10%, var(--card-bg)); border-radius: 12px;
+  outline: 2px solid var(--primary); outline-offset: -2px; scroll-margin-block: 84px;
+}
+html.community-mobile-ui #app .community-page {
+  --web-community-accent: var(--primary);
+  padding: 12px 14px 108px;
+}
+html.community-mobile-ui #app .community-page .community-search-shell { margin-bottom: 12px; }
+html.community-mobile-ui #app .community-page .community-search-shell > label {
+  min-height: 44px; border: 1px solid var(--divider); border-radius: 14px; background: var(--card-bg);
+}
+html.community-mobile-ui #app .community-page .community-search-shell input { font-size: 13px; }
+html.community-mobile-ui #app .community-search-shell.feed-search-dock { width: min(100vw, 480px); }
+html.community-mobile-ui #app .community-page .community-invite.web-community-compose {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+  gap: 6px 10px; margin: 0 0 12px; padding: 10px 12px 6px;
+  border: 1px solid var(--divider); border-radius: 17px; box-shadow: none;
+  color: var(--text); background: var(--card-bg) !important;
+}
+html.community-mobile-ui #app .web-community-compose-copy { display: grid; gap: 4px; min-width: 0; }
+html.community-mobile-ui #app .web-community-compose-copy strong { font-size: 16px; font-weight: 750; line-height: 1.4; }
+html.community-mobile-ui #app .web-community-compose-copy > span { color: var(--muted); font-size: 11px; line-height: 1.5; }
+html.community-mobile-ui #app .community-page .community-invite-publish {
+  display: inline-flex; grid-column: 2; grid-row: 1; align-items: center; justify-content: center; justify-self: end;
+  gap: 6px; min-width: 0; min-height: 44px; margin: 0; padding: 8px 12px; border: 0; border-radius: 12px;
+  background: color-mix(in srgb, var(--primary) 65%, #143629); color: #fff !important; font-size: 13px; font-weight: 700;
+}
+html.community-mobile-ui #app .community-page .community-invite-publish > span { color: inherit !important; font-size: inherit; }
+html.community-mobile-ui #app .community-page .community-invite svg { flex: 0 0 auto; width: 18px; height: 18px; }
+html.community-mobile-ui #app .community-page .community-invite-shortcuts {
+  grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px;
+  padding: 4px 0 0; margin: 0; border-top: 1px solid var(--divider);
+}
+html.community-mobile-ui #app .community-page .community-invite-shortcuts > button {
+  display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 44px;
+  padding: 6px 0; margin: 0; border: 0; border-radius: 9px; color: var(--muted) !important;
+  background: transparent; font-size: 12px; font-weight: 550; white-space: nowrap;
+}
+html.community-mobile-ui #app .community-page .community-invite-shortcuts > button svg { color: var(--primary); }
+html.community-mobile-ui #app .community-page .forum-circle-section {
+  display: grid; grid-template-columns: minmax(0, 1fr) 54px; gap: 6px; align-items: center; margin: 0 0 4px;
+}
+html.community-mobile-ui #app .web-community-circle-heading { display: contents; }
+html.community-mobile-ui #app .web-community-circle-heading > span { display: none; }
+html.community-mobile-ui #app .web-community-circle-heading > button {
+  grid-column: 2; grid-row: 1; display: inline-flex; align-items: center; justify-content: center; gap: 3px;
+  min-height: 44px; padding: 0; border: 0; border-radius: 9px; color: var(--muted); background: transparent; font-size: 12px;
+}
+html.community-mobile-ui #app .web-community-circle-heading svg { width: 14px; height: 14px; }
+html.community-mobile-ui #app .community-page .forum-circle-strip {
+  grid-column: 1; grid-row: 1; min-width: 0; margin: 0; padding: 2px 0; display: flex; align-items: center;
+  gap: 7px; overflow-x: auto; scrollbar-width: none;
+}
+html.community-mobile-ui #app .community-page .forum-circle-strip::-webkit-scrollbar { display: none; }
+html.community-mobile-ui #app .community-page .forum-circle-card {
+  flex: 0 0 auto; min-height: 40px; padding: 8px 12px; border: 1px solid transparent;
+  border-radius: 11px; color: var(--muted); background: var(--card-bg); font-size: 12px;
+}
+html.community-mobile-ui #app .community-page .forum-circle-card.active {
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--divider));
+  background: color-mix(in srgb, var(--primary) 9%, var(--card-bg)); color: var(--primary); font-weight: 700;
+}
+html.community-mobile-ui #app .community-page .forum-circle-section.is-expanded {
+  padding: 0 0 8px; border-bottom: 1px solid var(--divider);
+}
+html.community-mobile-ui #app .forum-circle-section.is-expanded .web-community-circle-heading > span {
+  display: flex; align-items: center; gap: 8px; grid-column: 1; grid-row: 1; min-width: 0;
+}
+html.community-mobile-ui #app .web-community-circle-heading strong { color: var(--text); font-size: 13px; }
+html.community-mobile-ui #app .web-community-circle-heading small { color: var(--muted); font-size: 11px; }
+html.community-mobile-ui #app .forum-circle-section.is-expanded .forum-circle-strip {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-column: 1 / -1; grid-row: 2; overflow: visible;
+}
+html.community-mobile-ui #app .forum-circle-section.is-expanded .forum-circle-card { min-width: 0; padding: 8px 3px; }
+html.community-mobile-ui #app .forum-circle-section.is-expanded .web-community-circle-heading svg { transform: rotate(180deg); }
+html.community-mobile-ui #app .community-page .forum-selected-circle { margin: 4px 0 8px; padding: 10px 12px; border: 1px solid var(--divider); border-radius: 12px; }
+html.community-mobile-ui #app .community-page .community-feed-toolbar { display: block; margin: 0 0 10px; padding: 0; }
+html.community-mobile-ui #app .community-page .forum-sort-tabs {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); width: 100%; max-width: 100%;
+  gap: 2px; margin: 0; padding: 0; overflow: visible;
+}
+html.community-mobile-ui #app .community-page .forum-sort-tabs > button {
+  min-width: 0; min-height: 44px; padding: 6px 2px; font-size: 13px; white-space: nowrap;
+}
+html.community-mobile-ui #app .community-page .forum-sort-tabs > button.active { color: var(--primary); }
+html.community-mobile-ui #app .community-page .forum-sort-tabs > button.active::after { left: 18%; right: 18%; bottom: 1px; }
+html.community-mobile-ui #app .community-page .forum-thread-card {
+  margin: 0 0 12px; border: 1px solid var(--divider); border-radius: 18px; background: var(--card-bg); overflow: hidden;
+}
+html.community-mobile-ui #app .community-page .forum-thread-author {
+  grid-template-columns: 34px minmax(0, 1fr) auto 36px; gap: 7px; padding: 11px 13px 5px;
+}
+html.community-mobile-ui #app .community-page .forum-thread-author .forum-thread-avatar,
+html.community-mobile-ui #app .community-page .forum-thread-author > button:first-child { width: 34px; height: 34px; }
+html.community-mobile-ui #app .community-page .forum-thread-author-name { font-size: 12px; }
+html.community-mobile-ui #app .community-page .forum-thread-author-copy > span { font-size: 10px; line-height: 1.5; }
+html.community-mobile-ui #app .community-page .forum-thread-follow {
+  min-height: 40px; padding: 0 9px; border: 0; background: transparent; color: var(--primary); font-size: 11px;
+}
+html.community-mobile-ui #app .community-page .forum-thread-more-wrap { width: 36px; height: 44px; }
+html.community-mobile-ui #app .community-page .forum-thread-more { width: 36px; height: 44px; border: 0; background: transparent !important; color: var(--muted); }
+html.community-mobile-ui #app .community-page .forum-thread-main { padding: 2px 13px 10px; }
+html.community-mobile-ui #app .community-page .forum-thread-badges { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 0 7px; }
+html.community-mobile-ui #app .community-page .forum-thread-badges:empty { display: none; }
+html.community-mobile-ui #app .community-page .forum-thread-badges > span,
+html.community-mobile-ui #app .community-page .forum-thread-badges > b { padding: 3px 6px; font-size: 10px; line-height: 1.4; }
+html.community-mobile-ui #app .community-page .forum-thread-badges .web-community-topic-badge { color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--card-bg)); }
+html.community-mobile-ui #app .community-page .forum-thread-badges .web-community-reply-badge { color: #94601d; background: #fff4df; }
+html.community-mobile-ui #app .community-page .web-community-needs-reply { border-color: color-mix(in srgb, #c9994e 28%, var(--divider)); }
+html.community-mobile-ui #app .community-page .forum-thread-card h3 { margin: 0 0 6px; font-size: 16px; line-height: 1.5; font-weight: 700; overflow-wrap: anywhere; }
+html.community-mobile-ui #app .community-page .forum-thread-card p { margin: 0; font-size: 13px; line-height: 1.7; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+html.community-mobile-ui #app .community-page .forum-thread-media { margin-top: 10px; border-radius: 11px; }
+html.community-mobile-ui #app .community-page .forum-thread-media.is-single > .community-feed-media-button { max-height: 260px; }
+html.community-mobile-ui #app .community-page .forum-thread-media.is-single img.community-media { width: 100%; max-height: 260px !important; object-fit: contain; }
+html.community-mobile-ui #app .community-page .forum-thread-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; min-height: 44px; margin: 0 13px; }
+html.community-mobile-ui #app .community-page .forum-thread-actions button { min-width: 0; min-height: 44px; font-size: 11px; }
+html.community-mobile-ui #app .community-page .forum-thread-actions .forum-action-content { gap: 5px; font-size: 11px; }
+html.community-mobile-ui #app .community-page .web-community-needs-reply [data-open-community-comments] .forum-action-content { color: var(--primary); }
+html.community-mobile-ui #app .web-community-filter-note {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px;
+  margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--divider); border-radius: 12px; background: var(--card-bg);
+}
+html.community-mobile-ui #app .web-community-filter-note p,
+html.community-mobile-ui #app .web-community-empty p,
+html.community-mobile-ui #app .web-community-load-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+html.community-mobile-ui #app .web-community-filter-note .web-community-load-status { grid-column: 1 / -1; }
+html.community-mobile-ui #app .web-community-load-status:empty { display: none; }
+html.community-mobile-ui #app .web-community-load-status:not(:empty) { margin-bottom: 8px; }
+html.community-mobile-ui #app .web-community-filter-note .web-community-load-status:not(:empty) { margin: 0; }
+html.community-mobile-ui #app .web-community-empty { padding: 24px 14px; border: 1px dashed var(--divider); border-radius: 16px; background: var(--card-bg); }
+html.community-mobile-ui #app .web-community-empty strong { display: block; margin-bottom: 8px; color: var(--text); font-size: 14px; }
+html.community-mobile-ui #app .web-community-empty-art { display: inline-grid; place-items: center; width: 48px; height: 48px; margin-bottom: 12px; border-radius: 15px; background: var(--soft); color: var(--primary); }
+html.community-mobile-ui #app .web-community-empty-art svg { width: 26px; height: 26px; }
+html.community-mobile-ui #app .web-community-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 14px; }
+html.community-mobile-ui #app [data-web-community-action] { min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid var(--divider); border-radius: 10px; color: var(--primary); background: var(--card-bg); font: inherit; font-size: 12px; }
+html.community-mobile-ui #app .web-community-circle-heading > [data-web-community-action] { border: 0; padding: 0; background: transparent; font-size: 12px; color: var(--muted); }
+html.community-mobile-ui #app [data-web-community-action]:disabled { opacity: .6; }
+html.community-mobile-ui #app [data-web-community-action][hidden] { display: none; }
+html.community-mobile-ui #app .community-page button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+html.community-mobile-ui[data-theme-color="dark"] #app .community-page .forum-thread-badges .web-community-reply-badge { color: #eac489; background: #473920; }
+html.community-mobile-ui[data-theme-color="dark"] #app .community-page .community-invite-publish { background: var(--primary); color: #082d21 !important; }
+html.community-mobile-ui #app .community-compose-page .web-community-draft-note {
+  display: flex; align-items: start; justify-content: space-between; gap: 12px; margin: 10px 0 8px; padding: 12px;
+  border: 1px solid var(--divider); border-radius: 13px; background: var(--soft); color: var(--text);
+}
+html.community-mobile-ui #app .web-community-draft-note strong { font-size: 13px; line-height: 1.5; }
+html.community-mobile-ui #app .web-community-draft-note p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+html.community-mobile-ui #app .web-community-draft-note > button { flex: 0 0 90px; padding: 8px; font-size: 12px; }
+@media (max-width: 360px) {
+  html.community-mobile-ui #app .web-community-compose-copy strong { font-size: 15px; }
+  html.community-mobile-ui #app .web-community-compose-copy > span { font-size: 10px; }
+  html.community-mobile-ui #app .community-page .community-invite-shortcuts > button { gap: 4px; font-size: 11px; }
+  html.community-mobile-ui #app .community-page .community-invite-publish { padding: 8px 9px; }
+  html.community-mobile-ui #app .web-community-filter-note { grid-template-columns: minmax(0, 1fr); }
+  html.community-mobile-ui #app .community-compose-page .web-community-draft-note { flex-direction: column; gap: 8px; }
+  html.community-mobile-ui #app .web-community-draft-note > button { flex: 0 0 auto; }
+}
+/* Phone-first, single-column detail with a keyboard-aware reply composer. */
+html.community-mobile-ui #app .web-community-detail {
+  --primary: var(--accent);
+  display: block; width: 100%; max-width: 480px; margin: 0 auto;
+  padding: 16px 14px calc(104px + env(safe-area-inset-bottom, 0px)) !important;
+  background: var(--page-bg);
+}
+html.community-mobile-ui #app .web-community-detail-topbar .nav-title { max-width: 480px; margin: 0 auto; }
+html.community-mobile-ui #app .web-community-detail .community-detail-card {
+  min-width: 0; margin: 0; padding: 18px !important; border: 1px solid var(--divider); border-radius: 20px;
+  box-shadow: none; background: var(--card-bg); overflow: visible;
+}
+html.community-mobile-ui #app .web-community-detail .community-detail-head {
+  display: grid; grid-template-columns: 38px minmax(0, 1fr) auto auto; gap: 9px; align-items: center; min-height: 44px; padding: 0; margin: 0 0 12px;
+}
+html.community-mobile-ui #app .web-community-detail .community-profile-avatar-button { grid-column: 1; width: 38px; height: 38px; padding: 0; border-radius: 50%; overflow: hidden; }
+html.community-mobile-ui #app .web-community-detail .community-profile-avatar-button .community-avatar { width: 100%; height: 100%; }
+html.community-mobile-ui #app .web-community-detail .community-detail-author-button { grid-column: 2; min-width: 0; padding: 0; text-align: left; }
+html.community-mobile-ui #app .web-community-detail .community-detail-author-button strong { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+html.community-mobile-ui #app .web-community-detail .community-detail-author-button > span { margin-top: 4px; color: var(--muted); font-size: 11px; }
+html.community-mobile-ui #app .web-community-detail .community-author-actions { grid-column: 3; display: flex; gap: 5px; }
+html.community-mobile-ui #app .web-community-detail .community-author-actions button { min-height: 40px; padding: 0 10px; border: 1px solid var(--divider); border-radius: 12px; font-size: 12px; }
+html.community-mobile-ui #app .web-community-detail-meta {
+  display: flex; align-items: center; gap: 7px; margin: 0 0 10px !important; padding: 0 !important;
+  border: 0; background: transparent !important; color: var(--muted);
+}
+html.community-mobile-ui #app .web-community-detail-meta > span { display: none; }
+html.community-mobile-ui #app .web-community-detail-meta > div { display: flex; align-items: center; gap: 10px; }
+html.community-mobile-ui #app .web-community-detail-meta b { color: var(--primary); font-size: 12px; font-weight: 600; }
+html.community-mobile-ui #app .web-community-detail-meta small { color: var(--muted); font-size: 11px; }
+html.community-mobile-ui #app .web-community-detail .forum-detail-title { margin: 0 0 12px; font-size: 24px; line-height: 1.45; letter-spacing: -.015em; overflow-wrap: anywhere; }
+html.community-mobile-ui #app .web-community-detail .community-post-context { margin: 0 0 10px; font-size: 12px; }
+html.community-mobile-ui #app .web-community-detail .community-detail-copy { margin: 0 0 16px; font-size: 15px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
+html.community-mobile-ui #app .web-community-detail-media { min-width: 0; margin: 12px 0 14px; }
+html.community-mobile-ui #app .web-community-detail .community-detail-media-gallery {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; width: 100%; margin: 0; padding: 0;
+  overflow: hidden; border-radius: 14px; background: var(--soft) !important;
+}
+html.community-mobile-ui #app .web-community-detail .community-detail-media-gallery.is-gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+html.community-mobile-ui #app .web-community-detail .community-detail-media-button {
+  display: flex; align-items: center; justify-content: center; position: relative; min-width: 0;
+  width: 100%; height: auto; min-height: 0; padding: 0; border-radius: 0; background: var(--soft) !important;
+}
+html.community-mobile-ui #app .web-community-detail .community-detail-media-button .community-media {
+  display: block; width: auto !important; height: auto !important; max-width: 100% !important;
+  max-height: min(62dvh, 620px) !important; margin: 0 auto; object-fit: contain !important;
+}
+html.community-mobile-ui #app .web-community-detail .community-detail-media-gallery.is-gallery .community-detail-media-button { min-height: 150px; }
+html.community-mobile-ui #app .web-community-detail .community-detail-media-gallery.is-gallery .community-media { max-height: 320px !important; }
+html.community-mobile-ui #app .web-community-detail .community-detail-media-button .inline-video-shell { min-width: 0; width: 100%; }
+html.community-mobile-ui #app .web-community-detail .community-detail-zoom-mark { display: inline-grid; place-items: center; position: absolute; left: auto; top: auto; right: 10px; bottom: 10px; transform: none; width: 30px; height: 30px; border-radius: 9px; background: #15271fc4; color: #fff; font-style: normal; }
+html.community-mobile-ui #app .web-community-detail-media figcaption { margin-top: 8px; color: var(--muted); font-size: 11px; line-height: 1.5; text-align: center; }
+html.community-mobile-ui #app .web-community-detail .community-detail-actions {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; min-height: 46px; margin: 14px 0 0; padding: 8px 0 0;
+  border-top: 1px solid var(--divider); border-bottom: 0;
+}
+html.community-mobile-ui #app .web-community-detail .community-detail-actions > button:nth-child(n) { display: inline-flex; justify-content: center; align-items: center; gap: 6px; min-width: 0; min-height: 44px; margin: 0; padding: 0; font-size: 12px; }
+html.community-mobile-ui #app .web-community-detail .community-discussion-hook { margin: 12px 0; border-radius: 12px; }
+html.community-mobile-ui #app .web-community-detail-more { grid-column: 4; position: relative; align-self: center; z-index: 4; }
+html.community-mobile-ui #app .web-community-detail-more > summary { display: grid; place-items: center; min-width: 36px; min-height: 44px; padding: 0 5px; border-radius: 10px; color: var(--muted); cursor: pointer; list-style: none; font-size: 17px; }
+html.community-mobile-ui #app .web-community-detail-more > summary::-webkit-details-marker { display: none; }
+html.community-mobile-ui #app .web-community-detail-more-panel { position: absolute; right: 0; top: calc(100% + 5px); display: grid; min-width: 150px; padding: 6px; border: 1px solid var(--divider); border-radius: 13px; background: var(--card-bg); box-shadow: 0 12px 36px #15271f20; }
+html.community-mobile-ui #app .web-community-detail-more-panel > button { min-height: 44px; padding: 8px 12px; border-radius: 8px; background: transparent; color: var(--text); text-align: left; font-size: 13px; }
+html.community-mobile-ui #app .web-community-detail-more-panel > .danger-link,
+html.community-mobile-ui #app .web-community-detail-more-panel > .community-post-delete { color: #bc4e55; }
+html.community-mobile-ui #app .web-community-detail-admin { margin-top: 12px; border-top: 1px solid var(--divider); }
+html.community-mobile-ui #app .web-community-detail-admin > summary { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 8px 0; color: var(--muted); list-style: none; cursor: pointer; font-size: 12px; }
+html.community-mobile-ui #app .web-community-detail-admin > summary::-webkit-details-marker { display: none; }
+html.community-mobile-ui #app .web-community-detail-admin .forum-admin-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; padding: 0 0 10px; gap: 8px; border: 0; }
+html.community-mobile-ui #app .web-community-detail-admin .forum-admin-actions > button { min-width: 0; min-height: 44px; padding: 8px; font-size: 12px; border-radius: 10px; }
+html.community-mobile-ui #app .web-community-detail-discussion { min-width: 0; margin-top: 16px; border: 1px solid var(--divider); border-radius: 18px; background: var(--card-bg); }
+html.community-mobile-ui #app .web-community-detail .forum-reply-section { margin: 0; border: 0; background: transparent; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-heading { min-height: 44px; padding: 0 14px; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-heading strong { font-size: 15px; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-heading span { font-size: 12px; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-section > .empty { min-height: 170px; margin: 0; padding: 22px 16px; border: 0; background: transparent; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-section > .empty strong { color: var(--text); font-size: 14px; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-section > .empty p { margin: 8px 0 14px; color: var(--muted); font-size: 12px; }
+html.community-mobile-ui #app .web-community-detail .forum-comment-thread { padding: 0; }
+html.community-mobile-ui #app .web-community-detail .forum-floor { min-width: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 9px; padding: 8px 12px; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-avatar,
+html.community-mobile-ui #app .web-community-detail .forum-comment-avatar-link { width: 30px; height: 30px; }
+html.community-mobile-ui #app .web-community-detail .forum-floor-content { min-width: 0; }
+html.community-mobile-ui #app .web-community-detail .forum-floor-content p { margin: 2px 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+html.community-mobile-ui #app .web-community-detail .forum-floor-content header { min-width: 0; font-size: 12px; }
+html.community-mobile-ui #app .web-community-detail .forum-comment-author-link { min-width: 0; max-width: 100%; }
+html.community-mobile-ui #app .web-community-detail .forum-comment-actions { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+html.community-mobile-ui #app .web-community-detail .forum-comment-actions button { min-height: 36px; padding: 0 2px; }
+html.community-mobile-ui #app .web-community-detail .forum-nested-replies { margin: 0 12px 8px 30px; padding: 0; border-radius: 12px; background: var(--soft); }
+html.community-mobile-ui #app .web-community-detail .forum-nested-replies .forum-floor { padding: 6px 10px; grid-template-columns: 26px minmax(0, 1fr); gap: 7px; }
+html.community-mobile-ui #app .web-community-detail .forum-nested-replies .forum-reply-avatar,
+html.community-mobile-ui #app .web-community-detail .forum-nested-replies .forum-comment-avatar-link { width: 26px; height: 26px; }
+html.community-mobile-ui #app .web-community-detail .forum-expand-replies { min-height: 44px; padding: 8px 14px; color: var(--primary); font-size: 12px; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-composer {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; position: fixed; left: 50%; right: auto; bottom: var(--forum-keyboard-bottom, 0px);
+  width: min(100%, 480px); max-width: 100%; margin: 0; transform: translateX(-50%);
+  padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--divider); background: var(--card-bg); z-index: 20;
+}
+html.community-mobile-ui #app .web-community-detail .forum-reply-composer input { flex: 1 1 0; min-width: 0; width: auto; min-height: 44px; margin: 0; padding: 10px 12px; border: 1px solid var(--divider); border-radius: 12px; background: var(--soft); font-size: 13px; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-composer input:focus { outline: 2px solid color-mix(in srgb, var(--primary) 40%, transparent); outline-offset: 1px; border-color: var(--primary); }
+html.community-mobile-ui #app .web-community-detail .forum-reply-composer > button[type="submit"] { flex: 0 0 auto; min-width: 60px; min-height: 44px; padding: 10px 14px; border-radius: 12px; background: color-mix(in srgb, var(--primary) 65%, #143629); color: #fff; font-size: 13px; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-composer > button:disabled { opacity: .5; cursor: default; }
+html.community-mobile-ui #app .web-community-reply-target { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 1 0 100%; min-width: 0; color: var(--muted); font-size: 12px; }
+html.community-mobile-ui #app .web-community-reply-target span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.community-mobile-ui #app .web-community-reply-target button { flex: none; min-height: 36px; padding: 0 6px; background: transparent; color: var(--primary); font-size: 12px; }
+html.community-mobile-ui #app .web-community-detail button:focus-visible,
+html.community-mobile-ui #app .web-community-detail summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+html.community-mobile-ui #app .web-community-home-sidebar,
+html.community-mobile-ui #app .web-community-home-feed { min-width: 0; }
+@media (max-width: 420px) {
+  html.community-mobile-ui #app .web-community-detail { padding: 10px 10px 104px !important; }
+  html.community-mobile-ui #app .web-community-detail .community-detail-card { padding: 13px !important; border-radius: 16px; }
+  html.community-mobile-ui #app .web-community-detail .community-detail-head { grid-template-columns: 32px minmax(0, 1fr) auto auto; gap: 6px; }
+  html.community-mobile-ui #app .web-community-detail .community-profile-avatar-button { width: 32px; height: 32px; }
+  html.community-mobile-ui #app .web-community-detail .community-author-actions button { padding: 0 7px; font-size: 11px; }
+  html.community-mobile-ui #app .web-community-detail .forum-detail-title { font-size: 21px; }
+  html.community-mobile-ui #app .web-community-detail .community-detail-media-gallery.is-gallery { gap: 5px; }
+  html.community-mobile-ui #app .web-community-detail .community-detail-media-gallery.is-gallery .community-detail-media-button { min-height: 90px; }
+}
+
+html.community-mobile-ui #app .community-page { width: 100%; max-width: 480px; margin: 0 auto; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-composer {
+  left: 50% !important; right: auto !important; width: min(100%, 480px) !important; max-width: 480px !important; transform: translateX(-50%);
+}
+html.community-mobile-ui #app .web-community-detail .forum-reply-composer input { font-size: 16px; }
+html.community-mobile-ui #app .community-page .community-invite-publish > span { display: inline !important; background: transparent !important; }
+html.community-mobile-ui #app .community-page .discovery-feed-note { display: none; }
+html.community-mobile-ui #app .community-page .discovery-species { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; padding: 0; }
+html.community-mobile-ui #app .community-page .discovery-species > span { flex: 0 0 auto; margin: 0; font-size: 10px; }
+html.community-mobile-ui #app .community-page .discovery-species-chips { display: flex; flex-wrap: nowrap; min-width: 0; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+html.community-mobile-ui #app .community-page .discovery-species-chips > button { flex: 0 0 auto; min-height: 44px; margin: 0; }
+html.community-mobile-ui #app .web-community-detail .community-author-actions button { min-height: 44px; }
+html.community-mobile-ui #app .web-community-detail-more > summary { min-width: 44px; }

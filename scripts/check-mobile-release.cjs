@@ -20,6 +20,9 @@ run('scripts/test-mobile-parity.cjs');
 run('scripts/verify-ios-build.js', ['--native']);
 if (!args.includes('--prepare-only')) {
   const failures = [];
+  for (const script of ['scripts/test-api-request-resilience.cjs', 'scripts/test-module-loading.cjs', 'scripts/test-feed-loading-recovery.js', 'scripts/test-notification-summary.js']) {
+    try { run(script); } catch (e) { failures.push(e.message); }
+  }
   // Run both even when the first fails, so one report shows both platforms.
   for (const [platform, engine] of [['ios', 'webkit'], ['android', 'chromium']]) {
     try { run('scripts/test-mobile-layout.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: engine, ANDROID_STRICT: platform === 'android' ? '1' : '0' }); }
@@ -28,6 +31,8 @@ if (!args.includes('--prepare-only')) {
   try { run('scripts/test-android-ui.cjs', [], { ANDROID_EXTENDED: '1', ANDROID_TYPOGRAPHY: '1', ANDROID_CARDS: '1', ANDROID_LEDGER: '1' }); }
   catch (e) { failures.push(e.message); }
   for (const platform of ['ios', 'android']) {
+    try { run('scripts/test-web-community-detail.cjs', [], { COMMUNITY_MOBILE_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
     try { run('scripts/test-discovery-workspace.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-form-intrinsic-layout.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }

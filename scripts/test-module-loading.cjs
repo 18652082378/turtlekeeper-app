@@ -5,7 +5,7 @@ function setup(){
  const ctx={console:{warn(){}},Date,Map,Set,Number,String,Boolean,structuredClone,
   CONFIGURED_SMS_BACKEND:true,canUseCommunity:()=>true,state:{loggedInPhone:'A',cloudToken:'tokenA',page:'following',communityFriends:[],communityFollowingUsers:[]},
   followingLoading:false,followingLastLoadedAt:0,publicReviewsLoading:false,publicReviewsLastLoadedAt:0,publicFeedbackLoading:false,publicFeedbackLastLoadedAt:0,
-  communityUserProfileLoading:false,communityUserProfileLoadedKey:'',communityLoading:false,
+  communityUserProfileLoading:false,communityUserProfileLoadedKey:'',communityLoading:false,communityPublicationRevision:0,
   contentReportsLoading:false,contentReportsLastLoadedAt:0,operationsOverviewLoading:false,operationsOverviewLastLoadedAt:0,systemAnnouncementsLoading:false,systemAnnouncementsLastLoadedAt:0,
   normalizeCommunityPosts:x=>x,normalizeMarketListings:x=>x,communityUserSnapshot:id=>({id}),communityAuthPayload:x=>x,reviewAuthPayload:()=>({}),feedbackAuthPayload:()=>({}),
   saveState(){},setupCommunityInfiniteScroll(){},patchVisibleCommunityFeed(){},$app:{querySelector:()=>null},render(){},toast(){},patchAnnouncementSlot(){}};

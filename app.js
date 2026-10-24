@@ -2797,14 +2797,14 @@ function communityNotificationCopy(item = {}) {
     ? { action: "赞了你的评论", detail: String(item.preview).replace(/^赞了你的评论：?/, "") || item.postTitle || "查看评论" }
     : { action: "赞了你的帖子", detail: item.postTitle || "查看帖子" };
   if (item.type === "follow") return { action: "关注了你", detail: "去看看这位壳友" };
-  return { action: "评论了你的帖子", detail: item.preview || item.postTitle || "查看新评论" };
+  return { action: item.replyToYou ? "回复了你的评论" : "评论了你的帖子", detail: item.preview || item.postTitle || "查看新评论" };
 }
 
 function communityNotificationRow(item = {}) {
   const copy = communityNotificationCopy(item);
   const target = item.type === "follow" ? "user" : "post";
   const thumbnail = apiAssetUrl(item.postThumbnail || "");
-  return `<button class="message-notification-row ${item.read ? "" : "is-unread"}" type="button" data-open-community-notification="${escapeHtml(item.id || "")}" data-notification-target="${target}" data-notification-user-id="${escapeHtml(item.actorId || "")}" data-notification-post-id="${escapeHtml(item.postId || "")}">
+  return `<button class="message-notification-row ${item.read ? "" : "is-unread"}" type="button" data-open-community-notification="${escapeHtml(item.id || "")}" data-notification-target="${target}" data-notification-user-id="${escapeHtml(item.actorId || "")}" data-notification-post-id="${escapeHtml(item.postId || "")}" data-notification-comment-id="${escapeHtml(item.commentId || "")}" data-notification-type="${escapeHtml(item.type || "")}">
     <span class="message-notification-avatar">${communityAvatar({ authorAvatar: item.actorAvatar, authorName: item.actorName })}<i class="message-notification-type ${escapeHtml(item.type || "comment")}" aria-hidden="true">${item.type === "like" ? "赞" : item.type === "follow" ? "+" : "评"}</i></span>
     <span class="message-notification-copy"><strong>${escapeHtml(item.actorName || "龟友")}${platformAdminBadge({ isAdmin: item.actorIsAdmin })}</strong><span>${escapeHtml(copy.action)} <time datetime="${escapeHtml(item.createdAt || "")}">${formatMessagePreviewTime(item.createdAt)}</time></span><small>${escapeHtml(copy.detail)}</small></span>
     ${thumbnail ? `<img class="message-notification-thumbnail" src="${escapeHtml(thumbnail)}" alt="帖子图片" loading="lazy">` : `<span class="message-notification-target-icon" aria-hidden="true">›</span>`}
@@ -4894,14 +4894,18 @@ function pageMarket() {
   `;
 }
 
-const MARKET_REFRESH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-
 function marketRefreshMeta(item = {}) {
-  const refreshedAt = Date.parse(item.refreshedAt || item.createdAt || "");
-  const elapsed = Number.isFinite(refreshedAt) ? Math.max(0, Date.now() - refreshedAt) : MARKET_REFRESH_WINDOW_MS;
-  const remainingDays = Math.max(0, Math.ceil((MARKET_REFRESH_WINDOW_MS - elapsed) / (24 * 60 * 60 * 1000)));
-  if (item.status === "inactive") return { label: "已下架", hint: "超过 7 天未刷新，已自动下架" };
-  return { label: "已发布", hint: `距自动下架还有 ${remainingDays} 天` };
+  const supported = item.availabilityPolicy === "confirmation-30d-v1";
+  if (item.status === "inactive") {
+    const reasons = { manual: "你已手动下架", stale: "在售状态未及时确认，已自动下架", restricted_species: "该品种暂不支持出售" };
+    return { label: "已下架", hint: reasons[item.offlineReason] || "商品已下架，请核实后处理" };
+  }
+  const expiresAt = Date.parse(item.expiresAt || "");
+  if (!supported || !Number.isFinite(expiresAt)) return { label: "已发布", hint: "请及时确认在售状态，下架时间以服务器为准" };
+  const remainingDays = Math.max(0, Math.ceil((expiresAt - Date.now()) / 86400000));
+  const dueAt = Date.parse(item.confirmationDueAt || "");
+  const needsConfirmation = item.needsConfirmation || (Number.isFinite(dueAt) && Date.now() >= dueAt);
+  return { label: needsConfirmation ? "待确认在售" : "已发布", hint: remainingDays === 0 ? "有效期已到，请确认仍在售" : `${needsConfirmation ? "请确认仍在售 · " : ""}${remainingDays} 天后未确认将下架` };
 }
 
 function myMarketListingRow(item) {
@@ -4919,9 +4923,10 @@ function myMarketListingRow(item) {
         <b><i>¥</i>${money(item.price)}</b>
         <small>${meta.hint}</small>
       </div>
-      <div class="my-market-listing-actions ${item.status === "active" ? "has-offline" : ""}">
+      <div class="my-market-listing-actions ${item.status === "active" ? "has-offline" : ""} ${item.status === "active" && item.availabilityPolicy === "confirmation-30d-v1" ? "has-confirm" : ""}">
         <button type="button" data-edit-market-listing="${item.id}">编辑</button>
-        <button class="refresh" type="button" data-refresh-market-listing="${item.id}">${item.status === "inactive" ? "重新上架" : "刷新"}</button>
+        ${item.availabilityPolicy === "confirmation-30d-v1" && (item.status === "active" || ["manual", "stale"].includes(item.offlineReason)) ? `<button class="refresh" type="button" data-confirm-market-listing="${item.id}">${item.status === "inactive" ? "确认在售并上架" : "确认仍在售"}</button>` : ""}
+        ${item.status === "active" || item.availabilityPolicy !== "confirmation-30d-v1" ? `<button class="refresh" type="button" data-refresh-market-listing="${item.id}">${item.status === "inactive" ? "重新上架" : "刷新曝光"}</button>` : ""}
         ${item.status === "active" ? `<button class="offline" type="button" data-offline-market-listing="${item.id}">下架</button>` : ""}
       </div>
     </article>
@@ -4937,12 +4942,12 @@ function pageMyMarketListings() {
   return `
     ${topbar("我的发布", true, `<button class="market-top-add" type="button" data-page="marketAdd" aria-label="发布出售">＋</button>`)}
     <main class="content page-fresh my-market-page">
-      <section class="my-market-notice"><strong>发布后请记得刷新</strong><p>商品超过 7 天未刷新将自动下架，刷新后重新计算展示时间。</p></section>
+      <section class="my-market-notice"><strong>请及时确认商品仍在售</strong><p>${all.length && all.every(item => item.availabilityPolicy === "confirmation-30d-v1") ? "7 天未确认会在此提醒，30 天未确认才自动下架。确认在售不提升排序，刷新曝光每天一次，并同时确认在售。" : "请核实商品是否仍在售。刷新曝光每天一次，下架时间以服务器规则为准。"}</p></section>
       <section class="my-market-tabs">
         <button class="${tab === "active" ? "active" : ""}" type="button" data-my-market-tab="active">已发布 <b>${activeCount}</b></button>
         <button class="${tab === "inactive" ? "active" : ""}" type="button" data-my-market-tab="inactive">已下架 <b>${inactiveCount}</b></button>
       </section>
-      <section class="my-market-list">${listings.map(myMarketListingRow).join("") || `<div class="market-empty visual-empty"><span class="visual-empty-art" aria-hidden="true">${TurtleArtwork.svg("market")}</span><strong>${tab === "active" ? "还没有已发布的商品" : "没有已下架的商品"}</strong><p>${tab === "active" ? "发布出售后会显示在这里。" : "超过 7 天未刷新时，商品会自动移动到这里。"}</p>${tab === "active" ? `<button type="button" data-page="marketAdd">发布出售</button>` : ""}</div>`}</section>
+      <section class="my-market-list">${listings.map(myMarketListingRow).join("") || `<div class="market-empty visual-empty"><span class="visual-empty-art" aria-hidden="true">${TurtleArtwork.svg("market")}</span><strong>${tab === "active" ? "还没有已发布的商品" : "没有已下架的商品"}</strong><p>${tab === "active" ? "发布出售后会显示在这里。" : "手动或到期下架的商品会显示在这里。"}</p>${tab === "active" ? `<button type="button" data-page="marketAdd">发布出售</button>` : ""}</div>`}</section>
     </main>
     ${bottomNav()}
   `;
@@ -7873,12 +7878,12 @@ function pageAccount() {
         </section>
         ${state.accountSessionNotice ? `<p class="fresh-card settings-card" role="alert">${escapeHtml(state.accountSessionNotice)}</p>` : ""}
         <form class="fresh-card survey-form" id="accountForm" data-auth-form="${state.accountMode}">
-          <label class="survey-field"><span>手机号</span><input class="field" name="phone" inputmode="tel" maxlength="11" placeholder="请输入 11 位手机号" value="${escapeHtml(state.accountDraftPhone || "")}" required></label>
-          <label class="survey-field"><span>${state.accountMode === "register" ? "创建密码" : "登录密码"}</span><input class="field" name="password" type="password" minlength="6" placeholder="至少 6 位密码" value="${escapeHtml(state.accountDraftPassword || "")}" required></label>
+          <label class="survey-field"><span>手机号</span><input class="field" name="phone" type="tel" inputmode="tel" autocomplete="username" maxlength="11" placeholder="请输入 11 位手机号" value="${escapeHtml(state.accountDraftPhone || "")}" required></label>
+          <label class="survey-field"><span>${state.accountMode === "register" ? "创建密码" : "登录密码"}</span><input class="field" name="password" type="password" autocomplete="${state.accountMode === "register" ? "new-password" : "current-password"}" minlength="6" placeholder="至少 6 位密码" value="${escapeHtml(state.accountDraftPassword || "")}" required></label>
           ${state.accountMode === "register" ? `
-            <label class="survey-field"><span>核对密码</span><input class="field" name="confirmPassword" type="password" minlength="6" placeholder="请再次输入密码" value="${escapeHtml(state.accountDraftConfirmPassword || "")}" required><small class="field-error" data-password-error hidden>密码不一致</small></label>
+            <label class="survey-field"><span>核对密码</span><input class="field" name="confirmPassword" type="password" autocomplete="new-password" minlength="6" placeholder="请再次输入密码" value="${escapeHtml(state.accountDraftConfirmPassword || "")}" required><small class="field-error" data-password-error hidden>密码不一致</small></label>
             <div class="code-row">
-              <label class="survey-field"><span>验证码</span><input class="field" name="code" inputmode="numeric" maxlength="6" placeholder="6 位验证码" required></label>
+              <label class="survey-field"><span>验证码</span><input class="field" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位验证码" required></label>
               <button class="secondary" type="button" data-send-code ${codeCooldown > 0 ? "disabled" : ""}>${codeCooldown > 0 ? `${codeCooldown} 秒后重试` : "获取验证码"}</button>
             </div>
             <label class="auth-agreement"><input type="checkbox" name="termsAccepted" required><span>我已阅读并同意<button type="button" data-page="rules">《服务与社区规则》</button>及<button type="button" data-page="privacy">《隐私政策》</button></span></label>
@@ -9571,6 +9576,7 @@ function bindEvents() {
       if (!post || String(post.id) !== postId) return toast("这篇帖子已删除或暂时不可见");
       communityReplyTarget = null;
       setState({ page: "communityPostDetail", selectedCommunityPostId: postId, communityPosts: [...(state.communityPosts || []).filter(item => String(item.id) !== postId), post], openCommunityActionId: "", communityCommentPostId: "" }, { skipCloud: true });
+      if (button.dataset.notificationCommentId || button.dataset.notificationType === "comment") window.TurtleMobileCommunity?.openComment?.(postId, button.dataset.notificationCommentId);
     } catch (error) {
       if (button.isConnected) toast("帖子暂时无法打开，请稍后重试");
     } finally { button.disabled = false; }
@@ -9996,6 +10002,7 @@ function bindEvents() {
   document.querySelectorAll("[data-delete-market]").forEach(btn => btn.addEventListener("click", () => deleteMarketListing(btn.dataset.deleteMarket)));
   document.querySelectorAll("[data-edit-market-listing]").forEach(btn => btn.addEventListener("click", () => beginMarketListingEdit(btn.dataset.editMarketListing)));
   document.querySelectorAll("[data-refresh-market-listing]").forEach(btn => btn.addEventListener("click", () => refreshOwnMarketListing(btn.dataset.refreshMarketListing)));
+  document.querySelectorAll("[data-confirm-market-listing]").forEach(btn => btn.addEventListener("click", () => confirmOwnMarketListing(btn.dataset.confirmMarketListing)));
   document.querySelectorAll("[data-offline-market-listing]").forEach(btn => btn.addEventListener("click", () => offlineOwnMarketListing(btn.dataset.offlineMarketListing)));
   document.querySelectorAll("[data-market-contact]").forEach(btn => btn.addEventListener("click", () => contactMarketSeller(btn.dataset.marketContact)));
   document.querySelectorAll("[data-market-detail-more]").forEach(btn => btn.addEventListener("click", () => openMarketDetailMore(btn.dataset.marketDetailMore)));
@@ -11506,7 +11513,7 @@ async function submitMarketListing(event) {
       page: "market",
       myMarketListings: normalizeMarketListings(result.myListings || [])
     });
-    toast(editingListingId ? "商品已保存并刷新" : "商品已发布，7 天未刷新将自动下架");
+    toast(editingListingId ? "商品已保存并刷新" : "商品已发布，请及时确认在售状态");
   } catch (error) {
     clearMarketPublishProgress();
     if (error.status === 405 || error.message === "方法不支持") {
@@ -11775,18 +11782,40 @@ function beginMarketListingEdit(listingId) {
   }, { skipCloud: true });
 }
 
+const marketAvailabilityRequests = new Set();
+
+async function confirmOwnMarketListing(listingId) {
+  return mutateMarketAvailability(listingId, "confirm");
+}
+
 async function refreshOwnMarketListing(listingId) {
+  return mutateMarketAvailability(listingId, "refresh");
+}
+
+async function mutateMarketAvailability(listingId, action) {
   if (!canUseCommunity()) return;
+  const phone = state.loggedInPhone;
+  const token = currentCloudToken();
+  const key = JSON.stringify([phone, token, listingId]);
+  if (marketAvailabilityRequests.has(key)) return;
+  marketAvailabilityRequests.add(key);
   try {
-    const result = await apiPost("/api/market/refresh", marketAuthPayload({ listingId }));
+    const result = await apiPost(`/api/market/${action}`, marketAuthPayload({ listingId }));
+    if (state.loggedInPhone !== phone || currentCloudToken() !== token) return;
+    const updated = result.myListings?.find(item => item.id === listingId);
+    if (result.ok !== true || !Array.isArray(result.listings) || !Array.isArray(result.myListings) || !updated || (action === "confirm" && updated.availabilityPolicy !== "confirmation-30d-v1")) {
+      throw new Error("服务器尚未确认商品状态，请重新加载后重试");
+    }
     marketLastLoadedAt = Date.now();
     setState({
       myMarketListings: normalizeMarketListings(result.myListings || []),
       marketListings: normalizeMarketListings(result.listings || [])
     }, { skipCloud: true });
-    toast("商品已刷新，将继续展示 7 天");
+    toast(action === "confirm" ? "已确认在售，有效期延长至 30 天，排序不变" : updated.availabilityPolicy === "confirmation-30d-v1" ? "已刷新曝光并确认在售，有效期延长至 30 天" : "商品已刷新");
   } catch (error) {
-    toast(error.message || "刷新失败");
+    if (state.loggedInPhone === phone && currentCloudToken() === token) toast(error.message || "操作失败，请重试");
+  } finally {
+    marketAvailabilityRequests.delete(key);
   }
 }
 
@@ -13906,7 +13935,7 @@ async function refreshMessageUnread(force = false, options = {}) {
     const friends = Array.isArray(result.friends) ? mergeCommunityFriends(result.friends) : state.communityFriends;
     const notifications = Array.isArray(result.notifications) ? result.notifications : (state.communityNotifications || []);
     const friendSignature = items => JSON.stringify((items || []).map(item => [item.id, item.name, item.avatar, item.lastMessage, item.lastMessageAt, Number(item.unreadCount || 0)]));
-    const notificationSignature = items => JSON.stringify((items || []).map(item => [item.id, item.type, item.actorName, item.postId, item.preview, item.postThumbnail, item.createdAt, Boolean(item.read)]));
+    const notificationSignature = items => JSON.stringify((items || []).map(item => [item.id, item.type, item.actorName, item.postId, item.commentId, Boolean(item.replyToYou), item.preview, item.postThumbnail, item.createdAt, Boolean(item.read)]));
     const notificationSummary = result.notificationSummary || null;
     const notificationsChanged = notificationSignature(notifications) !== notificationSignature(state.communityNotifications) || JSON.stringify(notificationSummary) !== JSON.stringify(state.communityNotificationSummary);
     // Consume the current render request before comparing data. If a new push
@@ -15179,7 +15208,7 @@ function queueNativePushAction(notification) {
   const senderId = String(data.senderId || data.senderID || data.sender_id || "").trim();
   const route = String(data.route || "").trim();
   const postId = String(data.postId || "").trim();
-  pendingNativePushAction = { senderId, route, postId, recipientId: String(data.recipientId || ''), receivedAt: Date.now() };
+  pendingNativePushAction = { senderId, route, postId, commentId: String(data.commentId || "").trim(), recipientId: String(data.recipientId || ''), receivedAt: Date.now() };
   consumePendingNativePushAction();
 }
 
@@ -15255,6 +15284,7 @@ async function openNativePushCommunityPost(action) {
       page: "communityPostDetail", selectedCommunityPostId: action.postId,
       openCommunityActionId: "", communityCommentPostId: ""
     }, { skipCloud: true });
+    if (action.commentId) window.TurtleMobileCommunity?.openComment?.(action.postId, action.commentId);
   } catch (error) {
     if (isCurrent() && state.page === fallbackPage) toast("帖子暂时无法打开，请稍后重试");
   } finally {
@@ -15316,8 +15346,12 @@ async function apiPost(path, payload) {
   const feedRead = /^\/api\/(market\/(list|detail)|community\/list)$/.test(path);
   const chatRequest = /^\/api\/community\/chat\/(list|send|recall)$/.test(path);
   const weatherRequest = path.startsWith('/api/weather/');
-  const controller = accountSync || feedRead || chatRequest || weatherRequest || path === "/api/account/session" ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(), accountSync ? 20000 : 15000) : null;
+  // Every JSON request must settle, including search, login and user mutations.
+  // Uploads get a separate allowance; timed-out mutations are never auto-retried here.
+  const uploadRequest = path.startsWith('/api/upload/');
+  const controller = new AbortController();
+  const timeoutMs = uploadRequest ? 120000 : accountSync ? 20000 : feedRead || chatRequest || weatherRequest || path === "/api/account/session" ? 15000 : 30000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const finishFeedback = window.TurtleUI?.beginRequest(path);
   let response, data;
   try {
@@ -15327,10 +15361,21 @@ async function apiPost(path, payload) {
       body: JSON.stringify(payload),
       ...(controller ? { signal: controller.signal } : {})
     });
+    const invalidResponse = () => {
+      const error = new Error("服务器返回异常，尚未确认处理结果，请检查后再试");
+      error.code = 'INVALID_API_RESPONSE';
+      error.status = response.status;
+      return error;
+    };
     data = await response.json().catch(error => {
-      if (controller?.signal.aborted) throw error;
-      return {};
+      if (controller.signal.aborted) throw error;
+      if (!response.ok) return { ok: false };
+      throw invalidResponse();
     });
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      if (response.ok) throw invalidResponse();
+      data = { ok: false };
+    }
   } catch (error) {
     if (controller?.signal.aborted) {
       if (weatherRequest) throw new Error('温度提醒连接超时，请稍后重试');
@@ -15344,8 +15389,8 @@ async function apiPost(path, payload) {
         timeout.code = "FEED_LOAD_TIMEOUT";
         throw timeout;
       }
-      const timeout = new Error("同步请求超时，本机修改已保留，请检查网络后重试");
-      timeout.code = "ACCOUNT_SYNC_TIMEOUT";
+      const timeout = new Error(accountSync ? "同步请求超时，本机修改已保留，请检查网络后重试" : uploadRequest ? "上传超时，请检查网络后重试" : "请求超时，尚未确认处理结果，请检查后再试");
+      timeout.code = accountSync ? "ACCOUNT_SYNC_TIMEOUT" : uploadRequest ? 'UPLOAD_TIMEOUT' : 'API_REQUEST_TIMEOUT';
       throw timeout;
     }
     if (accountSync && error instanceof TypeError) throw new Error("暂时无法连接云端，本机修改已保留，请检查网络后重试");
@@ -15409,9 +15454,10 @@ function appAnalyticsSource() {
 
 function appAnalyticsModule() {
   const page = String(state.page || "home");
-  if (["market", "marketAdd", "marketDetail", "marketSeller", "myMarketListings", "marketFavorites", "marketHistory"].includes(page)) return "龟集市";
+  if (page === "search") return window.TurtleSearch?.source?.() === "community" ? "壳友圈" : "龟集市";
+  if (["market", "marketAdd", "marketDetail", "marketSeller", "marketMy", "myMarketListings", "marketFavorites", "marketHistory"].includes(page)) return "龟集市";
   if (["community", "communityAdd", "communityPostDetail", "following", "followingProfile", "communityProfile"].includes(page)) return "壳友圈";
-  if (["messages", "communityFriends", "communityChat"].includes(page)) return "消息";
+  if (["messages", "communityActivity", "communityFriends", "communityChat"].includes(page)) return "消息";
   if (["ledger", "ledgerDetail", "calendar", "breeding", "breedingAdd", "breedingDetail"].includes(page)) return "账本";
   if (["mine", "satisfaction", "publicSatisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "reports", "sync", "about", "rules", "privacy", "moderation", "announcements", "operations"].includes(page)) return "空间";
   return "看板";

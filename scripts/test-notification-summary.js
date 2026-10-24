@@ -10,7 +10,7 @@ rows.push({id:'foreign',recipientPhone:'other',actorPhone:'actor',type:'like',cr
 const db={communityNotifications:rows,users:{actor:{accountName:'小龟友'}}};
 const ctx={readJson:async x=>x,readDatabase:()=>db,requireReviewUser:(db,body)=>({phone:body.phone}),sendJson:(r,s,body)=>body,communityUserId:x=>x,maskPhone:x=>x,isAdminUser:()=>false,communityMediaItemsFromPost:()=>[],writeDatabase:()=>{},syncCommunityUnreadBadge:()=>{},communityUnreadMessageCount:()=>3,communityFriends:()=>[]};
 vm.createContext(ctx);
-vm.runInContext(slice('function communityUnreadActivityCount(', 'function communityTotalUnreadCount(')+slice('function publicCommunityNotifications(', '// A badge-only APNs payload')+slice('async function handleCommunityUnread(', 'const MARKET_REFRESH_WINDOW_MS'),ctx);
+vm.runInContext(slice('function communityConversationState(', 'function clearCommunityConversationHistory(')+slice('function communityUnreadActivityCount(', 'function communityTotalUnreadCount(')+slice('function publicCommunityNotifications(', '// A badge-only APNs payload')+slice('async function handleCommunityUnread(', 'const MARKET_REFRESH_WINDOW_MS'),ctx);
 (async()=>{
  let inbox=await ctx.handleCommunityUnread({phone:'owner'});
  assert.equal(inbox.notifications.length,100);

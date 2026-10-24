@@ -1100,7 +1100,7 @@ function communityTotalUnreadCount(db, user) {
   return communityUnreadMessageCount(db, user) + communityUnreadActivityCount(db, user);
 }
 
-function addCommunityNotification(db, { type, recipientPhone, actorPhone, postId = "", postTitle = "", preview = "", uniqueKey = "" }) {
+function addCommunityNotification(db, { type, recipientPhone, actorPhone, postId = "", commentId = "", replyToYou = false, postTitle = "", preview = "", uniqueKey = "" }) {
   if (!recipientPhone || !actorPhone || recipientPhone === actorPhone) return null;
   db.communityNotifications = Array.isArray(db.communityNotifications) ? db.communityNotifications : [];
   if (uniqueKey && db.communityNotifications.some(item => item.recipientPhone === recipientPhone && item.uniqueKey === uniqueKey)) return null;
@@ -1110,6 +1110,8 @@ function addCommunityNotification(db, { type, recipientPhone, actorPhone, postId
     recipientPhone,
     actorPhone,
     postId: trimPublicText(postId, 100),
+    commentId: trimPublicText(commentId, 100),
+    replyToYou: Boolean(replyToYou),
     postTitle: trimPublicText(postTitle, 80),
     preview: trimPublicText(preview, 160),
     uniqueKey: trimPublicText(uniqueKey, 180),
@@ -1141,6 +1143,8 @@ function publicCommunityNotifications(db, user, { group, offset = 0, limit = 100
         actorAvatar: actor?.accountAvatar || "",
         actorIsAdmin: isAdminUser(actor),
         postId: item.postId || "",
+        commentId: item.commentId || "",
+        replyToYou: Boolean(item.replyToYou),
         postTitle: item.postTitle || "",
         preview: item.preview || "",
         postThumbnail: firstMedia?.posterUrl || firstMedia?.url || "",
@@ -1243,7 +1247,8 @@ async function notifyCommunityActivity(db, notification) {
       sound: "default"
     },
     route: "messages",
-    postId: notification.postId || ""
+    postId: notification.postId || "",
+    commentId: notification.commentId || ""
   };
   const results = await Promise.all(devices.map(item => sendDeviceNotification(item, payload)));
   results.forEach((result, index) => {
@@ -3508,8 +3513,13 @@ async function handleCommunityComment(req, res) {
   if (!canViewCommunityPost(db, post, user)) return sendJson(res, 403, { ok: false, message: "你无权查看这篇帖子" });
   if (!content) return sendJson(res, 400, { ok: false, message: "请输入评论" });
   if (rejectObjectionableContent(res, content)) return;
+  const submissionId = trimPublicText(body.submissionId, 96);
+  if (submissionId && (post.comments || []).some(item => item.authorPhoneRaw === user.phone && item.submissionId === submissionId)) {
+    return sendJson(res, 200, { ok: true, duplicate: true, posts: publicCommunityPosts(db, user) });
+  }
   const comment = {
     id: crypto.randomUUID(),
+    submissionId,
     content,
     authorPhoneRaw: user.phone,
     authorName: user.accountName || maskPhone(user.phone),
@@ -3520,17 +3530,25 @@ async function handleCommunityComment(req, res) {
     createdAt: new Date().toISOString()
   };
   post.comments = [...(Array.isArray(post.comments) ? post.comments : []), comment];
-  const notification = addCommunityNotification(db, {
-    type: "comment",
-    recipientPhone: post.authorPhoneRaw,
-    actorPhone: user.phone,
-    postId: post.id,
-    postTitle: post.title || "壳友交流帖",
-    preview: content,
-    uniqueKey: `comment:${comment.id}`
-  });
+  // Notify each participant once, including the author of the comment being answered.
+  const recipients = new Set([post.authorPhoneRaw, replyTarget?.authorPhoneRaw].filter(Boolean));
+  const notifications = [...recipients].map(recipientPhone => {
+    const recipient = db.users?.[recipientPhone];
+    if (!recipient || blockedPhoneSet(recipient).has(user.phone) || blockedPhoneSet(recipient).has(post.authorPhoneRaw) || !canViewCommunityPost(db, post, recipient)) return null;
+    return addCommunityNotification(db, {
+      type: "comment",
+      recipientPhone,
+      actorPhone: user.phone,
+      postId: post.id,
+      commentId: comment.id,
+      replyToYou: recipientPhone === replyTarget?.authorPhoneRaw,
+      postTitle: post.title || "壳友交流帖",
+      preview: content,
+      uniqueKey: `comment:${comment.id}`
+    });
+  }).filter(Boolean);
   writeDatabase(db);
-  if (notification) void notifyCommunityActivity(db, notification);
+  notifications.forEach(notification => { void notifyCommunityActivity(db, notification); });
   return sendJson(res, 200, { ok: true, posts: publicCommunityPosts(db, user) });
 }
 
@@ -3573,6 +3591,7 @@ async function handleCommunityCommentLike(req, res) {
     recipientPhone: comment.authorPhoneRaw,
     actorPhone: user.phone,
     postId: post.id,
+    commentId: comment.id,
     postTitle: post.title || "壳友交流帖",
     preview: `赞了你的评论：${trimPublicText(comment.content || "", 80)}`,
     uniqueKey: `comment-like:${comment.id}:${user.phone}`
@@ -4214,8 +4233,22 @@ async function handleCommunityUnread(req, res) {
   });
 }
 
-const MARKET_REFRESH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const MARKET_REFRESH_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const MARKET_CONFIRM_REMINDER_MS = 7 * 24 * 60 * 60 * 1000;
 const MARKET_MANUAL_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function marketAvailabilityMeta(item, now = Date.now()) {
+  // Legacy listings keep their last refresh as the initial confirmation. Never revive inactive records.
+  const confirmedAt = [item.confirmedAt, item.refreshedAt, item.createdAt]
+    .map(value => Date.parse(value || "")).find(Number.isFinite);
+  return {
+    availabilityPolicy: "confirmation-30d-v1",
+    confirmedAt: Number.isFinite(confirmedAt) ? new Date(confirmedAt).toISOString() : "",
+    expiresAt: Number.isFinite(confirmedAt) ? new Date(confirmedAt + MARKET_REFRESH_WINDOW_MS).toISOString() : "",
+    confirmationDueAt: Number.isFinite(confirmedAt) ? new Date(confirmedAt + MARKET_CONFIRM_REMINDER_MS).toISOString() : "",
+    needsConfirmation: (item.status || "active") === "active" && (!Number.isFinite(confirmedAt) || now - confirmedAt >= MARKET_CONFIRM_REMINDER_MS)
+  };
+}
 
 function marketWantCount(item, excludeAdmin = false) {
   const phones = Array.isArray(item.wantedPhones) ? item.wantedPhones : [];
@@ -4253,6 +4286,7 @@ function marketListingView(db, item, viewer = null) {
     })),
     status: ["active", "inactive", "sold"].includes(item.status) ? item.status : "active",
     refreshedAt: item.refreshedAt || item.createdAt || "",
+    ...marketAvailabilityMeta(item),
     offlineAt: item.offlineAt || "",
     offlineReason: item.offlineReason || "",
     sellerId: communityUserId(item.sellerPhoneRaw),
@@ -4270,8 +4304,8 @@ function autoOfflineStaleMarketListings(db, now = Date.now()) {
   let changed = false;
   (Array.isArray(db.marketListings) ? db.marketListings : []).forEach(listing => {
     if ((listing.status || "active") !== "active") return;
-    const refreshedAt = Date.parse(listing.refreshedAt || listing.createdAt || "");
-    if (!Number.isFinite(refreshedAt) || now - refreshedAt < MARKET_REFRESH_WINDOW_MS) return;
+    const expiresAt = Date.parse(marketAvailabilityMeta(listing, now).expiresAt);
+    if (!Number.isFinite(expiresAt) || now < expiresAt) return;
     listing.status = "inactive";
     listing.offlineReason = "stale";
     listing.offlineAt = new Date(now).toISOString();
@@ -4535,6 +4569,7 @@ async function handleMarketCreate(req, res) {
     sellerAvatar: user.accountAvatar || "",
     createdAt: new Date().toISOString(),
     refreshedAt: new Date().toISOString(),
+    confirmedAt: new Date().toISOString(),
     offlineAt: "",
     offlineReason: ""
   };
@@ -4656,6 +4691,28 @@ function syncMarketListingToLedger(owner, listing, status) {
   return null;
 }
 
+async function handleMarketConfirm(req, res) {
+  const body = await readJson(req);
+  const db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  const listing = (Array.isArray(db.marketListings) ? db.marketListings : []).find(item => item.id === String(body.listingId || ""));
+  if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
+  if (listing.sellerPhoneRaw !== user.phone && !isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "只能确认自己的商品" });
+  if (listing.status === "sold") return sendJson(res, 400, { ok: false, message: "已售商品不能确认在售" });
+  if (listing.status === "inactive" && !["stale", "manual"].includes(listing.offlineReason)) {
+    return sendJson(res, 400, { ok: false, message: "该商品暂不能重新上架，请联系管理员处理" });
+  }
+  if (isMarketProhibitedSpecies(listing.speciesCode, listing.speciesName)) return sendJson(res, 400, { ok: false, message: marketSpeciesRestrictionMessage() });
+  listing.status = "active";
+  listing.confirmedAt = new Date().toISOString();
+  listing.offlineAt = "";
+  listing.offlineReason = "";
+  // Confirmation changes availability only; ranking and the 24-hour refresh quota stay untouched.
+  writeDatabase(db);
+  return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user), myListings: ownMarketListings(db, user) });
+}
+
 async function handleMarketRefresh(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
@@ -4672,6 +4729,7 @@ async function handleMarketRefresh(req, res) {
   listing.status = "active";
   listing.refreshedAt = new Date().toISOString();
   listing.manualRefreshedAt = listing.refreshedAt;
+  listing.confirmedAt = listing.refreshedAt;
   listing.offlineAt = "";
   listing.offlineReason = "";
   writeDatabase(db);
@@ -4741,6 +4799,7 @@ async function handleMarketUpdate(req, res) {
     mediaItems,
     status: "active",
     refreshedAt: new Date().toISOString(),
+    confirmedAt: new Date().toISOString(),
     offlineAt: "",
     offlineReason: ""
   });
@@ -4779,6 +4838,7 @@ async function handleMarketStatus(req, res) {
     listing.soldPrice = "";
     listing.soldAt = "";
     listing.refreshedAt = new Date().toISOString();
+    listing.confirmedAt = listing.refreshedAt;
     listing.offlineAt = "";
     listing.offlineReason = "";
   }
@@ -5192,6 +5252,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/market/want") return await handleMarketWant(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/create") return await handleMarketCreate(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/refresh") return await handleMarketRefresh(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/confirm") return await handleMarketConfirm(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/offline") return await handleMarketOffline(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/update") return await handleMarketUpdate(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/status") return await handleMarketStatus(req, res);

@@ -208,13 +208,15 @@ const outcomes = [];
       await page.locator('#accountForm input[name="termsAccepted"]').check();
       assert.equal(await page.locator('#accountForm .ui-field-error').count(), 4, 'checking agreement clears its own error only');
     });
-    for (const outcome of ['success', 'http-error', 'network-error']) await check(`real apiPost ${outcome} clears busy state and prevents duplicate submits`, async page => {
+    for (const outcome of ['success', 'http-error', 'network-error', 'malformed-json', 'invalid-json-type']) await check(`real apiPost ${outcome} clears busy state and prevents duplicate submits`, async page => {
       let release;
       const gate = new Promise(resolve => { release = resolve; });
       let requests = 0;
       await page.route('**/api/feedback/create', async route => {
         requests++; await gate;
         if (outcome === 'network-error') return route.abort('failed');
+        if (outcome === 'malformed-json') return route.fulfill({ status: 200, contentType: 'text/html', body: '<html>upstream error</html>' });
+        if (outcome === 'invalid-json-type') return route.fulfill({ status: 200, contentType: 'application/json', body: 'null' });
         return route.fulfill({ status: outcome === 'success' ? 200 : 503, json: { ok: outcome === 'success', message: '测试响应' } });
       });
       await page.evaluate(() => {
@@ -260,14 +262,14 @@ const outcomes = [];
       });
       assert.deepEqual(marked, []);
     });
-    await check('market status mutation is protected even though its path ends in status', async page => {
-      const result = await page.evaluate(() => {
-        auditOpen.onclick = () => { window.auditEnd = TurtleUI.beginRequest('/api/market/status'); };
+    for (const path of ['/api/market/status', '/api/market/confirm']) await check(`market mutation ${path} is protected while pending`, async page => {
+      const result = await page.evaluate(path => {
+        auditOpen.onclick = () => { window.auditEnd = TurtleUI.beginRequest(path); };
         auditOpen.click();
         const busy = auditOpen.hasAttribute('data-ui-pending');
         auditEnd();
         return { busy, cleared: !auditOpen.hasAttribute('data-ui-pending') };
-      });
+      }, path);
       assert.deepEqual(result, { busy: true, cleared: true });
     });
     await check('navigation controls are not blocked by background requests started on entry', async page => {

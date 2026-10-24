@@ -110,7 +110,7 @@ const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
       assert.equal(await page.locator('[data-community-feed-card]').count(), 1);
       assert.equal(await page.locator('[data-community-feed-card]').getAttribute('data-community-feed-card'), 'ask');
       await page.evaluate(() => { const before = state.communityPosts; state.communityPosts = before.map(p => ({ ...p, comments: [{}] })); patchVisibleCommunityFeed(state.communityPosts, before); });
-      await page.locator('[data-discovery-all-posts]').click();
+      await page.locator('[data-discovery-all-posts], [data-web-community-action="reset"]').click();
       assert.equal(await page.locator('[data-community-feed-card]').count(), 3);
     });
     await check('Photo submission retains chosen visibility and species, with no private archive fields in its payload', async () => {

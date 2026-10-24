@@ -7262,6 +7262,15 @@ html[data-theme-color="dark"] .ledger-row .ledger-inline-type.loss {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.my-market-listing-actions.has-confirm {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.my-market-listing-main small {
+  white-space: normal;
+  line-height: 1.5;
+}
+
 .my-market-listing-actions button {
   min-height: 35px;
   border: 1px solid #d7e9e0;

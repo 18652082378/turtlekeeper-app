@@ -473,6 +473,11 @@ async function main() {
     await request("/api/community/comment/delete", { ...auth(seller), postId, commentId, canDelete: true }, { status: 403 });
     const replyResult = await request("/api/community/comment", { ...auth(seller), postId, content: "Keep this reply", replyToCommentId: commentId });
     const replyId = replyResult.json.posts[0].comments.find(item => item.content === "Keep this reply").id;
+    const replyInbox = await request('/api/community/notifications', { ...auth(buyer), group: 'interactions' });
+    const replyNotice = replyInbox.json.notifications.find(item => item.commentId === replyId);
+    assert.equal(replyNotice?.replyToYou, true, 'the comment author receives a reply even when the responder owns the post');
+    const sellerReplyInbox = await request('/api/community/notifications', { ...auth(seller), group: 'interactions' });
+    assert.ok(!sellerReplyInbox.json.notifications.some(item => item.commentId === replyId), 'no self notification');
     await request("/api/community/comment/like", { ...auth(seller), postId, commentId });
     const removed = await request("/api/community/comment/delete", { ...auth(buyer), postId, commentId });
     assert.equal(removed.json.posts[0].comments.length, 1);
@@ -483,6 +488,42 @@ async function main() {
     await request("/api/community/comment/delete", { ...auth(buyer), postId, commentId }, { status: 404 });
     await request("/api/community/comment/delete", { ...auth(buyer), postId, commentId: replyId }, { status: 403 });
     await request("/api/community/comment/delete", { ...auth(seller), postId, commentId: replyId });
+
+    // A three-person discussion notifies both participants without duplicate/self notifications.
+    const discussion = await request('/api/community/create', { ...auth(seller), title: 'Interaction regression', content: 'Three participants', visibility: 'public' });
+    const discussionId = discussion.json.posts.find(item => item.title === 'Interaction regression').id;
+    async function addDiscussionComment(user, content, replyToCommentId = '') {
+      const result = await request('/api/community/comment', { ...auth(user), postId: discussionId, content, replyToCommentId });
+      return result.json.posts.find(item => item.id === discussionId).comments.find(item => item.content === content).id;
+    }
+    async function noticesFor(user, commentId) {
+      const result = await request('/api/community/notifications', { ...auth(user), group: 'interactions' });
+      return result.json.notifications.filter(item => item.commentId === commentId);
+    }
+    const rootReplyId = await addDiscussionComment(buyer, 'Root discussion reply');
+    const thirdReplyId = await addDiscussionComment(modern, 'Third participant response', rootReplyId);
+    assert.equal((await noticesFor(seller, thirdReplyId)).length, 1);
+    assert.equal((await noticesFor(buyer, thirdReplyId))[0]?.replyToYou, true);
+    assert.equal((await noticesFor(modern, thirdReplyId)).length, 0);
+    const toOwnerId = await addDiscussionComment(buyer, 'Reply to post author comment', await addDiscussionComment(seller, 'Author response', rootReplyId));
+    assert.equal((await noticesFor(seller, toOwnerId)).length, 1, 'owner and reply target receive only one notification');
+    const selfId = await addDiscussionComment(buyer, 'Reply to my own comment', rootReplyId);
+    assert.equal((await noticesFor(buyer, selfId)).length, 0);
+    await request('/api/users/block', { ...auth(buyer), userId: communityId(modern.phone), mode: 'screen' });
+    const blockedReplyId = await addDiscussionComment(modern, 'Blocked actor response', rootReplyId);
+    assert.equal((await noticesFor(buyer, blockedReplyId)).length, 0, 'blocked actors cannot trigger reply notices');
+    await request('/api/users/unblock', { ...auth(buyer), userId: communityId(modern.phone) });
+    await request('/api/community/comment/delete', { ...auth(modern), postId: discussionId, commentId: thirdReplyId });
+    assert.equal((await noticesFor(buyer, thirdReplyId)).length, 0, 'deletion removes the corresponding reply notice');
+    const retryPayload = { ...auth(modern), postId: discussionId, content: 'Retry after lost acknowledgement', replyToCommentId: rootReplyId, submissionId: 'comment-retry-regression' };
+    const retryResponses = await Promise.all([request('/api/community/comment', retryPayload), request('/api/community/comment', retryPayload)]);
+    assert.equal(retryResponses.filter(result => result.json.duplicate).length, 1);
+    const retryComments = retryResponses[1].json.posts.find(item => item.id === discussionId).comments.filter(item => item.content === retryPayload.content);
+    assert.equal(retryComments.length, 1, 'a concurrent retry creates exactly one comment');
+    assert.equal((await noticesFor(buyer, retryComments[0].id)).length, 1, 'a repeated submission does not duplicate notifications');
+    const otherUserRetry = await request('/api/community/comment', { ...retryPayload, ...auth(buyer) });
+    assert.equal(otherUserRetry.json.duplicate, undefined, 'submission identifiers are isolated by author');
+    await request('/api/community/delete', { ...auth(seller), postId: discussionId });
 
     const sellerId = communityId(seller.phone);
     const buyerId = communityId(buyer.phone);
@@ -546,6 +587,20 @@ async function main() {
     });
     const listingId = market.json.myListings[0]?.id;
     assert.ok(listingId, "market listing should be returned after publishing");
+    const createdListing = market.json.myListings[0];
+    assert.equal(createdListing.availabilityPolicy, 'confirmation-30d-v1');
+    assert.equal(Date.parse(createdListing.expiresAt) - Date.parse(createdListing.confirmedAt), 30 * 86400000);
+    assert.equal(Date.parse(createdListing.confirmationDueAt) - Date.parse(createdListing.confirmedAt), 7 * 86400000);
+    await request('/api/market/confirm', { ...auth(buyer), listingId }, { status: 403 });
+    await request('/api/market/confirm', { phone: seller.phone, token: buyer.token, listingId }, { status: 401 });
+    await request('/api/market/confirm', { ...auth(seller), listingId: 'missing' }, { status: 404 });
+    const confirmed = (await request('/api/market/confirm', { ...auth(seller), listingId })).json.myListings.find(item => item.id === listingId);
+    assert.equal(confirmed.refreshedAt, createdListing.refreshedAt, 'confirmation preserves exposure timestamp');
+    assert.equal(confirmed.needsConfirmation, false);
+    const refreshed = (await request('/api/market/refresh', { ...auth(seller), listingId })).json.myListings.find(item => item.id === listingId);
+    assert.equal(refreshed.confirmedAt, refreshed.refreshedAt, 'legacy refresh also confirms availability');
+    await request('/api/market/confirm', { ...auth(seller), listingId });
+    await request('/api/market/refresh', { ...auth(seller), listingId }, { status: 429 });
     await request("/api/market/seller-phone", { listingId }, { status: 401 });
     await request("/api/market/seller-phone", { ...auth(buyer), listingId, isAdmin: true }, { status: 403 });
     await request("/api/market/seller-phone", { phone: seller.phone, token: buyer.token, listingId }, { status: 401 });
@@ -612,6 +667,10 @@ async function main() {
     const descriptionMatch = (await request("/api/market/list", {...rankedQuery, keyword:"排序回归测试"})).json;
     assert.equal(descriptionMatch.listings[0]?.id,cheapId);
     await request("/api/market/offline", {...auth(seller),listingId:cheapId});
+    const relisted = (await request('/api/market/confirm', { ...auth(seller), listingId: cheapId })).json.myListings.find(item => item.id === cheapId);
+    assert.equal(relisted.status, 'active');
+    assert.equal(relisted.refreshedAt, cheap.json.myListings.find(item => item.id === cheapId).refreshedAt, 'relisting through confirmation does not boost exposure');
+    await request('/api/market/offline', { ...auth(seller), listingId: cheapId });
     await request("/api/market/detail", { ...auth(buyer), listingId });
     const wanted = await request("/api/market/want", { ...auth(buyer), listingId });
     assert.equal(wanted.json.wantCount, 1);
@@ -623,6 +682,7 @@ async function main() {
       salePrice: 100
     });
     const marketAfterSale = await request("/api/market/list", auth(buyer));
+    await request('/api/market/confirm', { ...auth(seller), listingId }, { status: 400 });
     assert.equal(marketAfterSale.json.total, 0, "sold listings must be hidden from the public market");
     const removedPage = (await request("/api/market/list", {...rankedQuery,offset:1,rankingSession:rankedFirst.rankingSession})).json;
     assert.equal(removedPage.listings.length,0,"rank snapshots cannot reveal sold or offline listings");

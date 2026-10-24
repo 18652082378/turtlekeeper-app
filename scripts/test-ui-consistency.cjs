@@ -7,7 +7,10 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const fixture = require('./ui-audit-fixture.cjs');
 const root = path.resolve(__dirname, '..');
-const output = path.resolve(root, 'output', 'ui-consistency');
+const mobilePlatform = process.env.UI_AUDIT_PLATFORM || '';
+assert.ok(['', 'ios', 'android'].includes(mobilePlatform));
+const assetRoot = mobilePlatform ? path.join(root, 'www') : root;
+const output = path.resolve(root, 'output', 'ui-consistency' + (mobilePlatform ? '-' + mobilePlatform : ''));
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const renderMap = app.slice(app.indexOf('  const pages = {', app.indexOf('function render()')), app.indexOf('\n  };', app.indexOf('  const pages = {', app.indexOf('function render()'))));
 const routes = [...renderMap.matchAll(/^    (\w+):/gm)].map(match => match[1]);
@@ -58,13 +61,26 @@ async function main() {
   const results = [], failed = [], outbound = new Set();
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, reducedMotion: 'reduce' });
+  if (mobilePlatform) await context.addInitScript(platform => {
+    const app = { getInfo: async () => ({ build: '999' }), getLaunchUrl: async () => ({}), addListener: async () => ({ remove() {} }) };
+    const push = { checkPermissions: async () => ({ receive: 'denied' }), addListener: async () => ({ remove() {} }), register: async () => {}, unregister: async () => {} };
+    const bars = { setTheme: async () => {}, getDisplayMetrics: async () => ({}), addListener: async () => ({ remove() {} }) };
+    const plugins = { App: app, PushNotifications: push, TurtleAndroidWindow: bars, TurtleAndroidPush: push };
+    window.Capacitor = { getPlatform: () => platform, isNativePlatform: () => true, Plugins: plugins, registerPlugin: name => plugins[name] || {} };
+  }, mobilePlatform);
   await context.route('**/*', route => {
     const url = new URL(route.request().url());
     if (url.hostname !== 'ui-audit.test') { outbound.add(url.origin); return route.abort(); }
     if (url.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: 'window.TURTLE_API_BASE_URL=""; window.TURTLE_APP_BUILD=999;' });
     if (url.pathname.startsWith('/api/')) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, teams: [], invitations: [], posts: [], messages: [], listings: [], reviews: [], feedback: [], announcements: [] }) });
-    const file = path.resolve(root, '.' + (url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname)));
-    if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
+    if (mobilePlatform === 'android') {
+      if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: fs.readFileSync(path.join(assetRoot, 'index.html'), 'utf8').replace('</head>', '<link rel="stylesheet" href="/android-layout.css"></head>') });
+      if (url.pathname === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: require('./android/adapt-shared-asset.cjs')('app.js', fs.readFileSync(path.join(assetRoot, 'app.js'), 'utf8'), { androidBuild: 17, androidVersion: '1.1.8', updateChannel: 'store' }) });
+      if (url.pathname === '/android-layout.css') return route.fulfill({ contentType: 'text/css', body: fs.readFileSync(path.join(root, 'scripts/android/layout.css')) });
+      if (url.pathname === '/android-fonts/NotoSansSC-VF.ttf') return route.fulfill({ contentType: 'font/ttf', body: fs.readFileSync(path.join(root, 'scripts/android/fonts/NotoSansSC-VF.ttf')) });
+    }
+    const file = path.resolve(assetRoot, '.' + (url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname)));
+    if (!file.startsWith(assetRoot + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
     return route.fulfill({ body: fs.readFileSync(file), contentType: ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml' })[path.extname(file)] || 'application/octet-stream' });
   });
   const localPage = await context.newPage();
@@ -158,7 +174,7 @@ async function main() {
     }
   } finally {
     await browser.close();
-    const report = { generatedAt: new Date().toISOString(), scope: 'Synthetic local Chromium render/geometry checks only. No production traffic. Does not prove physical iOS keyboard/safe-area/native gesture behavior.', routes, states: states.map(({ id, route, empty }) => ({ id, route, empty: Boolean(empty) })), widths, themes, blockedExternalOrigins: [...outbound], total: results.length, failures: failed, results };
+    const report = { generatedAt: new Date().toISOString(), mobilePlatform, nativeDevice: false, assetRoot, scope: 'Synthetic local Chromium render/geometry checks only. No production traffic. Does not prove physical iOS keyboard/safe-area/native gesture behavior.', routes, states: states.map(({ id, route, empty }) => ({ id, route, empty: Boolean(empty) })), widths, themes, blockedExternalOrigins: [...outbound], total: results.length, failures: failed, results };
     fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
     fs.writeFileSync(path.join(output, 'report.md'), markdown(report));
     fs.writeFileSync(path.join(output, 'index.html'), gallery(report));
