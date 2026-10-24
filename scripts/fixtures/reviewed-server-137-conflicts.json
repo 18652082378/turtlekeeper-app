@@ -1,0 +1,38 @@
+[
+  [
+    "const { normalizeSettings: normalizeWeatherSettings, publicWeather, createWeatherProvider, createWeatherDispatcher } = require('./weather-reminders');\nconst { mediaUrl: validatedMediaUrl } = require('./media-url');\n",
+    "const TurtleCare = require('../assets/care-records');\nconst { normalizeSettings: normalizeWeatherSettings, publicWeather, createWeatherProvider, createWeatherDispatcher } = require('./weather-reminders');\nconst { mediaUrl: validatedMediaUrl } = require('./media-url');\nconst { createPasswordRecovery } = require('./password-recovery');\n"
+  ],
+  [
+    "const MARKET_SALE_METHODS = [\"自有客户成交\", \"闲鱼成交\", \"壳友手账成交\"];\n",
+    "const MARKET_SALE_METHODS = [\"自有客户成交\", \"闲鱼成交\", \"壳友手账成交\", \"龟友手账成交\"];\n"
+  ],
+  [
+    "    careRecords: [], careCustomItems: [], carePlans: [],\n",
+    "    careRecords: [],\n    careCustomItems: [],\n    carePlans: [],\n"
+  ],
+  [
+    "    account.careRecords, account.careCustomItems, account.carePlans,\n",
+    "    account.careRecords,\n    account.careCustomItems,\n    account.carePlans,\n"
+  ],
+  [
+    "  const fields = [\"careRecords\", \"careCustomItems\", \"carePlans\", \"turtles\", \"keptSpecies\", \"memos\", \"ledgerRecords\", \"breedingRecords\", \"turtlePools\"];\n",
+    "  const fields = [\"turtles\", \"keptSpecies\", \"memos\", \"careRecords\", \"careCustomItems\", \"carePlans\", \"ledgerRecords\", \"breedingRecords\", \"turtlePools\"];\n"
+  ],
+  [
+    "  for (const key of ['careRecords', 'careCustomItems', 'carePlans']) {\n    if (!Object.hasOwn(body.data || {}, key)) incomingData[key] = existingData[key];\n  }\n  const oldCare = new Map(existingData.careRecords.map(r => [r?.id, r]));\n  incomingData.careRecords = incomingData.careRecords.map(r => {\n    if (!r || typeof r !== 'object') return r;\n    const prior = oldCare.get(r.id);\n    return { ...r,\n      turtleRefs: Object.hasOwn(r, 'turtleRefs') ? r.turtleRefs : prior?.turtleRefs || [],\n      sourceMemoId: Object.hasOwn(r, 'sourceMemoId') ? r.sourceMemoId : prior?.sourceMemoId || '' };\n  });\n",
+    "  // Older app builds do not send these fields. Preserve them without preventing\n  // a new client from deliberately removing a saved picker option.\n  for (const field of [\"careRecords\", \"careCustomItems\", \"carePlans\"]) {\n    if (!Object.prototype.hasOwnProperty.call(body.data || {}, field)) incomingData[field] = existingData[field];\n  }\n  // Older care clients omit individual turtle links. Explicit [] from newer\n  // clients still clears them; omission preserves the historical associations.\n  const rawCareRecords = new Map((Array.isArray(body.data?.careRecords) ? body.data.careRecords : []).map(record => [record?.id, record]));\n  const previousCareRecords = new Map(existingData.careRecords.map(record => [record.id, record]));\n  incomingData.careRecords = incomingData.careRecords.map(record => rawCareRecords.has(record.id)\n    && !Object.prototype.hasOwnProperty.call(rawCareRecords.get(record.id), \"turtleRefs\")\n    ? { ...record, turtleRefs: previousCareRecords.get(record.id)?.turtleRefs || [] } : record);\n  incomingData.careRecords = incomingData.careRecords.map(record => rawCareRecords.has(record.id)\n    && !Object.prototype.hasOwnProperty.call(rawCareRecords.get(record.id), \"sourceMemoId\")\n    ? { ...record, sourceMemoId: previousCareRecords.get(record.id)?.sourceMemoId || \"\" } : record);\n"
+  ],
+  [
+    "",
+    "function marketAvailabilityMeta(item, now = Date.now()) {\n  // Legacy listings keep their last refresh as the initial confirmation. Never revive inactive records.\n  const confirmedAt = [item.confirmedAt, item.refreshedAt, item.createdAt]\n    .map(value => Date.parse(value || \"\")).find(Number.isFinite);\n  return {\n    availabilityPolicy: \"confirmation-30d-v1\",\n    confirmedAt: Number.isFinite(confirmedAt) ? new Date(confirmedAt).toISOString() : \"\",\n    expiresAt: Number.isFinite(confirmedAt) ? new Date(confirmedAt + MARKET_REFRESH_WINDOW_MS).toISOString() : \"\",\n    confirmationDueAt: Number.isFinite(confirmedAt) ? new Date(confirmedAt + MARKET_CONFIRM_REMINDER_MS).toISOString() : \"\",\n    needsConfirmation: (item.status || \"active\") === \"active\" && (!Number.isFinite(confirmedAt) || now - confirmedAt >= MARKET_CONFIRM_REMINDER_MS)\n  };\n}\n\n"
+  ],
+  [
+    "  const platform = new URL(req.url, \"http://localhost\").searchParams.get(\"platform\") ||\n    (/Android/i.test(String(req.headers?.[\"user-agent\"] || \"\")) ? \"android\" : \"ios\");\n  const policy = {\n    ok: true,\n    minimumBuild: MIN_SUPPORTED_APP_BUILD,\n    latestBuild: LATEST_APP_BUILD,\n    appStoreUrl: IOS_APP_STORE_URL,\n    message: \"龟友手账 1.1.1 已正式上线。当前版本已停止支持，请前往 App Store 更新后继续使用。\"\n  };\n  if (platform === \"ios\") {\n    policy.minimumBuild = Math.max(136, MIN_SUPPORTED_APP_BUILD);\n    policy.latestBuild = Math.max(policy.minimumBuild, 136, LATEST_APP_BUILD);\n    policy.message = \"龟友手账 1.1.8 已正式上线。当前版本已停止支持，请前往 App Store 更新后继续使用。\";\n  }\n  res.setHeader(\"Cache-Control\", \"no-store\");\n  return sendJson(res, 200, policy);\n",
+    "  res.setHeader(\"Cache-Control\", \"no-store\");\n  return sendJson(res, 200, appUpdatePolicy(req));\n"
+  ],
+  [
+    "",
+    "    if (req.method === \"POST\" && url.pathname === \"/api/account/password/reset\") return await passwordRecovery.reset(req, res, await readJson(req));\n"
+  ]
+]

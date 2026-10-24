@@ -10,9 +10,13 @@ node scripts/verify-ios-build.js
 node scripts/verify-release-137.cjs
 node scripts/verify-ios-upload-manifest.cjs
 node scripts/test-api-request-resilience.cjs
+node scripts/test-app-update-policy.cjs
+node scripts/test-reconcile-server-137.cjs
 if [[ "${1:-}" == --check ]]; then exit 0; fi
 # Support this app's detached worktree as well as main, without forced pushes.
-git fetch origin main
+# Windows can hold old packfiles open in another Git client. Fetch source
+# without launching unrelated automatic repacking or maintenance.
+git -c gc.auto=0 -c maintenance.auto=false fetch origin main
 if ! git merge-base --is-ancestor origin/main HEAD; then
   printf '%s\n' 'GitHub main has changes missing here. Stopped; do not force push.' >&2; exit 1
 fi

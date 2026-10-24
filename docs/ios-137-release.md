@@ -29,22 +29,68 @@ bash scripts/upload-ios-137.sh --check
 
 上传脚本按 `scripts/ios-137-release-files.txt` 提交本次累计改动，允许当前脱离分支的工作树，拒绝强制推送与远端历史分叉；只有核对 GitHub main 与新提交完全一致后才提示成功。不会向 GitHub 提交数据、密码、服务器 `.env`、签名密钥、`output`、`node_modules`、浏览器缓存或生成的原生资源目录。
 
+若 Windows Git 在 fetch 后显示 `Unlink of file ... failed. Should I try again?`，先按 Ctrl+C 结束该次上传，再重跑更新后的脚本。本脚本的 fetch、commit 和 push 均关闭该次命令的自动垃圾回收／维护，避免其他 Git 客户端占用旧 pack 文件时卡在删除提示；不会删除仓库文件，也不更改全局 Git 配置。不要因此手动删除 `.git/objects/pack`。
+
 ## 第二步：服务器一次更新全部代码
 
 第一步提示上传成功后，在服务器终端执行：
 
 ```bash
+bash <<'DEPLOY_137' || printf '%s\n' '更新未完成，请保留以上输出。'
 set -euo pipefail
 cd /www/turtlekeeper-app
 git fetch origin main
 git show origin/main:scripts/deploy-server-137.sh | bash -s -- --apply /www/turtlekeeper-app
+DEPLOY_137
 ```
+
+严格错误处理只在子 Bash 中开启；更新检查失败会保留当前 SSH 终端，不应直接在交互式登录 Shell 执行顶层 `set -e`。
+
+若提示 `Server source has local changes`，说明尚未安装或重启。先执行以下只读检查，取得文件名、改动规模及当前提交，再判断如何保留或合并服务器修改：
+
+```bash
+bash <<'CHECK_137' || printf '%s\n' '检查未完成，请保留以上输出。'
+cd /www/turtlekeeper-app || exit 1
+git log -1 --format='%h %s'
+git status --short --untracked-files=no
+git diff --stat
+git diff --cached --stat
+CHECK_137
+```
+
+这些检查不会输出文件正文、清理修改或重启服务。未确定服务器本地修改的用途前，不通过强制重置或自动隐藏全部修改来绕过检查。
 
 服务器脚本会核对版本、Node.js 22+、目标 PM2 进程和干净的代码目录；在项目旁的 `.turtlekeeper-release-backups` 保存上一版本已提交源码，再快进更新代码、安装生产依赖、检查语法、重启 `turtlekeeper-api` 并验证公开版本接口。
 
 不会修改现有 `.env`、用户数据库、上传目录或密钥，不执行数据库迁移，不提高旧版 App 的最低可用构建号。源码备份不替代用户数据库备份。若服务器已有本地代码修改或 Git 历史分叉，脚本会停止并保留文件，不使用 `reset --hard`。如果部署后就绪检查失败，脚本会报错并显示源码备份位置，不声称部署成功。
 
 本轮服务器配置仍按现有商店最低版本运行。不要在 137 尚未上架时把 `MIN_SUPPORTED_APP_BUILD` 调高到 137，以免旧版用户被要求更新到尚不可下载的版本。
+
+## 2026-10-25：处理已核对的服务器本地修改
+
+针对服务器 HEAD 为 627add3、7 个文件校验值与本轮截图一致的情况，先在电脑重新执行第一步上传修正，再在服务器执行：
+
+```bash
+bash <<'DEPLOY_REVIEWED_137' || printf '%s\n' '更新未完成，请保留输出。'
+set -euo pipefail
+umask 077
+cd /www/turtlekeeper-app
+git fetch origin main
+installer=$(mktemp "$HOME/turtlekeeper-137-installer-XXXXXXXX.cjs")
+git show origin/main:scripts/reconcile-server-137.cjs > "$installer"
+node "$installer" --apply /www/turtlekeeper-app
+DEPLOY_REVIEWED_137
+```
+
+安装器只接受本次已核对的 7 个文件和 9 处冲突。它在私有临时目录做三方合并，采用已核对的 137 片段，并允许移除旧护理补丁的重复原始字段及注释标记；若仍有其他差异，会输出差异并停止，尚未更改运行代码。
+
+核对通过后，安装器另存 7 个实际工作文件、二进制差异及旧提交号，再将这 7 个已核对文件保存为可恢复的 Git stash，调用常规部署脚本快进到同一已核对提交。它拒绝未跟踪文件覆盖、未核对文件改动、暂存修改、进程自动监视及发布提交变化。旧 Git stash 作为备份保留，不要将其应用到 137 上。
+
+如果快进之前失败，安装器尝试恢复旧工作文件；若已经快进但安装依赖或就绪验证失败，会报告失败和备份位置，不自动宣称回滚完成。不会改写环境文件、数据库或上传文件。
+
+本次修正将 iOS 更新策略默认值与当前线上对齐：最低和最新已发布构建号均为 136、提示 1.1.8。不提前将未上架的 137 设为强制更新目标。公开版本接口已只读确认当前为 136/136；部署后也核对网页免更新限制及苹果 136/136。
+
+本机新增验证覆盖 9 处原始冲突、未知冲突拒绝、护理重复字段清理、未知额外代码拒绝、更新策略与历史安装器不可降级。实际服务器的完整合并结果仍由安装器在服务器核对，不以本地测试代替线上执行。
 
 ## 第三步：Codemagic 构建 App
 

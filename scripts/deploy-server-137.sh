@@ -18,6 +18,9 @@ command -v npm >/dev/null
 command -v pm2 >/dev/null
 git fetch origin main
 release_commit="$(git rev-parse origin/main)"
+if [[ -n "${TURTLE_RELEASE_COMMIT:-}" && "$release_commit" != "$TURTLE_RELEASE_COMMIT" ]]; then
+  printf '%s\n' 'GitHub main changed after source review. Stopped before installation.' >&2; exit 1
+fi
 git merge-base --is-ancestor HEAD "$release_commit" || { printf '%s\n' 'Server history diverged; stopped without force-reset.' >&2; exit 1; }
 node - "$release_commit" "$root" <<'NODE'
 const fs=require('node:fs'),path=require('node:path'),{execFileSync}=require('node:child_process');
@@ -56,6 +59,9 @@ node - <<'NODE'
       const response=await fetch(url,{signal:AbortSignal.timeout(10000)});
       const data=await response.json();
       if(!response.ok||data.ok!==true||data.platform!=='web'||data.minimumBuild!==0) throw Error('Public API readiness check failed');
+      const iosResponse=await fetch('https://api.turtleworld.cn/api/app/version?platform=ios',{signal:AbortSignal.timeout(10000)});
+      const ios=await iosResponse.json();
+      if(!iosResponse.ok||ios.ok!==true||ios.minimumBuild!==136||ios.latestBuild!==136) throw Error('iOS published-build policy changed; expected 136/136, never force unpublished 137.');
       console.log('Public API is ready. Server source for 1.1.9 (137) deployed.'); return;
     } catch(e) { error=e; if(i<4) await new Promise(resolve=>setTimeout(resolve,1000)); }
   }

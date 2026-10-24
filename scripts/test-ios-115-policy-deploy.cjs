@@ -6,7 +6,8 @@ const { serverCommand } = require('./copy-ios-115-policy-command.cjs');
 const workspace = path.resolve(__dirname, '..');
 const oldModule = fs.readFileSync(path.join(__dirname, 'fixtures/app-update-policy-114.js'), 'utf8').replaceAll('\r\n', '\n');
 const moduleAfter = patchModule(oldModule);
-assert.equal(moduleAfter, fs.readFileSync(path.join(workspace, 'server/app-update-policy.js'), 'utf8').replaceAll('\r\n', '\n'));
+// This archived 132 installer must refuse today's newer 136 policy.
+assert.throws(() => patchModule(fs.readFileSync(path.join(workspace, 'server/app-update-policy.js'), 'utf8').replaceAll('\r\n', '\n')), /Unreviewed/);
 assert.equal(patchModule(moduleAfter), moduleAfter); assert.equal(patchLegacyServer(LEGACY_AFTER), LEGACY_AFTER);
 assert.equal(patchModule(oldModule.replaceAll('\n', '\r\n')), moduleAfter.replaceAll('\n', '\r\n'));
 assert.equal(patchLegacyServer(LEGACY_BEFORE.replaceAll('\n', '\r\n')), LEGACY_AFTER.replaceAll('\n', '\r\n'));

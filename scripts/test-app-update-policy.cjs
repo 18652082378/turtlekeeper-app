@@ -10,8 +10,8 @@ const env = {
   ANDROID_BETA_UPDATE_URL: 'https://example.com/android/test.apk'
 };
 const policy = (query, overrides = env, ua = '') => appUpdatePolicy({ url: '/api/app/version?' + query, headers: { 'user-agent': ua } }, overrides);
-assert.equal(policy('platform=ios').minimumBuild, 132);
-assert.equal(policy('').minimumBuild, 132, 'Legacy iOS receives the published App Store 1.1.5 (build 132) boundary');
+assert.equal(policy('platform=ios').minimumBuild, 136);
+assert.equal(policy('').minimumBuild, 136, 'Legacy iOS receives the published App Store 1.1.8 (build 136) boundary');
 assert.equal(policy('', env, 'Mozilla/5.0 (Linux; Android 15)').minimumBuild, 0, 'Never gate legacy Android with hardcoded Apple actions');
 assert.equal(policy('platform=android&channel=store').minimumBuild, 12);
 assert.equal(policy('platform=android&channel=beta').minimumBuild, 11);
@@ -43,18 +43,18 @@ async function client({ platform = 'android', channel = 'beta', response, build 
 }
 (async () => {
   const releasedPolicy = policy('platform=ios', {});
-  assert.equal(releasedPolicy.minimumBuild, 132);
-  assert.equal(releasedPolicy.latestBuild, 132);
-  assert.match(releasedPolicy.message, /1\.1\.5/);
+  assert.equal(releasedPolicy.minimumBuild, 136);
+  assert.equal(releasedPolicy.latestBuild, 136);
+  assert.match(releasedPolicy.message, /1\.1\.8/);
   assert.match(releasedPolicy.message, /当前版本已停止支持/);
-  assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '117', LATEST_APP_BUILD: '119' }).minimumBuild, 132, 'old production env cannot keep older builds supported');
-  assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '132', LATEST_APP_BUILD: '134' }).minimumBuild, 132, 'future stricter policy remains configurable');
-  assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '132', LATEST_APP_BUILD: '134' }).latestBuild, 134);
-  for (const build of [114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134]) {
+  assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '117', LATEST_APP_BUILD: '119' }).minimumBuild, 136, 'old production env cannot keep older builds supported');
+  assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '138', LATEST_APP_BUILD: '139' }).minimumBuild, 138, 'future stricter policy remains configurable');
+  assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '138', LATEST_APP_BUILD: '139' }).latestBuild, 139);
+  for (const build of [114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137]) {
     const result = await client({ platform: 'ios', configuredBuild: build, response: releasedPolicy });
-    assert.equal(result.context.forceUpdateState.required, build < 132, `iOS build ${build}: stop older builds and allow App Store 1.1.5 (build 132)`);
-    if (build < 132) {
-      assert.match(result.context.forceUpdatePage(), /1\.1\.5/);
+    assert.equal(result.context.forceUpdateState.required, build < 136, `iOS build ${build}: stop older builds and allow App Store 1.1.8 (build 136)`);
+    if (build < 136) {
+      assert.match(result.context.forceUpdatePage(), /1\.1\.8/);
       result.context.bindForceUpdateActions(); result.callbacks['[data-open-app-store-update]']();
       assert.equal(result.context.window.location.href, 'https://apps.apple.com/app/id6783481335');
     }

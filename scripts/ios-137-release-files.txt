@@ -480,6 +480,7 @@ scripts/fixtures/app-update-policy-113.js
 scripts/fixtures/app-update-policy-114.js
 scripts/fixtures/reviewed-account-functions-20260927.js
 scripts/fixtures/reviewed-community-daily-push-20261001.js
+scripts/fixtures/reviewed-server-137-conflicts.json
 scripts/fixtures/reviewed-server-20260929.js
 scripts/fixtures/reviewed-weather-reminders-129.js
 scripts/ios-113-policy-release-files.txt
@@ -538,6 +539,7 @@ scripts/prepare-media-delivery.js
 scripts/publish-ios-110.ps1
 scripts/publish-ios-115.ps1
 scripts/publish-team-ios-110.ps1
+scripts/reconcile-server-137.cjs
 scripts/replace-fallback-species-images.js
 scripts/replace-fallback-with-inaturalist.js
 scripts/reset-production-data.js
@@ -662,6 +664,7 @@ scripts/test-postrelease-server-audit.cjs
 scripts/test-production-account-selftest.cjs
 scripts/test-production-account.cjs
 scripts/test-push-deeplink.js
+scripts/test-reconcile-server-137.cjs
 scripts/test-registration-state-ui.cjs
 scripts/test-release-notes.cjs
 scripts/test-reliability-guards.cjs

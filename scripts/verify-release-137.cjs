@@ -17,5 +17,8 @@ require('./verify-ios-upload-manifest.cjs').verifyUploadManifest(list);
 assert.match(read('scripts/check-mobile-release.cjs'),/test-api-request-resilience\.cjs/);
 assert.match(read('scripts/check-mobile-release.cjs'),/test-web-community-detail\.cjs/);
 assert.match(read('assets/release-notes.js'),/'1\.1\.9':/);
+for (const file of ['scripts/reconcile-server-137.cjs', 'scripts/test-reconcile-server-137.cjs', 'scripts/fixtures/reviewed-server-137-conflicts.json']) assert.ok(list.includes(file), 'Release manifest omits '+file);
+assert.match(read('server/app-update-policy.js'), /Math\.max\(136,/);
+assert.doesNotMatch(read('server/app-update-policy.js'), /Math\.max\(137,/);
 assert.doesNotMatch(read('scripts/deploy-server-137.sh'),/^\s*(?:git reset --hard|git clean|sed .*MIN_SUPPORTED_APP_BUILD)/m);
 console.log('PASS: iOS 1.1.9 (137), extension, Android 1.1.9 (28), cumulative source manifest and release gates.');
