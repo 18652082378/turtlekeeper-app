@@ -1,0 +1,10 @@
+deploy/web-comment-entry/reviewed-baseline.json
+deploy/web-comment-entry/release.json
+docs/web-comment-entry-deployment.md
+scripts/build-web-comment-entry.cjs
+scripts/copy-web-comment-entry-command.cjs
+scripts/deploy-web-comment-entry.cjs
+scripts/test-web-comment-entry-deploy.cjs
+scripts/test-web-comment-entry-ui.cjs
+scripts/upload-web-comment-entry.sh
+scripts/web-comment-entry-release-files.txt
