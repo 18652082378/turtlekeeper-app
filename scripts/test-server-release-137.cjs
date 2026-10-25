@@ -89,6 +89,9 @@ try {
         if(name==='os')return {homedir:()=>temp};
         if(name==='child_process')return {execFileSync(command,args,options){
           if(command==='git') {
+            // The recovery script targets cached release 137, independent of
+            // whichever later release the real origin/main points to today.
+            if(args[0]==='rev-parse'&&args[1]==='origin/main')return short.commit+'\n';
             const bytes=require('node:child_process').execFileSync(command,args,{...options,cwd:path.resolve(__dirname,'..')});
             return drift&&args[0]==='show'&&args[1].endsWith(':scripts/deploy-server-137.sh')?bytes+'\n# unexpected drift\n':bytes;
           }

@@ -35,3 +35,7 @@ scripts/test-server-138-command.cjs text eol=lf
 scripts/test-web-release-138-ui.cjs text eol=lf
 deploy/web-release-138/release.json text eol=lf
 deploy/web-release-138/reviewed-baseline.json text eol=lf
+scripts/upload-ios-139.sh text eol=lf
+scripts/verify-release-139.cjs text eol=lf
+scripts/ios-139-release-files.txt text eol=lf
+docs/ios-139-release.md text eol=lf
