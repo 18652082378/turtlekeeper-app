@@ -16,7 +16,11 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 command -v npm >/dev/null
 command -v pm2 >/dev/null
-git fetch origin main
+# The reviewed installer already fetched and pinned this exact commit. Avoid
+# another network request after saving/removing the old working files.
+if [[ -z "${TURTLE_RELEASE_COMMIT:-}" ]]; then
+  git fetch origin main
+fi
 release_commit="$(git rev-parse origin/main)"
 if [[ -n "${TURTLE_RELEASE_COMMIT:-}" && "$release_commit" != "$TURTLE_RELEASE_COMMIT" ]]; then
   printf '%s\n' 'GitHub main changed after source review. Stopped before installation.' >&2; exit 1

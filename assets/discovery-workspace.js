@@ -27,12 +27,12 @@
     }
     const personal = entries.size > 0;
     if (!personal) ['GHG', 'HMG', 'TBG', 'AMBKG'].forEach(code => add(code, '品种图鉴'));
-    return { personal, entries: [...entries.values()].slice(0, 4) };
+    return { personal, entries: kind === 'market' ? [...entries.values()] : [...entries.values()].slice(0, 4) };
   }
   function speciesMarkup(kind) {
     const { personal, entries } = speciesEntries(kind);
     if (!entries.length) return '';
-    return `<div class="discovery-species" aria-label="${kind === 'market' ? '按品种找龟' : '按品种找龟友'}"><span>${personal ? '你感兴趣的品种' : '从品种开始看看'}</span><div class="discovery-species-chips">${entries.map(({ item, reason }) => `<button type="button" data-discovery-species="${escapeHtml(item.code)}" data-discovery-source="${kind}">${escapeHtml(item.name)}${personal ? `<small>${reason}</small>` : ''}</button>`).join('')}</div></div>`;
+    return `<div class="discovery-species" aria-label="${kind === 'market' ? '按品种找龟' : '按品种找龟友'}"><span>${personal ? '你感兴趣的品种' : '从品种开始看看'}</span><div class="discovery-species-chips">${entries.map(({ item, reason }) => `<button type="button" data-discovery-species="${escapeHtml(item.code)}" data-discovery-source="${kind}"><span class="discovery-species-name">${escapeHtml(item.name)}</span>${personal ? `<small>${reason}</small>` : ''}</button>`).join('')}</div></div>`;
   }
   function communityEntry() {
     return `<section class="discovery-community-entry">${speciesMarkup('community')}</section>`;

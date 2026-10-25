@@ -6,6 +6,12 @@ const normalize = value => value.toString().replace(/\r\n/g, '\n');
 const hash = value => crypto.createHash('sha256').update(normalize(value)).digest('hex');
 const ensure = (yes, message) => { if (!yes) throw Error(message); };
 const rawHash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+// Reconstructed and reviewed on 2026-10-25: build-110 team-space.js with
+// ONLY the Alipay entitlement access() change from build 117. Release 137
+// retains that change and adds the two public turtle metadata projections.
+const reviewedUntrackedHashes = {
+  'server/team-space.js': 'cb01c8600cb899e229c568fcb36ef211a581b463df24b3e1f6f3c0044708765e'
+};
 function sourceHash(bytes, file) {
   const text = /\.(?:js|cjs|mjs|css|html|json|md|txt|sh|yaml|yml|xml|swift|plist|gradle|properties|pbxproj)$/.test(file)
     && !bytes.includes(0) && require('node:buffer').isUtf8(bytes);
@@ -23,6 +29,10 @@ function inspectUntracked({ root, targets, tracked, commit, git, readVersion }) 
     try { stat = fs.lstatSync(target); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
     if (!stat.isFile() || fs.realpathSync(target) !== target) { unknown.push(file + ' (not a regular source file)'); continue; }
     const bytes = fs.readFileSync(target), digest = sourceHash(bytes, file);
+    if (reviewedUntrackedHashes[file] === digest) {
+      known.push({ file, bytes, mode: stat.mode & 0o777, digest: rawHash(bytes), matchedCommit: 'reviewed-build-110-with-Alipay-access-from-117' });
+      continue;
+    }
     const versions = [commit];
     let matched = '';
     for (let index = 0; index < versions.length; index++) {
@@ -150,7 +160,7 @@ async function main() {
     targets: git(['ls-tree', '-r', '--name-only', '-z', commit]).split('\0').filter(Boolean),
     readVersion: (revision, file) => execFileSync('git', ['show', revision + ':' + file], { cwd: root, maxBuffer: 24e6, stdio: ['ignore', 'pipe', 'pipe'] }) });
   ensure(!collisions.unknown.length, 'Unreviewed untracked files; no source changed:\n' + collisions.unknown.join('\n'));
-  console.log('Checked all incoming paths: ' + collisions.known.length + ' untracked files match release 137 or a version in its Git history.');
+  console.log('Checked all incoming paths: ' + collisions.known.length + ' untracked files match a release, historical, or explicitly reviewed compatibility version.');
   const apps = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8', maxBuffer: 8e6 }));
   const matches = apps.filter(app => app.name === 'turtlekeeper-api');
   const env = matches[0]?.pm2_env;
@@ -208,5 +218,5 @@ async function main() {
   }
   console.log('The old edits remain recoverable in the private backup and Git stash. Do not apply the old stash onto release 137.');
 }
-module.exports = { resolveReviewed, withoutOldMarker, reviewed, sourceHash, inspectUntracked, checkUntracked, backupUntracked, clearUntracked, restoreUntracked };
+module.exports = { resolveReviewed, withoutOldMarker, reviewed, sourceHash, inspectUntracked, checkUntracked, backupUntracked, clearUntracked, restoreUntracked, reviewedUntrackedHashes };
 if (require.main === module) main().catch(error => { console.error(error.message); process.exitCode = 1; });

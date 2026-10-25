@@ -23,6 +23,35 @@
   const originalDetail = pageCommunityPostDetail, originalSubmitComment = submitCommunityComment;
   let detailOwner = '', detailDrafts = new Map(), detailSending = new Map(), detailAttempts = new Map();
   const detailActive = () => state.page === 'communityPostDetail';
+  let accessoryDesired = null, accessoryQueue = Promise.resolve(), composerObserved = null, composerObserver = null;
+  function iosKeyboard() {
+    const cap = window.Capacitor;
+    if (cap?.getPlatform?.() !== 'ios' || !cap.isNativePlatform?.() || !cap.isPluginAvailable?.('Keyboard')) return null;
+    return cap.Plugins?.Keyboard || cap.registerPlugin?.('Keyboard');
+  }
+  function syncKeyboard() {
+    const form = detailActive() ? document.querySelector('.web-community-detail .forum-reply-composer') : null;
+    if (form !== composerObserved) {
+      composerObserver?.disconnect(); composerObserved = form;
+      if (form && typeof ResizeObserver === 'function') {
+        composerObserver = new ResizeObserver(() => {
+          if (form.isConnected) document.documentElement.style.setProperty('--forum-composer-height', Math.ceil(form.getBoundingClientRect().height) + 'px');
+        });
+        composerObserver.observe(form);
+      }
+      if (!form) document.documentElement.style.removeProperty('--forum-composer-height');
+    }
+    if (form) document.documentElement.style.setProperty('--forum-composer-height', Math.ceil(form.getBoundingClientRect().height) + 'px');
+    const keyboard = iosKeyboard();
+    if (!keyboard?.setAccessoryBarVisible) return;
+    const visible = !detailActive() && state.page !== 'communityChat';
+    if (visible === accessoryDesired) return;
+    accessoryDesired = visible;
+    // Serialize bridge calls so a late detail response cannot hide another page's toolbar.
+    accessoryQueue = accessoryQueue.then(() => keyboard.setAccessoryBarVisible({ isVisible: visible })).catch(() => {
+      if (accessoryDesired === visible) accessoryDesired = null;
+    });
+  }
   function prepareDetailOwner() {
     const next = owner();
     if (next !== detailOwner) { detailOwner = next; detailDrafts.clear(); detailSending.clear(); detailAttempts.clear(); }
@@ -107,7 +136,7 @@
     if (latest) {
       const preview = document.createElement('button'); preview.type = 'button'; preview.className = 'mobile-community-reply-preview';
       preview.dataset.webCommunityAction = 'preview-reply'; preview.dataset.postId = String(post.id); preview.dataset.commentId = String(latest.id);
-      preview.innerHTML = `<small>最新回复</small><span><b>${escapeHtml(latest.authorName || '龟友')}</b>：${escapeHtml(String(latest.content).replace(/\s+/g, ' ').trim().slice(0, 120))}</span>`;
+      preview.innerHTML = `<small>最新回复</small><span><b>${escapeHtml(latest.authorName || '龟友')}</b>：${communityTextMarkup(String(latest.content).replace(/\s+/g, ' ').trim().slice(0, 120))}</span>`;
       preview.setAttribute('aria-label', `查看${latest.authorName || '龟友'}的最新回复`);
       card.querySelector('.forum-thread-actions')?.before(preview);
     }
@@ -147,6 +176,46 @@
     if (!input || input.disabled) return;
     input.focus({ preventScroll: true });
   }
+  function updateReplyTarget(form) {
+    form.querySelector('.web-community-reply-target')?.remove();
+    if (communityReplyTarget?.postId !== String(form.dataset.communityCommentForm || '')) return;
+    const target = document.createElement('div'); target.className = 'web-community-reply-target';
+    target.innerHTML = `<span>正在回复 ${escapeHtml(communityReplyTarget.name || '龟友')}</span><button type="button" data-web-community-action="cancel-reply" aria-label="取消回复对象">取消</button>`;
+    form.prepend(target);
+  }
+  function refreshReplyTarget() {
+    if (!detailActive()) return false;
+    const form = document.querySelector('.web-community-detail .forum-reply-composer');
+    if (!form) return false;
+    // Keep the same focused input, selection and scroll position when changing recipients.
+    updateReplyTarget(form); focusReply(); return true;
+  }
+  function dismissReplyKeyboard() {
+    const input = document.activeElement;
+    if (!detailActive() || !input?.matches?.('.web-community-detail .forum-reply-composer input')) return;
+    const form = input.closest('form');
+    if (detailOwner === owner()) detailDrafts.set(String(form.dataset.communityCommentForm || ''), input.value);
+    input.blur();
+    const keyboard = iosKeyboard() || (window.Capacitor?.getPlatform?.() === 'android' && window.Capacitor?.Plugins?.TurtleAndroidWindow);
+    try { Promise.resolve(keyboard?.hide ? keyboard.hide() : keyboard?.hideKeyboard?.()).catch(() => {}); } catch (_) { /* Blur remains the browser fallback. */ }
+  }
+  let replyDrag = null;
+  document.addEventListener('touchstart', event => {
+    replyDrag = null;
+    if (!detailActive() || event.touches.length !== 1 ||
+        !document.activeElement?.matches?.('.web-community-detail .forum-reply-composer input')) return;
+    const target = event.target;
+    if (!target?.closest?.('.web-community-detail') || target.closest('.forum-reply-composer, [role="dialog"], .image-preview-overlay, .video-preview-overlay')) return;
+    const touch = event.touches[0]; replyDrag = { x: touch.clientX, y: touch.clientY, id: touch.identifier };
+  }, { passive: true });
+  document.addEventListener('touchmove', event => {
+    if (!replyDrag) return;
+    if (event.touches.length !== 1 || event.touches[0].identifier !== replyDrag.id) { replyDrag = null; return; }
+    const touch = event.touches[0], dy = Math.abs(touch.clientY - replyDrag.y), dx = Math.abs(touch.clientX - replyDrag.x);
+    if (dy < 12 || dy < dx * 1.2) return;
+    replyDrag = null; dismissReplyKeyboard();
+  }, { passive: true });
+  for (const name of ['touchend', 'touchcancel']) document.addEventListener(name, () => { replyDrag = null; }, { passive: true });
   // A notification may point into a collapsed thread. Expand its ancestors before locating it.
   function openComment(postId, commentId) {
     if (!detailActive() || String(state.selectedCommunityPostId) !== String(postId)) return;
@@ -222,11 +291,10 @@
     const empty = replies.querySelector('.empty');
     if (empty) empty.innerHTML = `<div><span class="web-community-empty-art" aria-hidden="true">${icon('question')}</span><strong>还没有回复</strong><p>说说你的看法，开启这篇讨论。</p><button type="button" data-web-community-action="reply-focus">写第一条回复</button></div>`;
     const input = form.querySelector('input[name="content"]');
-    if (input) { input.setAttribute('aria-label', '回复内容'); input.setAttribute('enterkeyhint', 'send'); input.autocomplete = 'off'; input.setAttribute('value', detailDrafts.get(postId) || ''); }
-    if (communityReplyTarget?.postId === postId) {
-      const target = document.createElement('div'); target.className = 'web-community-reply-target';
-      target.innerHTML = `<span>正在回复 ${escapeHtml(communityReplyTarget.name || '龟友')}</span><button type="button" data-web-community-action="cancel-reply">取消</button>`; form.prepend(target);
-    }
+    if (input) { input.setAttribute('aria-label', '回复内容'); input.setAttribute('enterkeyhint', 'send'); input.required = true; input.autocomplete = 'off'; input.setAttribute('value', detailDrafts.get(postId) || ''); }
+    // Keyboard send and the emote panel own submission. Keep only the input and smile entry here.
+    form.querySelector('button[type="submit"]')?.remove();
+    updateReplyTarget(form);
     syncReplyForm(form);
     return template.innerHTML;
   };
@@ -386,7 +454,7 @@
     if (!button?.isConnected) return;
     const action = button.dataset.webCommunityAction;
     if (detailActive() && action === 'reply-focus') { focusReply(); return; }
-    if (detailActive() && action === 'cancel-reply') { communityReplyTarget = null; render(); focusReply(); return; }
+    if (detailActive() && action === 'cancel-reply') { communityReplyTarget = null; refreshReplyTarget(); return; }
     if (action === 'template' && state.page === 'communityAdd') {
       const guide = composerGuides[communityDraftTopic], textarea = document.querySelector('#communityPostForm textarea[name="content"]');
       if (!guide || !textarea || textarea.value.trim()) return;
@@ -432,7 +500,7 @@
     const more = event.target?.closest?.('.web-community-detail-more[open]');
     if (more) { more.open = false; more.querySelector('summary')?.focus(); }
   });
-  window.TurtleMobileCommunity = Object.freeze({ installed: true, version: 'community-mobile-ui', revision: '20261024-resilience', openComment });
+  window.TurtleMobileCommunity = Object.freeze({ installed: true, version: 'community-mobile-ui', revision: '20261025-comment-keyboard', openComment, refreshReplyTarget, syncKeyboard });
   document.documentElement.classList.add('community-mobile-ui');
   if (active() || detailActive() || (state.page === 'communityAdd')) render();
 })();

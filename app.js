@@ -2538,7 +2538,7 @@ function communityFeedCard(item, { allowDetail = false } = {}) {
         ${communityPostQuestionMarkup(item)}
         ${item.location ? `<span class="community-post-location">${escapeHtml(item.location)}</span>` : ""}
         <div class="community-moment-meta"><span>${formatTime(item.createdAt)}${canDelete ? `<button class="community-post-delete" type="button" data-delete-community-post="${item.id}">删除</button>` : ""}</span><div class="community-moment-action-wrap"><button type="button" data-community-more="${item.id}">••</button>${state.openCommunityActionId === item.id ? communityMomentActionMenu(item, isOwn) : ""}</div></div>
-        ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "龟友")}${platformAdminBadge(comment)}</strong>：${escapeHtml(comment.content)}${communityCommentDeleteMarkup(comment, item.id)}</p>`).join("")}</div>` : ""}
+        ${(item.likeCount || comments.length) ? `<div class="community-social-panel">${item.likeCount ? `<p class="community-like-line">♡ ${item.likeCount} 人觉得很赞</p>` : ""}${comments.map(comment => `<p><strong>${escapeHtml(comment.authorName || "龟友")}${platformAdminBadge(comment)}</strong>：${communityTextMarkup(comment.content)}${communityCommentDeleteMarkup(comment, item.id)}</p>`).join("")}</div>` : ""}
         ${state.communityCommentPostId === item.id ? `<form class="community-comment-form" data-community-comment-form="${item.id}"><input name="content" placeholder="${item.question ? "分享你的经验" : "评论"}" maxlength="500" autofocus><button type="submit">发送</button></form>` : ""}
       </div>
     </article>
@@ -2663,9 +2663,14 @@ function bindCommunityCommentDeletes(root = document) {
   });
 }
 
+function communityTextMarkup(value) {
+  return window.TurtleEmotes?.render?.(value) ?? escapeHtml(value);
+}
+
 function bindCommunityCommentInteractions() {
   const beginCommunityReply = target => {
     communityReplyTarget = { postId: target.dataset.postId, commentId: target.dataset.replyCommunityComment, name: target.dataset.replyAuthor || "龟友" };
+    if (window.TurtleMobileCommunity?.refreshReplyTarget?.()) return;
     render();
     const input = document.querySelector(".forum-reply-composer input");
     input?.focus({ preventScroll: true });
@@ -2709,7 +2714,7 @@ function communityCommentRowMarkup(comment, postId, floorNumber = 0, nested = fa
     ? `<button class="forum-comment-author-link" type="button" ${profileLink} aria-label="查看${author}的主页"><strong>${author}</strong>${platformAdminBadge(comment)}</button>`
     : `<strong>${author}${platformAdminBadge(comment)}</strong>`;
   const replyLabel = comment.replyToName ? `<small>回复 ${escapeHtml(comment.replyToName)}</small>` : "";
-  return `<article class="forum-floor ${nested ? "is-nested-reply" : ""}" data-community-comment-row data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${author}" data-post-id="${escapeHtml(postId)}" tabindex="0" aria-label="回复${author}"><div class="forum-floor-avatar">${avatar}</div><div class="forum-floor-content"><header>${authorName}</header>${replyLabel}<p>${escapeHtml(comment.content)}</p><div class="forum-comment-actions"><time datetime="${escapeHtml(comment.createdAt || "")}">${formatCommunityCommentTime(comment.createdAt)}</time><button type="button" data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${author}" data-post-id="${escapeHtml(postId)}">回复</button>${communityCommentDeleteMarkup(comment, postId)}<button class="forum-comment-like ${comment.liked ? "active" : ""}" type="button" data-like-community-comment="${escapeHtml(comment.id)}" data-comment-post-id="${escapeHtml(postId)}" aria-label="${comment.liked ? "取消评论点赞" : "给评论点赞"}" aria-pressed="${comment.liked ? "true" : "false"}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="${comment.liked ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg><b>${Number(comment.likeCount || 0) || ""}</b></button></div></div></article>`;
+  return `<article class="forum-floor ${nested ? "is-nested-reply" : ""}" data-community-comment-row data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${author}" data-post-id="${escapeHtml(postId)}" tabindex="0" aria-label="回复${author}"><div class="forum-floor-avatar">${avatar}</div><div class="forum-floor-content"><header>${authorName}</header>${replyLabel}<p>${communityTextMarkup(comment.content)}</p><div class="forum-comment-actions"><time datetime="${escapeHtml(comment.createdAt || "")}">${formatCommunityCommentTime(comment.createdAt)}</time><button type="button" data-reply-community-comment="${escapeHtml(comment.id)}" data-reply-author="${author}" data-post-id="${escapeHtml(postId)}">回复</button>${communityCommentDeleteMarkup(comment, postId)}<button class="forum-comment-like ${comment.liked ? "active" : ""}" type="button" data-like-community-comment="${escapeHtml(comment.id)}" data-comment-post-id="${escapeHtml(postId)}" aria-label="${comment.liked ? "取消评论点赞" : "给评论点赞"}" aria-pressed="${comment.liked ? "true" : "false"}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="${comment.liked ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg><b>${Number(comment.likeCount || 0) || ""}</b></button></div></div></article>`;
 }
 
 function communityCommentsMarkup(item) {
@@ -2806,7 +2811,7 @@ function communityNotificationRow(item = {}) {
   const thumbnail = apiAssetUrl(item.postThumbnail || "");
   return `<button class="message-notification-row ${item.read ? "" : "is-unread"}" type="button" data-open-community-notification="${escapeHtml(item.id || "")}" data-notification-target="${target}" data-notification-user-id="${escapeHtml(item.actorId || "")}" data-notification-post-id="${escapeHtml(item.postId || "")}" data-notification-comment-id="${escapeHtml(item.commentId || "")}" data-notification-type="${escapeHtml(item.type || "")}">
     <span class="message-notification-avatar">${communityAvatar({ authorAvatar: item.actorAvatar, authorName: item.actorName })}<i class="message-notification-type ${escapeHtml(item.type || "comment")}" aria-hidden="true">${item.type === "like" ? "赞" : item.type === "follow" ? "+" : "评"}</i></span>
-    <span class="message-notification-copy"><strong>${escapeHtml(item.actorName || "龟友")}${platformAdminBadge({ isAdmin: item.actorIsAdmin })}</strong><span>${escapeHtml(copy.action)} <time datetime="${escapeHtml(item.createdAt || "")}">${formatMessagePreviewTime(item.createdAt)}</time></span><small>${escapeHtml(copy.detail)}</small></span>
+    <span class="message-notification-copy"><strong>${escapeHtml(item.actorName || "龟友")}${platformAdminBadge({ isAdmin: item.actorIsAdmin })}</strong><span>${escapeHtml(copy.action)} <time datetime="${escapeHtml(item.createdAt || "")}">${formatMessagePreviewTime(item.createdAt)}</time></span><small>${communityTextMarkup(copy.detail)}</small></span>
     ${thumbnail ? `<img class="message-notification-thumbnail" src="${escapeHtml(thumbnail)}" alt="帖子图片" loading="lazy">` : `<span class="message-notification-target-icon" aria-hidden="true">›</span>`}
   </button>`;
 }
@@ -3834,7 +3839,7 @@ function pageCommunityChat() {
       : "";
     const recalled = Boolean(message.recalled);
     const textMessage = text && !mediaUrl && !recalled
-      ? `<p class="community-chat-text-message" data-community-chat-text-message="${escapeHtml(message.id || "")}" tabindex="0">${escapeHtml(text)}</p>`
+      ? `<p class="community-chat-text-message ${window.TurtleEmotes?.only?.(text) ? "turtle-emote-only" : ""}" data-community-chat-text-message="${escapeHtml(message.id || "")}" tabindex="0">${communityTextMarkup(text)}</p>`
       : "";
     const recalledMessage = recalled
       ? `<p class="community-chat-recalled-message">${message.mine ? "你撤回了一条消息" : "对方撤回了一条消息"}</p>`
@@ -7741,7 +7746,7 @@ function publicFeedbackCard(item, options = {}) {
             <div class="feedback-comment-list">
               ${previewComments.map(comment => `
                 <div class="feedback-comment-row">
-                  <span><strong>${escapeHtml(comment.authorName || "龟友")}</strong>：${escapeHtml(comment.content)}</span>
+                  <span><strong>${escapeHtml(comment.authorName || "龟友")}</strong>：${communityTextMarkup(comment.content)}</span>
                   ${comment.canDelete ? `<button type="button" data-delete-feedback-comment="${item.id}:${comment.id}">删除</button>` : ""}
                 </div>
               `).join("")}
@@ -8383,6 +8388,7 @@ function render() {
     window.setTimeout(() => $app.classList.remove("community-chat-enter-motion"), 300);
   }
   bindEvents();
+  window.TurtleEmotePicker?.sync?.();
   if (state.page === 'team') TurtleTeam.bind();
   window.TurtleUI?.enhance($app);
   setupMarketInfiniteScroll();
@@ -18763,7 +18769,7 @@ function setupUniversalMediaPreview() {
     // handler.  The capture listener is only a safe fallback for content
     // media that otherwise has no click behaviour.
     if (media.closest("button, a, label, input, textarea, select, [contenteditable='true'], [data-preview-community-media], [data-preview-chat-media], [data-preview-market-image], [data-growth-photo-preview], .photo-uploader, .media-picker, .default-avatar-option, .avatar-picker")) return;
-    if (media.classList.contains("species-thumbnail") || media.classList.contains("turtle-icon") || media.classList.contains("app-icon")) return;
+    if (media.classList.contains("species-thumbnail") || media.classList.contains("turtle-icon") || media.classList.contains("app-icon") || media.classList.contains("turtle-emote")) return;
     const source = media.currentSrc || media.src;
     if (!source || source.startsWith("data:image/svg+xml")) return;
     event.preventDefault();
@@ -18789,12 +18795,15 @@ function syncMobileKeyboardUI() {
   const editable = active instanceof HTMLElement && !active.readOnly && !active.disabled &&
     active.matches("textarea, [contenteditable='true'], input:not([type='checkbox']):not([type='radio']):not([type='button']):not([type='submit']):not([type='file']):not([type='range']):not([type='color']):not([type='date'])");
   const viewport = window.visualViewport;
-  const layoutHeight = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0);
+  // Native keyboard resize can precede documentElement.clientHeight updating.
+  // Using the larger stale height would lift an already resized footer twice.
+  const layoutHeight = window.innerHeight || document.documentElement.clientHeight || 0;
   const layoutWidth = document.documentElement.clientWidth || window.innerWidth;
   if (!editable || !mobileKeyboardBaseHeight || Math.abs(layoutWidth - mobileKeyboardBaseWidth) > 80) mobileKeyboardBaseHeight = layoutHeight;
   mobileKeyboardBaseWidth = layoutWidth;
   const composerViewport = forumComposerViewportState(layoutHeight, viewport, editable, mobileKeyboardBaseHeight);
-  const nativeKeyboard = window.TURTLE_ANDROID_KEYBOARD_VISIBLE;
+  const nativeKeyboard = typeof window.TURTLE_ANDROID_KEYBOARD_VISIBLE === "boolean"
+    ? window.TURTLE_ANDROID_KEYBOARD_VISIBLE : window.TURTLE_IOS_KEYBOARD_VISIBLE;
   if (typeof nativeKeyboard === "boolean") {
     composerViewport.keyboardOpen = nativeKeyboard;
     if (!nativeKeyboard) composerViewport.bottom = 0;
@@ -18806,6 +18815,8 @@ function syncMobileKeyboardUI() {
   // Focus can remain after dismissing the software keyboard or using a physical
   // keyboard. Hide tabs only while geometry/native state says it is visible.
   document.documentElement.classList.toggle("keyboard-open", composerViewport.keyboardOpen);
+  window.TurtleMobileCommunity?.syncKeyboard?.();
+  window.TurtleEmotePicker?.sync?.();
 }
 
 function setupMobileKeyboardGuard() {
@@ -18831,6 +18842,18 @@ function setupMobileKeyboardGuard() {
     window.clearTimeout(focusOutTimer);
     focusOutTimer = window.setTimeout(scheduleViewport, 80);
   });
+  if (window.Capacitor?.getPlatform?.() === "ios" && window.Capacitor?.isNativePlatform?.() &&
+      window.Capacitor?.isPluginAvailable?.("Keyboard")) {
+    // Keep the keyboard state through its closing animation; focus can outlive it.
+    for (const name of ["keyboardWillShow", "keyboardDidShow", "keyboardDidHide"]) {
+      window.addEventListener(name, event => {
+        // An attached hardware keyboard can emit a show event with zero height.
+        const height = Number(event.keyboardHeight ?? event.detail?.keyboardHeight);
+        window.TURTLE_IOS_KEYBOARD_VISIBLE = name !== "keyboardDidHide" && (!Number.isFinite(height) || height > 80);
+        scheduleViewport();
+      });
+    }
+  }
   window.visualViewport?.addEventListener("resize", scheduleViewport);
   window.visualViewport?.addEventListener("scroll", scheduleViewport);
   window.addEventListener("resize", scheduleViewport);

@@ -8,6 +8,7 @@ const root = path.resolve(__dirname, "..");
 const read = file => fs.readFileSync(path.join(root, file), "utf8");
 require('./verify-notification-extension.cjs').verifyNotificationExtension(root, read);
 const version = JSON.parse(read("package.json")).version;
+assert.equal(JSON.parse(read('capacitor.config.json')).plugins.Keyboard.resize, 'native', 'iOS keyboard must resize the webview without a second footer offset');
 const project = read("ios/App/App.xcodeproj/project.pbxproj");
 const versions = [...project.matchAll(/MARKETING_VERSION\s*=\s*([^;]+);/g)].map(match => match[1].trim());
 const builds = [...project.matchAll(/CURRENT_PROJECT_VERSION\s*=\s*(\d+);/g)].map(match => Number(match[1]));
@@ -79,6 +80,9 @@ for (const workflow of ['.github/workflows/ios-check.yml', 'codemagic.yaml']) {
 assert.match(read('codemagic.yaml'), /node scripts\/verify-ios-signing\.cjs\s*\r?\n\s*xcode-project use-profiles --archive-method app-store\s*\r?\n\s*node scripts\/verify-ios-signing\.cjs --applied[\s\S]*- name: Build IPA/, 'Codemagic must validate both installed and applied signing profiles before Build IPA');
 if (process.argv.includes('--native')) {
   const native = JSON.parse(read('ios/App/App/capacitor.config.json'));
+  assert.ok(native.packageClassList.includes('KeyboardPlugin'), 'Keyboard plugin is missing from the iOS bundle');
+  assert.equal(native.plugins.Keyboard.resize, 'native', 'Synced keyboard resize configuration is stale');
+  assert.match(read('ios/App/CapApp-SPM/Package.swift'), /\.product\(name: "CapacitorKeyboard", package: "CapacitorKeyboard"\)/, 'Keyboard package is not linked into the iOS target');
   for (const plugin of localPlugins) assert.ok(native.packageClassList.includes(plugin), `Synced iOS plugin registration is missing: ${plugin}`);
   for (const file of bundledSources) {
     assert.equal(hash(`ios/App/App/public/${file}`), hash(`www/${file}`), `Stale native asset: ${file}`);

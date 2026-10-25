@@ -93,7 +93,25 @@ try {
   assert.equal(fs.readFileSync(path.join(root, first.file), 'utf8'), 'new concurrent file');
   assert.equal(fs.readFileSync(path.join(root, 'server/.env'), 'utf8'), 'SYNTHETIC_CONFIG=must-stay\n');
   assert.equal(fs.readFileSync(path.join(root, 'assets/custom.js'), 'utf8'), 'private custom change\n');
+  // Reconstruct the supplied server hash from reviewed Git code, rather than
+  // trusting an arbitrary screenshot hash as an upgrade exception.
+  const repository = path.resolve(__dirname, '..');
+  const oldTeam = execFileSync('git', ['show', '4fd1de3:server/team-space.js'], { cwd: repository, encoding: 'utf8' }).replace(/\r\n/g, '\n');
+  const newTeam = fs.readFileSync(path.join(repository, 'server/team-space.js'), 'utf8').replace(/\r\n/g, '\n');
+  const access = text => { const start = text.indexOf('function access('); const end = text.indexOf('\nfunction ', start + 1); assert(start >= 0 && end > start); return text.slice(start, end); };
+  const partialTeam = oldTeam.replace(access(oldTeam), () => access(newTeam));
+  const { reviewedUntrackedHashes } = require('./reconcile-server-137.cjs');
+  assert.equal(sourceHash(Buffer.from(partialTeam), 'server/team-space.js'), reviewedUntrackedHashes['server/team-space.js']);
+  fs.writeFileSync(path.join(root, 'server/team-space.js'), partialTeam);
+  const partialOptions = { root, commit: incoming, git, tracked: new Set(), targets: ['server/team-space.js'], readVersion() { throw Error('not a synthetic Git path'); } };
+  const partialReport = inspectUntracked(partialOptions);
+  assert.equal(partialReport.known.length, 1); assert.equal(partialReport.unknown.length, 0);
+  fs.appendFileSync(path.join(root, 'server/team-space.js'), '\n// unknown extra change');
+  assert.equal(inspectUntracked(partialOptions).unknown.length, 1);
+  fs.writeFileSync(path.join(root, 'server/another-file.js'), partialTeam);
+  assert.equal(inspectUntracked({ ...partialOptions, targets: ['server/another-file.js'] }).unknown.length, 1);
   console.log('PASS: all untracked collisions inspected; current/historical text and binary versions recognized; unknown files preserved; backups, concurrent edits and partial-failure recovery checked in an isolated Git repository.');
+  console.log('PASS: the supplied team module is exactly build 110 plus the reviewed Alipay access change; extra changes and the same bytes at another path remain rejected.');
 } finally {
   fs.unlinkSync = originalUnlink;
   assert.equal(path.dirname(root), output);

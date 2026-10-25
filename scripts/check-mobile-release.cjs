@@ -31,6 +31,14 @@ if (!args.includes('--prepare-only')) {
   try { run('scripts/test-android-ui.cjs', [], { ANDROID_EXTENDED: '1', ANDROID_TYPOGRAPHY: '1', ANDROID_CARDS: '1', ANDROID_LEDGER: '1' }); }
   catch (e) { failures.push(e.message); }
   for (const platform of ['ios', 'android']) {
+    try { run('scripts/test-community-page-polish.cjs', ['--bundle'], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
+    try { run('scripts/test-community-release-138.cjs', [], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
+    try { run('scripts/test-community-single-photo.cjs', [], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
+    try { run('scripts/test-turtle-emotes-ui.cjs', [], { EMOTE_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
     try { run('scripts/test-web-community-detail.cjs', [], { COMMUNITY_MOBILE_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-discovery-workspace.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }

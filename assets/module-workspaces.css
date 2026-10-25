@@ -220,6 +220,25 @@ html .phone-shell .visual-empty > p { max-width: 320px; overflow-wrap: anywhere;
 html[data-theme-color="dark"] .visual-avatar,
 html[data-theme-color="dark"] .visual-photo-placeholder,
 html[data-theme-color="dark"] .visual-empty > .visual-empty-art { background: #304238; }
+/* Community photos share the card surface, with single images aligned left. */
+html.community-mobile-ui #app .community-page .forum-thread-media,
+html.community-mobile-ui #app .community-page .forum-thread-media .community-media-gallery,
+html.community-mobile-ui #app .community-page .forum-thread-media .community-feed-media-cell,
+html.community-mobile-ui #app .community-page .forum-thread-media .community-feed-media-button:not(.is-video),
+html.community-mobile-ui #app .web-community-detail .community-detail-card.is-single-image .community-detail-media-gallery,
+html.community-mobile-ui #app .web-community-detail .community-detail-card.is-single-image .community-detail-media-button:not(.is-video) {
+  background: transparent !important;
+}
+html.community-mobile-ui #app .community-page .forum-thread-media.is-single > .community-feed-media-button:not(.is-video),
+html.community-mobile-ui #app .web-community-detail .community-detail-card.is-single-image .community-detail-media-button:not(.is-video) {
+  justify-content: flex-start !important; padding: 0 !important; border-radius: 0 !important;
+}
+html.community-mobile-ui #app .community-page .forum-thread-media.is-single,
+html.community-mobile-ui #app .web-community-detail .community-detail-card.is-single-image .community-detail-media-gallery { border-radius: 0 !important; }
+html.community-mobile-ui #app .community-page .forum-thread-media.is-single > .community-feed-media-button:not(.is-video) img.community-media,
+html.community-mobile-ui #app .web-community-detail .community-detail-card.is-single-image .community-detail-media-button:not(.is-video) img.community-media {
+  margin-inline: 0 !important; object-position: left center !important; border-radius: 0 !important;
+}
 @media (max-width: 320px) {
   html .phone-shell .visual-empty { padding: 20px 12px; }
   html .phone-shell .visual-empty > .visual-empty-art { width: 72px; height: 72px; padding: 6px; border-radius: 22px; }

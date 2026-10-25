@@ -50,7 +50,7 @@ async function client({ platform = 'android', channel = 'beta', response, build 
   assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '117', LATEST_APP_BUILD: '119' }).minimumBuild, 136, 'old production env cannot keep older builds supported');
   assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '138', LATEST_APP_BUILD: '139' }).minimumBuild, 138, 'future stricter policy remains configurable');
   assert.equal(policy('platform=ios', { MIN_SUPPORTED_APP_BUILD: '138', LATEST_APP_BUILD: '139' }).latestBuild, 139);
-  for (const build of [114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137]) {
+  for (const build of [114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138]) {
     const result = await client({ platform: 'ios', configuredBuild: build, response: releasedPolicy });
     assert.equal(result.context.forceUpdateState.required, build < 136, `iOS build ${build}: stop older builds and allow App Store 1.1.8 (build 136)`);
     if (build < 136) {

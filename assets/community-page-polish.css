@@ -1,0 +1,55 @@
+/* Shared mobile reading widths without changing chat/keyboard geometry. */
+html.community-mobile-ui #app :is(.following-page, .following-profile-page, .community-activity-page, .message-page, .community-compose-page) {
+  box-sizing: border-box; width: 100%; max-width: 480px; margin-inline: auto; min-width: 0;
+}
+html.community-mobile-ui #app .community-editor-meta {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px; min-width: 0;
+  padding: 3px 2px 10px; color: var(--muted); font-size: 11px; line-height: 1.6;
+}
+html.community-mobile-ui #app .community-editor-meta > :last-child { flex: none; font-variant-numeric: tabular-nums; }
+html.community-mobile-ui #app [data-community-title-hint][data-short="true"] { color: #a45d21; }
+html.community-mobile-ui #app .community-editor-body-meta { padding-bottom: 6px; }
+html.community-mobile-ui #app .community-editor-prompts { margin: 4px 0 12px; border: 1px solid var(--divider); border-radius: 12px; background: var(--card-bg); }
+html.community-mobile-ui #app .community-editor-prompts > summary { min-height: 44px; padding: 11px 12px; color: var(--primary); font-size: 12px; cursor: pointer; }
+html.community-mobile-ui #app .community-editor-prompts > .discovery-compose-prompts { margin: 0; border: 0; border-top: 1px solid var(--divider); border-radius: 0 0 12px 12px; }
+html.community-mobile-ui #app .community-editor-prompts > .web-community-draft-note { margin: 0; border: 0; border-top: 1px solid var(--divider); border-radius: 0; }
+html.community-mobile-ui #app .community-compose-page .community-draft-media-tip { margin: 7px 0 12px; font-size: 11px; line-height: 1.6; color: var(--muted); }
+html.community-mobile-ui #app .community-draft-media-item > button { min-width: 36px; min-height: 36px; display: grid; place-items: center; top: 0; right: 0; border-radius: 0 10px 0 10px; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-section > .empty { min-height: 112px; padding: 16px 12px; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-section > .empty .web-community-empty-art { width: 30px; height: 30px; margin-bottom: 6px; border-radius: 9px; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-section > .empty p { margin: 5px 0 8px; }
+html.community-mobile-ui #app .following-profile-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 14px; }
+html.community-mobile-ui #app .following-profile-head .following-profile-avatar { width: 44px; height: 44px; }
+html.community-mobile-ui #app .following-profile-head > div { min-width: 0; }
+html.community-mobile-ui #app .following-profile-head h2 { margin: 0; font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
+html.community-mobile-ui #app .following-profile-head p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+html.community-mobile-ui #app .following-profile-head > button { min-width: 62px; min-height: 44px; padding: 6px 8px; white-space: nowrap; }
+html.community-mobile-ui #app .profile-content-tabs { gap: 8px; margin-block: 12px; }
+html.community-mobile-ui #app .profile-content-tabs > button { min-width: 0; min-height: 52px; }
+html.community-mobile-ui #app :is(.following-user-card, .community-friend-row) { min-width: 0; gap: 10px; padding: 12px; }
+html.community-mobile-ui #app :is(.following-user-card, .community-friend-row) > div { min-width: 0; }
+html.community-mobile-ui #app :is(.following-user-card, .community-friend-row) strong { overflow-wrap: anywhere; }
+html.community-mobile-ui #app .community-friend-row > button { min-height: 44px; min-width: 56px; }
+html.community-mobile-ui #app .community-polished-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 144px; padding: 20px 14px; text-align: center; line-height: 1.7; }
+html.community-mobile-ui #app .community-polished-empty > button { min-height: 44px; padding: 9px 16px; border: 1px solid var(--divider); border-radius: 11px; color: var(--primary); background: var(--card-bg); font-size: 13px; }
+html.community-mobile-ui #app .community-activity-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+html.community-mobile-ui #app .community-activity-tabs > button { min-width: 0; min-height: 44px; }
+html.community-mobile-ui #app .message-friend-copy { min-width: 0; }
+html.community-mobile-ui #app .message-friend-copy :is(strong, span) { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.community-mobile-ui #app .message-friend-meta { flex: none; }
+html.community-mobile-ui #app .community-polished-page button:focus-visible,
+html.community-mobile-ui #app .community-editor-prompts > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* Fixed single-photo thumbnails; the existing preview opens the full original. */
+html.community-mobile-ui #app .community-page .forum-thread-media.is-single > .community-feed-media-button:not(.is-video)[data-community-photo-shape] {
+  --community-photo-width: 320px; --community-photo-ratio: 4 / 3;
+  position: relative; display: block !important; width: min(100%, var(--community-photo-width)) !important;
+  height: auto !important; min-height: 0 !important; max-height: none !important; aspect-ratio: var(--community-photo-ratio) !important;
+  margin: 0 !important; padding: 0 !important; overflow: hidden !important; border: 0 !important; border-radius: 0 !important;
+}
+html.community-mobile-ui #app .community-page .forum-thread-media.is-single > [data-community-photo-shape="portrait"] { --community-photo-width: 195px !important; --community-photo-ratio: 3 / 4 !important; }
+html.community-mobile-ui #app .community-page .forum-thread-media.is-single > [data-community-photo-shape="square"] { --community-photo-width: 260px !important; --community-photo-ratio: 1 / 1 !important; }
+html.community-mobile-ui #app .community-page .forum-thread-media.is-single > .community-feed-media-button:not(.is-video)[data-community-photo-shape] img.community-media {
+  position: absolute; inset: 0; display: block; width: 100% !important; height: 100% !important;
+  max-width: 100% !important; max-height: none !important; margin: 0 !important; border-radius: 0 !important;
+  object-fit: cover !important; object-position: center !important;
+}

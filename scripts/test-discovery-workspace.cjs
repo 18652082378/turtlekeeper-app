@@ -47,6 +47,11 @@ const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
       await page.locator('[data-directory-search]').fill(name);
       await page.locator('.directory-archive-card').filter({ hasText: name }).first().click();
     }
+    async function choosePrompt(name) {
+      const details = page.locator('.community-editor-prompts');
+      if (await details.count() && await details.getAttribute('open') === null) await details.locator('summary').click();
+      await page.locator(`[data-discovery-prompt="${name}"]`).click();
+    }
     await check('Species discovery opens real community search and market keyword flow without posts or subscriptions', async () => {
       await page.locator('[data-discovery-source="community"][data-discovery-species="GHG"]').click();
       assert.equal(await page.locator('[data-workspace-search]').inputValue(), '果核蛋龟');
@@ -85,14 +90,14 @@ const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
     });
     await check('Templates preserve images and visibility, cancel keeps writing, untouched outlines cannot be published', async () => {
       await page.evaluate(() => { communityDraftTopic = 'daily'; communityDraftText = ''; communityDraftTitle = ''; communityDraftVisibility = 'private'; render(); });
-      await page.locator('[data-discovery-prompt="habitat"]').click();
+      await choosePrompt('habitat');
       assert.equal(await page.evaluate(() => communityDraftCircleId), 'habitat');
       assert.equal(await page.evaluate(() => communityDraftVisibility), 'private');
       assert.equal(await page.locator('.community-compose-submit').isDisabled(), true);
       await page.locator('[name="content"]').fill('这是我自己布置的龟池，水深十二厘米。');
       assert.equal(await page.locator('.community-compose-submit').isDisabled(), false);
       page.once('dialog', dialog => dialog.dismiss());
-      await page.locator('[data-discovery-prompt="feeding"]').click();
+      await choosePrompt('feeding');
       assert.match(await page.locator('[name="content"]').inputValue(), /水深十二/);
       await page.evaluate(() => { state.page = 'community'; render(); });
       await page.locator('[data-community-compose="daily"]').first().click();
@@ -126,7 +131,7 @@ const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
     });
     await check('A published template keeps its chosen circle and leaves no stale template restriction on the next post', async () => {
       await page.evaluate(() => { openCommunityComposer('daily'); discoveryCalls = []; });
-      await page.locator('[data-discovery-prompt="habitat"]').click();
+      await choosePrompt('habitat');
       await page.locator('[name="content"]').fill('这是我观察和调整龟池水深的实际过程。');
       await page.locator('.community-compose-submit').click();
       await page.waitForFunction(() => !communityPublishInFlight);

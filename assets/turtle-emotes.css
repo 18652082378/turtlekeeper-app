@@ -1,0 +1,38 @@
+.turtle-emote { display:inline-block; width:1.45em; height:1.45em; max-width:none; margin:0 .05em; object-fit:contain; vertical-align:-.28em; user-select:none; }
+html #app img.turtle-emote, html #app .turtle-emote-grid img { background:transparent !important; border:0 !important; border-radius:0 !important; box-shadow:none !important; }
+.turtle-emote-panel,.turtle-emote-enabled { --primary:var(--ui-accent,var(--green,#22735b)); --soft:var(--ui-raised,var(--mint,#edf7f1)); }
+html #app .community-chat-text-message.turtle-emote-only { background:transparent !important; border:0 !important; box-shadow:none; padding:4px 0; }
+.community-chat-text-message.turtle-emote-only .turtle-emote { width:38px; height:38px; }
+html { --turtle-emote-panel-height:0px; }
+html.turtle-emote-open { --turtle-emote-panel-height:min(310px, 44dvh); }
+html #app .turtle-emote-enabled .turtle-emote-toggle { display:grid; place-items:center; flex:0 0 40px; width:40px; min-width:40px; height:44px; min-height:44px; padding:6px; border:0; border-radius:10px; color:var(--text); background:transparent; }
+.turtle-emote-toggle svg { width:26px; height:26px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-composer.turtle-emote-enabled .turtle-emote-toggle { flex-basis:44px; width:44px; min-width:44px; background:transparent; }
+html.community-mobile-ui #app .web-community-detail .forum-reply-composer.turtle-emote-enabled .turtle-emote-toggle svg { width:29px; height:29px; }
+html #app .turtle-emote-enabled .turtle-emote-toggle[aria-expanded="true"] { color:var(--primary); background:var(--soft); }
+html.community-mobile-ui #app .web-community-detail .forum-reply-composer.turtle-emote-enabled { bottom:calc(var(--forum-keyboard-bottom, 0px) + var(--turtle-emote-panel-height)); gap:6px; }
+html.turtle-emote-open.community-mobile-ui #app .web-community-detail .forum-reply-composer { padding-bottom:8px; }
+html #app .community-chat-form.turtle-emote-enabled { grid-template-columns:minmax(0,1fr) 40px 42px; gap:6px; bottom:calc(var(--forum-keyboard-bottom, 0px) + var(--turtle-emote-panel-height)); }
+html #app .community-chat-form.turtle-emote-enabled.has-send-button { grid-template-columns:minmax(0,1fr) 40px 42px auto; }
+html:is(.keyboard-open,.turtle-emote-open) #app .community-chat-form.turtle-emote-enabled { padding-bottom:8px; }
+html.turtle-emote-open #app .community-chat-list { padding-bottom:calc(92px + var(--turtle-emote-panel-height)); }
+html.turtle-emote-open.community-mobile-ui #app .web-community-detail { padding-bottom:calc(var(--forum-composer-height,104px) + var(--turtle-emote-panel-height) + 12px) !important; }
+html #app .turtle-emote-panel { position:fixed; z-index:49; left:50%; bottom:0; transform:translateX(-50%); width:min(100%,480px); height:var(--turtle-emote-panel-height); box-sizing:border-box; display:flex; flex-direction:column; background:var(--card-bg,#fff); border-top:1px solid var(--divider); padding:0 8px env(safe-area-inset-bottom,0px); color:var(--text); }
+html #app .turtle-emote-panel[hidden] { display:none; }
+.turtle-emote-tabs { display:flex; flex:0 0 auto; gap:3px; align-items:center; padding:5px 2px; border-bottom:1px solid var(--divider); }
+html #app .turtle-emote-tabs button { flex:1; min-width:0; min-height:36px; padding:4px 2px; border:0; border-radius:8px; background:transparent; color:var(--muted); font-size:12px; }
+html #app .turtle-emote-tabs button[aria-pressed="true"] { color:var(--primary); background:var(--soft); font-weight:650; }
+.turtle-emote-grid { display:grid; grid-template-columns:repeat(8,minmax(0,1fr)); align-content:start; min-height:0; flex:1 1 auto; overflow:auto; overscroll-behavior:contain; touch-action:pan-y; scrollbar-width:thin; padding:6px 0; }
+html #app .turtle-emote-grid button { display:grid; place-items:center; min-width:0; min-height:44px; padding:4px 0; border:0; background:transparent; border-radius:8px; }
+.turtle-emote-grid img { display:block; width:34px; height:34px; max-width:100%; pointer-events:none; }
+html #app .turtle-emote-grid button:active { background:var(--soft); }
+.turtle-emote-empty { grid-column:1/-1; margin:20px 8px; text-align:center; font-size:13px; color:var(--muted); }
+.turtle-emote-panel footer { display:flex; flex:0 0 auto; align-items:center; gap:8px; padding:4px 0; border-top:1px solid var(--divider); }
+.turtle-emote-panel footer span { flex:1; padding-left:5px; color:var(--muted); font-size:11px; }
+html #app .turtle-emote-panel footer button { min-height:38px; min-width:48px; padding:5px 12px; border:0; border-radius:9px; background:var(--soft); color:var(--text); }
+html #app .turtle-emote-panel footer [data-emote-send] { color:#fff; background:var(--ui-primary-fill,#20745b); font-size:13px; }
+html #app .turtle-emote-panel footer [data-emote-send]:disabled { color:#999; background:#e6e6e6; opacity:1; }
+html[data-theme-color="dark"] #app .turtle-emote-panel footer [data-emote-send]:disabled { color:#929292; background:#353535; }
+html #app .turtle-emote-panel button:disabled { opacity:.45; cursor:default; }
+.turtle-emote-panel button:focus-visible,.turtle-emote-toggle:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
+@media(max-width:350px) { .turtle-emote-grid { grid-template-columns:repeat(7,minmax(0,1fr)); } html #app .community-chat-form.turtle-emote-enabled { padding-inline:8px; gap:4px; } }

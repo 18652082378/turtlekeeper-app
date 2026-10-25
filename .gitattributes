@@ -25,3 +25,13 @@ scripts/deploy-server-137.sh text eol=lf
 scripts/ios-137-release-files.txt text eol=lf
 scripts/fixtures/app-update-policy-114.js -text
 scripts/ios-115-policy-release-files.txt text eol=lf
+scripts/upload-ios-138.sh text eol=lf
+scripts/ios-138-release-files.txt text eol=lf
+scripts/build-web-release-138.cjs text eol=lf
+scripts/deploy-web-release-138.cjs text eol=lf
+scripts/copy-server-138-command.cjs text eol=lf
+scripts/test-web-release-138-deploy.cjs text eol=lf
+scripts/test-server-138-command.cjs text eol=lf
+scripts/test-web-release-138-ui.cjs text eol=lf
+deploy/web-release-138/release.json text eol=lf
+deploy/web-release-138/reviewed-baseline.json text eol=lf
