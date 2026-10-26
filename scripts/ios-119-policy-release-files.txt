@@ -1,0 +1,12 @@
+.gitattributes
+server/app-update-policy.js
+scripts/test-app-update-policy.cjs
+scripts/verify-release-139.cjs
+scripts/ios-139-release-files.txt
+scripts/deploy-ios-119-policy.cjs
+scripts/copy-ios-119-policy-command.cjs
+scripts/test-ios-119-policy-deploy.cjs
+scripts/fixtures/app-update-policy-118.js
+scripts/upload-ios-119-policy.sh
+scripts/ios-119-policy-release-files.txt
+docs/ios-119-update-policy.md

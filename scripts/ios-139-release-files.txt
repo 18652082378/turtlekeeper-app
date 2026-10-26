@@ -903,3 +903,10 @@ scripts/upload-ios-139.sh
 scripts/verify-release-139.cjs
 scripts/ios-139-release-files.txt
 docs/ios-139-release.md
+scripts/deploy-ios-119-policy.cjs
+scripts/copy-ios-119-policy-command.cjs
+scripts/test-ios-119-policy-deploy.cjs
+scripts/fixtures/app-update-policy-118.js
+scripts/upload-ios-119-policy.sh
+scripts/ios-119-policy-release-files.txt
+docs/ios-119-update-policy.md

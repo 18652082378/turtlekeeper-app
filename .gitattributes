@@ -39,3 +39,10 @@ scripts/upload-ios-139.sh text eol=lf
 scripts/verify-release-139.cjs text eol=lf
 scripts/ios-139-release-files.txt text eol=lf
 docs/ios-139-release.md text eol=lf
+scripts/deploy-ios-119-policy.cjs text eol=lf
+scripts/copy-ios-119-policy-command.cjs text eol=lf
+scripts/test-ios-119-policy-deploy.cjs text eol=lf
+scripts/fixtures/app-update-policy-118.js -text
+scripts/upload-ios-119-policy.sh text eol=lf
+scripts/ios-119-policy-release-files.txt text eol=lf
+docs/ios-119-update-policy.md text eol=lf

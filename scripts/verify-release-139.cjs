@@ -12,7 +12,7 @@ const list=read('scripts/ios-139-release-files.txt').trim().split(/\r?\n/);
 require('./verify-ios-upload-manifest.cjs').verifyUploadManifest(list);
 for(const file of ['config.js','index.html','assets/module-workspaces.css','assets/discovery-workspace.css','assets/discovery-workspace.js','assets/turtle-emote-picker.js','assets/turtle-emotes.js','assets/turtle-emotes.css','assets/community-page-polish.js','assets/community-page-polish.css','scripts/test-community-page-polish.cjs','scripts/test-community-release-138.cjs','scripts/verify-release-139.cjs','scripts/upload-ios-139.sh','scripts/ios-139-release-files.txt','docs/ios-139-release.md'])assert.ok(list.includes(file),'Release manifest omits '+file);
 for(const file of ['assets/community-page-polish.js','assets/community-page-polish.css'])assert.ok(read('index.html').includes('./'+file),'Missing page enhancement entry');
-assert.match(read('server/app-update-policy.js'),/Math\.max\(136,/);
+assert.match(read('server/app-update-policy.js'),/Math\.max\(137,/);
 assert.doesNotMatch(read('server/app-update-policy.js'),/Math\.max\(139,/);
 assert.match(read('scripts/check-mobile-release.cjs'),/test-community-page-polish\.cjs/);
 assert.match(read('scripts/check-mobile-release.cjs'),/test-community-release-138\.cjs/);
