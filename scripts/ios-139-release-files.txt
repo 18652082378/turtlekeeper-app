@@ -910,3 +910,8 @@ scripts/fixtures/app-update-policy-118.js
 scripts/upload-ios-119-policy.sh
 scripts/ios-119-policy-release-files.txt
 docs/ios-119-update-policy.md
+scripts/diagnose-ios-119-policy.cjs
+scripts/copy-ios-119-diagnostic-command.cjs
+scripts/test-ios-119-diagnostic.cjs
+scripts/test-ios-119-policy-readiness.cjs
+scripts/test-ios-119-policy-write.cjs

@@ -26,25 +26,26 @@ const bash=process.platform==='win32'?'C:/Program Files/Git/bin/bash.exe':'bash'
       const target = path.join(dir, 'app-update-policy.js'); const before = fs.readFileSync(target);
       fs.writeFileSync(path.join(dir, '.env'), 'PORT=8787\nMIN_SUPPORTED_APP_BUILD=117\nLATEST_APP_BUILD=119\nSECRET_FIXTURE=do-not-copy\n');
       fs.writeFileSync(path.join(dir, 'database-sentinel.json'), '{"unchanged":true}'); fs.writeFileSync(path.join(dir, 'community-daily-push.js'), 'unchanged-module');
-      let pid = 100, restarts = 0;
+      let pid = 100, restarts = 0, readinessProbes=0;
       const run = args => {
         if (args[0] === 'jlist') return JSON.stringify([{ name: 'turtlekeeper-api', pid, pm2_env: { status: 'online', exec_mode: 'fork_mode', pm_cwd: root, pm_exec_path: server, watch: false, PORT: 8787 } }]);
         assert.deepEqual(args, ['restart', 'turtlekeeper-api', '--kill-timeout', '30000']); restarts++; pid++; return '';
       };
       const health = async (_port, route, options={}) => {
+        if(fault==='slow-start'&&restarts===1&&++readinessProbes<=15)throw Error('API booting');
         if (route === '/api/account/load') return { status: fault === 'auth' ? 200 : 401, json: { ok: false } };
         const result={status:200,json:policyFrom(fs.readFileSync(target,'utf8'),route,{MIN_SUPPORTED_APP_BUILD:'117',LATEST_APP_BUILD:'119',ANDROID_STORE_MIN_BUILD:'12',ANDROID_STORE_LATEST_BUILD:'13',ANDROID_STORE_UPDATE_URL:'https://example.com/store',ANDROID_BETA_MIN_BUILD:'11',ANDROID_BETA_LATEST_BUILD:'12',ANDROID_BETA_UPDATE_URL:'https://example.com/beta'},options.headers?{'user-agent':options.headers['User-Agent']}: {})};
         if (fault === 'future') result.json.latestBuild = 140;
-        if (fault && restarts === 1) result.json.latestBuild = 999;
+        if (fault && fault!=='slow-start' && restarts === 1) result.json.latestBuild = 999;
         return result;
       };
-      const action = () => deploy({ mode, root, platform: 'linux', run, health, wait: async () => {}, attempts: 2, log() {} });
+      const action = () => deploy({ mode, root, platform: 'linux', run, health, wait: async () => {}, ...(fault==='slow-start'?{}:{attempts:2}), log() {} });
       if (['auth', 'future'].includes(fault)) {
         await assert.rejects(action, fault === 'auth' ? /authentication/ : /newer production/);
         assert.deepEqual(fs.readFileSync(target), before); assert.equal(restarts, 0);
         assert.equal(fs.existsSync(path.join(dir, 'backups')), false);
       }
-      else if (fault) { await assert.rejects(action, /release policy or health/); assert.deepEqual(fs.readFileSync(target), before); assert.equal(restarts, 2); }
+      else if (fault && fault!=='slow-start') { await assert.rejects(action, /release policy or health.*iOS update policy not active/); assert.deepEqual(fs.readFileSync(target), before); assert.equal(restarts, 2); }
       else {
         const result = await action(); assert.equal(result.status, mode === '--check' ? 'checked' : installed?'unchanged':'installed');
         assert.equal(restarts, mode === '--check'||installed ? 0 : 1);
@@ -56,7 +57,7 @@ const bash=process.platform==='win32'?'C:/Program Files/Git/bin/bash.exe':'bash'
       assert.equal(fs.readFileSync(path.join(dir, 'community-daily-push.js'), 'utf8'), 'unchanged-module');
       assert.equal(fs.readFileSync(server, 'utf8'),'const { appUpdatePolicy } = require("./app-update-policy");\n'+modern);
     }
-    await scenario('--check');await scenario('--apply');await scenario('--apply','health');await scenario('--apply','',true);await scenario('--apply','future');await scenario('--apply','auth');
+    await scenario('--apply','slow-start');await scenario('--check');await scenario('--apply');await scenario('--apply','health');await scenario('--apply','',true);await scenario('--apply','future');await scenario('--apply','auth');
     for(const corrupt of [false,true]){
       const folder=fs.mkdtempSync(path.join(fixture,'transport-')),log=path.join(folder,'invocations.txt'),installer=path.join(workspace,'scripts/deploy-ios-119-policy.cjs');
       let command=generated.replace('/tmp/turtlekeeper-ios119-policy.XXXXXX','$PWD/turtlekeeper-ios119-policy.XXXXXX');

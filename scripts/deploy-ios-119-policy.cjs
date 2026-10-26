@@ -29,9 +29,18 @@ function plan(root) {
   return { file, before: fs.readFileSync(file), after: Buffer.from(after), mode: fs.statSync(file).mode & 0o777, server, serverHash: digest(fs.readFileSync(server)) };
 }
 function atomicWrite(file, bytes, mode) {
+  const previous=fs.statSync(file);
   const temp = file + '.policy-' + crypto.randomUUID() + '.tmp'; let descriptor;
   try {
-    descriptor = fs.openSync(temp, 'wx', mode); fs.writeFileSync(descriptor, bytes); fs.fsyncSync(descriptor); fs.closeSync(descriptor); descriptor = undefined;
+    descriptor = fs.openSync(temp, 'wx', mode);
+    // The transport uses umask 077. Restore the reviewed source metadata so
+    // its service user can still read the replacement after the rename.
+    if(process.platform!=='win32'){
+      const current=fs.fstatSync(descriptor);
+      if(current.uid!==previous.uid||current.gid!==previous.gid)fs.fchownSync(descriptor,previous.uid,previous.gid);
+    }
+    fs.fchmodSync(descriptor,mode);
+    fs.writeFileSync(descriptor, bytes); fs.fsyncSync(descriptor); fs.closeSync(descriptor); descriptor = undefined;
     fs.renameSync(temp, file);
   } finally { if (descriptor !== undefined) fs.closeSync(descriptor); if (fs.existsSync(temp)) fs.unlinkSync(temp); }
 }
@@ -40,14 +49,17 @@ const command = args => {
   catch { throw Error('PM2 command failed: ' + args[0]); }
 };
 async function request(port, route, options = {}) {
-  const response = await fetch('http://127.0.0.1:' + port + route, { ...options, redirect: 'error', signal: AbortSignal.timeout(3000) });
-  const text = await response.text(); ensure(text.length < 32768, 'Unexpected health response size');
-  return { status: response.status, json: JSON.parse(text) };
+  try{
+    const response = await fetch('http://127.0.0.1:' + port + route, { ...options, redirect: 'error', signal: AbortSignal.timeout(3000) });
+    const text = await response.text(); ensure(text.length < 32768, 'Unexpected health response size');
+    let json;try{json=JSON.parse(text);}catch{throw Error('Invalid JSON (HTTP '+response.status+')');}
+    return { status: response.status, json };
+  }catch(error){throw Error(route+': '+error.message);}
 }
 const ROUTES = ['/api/app/version', '/api/app/version?platform=ios&build=136', '/api/app/version?platform=ios&build=137', '/api/app/version?platform=ios&build=139', '/api/app/version?platform=android&channel=beta', '/api/app/version?platform=android&channel=store', '/api/app/version?platform=web', '/api/app/version?platform=harmony', '/api/app/version?platform=unknown'];
 const ANDROID_UA={'User-Agent':'Mozilla/5.0 (Linux; Android 15)'};
 const iosMatches=p=>p.ok===true&&p.minimumBuild===MINIMUM&&p.latestBuild===LATEST&&p.message===MESSAGE;
-async function deploy({ mode, root = ROOT, platform = process.platform, run = command, health = request, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), attempts = 12, log = console.log } = {}) {
+async function deploy({ mode, root = ROOT, platform = process.platform, run = command, health = request, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), attempts = 90, log = console.log } = {}) {
   ensure(platform === 'linux', 'Run this on the Linux server'); ensure(['--check', '--apply'].includes(mode), 'Use --check or --apply');
   ensure(fs.realpathSync(root) === root && fs.realpathSync(path.join(root, 'server')) === path.join(root, 'server'), 'Unexpected project directory');
   const patch = plan(root);
@@ -79,21 +91,23 @@ async function deploy({ mode, root = ROOT, platform = process.platform, run = co
   ensure(digest(fs.readFileSync(patch.file)) === digest(patch.before) && digest(fs.readFileSync(patch.server)) === patch.serverHash && processInfo().pid === original.pid, 'Server changed during preflight');
   const restart = () => run(['restart', SERVICE, '--kill-timeout', '30000']);
   async function verify(oldPid, installed) {
+    let lastFailure='No successful health response';const deadline=Date.now()+90000;
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
         const app = processInfo(); ensure(app.pid !== oldPid, 'Old process still running');
         for (let i = 0; i < ROUTES.length; i++) {
-          const response = await health(port, ROUTES[i]); ensure(response.status === 200, 'Version endpoint failed');
+          const response = await health(port, ROUTES[i]); ensure(response.status === 200, 'Version endpoint HTTP '+response.status+': '+ROUTES[i]);
           if (installed && i < 4) {
-            ensure(iosMatches(response.json) && response.json.appStoreUrl === baseline[i].appStoreUrl, 'iOS update policy not active');
-          } else ensure(JSON.stringify(response.json) === JSON.stringify(baseline[i]), 'Another platform policy changed');
+            ensure(iosMatches(response.json) && response.json.appStoreUrl === baseline[i].appStoreUrl, 'iOS update policy not active: '+ROUTES[i]+' minimum='+response.json.minimumBuild+' latest='+response.json.latestBuild);
+          } else ensure(JSON.stringify(response.json) === JSON.stringify(baseline[i]), 'Another platform policy changed: '+ROUTES[i]);
         }
         ensure(JSON.stringify(await health(port,'/api/app/version',{headers:ANDROID_UA}))===JSON.stringify(androidBaseline),'Legacy Android policy changed');
         ensure((await anonymous()).status === 401, 'Anonymous authentication check failed'); return;
-      } catch {}
-      await wait(500);
+      } catch(error) {lastFailure=error.message;if(attempt===0||attempt%10===9)log('Waiting for API readiness: '+lastFailure);}
+      if(Date.now()>=deadline)break;
+      await wait(1000);
     }
-    throw Error('Post-restart release policy or health check failed');
+    throw Error('Post-restart release policy or health check failed: '+lastFailure);
   }
   let written = false;
   try {
@@ -112,5 +126,5 @@ async function deploy({ mode, root = ROOT, platform = process.platform, run = co
   log('SUCCESS: iOS 1.1.8 and older stopped; minimumBuild=137, latestBuild=139, update prompt=1.1.9. Android/web/Harmony policies unchanged.');
   return { status: 'installed', backup };
 }
-module.exports = { MESSAGE, MINIMUM, LATEST, BEFORE_HASH, AFTER_HASH, patchModule, plan, deploy, ROUTES };
+module.exports = { MESSAGE, MINIMUM, LATEST, BEFORE_HASH, AFTER_HASH, patchModule, plan, deploy, ROUTES, atomicWrite };
 if (require.main === module) deploy({ mode: process.argv.length === 3 ? process.argv[2] : '' }).catch(error => { console.error(error.message); process.exitCode = 1; });

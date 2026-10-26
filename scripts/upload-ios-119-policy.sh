@@ -6,6 +6,9 @@ if [[ "$#" -gt 1 || ( "$#" -eq 1 && "$1" != --check ) ]]; then
 fi
 node scripts/test-app-update-policy.cjs
 node scripts/test-ios-119-policy-deploy.cjs
+node scripts/test-ios-119-policy-readiness.cjs
+node scripts/test-ios-119-policy-write.cjs
+node scripts/test-ios-119-diagnostic.cjs
 node scripts/verify-ios-upload-manifest.cjs
 if [[ "${1:-}" == --check ]]; then exit 0; fi
 git -c gc.auto=0 -c maintenance.auto=false fetch origin main
@@ -24,7 +27,7 @@ const files=new Set(fs.readFileSync('scripts/ios-119-policy-release-files.txt','
 process.exit(execFileSync('git',['diff','--cached','--name-only','-z']).toString().split('\0').some(x=>files.has(x))?0:1);
 NODE
 then
-  git -c gc.auto=0 -c maintenance.auto=false commit --only -m "Require App Store 1.1.9 for iOS; preserve Android update channels [skip ci]" --pathspec-from-file=scripts/ios-119-policy-release-files.txt
+  git -c gc.auto=0 -c maintenance.auto=false commit --only -m "Fix iOS policy deployment readiness and preserve source permissions [skip ci]" --pathspec-from-file=scripts/ios-119-policy-release-files.txt
 fi
 git -c gc.auto=0 -c maintenance.auto=false push origin HEAD:main
 node - <<'NODE'

@@ -46,3 +46,8 @@ scripts/fixtures/app-update-policy-118.js -text
 scripts/upload-ios-119-policy.sh text eol=lf
 scripts/ios-119-policy-release-files.txt text eol=lf
 docs/ios-119-update-policy.md text eol=lf
+scripts/diagnose-ios-119-policy.cjs text eol=lf
+scripts/copy-ios-119-diagnostic-command.cjs text eol=lf
+scripts/test-ios-119-diagnostic.cjs text eol=lf
+scripts/test-ios-119-policy-readiness.cjs text eol=lf
+scripts/test-ios-119-policy-write.cjs text eol=lf
