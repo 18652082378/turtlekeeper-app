@@ -53,7 +53,7 @@ const server = http.createServer((req, res) => {
       render();
     });
     const results = [];
-    for (const [width, height] of [[320,780],[360,800],[390,844],[440,900],[600,850],[720,900],[840,720],[960,600],[360,800]]) {
+    for (const [width, height] of [[280,780],[320,780],[360,800],[390,844],[440,900],[600,850],[720,900],[840,720],[960,600],[360,800]]) {
       await page.setViewportSize({ width, height });
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.waitForTimeout(100);
@@ -82,8 +82,9 @@ const server = http.createServer((req, res) => {
       assert(result.metrics.y < result.hero.bottom, 'Statistics retain the layered hero layout');
       assert.equal(result.guideLines, 1, 'Default-size trade guide must stay on one line');
       assert(result.titleFont.includes('Turtle Noto Sans SC') && Number(result.titleWeight) >= 600, 'Title uses the bundled bold Chinese font: ' + JSON.stringify(result));
-      if (new Set(result.filters).size !== 1) { console.log(JSON.stringify(result)); console.log(await page.locator('.filter-dock').evaluate(el => ({ html: el.outerHTML, display: getComputedStyle(el).display, columns: getComputedStyle(el).gridTemplateColumns, rules: [...document.styleSheets].map(s=>s.href) }))); await page.screenshot({ path: path.join(output, 'filters-failed.png') }); }
-      assert.equal(new Set(result.filters).size, 1, 'All three filters stay on the same row');
+      const expectedFilterRows = width <= 300 ? 2 : 1;
+      if (new Set(result.filters).size !== expectedFilterRows) { console.log(JSON.stringify(result)); await page.screenshot({ path: path.join(output, 'filters-failed.png') }); }
+      assert.equal(new Set(result.filters).size, expectedFilterRows, 'Ordinary phones keep one filter row; very narrow screens reserve readable space');
       assert(result.filterTextFits, 'Default filter labels must fit without native-arrow clipping');
       assert(result.nav.bottom <= height + 1 && result.nav.height >= 60, 'Bottom tabs must fit WebView');
       assert.equal(result.overflowing.length, 0, JSON.stringify(result));

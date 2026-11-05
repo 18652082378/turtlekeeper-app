@@ -1,13 +1,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { launchBrowser, artifactName } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
 const uiFixture = require('./ui-audit-fixture.cjs');
 const outcomes = [];
 
 (async () => {
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
+  const browser = await launchBrowser();
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
   await context.route('**/*', route => {
     const url = new URL(route.request().url());
@@ -20,7 +20,9 @@ const outcomes = [];
   });
   const tick = page => page.evaluate(() => new Promise(requestAnimationFrame));
   async function check(name, run) {
+    if (process.env.UI_EXPERIENCE_CASE && !process.env.UI_EXPERIENCE_CASE.split(',').some(part => name.includes(part))) return;
     const page = await context.newPage();
+    page.setDefaultTimeout(6000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     try {
@@ -45,7 +47,7 @@ const outcomes = [];
       await run(page);
       assert.deepEqual(errors, [], 'no uncaught runtime errors');
       outcomes.push({ name, pass: true });
-    } catch (error) { outcomes.push({ name, pass: false, error: error.message }); }
+    } catch (error) { outcomes.push({ name, pass: false, error: error.message }); console.error('FAIL ' + name + ': ' + error.message); }
     finally { await page.close(); }
   }
   try {
@@ -177,7 +179,7 @@ const outcomes = [];
       const result = await page.evaluate(() => {
         document.getElementById('uiAudit').innerHTML = '<div class="form-row"><label>龟池名称</label><input id="pool"></div><input id="query" type="search" placeholder="查找乌龟"><input id="explicit" aria-label="已有名称" placeholder="替代提示"><input id="count" type="number"><input id="decimal" type="number" step="0.1">';
         TurtleUI.enhance(document.getElementById('uiAudit'));
-        return { label: document.getElementById('pool').labels[0]?.textContent, query: document.getElementById('query').getAttribute('aria-label'), existing: document.getElementById('explicit').getAttribute('aria-label'), count: document.getElementById('count').inputMode, decimal: document.getElementById('decimal').inputMode, enter: document.getElementById('query').enterKeyHint };
+        return { label: document.getElementById('pool').labels[0]?.textContent, query: document.getElementById('query').getAttribute('aria-label'), existing: document.getElementById('explicit').getAttribute('aria-label'), count: document.getElementById('count').inputMode, decimal: document.getElementById('decimal').inputMode, enter: document.getElementById('query').getAttribute('enterkeyhint') };
       });
       assert.deepEqual(result, { label: '龟池名称', query: '查找乌龟', existing: '已有名称', count: 'numeric', decimal: 'decimal', enter: 'search' });
     });
@@ -207,6 +209,54 @@ const outcomes = [];
       assert.equal(await page.locator('#accountForm input[aria-invalid="true"]').evaluateAll(fields => fields.every(field => (field.getAttribute('aria-describedby') || '').split(/\s+/).some(id => document.getElementById(id)?.classList.contains('ui-field-error')))), true);
       await page.locator('#accountForm input[name="termsAccepted"]').check();
       assert.equal(await page.locator('#accountForm .ui-field-error').count(), 4, 'checking agreement clears its own error only');
+    });
+    await check('invalid required fields reveal nested details and keep their label and help readable', async page => {
+      await page.evaluate(() => {
+        uiAudit.innerHTML = '<form id="foldedForm"><details id="outerFold"><summary>更多信息</summary><details id="innerFold"><summary>测量数据</summary><label>体重<input id="foldedRequired" name="weight" required></label><small id="measureHelp">单位为克</small></details></details><button type="submit">保存</button></form>';
+        foldedRequired.setAttribute('aria-describedby', 'measureHelp');
+        foldedForm.requestSubmit();
+      });
+      await tick(page);
+      assert.equal(await page.locator('#outerFold').getAttribute('open'), '');
+      assert.equal(await page.locator('#innerFold').getAttribute('open'), '');
+      assert(await page.locator('#foldedRequired').isVisible());
+      assert.equal(await page.locator('#foldedForm .ui-field-error').innerText(), '请填写此项');
+      assert.match(await page.locator('#foldedRequired').getAttribute('aria-describedby'), /^measureHelp ui-error-/);
+      assert.equal(await page.locator('#foldedForm label').innerText(), '体重');
+    });
+    await check('number, selection, checkbox and email validation uses clear Chinese feedback without changing values', async page => {
+      const result = await page.evaluate(() => {
+        uiAudit.innerHTML = '<form><label>数量<input id="rangeField" type="number" min="1" max="5" step="1"></label><label>品种<select required id="choiceField"><option value="">选择</option></select></label><label>同意<input id="agreeField" type="checkbox" required></label><label>邮箱<input id="emailField" type="email"></label><input id="customField"></form>';
+        const messages = [];
+        for (const value of ['0', '6', '1.5']) { rangeField.value = value; rangeField.checkValidity(); messages.push(document.getElementById(rangeField.dataset.uiErrorId).textContent); }
+        choiceField.checkValidity(); agreeField.checkValidity(); emailField.value = 'invalid'; emailField.checkValidity();
+        customField.setCustomValidity('这个编号已存在，请换一个'); customField.checkValidity();
+        messages.push(...[choiceField, agreeField, emailField, customField].map(field => document.getElementById(field.dataset.uiErrorId).textContent));
+        return { messages, number: rangeField.value, email: emailField.value };
+      });
+      assert.deepEqual(result, { messages: ['数值不能小于 1', '数值不能大于 5', '请填写整数', '请选择一项', '请勾选后继续', '请输入有效的邮箱地址', '这个编号已存在，请换一个'], number: '1.5', email: 'invalid' });
+    });
+    await check('background validation does not take focus away from the active editor', async page => {
+      await page.evaluate(() => { uiAudit.innerHTML = '<input id="activeEditor"><input id="otherRequired" required>'; activeEditor.focus(); otherRequired.checkValidity(); });
+      await tick(page);
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'activeEditor');
+    });
+    await check('IME candidate confirmation cannot choose a market species before text composition ends', async page => {
+      await page.evaluate(() => setState({ page: 'marketAdd' }, { skipSave: true }));
+      const input = page.locator('[data-market-species-search]');
+      await input.fill('果核');
+      await input.evaluate(field => {
+        field.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        field.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', isComposing: true }));
+      });
+      assert.equal(await page.locator('[data-market-species-value]').inputValue(), '');
+      await input.evaluate(field => {
+        field.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '果核' }));
+        field.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 229 }));
+      });
+      assert.equal(await page.locator('[data-market-species-value]').inputValue(), '');
+      await input.press('Enter');
+      assert.equal(await page.locator('[data-market-species-value]').inputValue(), 'GHG');
     });
     for (const outcome of ['success', 'http-error', 'network-error', 'malformed-json', 'invalid-json-type']) await check(`real apiPost ${outcome} clears busy state and prevents duplicate submits`, async page => {
       let release;
@@ -288,7 +338,7 @@ const outcomes = [];
       assert.equal(await page.locator('#app > .bottom-nav [aria-current="page"]').count(), 1);
     });
     fs.mkdirSync(path.join(root, 'output'), { recursive: true });
-    fs.writeFileSync(path.join(root, 'output/ui-experience-regression.json'), JSON.stringify(outcomes, null, 2));
+    fs.writeFileSync(path.join(root, 'output', artifactName('ui-experience-regression' + (process.env.UI_EXPERIENCE_CASE ? '-focused' : '') + '.json')), JSON.stringify(outcomes, null, 2));
     console.log(JSON.stringify(outcomes, null, 2));
     assert.ok(outcomes.every(item => item.pass), 'all UI experience regression cases must pass');
   } finally { await browser.close(); }

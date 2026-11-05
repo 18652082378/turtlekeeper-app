@@ -31,10 +31,13 @@ const fixture = require('./ui-audit-fixture.cjs')();
           marketDraftCity: '杭州市', marketDraftDescription: '', marketDraftMedia: mode === 'archive' ? Array.from({ length: 9 }, () => ({ type: 'image', dataUrl: fixture.__image })) : [] };
         window.publishBusinessSnapshot = JSON.stringify([state.turtles, state.ledgerRecords, state.marketListings, state.myMarketListings]);
         forceUpdateState = { required: false }; pendingPageEnterMotion = false; render();
+      }, { fixture, theme, mode, intrinsicStress });
+      await page.locator('#marketListingForm').waitFor();
+      await page.evaluate(intrinsicStress => {
         // Native controls have different intrinsic widths on Mac/Windows.
         // A large preferred textarea width must not expand the form's grid.
         if (intrinsicStress) document.querySelector('#marketListingForm textarea').cols = 60;
-      }, { fixture, theme, mode, intrinsicStress });
+      }, intrinsicStress);
       await page.locator('#marketListingForm [name="title"]').fill('界面检查用的商品标题');
       await page.locator('#marketListingForm [name="description"]').fill('本地测试说明，不会发布商品。');
       await page.locator('#marketListingForm [name="stage"]').selectOption('juvenile');

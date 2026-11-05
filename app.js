@@ -7,6 +7,11 @@ const SERVER_SMS_CODE = "__SERVER_SMS__";
 const CONFIGURED_SMS_BACKEND = Boolean(window.TURTLE_API_BASE_URL);
 const CLOUD_SYNC_DEBOUNCE_MS = 900;
 const CHINA_TIME_ZONE = "Asia/Shanghai";
+const chinaDateFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: CHINA_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
+const chinaTimeFormatter = new Intl.DateTimeFormat("zh-CN", { timeZone: CHINA_TIME_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const chinaDateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: CHINA_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
+});
 const REVIEW_ADMIN_PHONE = "18652082378";
 const RESERVED_PLATFORM_NICKNAME = "龟友手账";
 // Retain the previous official name to prevent impersonation after the rename.
@@ -493,6 +498,18 @@ let communityPublishSubmissionId = "";
 let communityPublishProgress = { active: false, current: 0, total: 0, stage: "" };
 let marketLoading = false;
 let marketLastLoadedAt = 0;
+let feedEntryRefresh = { market: { pending: false, at: 0, key: "" }, community: { pending: false } };
+let feedCacheSaveTicket = 0;
+
+function deferFeedCacheSave() {
+  const ticket = ++feedCacheSaveTicket;
+  const phone = state.loggedInPhone, token = currentCloudToken();
+  // Feed reads must not serialize the full archive mirror before new cards paint.
+  requestAnimationFrame(() => window.setTimeout(() => {
+    if (ticket !== feedCacheSaveTicket || phone !== state.loggedInPhone || token !== currentCloudToken()) return;
+    saveState({ skipCloud: true });
+  }, 0));
+}
 let marketCityLocationRequestId = 0;
 let marketLoadObserver = null;
 let marketLoadRetryKey = "";
@@ -944,13 +961,19 @@ function saveState(options = {}) {
   return !localBackupFailed;
 }
 
+function formRestoreIdentity(form) {
+  const keys = ["id", "data-entity-id", "data-auth-form", "data-feedback-id", "data-review-id", "data-community-comment-form", "data-admin-feedback-form"];
+  const identity = keys.filter(key => form.getAttribute(key)).map(key => [key, form.getAttribute(key)]);
+  return identity.length ? JSON.stringify(identity) : null;
+}
+
 function captureVisibleFormInputs() {
   return [...$app.querySelectorAll("form")].map((form, formIndex) => ({
-    id: form.id, formIndex,
+    id: form.id, identity: formRestoreIdentity(form), formIndex,
     inputs: [...form.querySelectorAll("input, textarea, select")].map((input, index) => ({
       index, name: input.name, type: input.type, value: input.type === "file" ? "" : input.value,
       checked: input.checked, selected: input.tagName === "SELECT" && input.multiple ? [...input.selectedOptions].map(option => option.value) : null,
-      focused: input === document.activeElement, start: input.selectionStart, end: input.selectionEnd
+      focused: input === document.activeElement, start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection
     })).filter(input => input.type !== "file")
   }));
 }
@@ -958,19 +981,22 @@ function captureVisibleFormInputs() {
 function restoreVisibleFormInputs(forms) {
   const visible = [...$app.querySelectorAll("form")];
   for (const saved of forms || []) {
-    const form = saved.id ? visible.find(item => item.id === saved.id) : visible[saved.formIndex];
+    const candidates = saved.identity ? visible.filter(item => formRestoreIdentity(item) === saved.identity) : [];
+    const form = saved.identity ? (candidates.length === 1 ? candidates[0] : null)
+      : saved.id ? visible.find(item => item.id === saved.id) : visible[saved.formIndex];
     if (!form) continue;
     const inputs = [...form.querySelectorAll("input, textarea, select")];
     for (const field of saved.inputs) {
-      const input = inputs[field.index];
+      const input = ["radio", "checkbox"].includes(field.type)
+        ? inputs.find(item => item.name === field.name && item.type === field.type && item.value === field.value) : inputs[field.index];
       if (!input || input.name !== field.name || input.type !== field.type) continue;
       if (field.selected) [...input.options].forEach(option => { option.selected = field.selected.includes(option.value); });
-      else input.value = field.value;
+      else if (!["radio", "checkbox"].includes(field.type) && (input.tagName !== "SELECT" || [...input.options].some(option => option.value === field.value))) input.value = field.value;
       if (field.checked !== undefined) input.checked = field.checked;
       if (field.focused) {
         input.focus({ preventScroll: true });
-        if (typeof field.start === "number") { try { input.setSelectionRange(field.start, field.end); } catch {} }
       }
+      if (typeof field.start === "number") { try { input.setSelectionRange(field.start, field.end, field.direction || "none"); } catch {} }
     }
   }
 }
@@ -993,6 +1019,8 @@ function setState(patch, options = {}) {
     careHistoryFilter = {}; careHistoryLimit = 40; growthHistoryLimit = 40;
     patch = { ...patch, ...accountModuleCache(patch.loggedInPhone), ...messageCacheForAccount(patch.loggedInPhone) };
     communityLastLoadedAt = 0;
+    feedEntryRefresh = { market: { pending: false, at: 0, key: "" }, community: { pending: false } };
+    feedCacheSaveTicket++;
     messageUnreadLastLoadedAt = 0;
     marketLastLoadedAt = followingLastLoadedAt = publicReviewsLastLoadedAt = publicFeedbackLastLoadedAt = 0;
     communityUserProfileLoadedKey = "";
@@ -1003,6 +1031,7 @@ function setState(patch, options = {}) {
   }
   if ((patch.page && patch.page !== "home") || (patch.loggedInPhone !== undefined && patch.loggedInPhone !== state.loggedInPhone)) ledgerDashboardPicker = null;
   const pageChanged = Object.prototype.hasOwnProperty.call(patch, "page") && patch.page && patch.page !== state.page;
+  if (pageChanged && (patch.page === "market" || patch.page === "community")) feedEntryRefresh[patch.page].pending = true;
   if (pageChanged) {
     if (state.page === "search") window.TurtleSearch?.leave();
     // Snapshots must never serialize coordinates owned by an interrupted swipe.
@@ -1037,14 +1066,13 @@ function setState(patch, options = {}) {
       // HTML string remains only as a recovery fallback; replacing innerHTML
       // after an edge swipe was the source of the visible previous-page jump.
       cleanNavigationSnapshotDom($app);
-      const pageHtml = cleanNavigationSnapshotHtml($app.innerHTML);
+      const pageHtml = $app.innerHTML;
       const liveSnapshot = detachNavigationSnapshotDom();
       edgeBackSnapshots.push({
         page: state.page,
         editorState,
-        dataSignature: navigationDataSignature(state.page),
+        dataSnapshot: copyNavigationData(navigationDataValues(state.page)),
         html: pageHtml,
-        previewHtml: buildEdgeBackPreviewHtml(pageHtml),
         liveDom: liveSnapshot.dom,
         bottomNavHtml: liveSnapshot.bottomNavHtml,
         fixedLayers,
@@ -1053,6 +1081,7 @@ function setState(patch, options = {}) {
       // A user only needs the most recent navigation levels. Keeping a long
       // chain of media-heavy pages is wasteful on an iPhone WebView.
       edgeBackSnapshots = edgeBackSnapshots.slice(-3);
+      scheduleEdgeBackPreviewWarmup(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
     } else if (BOTTOM_NAV_ROOT_PAGES.has(patch.page)) {
       edgeBackSnapshots = [];
     }
@@ -1122,13 +1151,6 @@ function cleanNavigationSnapshotDom(root) {
     foreground?.style.removeProperty("transform");
     foreground?.style.removeProperty("will-change");
   });
-}
-
-function cleanNavigationSnapshotHtml(html = "") {
-  const template = document.createElement("template");
-  template.innerHTML = html;
-  cleanNavigationSnapshotDom(template.content);
-  return template.innerHTML;
 }
 
 function detachNavigationSnapshotDom() {
@@ -1609,12 +1631,7 @@ function stats() {
 function chinaDateParts(value) {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return null;
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: CHINA_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(date);
+  const parts = chinaDateFormatter.formatToParts(date);
   return Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
 }
 
@@ -1622,16 +1639,7 @@ function formatTime(value) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: CHINA_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23"
-  }).format(date);
+  return chinaDateTimeFormatter.format(date);
 }
 
 function formatMessagePreviewTime(value) {
@@ -1642,12 +1650,7 @@ function formatMessagePreviewTime(value) {
   const target = chinaDateParts(date);
   if (!current || !target) return "";
   if (current.year === target.year && current.month === target.month && current.day === target.day) {
-    return new Intl.DateTimeFormat("zh-CN", {
-      timeZone: CHINA_TIME_ZONE,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23"
-    }).format(date);
+    return chinaTimeFormatter.format(date);
   }
   return current.year === target.year ? `${target.month}/${target.day}` : `${target.year}/${target.month}/${target.day}`;
 }
@@ -2182,7 +2185,7 @@ function describeTurtleSnapshot(snapshot = {}) {
   ].join(" · ");
 }
 
-function renderTurtleGrowthSnapshot(snapshot = {}, photo, label, isNew = false) {
+function renderTurtleGrowthSnapshot(snapshot = {}, photo, label, isNew = false, sharedView = false) {
   const nickname = escapeHtml(String(snapshot.code || "未命名"));
   const weight = snapshot.weight !== undefined && snapshot.weight !== "" ? `${escapeHtml(String(snapshot.weight))}g` : "-";
   const length = snapshot.carapaceLength !== undefined && snapshot.carapaceLength !== "" ? `${escapeHtml(String(snapshot.carapaceLength))}cm` : "-";
@@ -2197,11 +2200,11 @@ function renderTurtleGrowthSnapshot(snapshot = {}, photo, label, isNew = false) 
       </div>
       <strong>${nickname}</strong>
       <div class="growth-snapshot-meta">
-        <span>体重 <b>${weight}</b></span>
-        <span>背甲 <b>${length}</b></span>
-        <span>状态 <b>${status}</b></span>
-        <span>健康 <b>${health}</b></span>
-        <span>龟池 <b>${pool}</b></span>
+        ${!sharedView || publicTurtleNumber(snapshot.weight) !== "" ? `<span>体重 <b>${weight}</b></span>` : ""}
+        ${!sharedView || publicTurtleNumber(snapshot.carapaceLength) !== "" ? `<span>背甲 <b>${length}</b></span>` : ""}
+        ${!sharedView || publicTurtleText(snapshot.status) ? `<span>状态 <b>${status}</b></span>` : ""}
+        ${!sharedView || publicTurtleText(snapshot.health) ? `<span>健康 <b>${health}</b></span>` : ""}
+        ${!sharedView ? `<span>龟池 <b>${pool}</b></span>` : ""}
       </div>
     </section>
   `;
@@ -2401,9 +2404,9 @@ function navigateBottomTab(targetPage) {
   // A tab switch is not a feed reset. Keep the server's ranking session and
   // loaded pages; clearing initialized made the first frame use local sorting
   // (including detail-only cached listings), then rebuild on the list response.
-  // First entry still loads normally. Search/filter/publish and pull refresh
-  // explicitly reset or refresh the feed when fresh recommendations are wanted.
-  setState(navigationState);
+  // First entry loads normally; an older cached feed revalidates after opening.
+  // Search/filter/publish and pull refresh still explicitly reset the feed.
+  setState(navigationState, { skipSave: true });
 }
 
 function restoreBottomNavAfterForeground() {
@@ -2469,6 +2472,7 @@ function communityPostMediaItems(item) {
   return values
     .map(media => ({
       url: String(media?.url || ""),
+      thumbnailUrl: String(media?.thumbnailUrl || ""),
       posterUrl: String(media?.posterUrl || media?.poster || ""),
       type: media?.type === "video" ? "video" : "image"
     }))
@@ -2501,7 +2505,7 @@ function communityFeedMedia(item) {
     if (media.type === "video") {
       return `<div class="community-feed-media-button is-video" role="button" tabindex="0" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><div class="inline-video-shell"><img class="community-media" src="${escapeHtml(apiAssetUrl(media.thumbnailUrl || media.posterUrl || defaultPhoto))}" alt="视频封面" loading="lazy"><span class="community-video-play-mark" aria-hidden="true">▶</span>${inlineVideoExpandButton(media, "动态视频")}</div></div>`;
     }
-    return `<button class="community-feed-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${escapeHtml(media.url)}" alt="动态图片 ${index + 1}" loading="lazy"><i class="community-detail-zoom-mark">⤢</i></button>`;
+    return `<button class="community-feed-media-button" type="button" data-preview-community-media="${item.id}" data-preview-community-media-index="${index}" aria-label="${label}"><img class="community-media" src="${escapeHtml(apiAssetUrl(media.thumbnailUrl || media.url))}" data-community-image-original="${escapeHtml(media.url)}" alt="动态图片 ${index + 1}" loading="lazy" decoding="async"><i class="community-detail-zoom-mark">⤢</i></button>`;
   };
   if (!mediaItems.length) return "";
   if (mediaItems.length === 1) return mediaButton(mediaItems[0], 0);
@@ -3709,10 +3713,10 @@ function marketImageBackupUrl(source) {
 }
 
 function bindMarketImageRecovery() {
-  for (const image of document.querySelectorAll("img[data-market-image-original]")) {
+  for (const image of document.querySelectorAll("img[data-market-image-original], img[data-community-image-original]")) {
     if (image.__marketRecoveryBound) continue;
     image.__marketRecoveryBound = true;
-    const original = apiAssetUrl(image.dataset.marketImageOriginal);
+    const original = apiAssetUrl(image.dataset.marketImageOriginal || image.dataset.communityImageOriginal);
     const attempts = new Set([image.getAttribute("src")]);
     const retry = () => {
       const next = [original, marketImageBackupUrl(original)].find(url => url && !attempts.has(url));
@@ -3903,11 +3907,9 @@ function navigationDataKeys(page) {
   return ["loggedInPhone", "accountName", "accountAvatar", "themeColor", ...(groups[page] || business)];
 }
 
-function navigationDataSignature(page) {
-  if (page === "search") return JSON.stringify([window.TurtleSearch?.signature(), state.loggedInPhone, state.themeColor, state.keptSpecies, (state.turtles || []).map(item => item.speciesCode), state.marketFavoriteIds, state.marketHistoryIds]);
-  // Two independent 32-bit hashes avoid retaining duplicate photo strings in
-  // the three-level navigation cache. This is a UI change detector, not auth.
-  const text = JSON.stringify(navigationDataKeys(page).map(key => {
+function navigationDataValues(page) {
+  if (page === "search") return [window.TurtleSearch?.signature(), state.loggedInPhone, state.themeColor, state.keptSpecies, (state.turtles || []).map(item => item.speciesCode), state.marketFavoriteIds, state.marketHistoryIds];
+  return navigationDataKeys(page).map(key => {
     if (["market", "community"].includes(page) && key === "turtles") return (state.turtles || []).map(item => [item.speciesCode, item.status, Boolean(item.lossRecordId)]);
     if (page === "market" && key === "marketFeedError") return Boolean(state[key]);
     if (page !== "market" || key !== "marketListings") return state[key];
@@ -3923,18 +3925,27 @@ function navigationDataSignature(page) {
     ]);
   }).concat(page === "communityAdd" ? [currentCloudToken(), communityPublishInFlight, communityDraftOwner, communityDraftTopic,
     communityDraftTitle, communityDraftText, communityDraftQuestion, communityDraftCircleId, communityDraftVisibility,
-    communityDraftTurtleId, communityDraftMediaItems.map(media => [media.previewUrl, media.type])] : []));
-  let a = 2166136261, b = 5381;
-  for (let i = 0; i < text.length; i++) {
-    const c = text.charCodeAt(i);
-    a = Math.imul(a ^ c, 16777619);
-    b = Math.imul(b, 33) ^ c;
-  }
-  return `${text.length}:${a >>> 0}:${b >>> 0}`;
+    communityDraftTurtleId, communityDraftMediaItems.map(media => [media.previewUrl, media.type])] : []);
+}
+
+// Copy the mutable record structure. Strings, including embedded photos, can
+// be compared directly without serializing and hashing their bytes on return.
+function copyNavigationData(value) {
+  if (Array.isArray(value)) return value.map(copyNavigationData);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, copyNavigationData(item)]));
+}
+
+function sameNavigationData(saved, current) {
+  if (Object.is(saved, current)) return true;
+  if (!saved || !current || typeof saved !== "object" || typeof current !== "object") return false;
+  if (Array.isArray(saved) !== Array.isArray(current)) return false;
+  const keys = Object.keys(saved);
+  return keys.length === Object.keys(current).length && keys.every(key => Object.hasOwn(current, key) && sameNavigationData(saved[key], current[key]));
 }
 
 function navigationSnapshotIsCurrent(snapshot) {
-  return snapshot?.dataSignature === navigationDataSignature(snapshot.page) && snapshot.page !== "team";
+  return Boolean(snapshot && snapshot.page !== "team" && sameNavigationData(snapshot.dataSnapshot, navigationDataValues(snapshot.page)));
 }
 
 function backNavigationState() {
@@ -4024,7 +4035,6 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
     $app.appendChild(bottomNav);
     syncPersistentBottomNav(bottomNav);
   }
-  if (!["home", "list"].includes(state.page)) saveState({ skipCloud: true });
   if (state.page === "market") {
     patchMarketSnapshotDetails();
     patchSystemAnnouncementOverlay();
@@ -4033,7 +4043,7 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
   setupCommunityInfiniteScroll();
   updateAccountSaveStatus();
   syncMobileKeyboardUI();
-  $app.syncNativeEdgeBack?.();
+  $app.syncNativeEdgeBack?.(true);
   window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
   restoredSnapshotRenderHoldUntil = Date.now() + 520;
   window.requestAnimationFrame(() => {
@@ -4075,7 +4085,6 @@ function navigateBack(options = {}) {
     $app.classList.remove("edge-back-dragging", "page-enter-motion", "community-chat-enter-motion");
     stopMarketDetailVideos($app, true);
     $app.innerHTML = snapshot.html;
-    if (!["home", "list"].includes(state.page)) saveState({ skipCloud: true });
     bindEvents();
     if (state.page === "market") {
       patchMarketSnapshotDetails();
@@ -4100,7 +4109,7 @@ function navigateBack(options = {}) {
     return;
   }
   setState(nextState, {
-    skipSave: state.page === "turtleDetail",
+    skipSave: true,
     pageMotion: "none",
     pageScroll: "preserve",
     skipEdgeSnapshot: true,
@@ -4987,7 +4996,7 @@ function pageMarketAdd() {
   return `
     ${topbar(editingListing ? "编辑出售" : "发布出售", true)}
     <main class="content page-fresh market-publish-page">
-      <form id="marketListingForm" class="market-publish-form">
+      <form id="marketListingForm" class="market-publish-form" data-entity-id="${escapeHtml(editingListing?.id || 'new')}">
         <section class="market-form-card market-source-card">
           <div class="market-form-heading"><b>从档案带入</b><small>减少重复填写，数据更可信</small></div>
           <select class="select" name="turtleId" data-market-turtle-source data-archive-directory>
@@ -5174,7 +5183,7 @@ function turtlePoolDimensions(pool = {}) {
   return values.length ? `${values.join(" · ")} cm` : "未记录尺寸";
 }
 
-function turtlePoolRow(pool) {
+function turtlePoolRow(pool, count) {
   const needsReview = TurtleBatches.poolCountNeedsReview(pool);
   return `
     <article class="turtle-pool-row fresh-card" data-edit-turtle-pool="${pool.id}" role="button" tabindex="0">
@@ -5184,9 +5193,9 @@ function turtlePoolRow(pool) {
           <div class="turtle-pool-title"><strong>${escapeHtml(pool.name || "未命名龟池")}</strong><span>${turtlePoolTypeLabel(pool.type)}</span></div>
           <small>${escapeHtml(turtlePoolDimensions(pool))}</small>
         </div>
-        <b>${TurtleBatches.poolCount(pool, state.turtles)}<em>只</em></b>
+        <b>${count}<em>只</em></b>
       </div>
-      ${needsReview ? `<p>已关联在养 ${TurtleBatches.poolCount(pool, state.turtles)} 只；历史手填 ${Number(pool.count)} 只，尚未核对。点击核对实际总数。</p>` : ""}
+      ${needsReview ? `<p>已关联在养 ${count} 只；历史手填 ${Number(pool.count)} 只，尚未核对。点击核对实际总数。</p>` : ""}
       ${pool.note ? `<p>${escapeHtml(pool.note)}</p>` : ""}
     </article>
   `;
@@ -5194,8 +5203,14 @@ function turtlePoolRow(pool) {
 
 function pageTurtlePools() {
   const pools = state.turtlePools || [];
+  const turtlesByPool = new Map();
+  for (const turtle of state.turtles) {
+    if (!turtlesByPool.has(turtle.poolId)) turtlesByPool.set(turtle.poolId, []);
+    turtlesByPool.get(turtle.poolId).push(turtle);
+  }
+  const rows = pools.map(pool => ({ pool, count: TurtleBatches.poolCount(pool, turtlesByPool.get(pool.id) || []) }));
   const unconfirmedPools = pools.filter(TurtleBatches.poolCountNeedsReview).length;
-  const turtleCount = pools.reduce((sum, pool) => sum + TurtleBatches.poolCount(pool, state.turtles), 0);
+  const turtleCount = rows.reduce((sum, row) => sum + row.count, 0);
   return `
     ${topbar("龟池管理", true)}
     <main class="content page-fresh workspace-page turtle-pools-page">
@@ -5209,7 +5224,7 @@ function pageTurtlePools() {
       </section>
       ${unconfirmedPools ? `<p class="muted">${unconfirmedPools} 个龟池的历史手填数量尚未核对，暂不与已关联档案相加。</p>` : ""}
       <section class="turtle-pool-list">
-        ${pools.map(turtlePoolRow).join("") || visualEmpty("pool", "还没有龟池", "记录尺寸、类型和居住的小龟，让每个龟池井井有条。", `<button class="primary" type="button" data-page="poolAdd">添加第一个龟池</button>`)}
+        ${rows.map(({ pool, count }) => turtlePoolRow(pool, count)).join("") || visualEmpty("pool", "还没有龟池", "记录尺寸、类型和居住的小龟，让每个龟池井井有条。", `<button class="primary" type="button" data-page="poolAdd">添加第一个龟池</button>`)}
       </section>
     </main>
     ${bottomNav()}
@@ -5227,7 +5242,7 @@ function pageTurtlePoolAdd() {
       <section class="page-intro compact-intro turtle-pools-intro">
         <div><p class="eyebrow dark">${editing ? "编辑" : "新增"}</p><h2>${editing ? escapeHtml(pool.name || "龟池") : "记录一个龟池"}</h2><p>名称和类型为必填信息，其余数据可随时补充。</p></div>
       </section>
-      <form class="pool-form fresh-card" id="turtlePoolForm">
+      <form class="pool-form fresh-card" id="turtlePoolForm" data-entity-id="${escapeHtml(pool?.id || 'new')}">
         <label><span>龟池名称<i class="required-mark" aria-hidden="true">*</i></span><input class="field" name="name" maxlength="24" value="${escapeHtml(pool?.name || "")}" placeholder="例如：南侧苗池" required></label>
         <section class="pool-type-field">
           <span>龟池类型<i class="required-mark" aria-hidden="true">*</i></span>
@@ -5269,8 +5284,15 @@ function turtleCard(t) {
 }
 
 const ARCHIVE_PAGE_SIZE = 30;
+const ARCHIVE_PRICE_VISIBILITY_STORAGE = "turtlekeeper-archive-prices-hidden-v1";
+let archivePricesHidden = loadArchivePricesHidden();
 let archiveListView = { phone: null, key: "", page: 0, query: "" };
 let archiveSearchTimer;
+
+function loadArchivePricesHidden() {
+  try { return localStorage.getItem(ARCHIVE_PRICE_VISIBILITY_STORAGE) === "true"; }
+  catch { return false; }
+}
 
 function archivePageData(list) {
   const key = JSON.stringify([state.loggedInPhone, state.turtleFilter, state.turtlePoolFilter, state.turtleSort, archiveListView.query]);
@@ -5285,6 +5307,13 @@ function archivePageData(list) {
 }
 
 function bindArchivePagination() {
+  document.querySelector("[data-toggle-archive-prices]")?.addEventListener("click", () => {
+    archivePricesHidden = !archivePricesHidden;
+    // A device display preference must never write or sync financial records.
+    try { localStorage.setItem(ARCHIVE_PRICE_VISIBILITY_STORAGE, String(archivePricesHidden)); } catch {}
+    setState({ openTurtleMenuId: "" }, { skipSave: true });
+    document.querySelector("[data-toggle-archive-prices]")?.focus({ preventScroll: true });
+  });
   document.querySelectorAll("[data-archive-page]").forEach(button => button.addEventListener("click", () => {
     archiveListView.page = Number(button.dataset.archivePage);
     setState({ openTurtleMenuId: "" }, { skipSave: true });
@@ -5333,6 +5362,13 @@ function sortedTurtles() {
 function archiveDashboardSection() {
   if (archiveListView.phone !== state.loggedInPhone) archiveListView = { phone: state.loggedInPhone, key: "", page: 0, query: "" };
   const page = archivePageData(sortedTurtles());
+  const visibleIndividuals = new Set(page.rows.filter(turtle => !turtle.batchId).map(turtle => turtle.id));
+  const medicalByTurtle = new Map();
+  if (visibleIndividuals.size) for (const record of state.ledgerRecords || []) {
+    if (record.type !== "other" || record.category !== "看病" || !visibleIndividuals.has(record.turtleId)) continue;
+    if (!medicalByTurtle.has(record.turtleId)) medicalByTurtle.set(record.turtleId, []);
+    medicalByTurtle.get(record.turtleId).push(record);
+  }
   const speciesOptions = [...new Set(state.turtles.map(t => t.speciesCode))]
     .map(code => speciesByCode(code) || { code, name: code });
   const poolOptions = state.turtlePools || [];
@@ -5365,10 +5401,13 @@ function archiveDashboardSection() {
         </select>
         ${["valueAsc", "valueDesc"].includes(state.turtleSort) ? `<button class="select" type="button" data-toggle-turtle-value-sort aria-label="切换为价值${state.turtleSort === "valueAsc" ? "降序" : "升序"}">价值${state.turtleSort === "valueAsc" ? "升序 ↑" : "降序 ↓"}</button>` : ""}
       </section>
+      <div class="archive-list-toolbar">
       <p class="archive-page-count" aria-live="polite">${selectedSpecies
         ? `<span class="archive-species-count">共 ${speciesTurtles.length} 只${escapeHtml(speciesName)} · <span>公 ${maleCount} 只</span> <span>母 ${femaleCount} 只</span> <span>未知 ${speciesTurtles.length - maleCount - femaleCount} 只</span></span>${page.pages > 1 ? `<span class="archive-species-pagination">${page.total} 条档案 · 当前显示 ${page.start + 1}–${page.start + page.rows.length} 条</span>` : ""}`
         : `共 ${page.total} 条${page.total ? ` · 当前显示 ${page.start + 1}–${page.start + page.rows.length} 条` : ""}`}</p>
-      ${page.rows.map(turtleListRow).join("") || `<div class="empty"><div><strong>${state.turtles.length ? "没有符合条件的档案" : "还没有乌龟档案"}</strong><p>${state.turtles.length ? "试试其他关键词、品种或龟池。" : "点击右上角加号，创建第一份档案。"}</p></div></div>`}
+      <button class="archive-price-toggle" type="button" data-toggle-archive-prices aria-pressed="${archivePricesHidden}" aria-label="${archivePricesHidden ? "显示档案列表价格" : "隐藏档案列表价格"}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>${archivePricesHidden ? `<path d="m3 3 18 18"/>` : ""}</svg><span>${archivePricesHidden ? "显示价格" : "隐藏价格"}</span></button>
+      </div>
+      ${page.rows.map(turtle => turtleListRow(turtle, medicalByTurtle.get(turtle.id) || [])).join("") || `<div class="empty"><div><strong>${state.turtles.length ? "没有符合条件的档案" : "还没有乌龟档案"}</strong><p>${state.turtles.length ? "试试其他关键词、品种或龟池。" : "点击右上角加号，创建第一份档案。"}</p></div></div>`}
       ${page.pages > 1 ? `<nav class="archive-pagination" aria-label="档案分页"><button class="secondary" type="button" data-archive-page="${archiveListView.page - 1}" ${archiveListView.page === 0 ? "disabled" : ""}>上一页</button><span>${archiveListView.page + 1} / ${page.pages}</span><button class="secondary" type="button" data-archive-page="${archiveListView.page + 1}" ${archiveListView.page + 1 >= page.pages ? "disabled" : ""}>下一页</button></nav>` : ""}
     </section>
   `;
@@ -5432,6 +5471,7 @@ function growthSparkline(values = []) {
 }
 
 function turtleDetailGrowthChart(turtle) {
+  if (turtle.sharedView && (publicTurtleNumber(turtle.weight) === "" || publicTurtleNumber(turtle.carapaceLength) === "")) return "";
   const history = [...(turtle?.measureHistory || [])].reverse();
   const baseline = history[0]?.oldSnapshot || turtle || {};
   const records = [{
@@ -5481,7 +5521,7 @@ function turtleDetailGrowthChart(turtle) {
           ${records.map((item, index) => `<text x="${x(index)}" y="194" text-anchor="middle">${item.date ? item.date.slice(5).replace("-", "/") : `第${index + 1}次`}</text>`).join("")}
         </svg>
       </div>
-      ${history.length ? `<footer><span>从首次建档到现在</span><strong>${weightChange >= 0 ? "增重" : "减重"} ${Math.abs(weightChange).toFixed(1)}g · 背甲${lengthChange >= 0 ? "增长" : "减少"} ${Math.abs(lengthChange).toFixed(1)}cm</strong></footer>` : `<footer class="is-empty"><span>完成下一次记录后，曲线会自动连接</span><button type="button" data-update-turtle="${escapeHtml(turtle.id)}">记录成长</button></footer>`}
+      ${history.length ? `<footer><span>从首次建档到现在</span><strong>${weightChange >= 0 ? "增重" : "减重"} ${Math.abs(weightChange).toFixed(1)}g · 背甲${lengthChange >= 0 ? "增长" : "减少"} ${Math.abs(lengthChange).toFixed(1)}cm</strong></footer>` : turtle.sharedView ? `<footer class="is-empty"><span>已记录当前体重和背甲长度</span></footer>` : `<footer class="is-empty"><span>完成下一次记录后，曲线会自动连接</span><button type="button" data-update-turtle="${escapeHtml(turtle.id)}">记录成长</button></footer>`}
     </section>`;
 }
 
@@ -5539,6 +5579,10 @@ function turtleArchiveKeepingDays(turtle, records = state.ledgerRecords || []) {
   return turtleKeepingDays(turtle.acquiredDate || loss?.turtleSnapshot?.acquiredDate, lossDate) || "饲养天数待补";
 }
 
+function archivePriceAmount(value) {
+  return `<span class="turtle-price-amount">¥${money(value).replace(/\d/g, digit => `<span class="turtle-price-digit">${archivePricesHidden ? "*" : digit}</span>`)}</span>`;
+}
+
 function turtleBatchPoolLabel(summary) {
   return summary.pools.length > 1 ? `分布在 ${summary.pools.length} 处` : turtlePoolName(summary.pools[0]);
 }
@@ -5552,7 +5596,7 @@ function turtleBatchListRow(t) {
     ${t.pinned ? `<span class="turtle-pinned-badge">置顶</span>` : ""}
     <div class="turtle-row-content">
       <div class="turtle-row-title"><strong>${escapeHtml(turtleBatchLabel(t))}</strong><span class="turtle-pool-title-meta">龟池 ${escapeHtml(turtleBatchPoolLabel(summary))}</span></div>
-      <div class="turtle-row-species"><p>${escapeHtml(t.speciesName)} <b class="batch-count-badge">批次 · 在养 ${summary.count} 只</b></p>${!t.sourceBreedingId || summary.cost > 0 ? `<span class="turtle-price" aria-label="在养购入成本 ${money(summary.cost)} 元">¥${money(summary.cost)}</span>` : ""}</div>
+      <div class="turtle-row-species"><p>${escapeHtml(t.speciesName)} <b class="batch-count-badge">批次 · 在养 ${summary.count} 只</b></p>${!t.sourceBreedingId || summary.cost > 0 ? `<span class="turtle-price" aria-label="${archivePricesHidden ? "价格已隐藏" : `在养购入成本 ${money(summary.cost)} 元`}">${archivePriceAmount(summary.cost)}</span>` : ""}</div>
       <div class="turtle-row-bottom"><div class="turtle-row-meta"><span>${({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[t.stage] || "未填阶段"}</span><span>${summary.male} 公 · ${summary.female} 母${summary.unknown ? ` · ${summary.unknown} 未知` : ""}</span>${t.sourceBreedingId && summary.lost ? `<span>损耗 ${summary.lost} 只</span>` : ""}</div><span class="turtle-keeping-days">${summary.lost && !t.sourceBreedingId ? `损耗 ${summary.lost} 只` : keepingDays}</span>${t.sourceBreedingId ? `<span class="turtle-row-status-badge ${summary.count ? "turtle-hatch-badge" : "turtle-loss-badge"}">${summary.count ? "孵化" : "损耗"}</span>` : ""}</div>
     </div>
     <button class="more-btn" data-toggle-turtle-menu="${t.id}" aria-label="批次操作" aria-expanded="${menuOpen}">•••</button>
@@ -5581,7 +5625,7 @@ function pageTurtleBatchDetail(t) {
     <section class="page-intro compact-intro batch-identity"><img class="batch-cover" src="${escapeHtml(photo)}" alt="批次照片" data-growth-photo-preview role="button" tabindex="0"><div><p class="eyebrow dark">${t.sourceBreedingId ? "同窝孵化" : "批量购入"}</p><h2>${escapeHtml(turtleBatchLabel(t))}</h2><p>${escapeHtml(t.speciesName)} · ${escapeHtml(t.acquiredDate || "未填写日期")}</p></div></section>
     <section class="turtle-pool-summary fresh-card batch-summary"><div><span>当前在养</span><strong>${summary.count}<small>只</small></strong></div><div><span>累计损耗</span><strong>${summary.lost}<small>只</small></strong></div><div><span>在养购入成本</span><strong><small>¥</small>${money(summary.cost)}</strong></div></section>
     <section class="fresh-card note-card batch-profile"><h3>批次资料</h3><div class="batch-profile-line"><span>性别组成</span><p>${summary.male} 公 · ${summary.female} 母 · ${summary.unknown} 性别未知</p></div><div class="batch-profile-line"><span>所在龟池</span><p>${escapeHtml(turtleBatchPoolLabel(summary))}</p></div><div class="batch-profile-line"><span>阶段 / 健康</span><p>${({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[current.stage] || "未填写"} · ${escapeHtml(current.health || "健康")}</p></div>${current.note ? `<p class="batch-profile-note">${escapeHtml(current.note)}</p>` : ""}</section>
-    ${editing ? `<form id="turtleDetailForm" class="breeding-form fresh-card turtle-detail-edit-form">
+    ${editing ? `<form id="turtleDetailForm" class="breeding-form fresh-card turtle-detail-edit-form" data-entity-id="${escapeHtml(t.id)}">
       <div class="photo-uploader breeding-photo-box"><img src="${escapeHtml(photo)}" alt="批次照片"><div><button class="secondary" type="button" data-update-photo-button>更新批次照片</button><button class="danger-link" type="button" data-clear-update-photo>清除图片</button></div></div>
       <input class="hidden-file" type="file" accept="image/*" data-update-photo-input>
       <div class="breeding-form-grid">
@@ -5709,12 +5753,12 @@ function submitTurtleBatchMovement(event) {
   toast(`已记录${type === "sold" ? "售出" : "损耗"} ${count} 只，龟池数量已同步`);
 }
 
-function turtleListRow(t) {
+function turtleListRow(t, medicalRecords) {
   if (t.batchId) return turtleBatchListRow(t);
   const menuOpen = state.openTurtleMenuId === t.id;
   const keepingDays = turtleArchiveKeepingDays(t);
   const isHatched = Boolean(t.sourceBreedingId || t.source === "孵化");
-  const totalCost = turtleTotalCost(t);
+  const totalCost = turtleTotalCost(t, medicalRecords);
   return `
     <article class="turtle-row fresh-card ${menuOpen ? "menu-open" : ""}" data-view-turtle="${escapeHtml(t.id)}" data-reorder-turtle="${escapeHtml(t.id)}">
       <img src="${escapeHtml(t.photo || defaultPhoto)}" alt="${escapeHtml(t.speciesName)}" draggable="false" loading="lazy" decoding="async" width="58" height="58">
@@ -5726,7 +5770,7 @@ function turtleListRow(t) {
         </div>
         <div class="turtle-row-species">
           <p class="turtle-individual-species"><span class="turtle-species-name">${escapeHtml(t.speciesName)}</span>${["公", "母"].includes(t.gender) ? `<span class="turtle-gender">· ${escapeHtml(t.gender)}</span>` : ""}</p>
-          ${totalCost > 0 ? `<span class="turtle-price" aria-label="总成本 ${money(totalCost)} 元">¥${money(totalCost)}</span>` : ""}
+          ${totalCost > 0 ? `<span class="turtle-price" aria-label="${archivePricesHidden ? "价格已隐藏" : `总成本 ${money(totalCost)} 元`}">${archivePriceAmount(totalCost)}</span>` : ""}
         </div>
         <div class="turtle-row-bottom">
           <div class="turtle-row-meta">
@@ -5756,14 +5800,14 @@ function pageTurtleDetail() {
   const t = (sharedTurtlePreview?.id === state.selectedTurtleId ? sharedTurtlePreview : null) || state.turtles.find(item => item.id === state.selectedTurtleId);
   if (!t) return `${topbar("档案详情", true)}<main class="content page-fresh"><div class="empty"><strong>没有找到这份档案</strong></div></main>${bottomNav()}`;
   if (t.batchId && !t.sharedView) return pageTurtleBatchDetail(t);
-  const isEditing = state.updatingTurtleId === t.id;
+  const isEditing = !t.sharedView && state.updatingTurtleId === t.id;
   const speciesCode = isEditing ? (turtleDraftValue(t, "speciesCode") || t.speciesCode) : t.speciesCode;
   const species = speciesByCode(speciesCode) || speciesByCode(t.speciesCode) || { code: speciesCode, name: t.speciesName };
   const nickname = isEditing ? (turtleDraftValue(t, "code") || t.code) : t.code;
   const photo = isEditing && state.updateDraftPhoto === "__CLEAR__" ? defaultPhoto : (isEditing ? state.updateDraftPhoto : "") || t.photo || speciesPhoto(species) || defaultPhoto;
   // 档案详情是完整成长时间线，始终从第 1 次成长开始向下查看。
   const historyList = [...(t.measureHistory || [])].reverse();
-  const menuOpen = state.openTurtleMenuId === t.id;
+  const menuOpen = !t.sharedView && state.openTurtleMenuId === t.id;
   return `
     ${topbar(isEditing ? "成长记录" : "档案详情", true)}
     <main class="content page-fresh">
@@ -5771,7 +5815,7 @@ function pageTurtleDetail() {
         <div>
           <p class="eyebrow dark">明细</p>
           <h2>${escapeHtml(nickname || "未命名档案")}</h2>
-          <p>${escapeHtml(species.name || t.speciesName)} · ${escapeHtml(turtleDraftValue(t, "status") || t.status)} · ${escapeHtml(turtleDraftValue(t, "health") || t.health)}</p>
+          <p>${t.sharedView ? [species.name || t.speciesName, t.status, t.health].map(publicTurtleText).filter(Boolean).map(escapeHtml).join(" · ") : `${escapeHtml(species.name || t.speciesName)} · ${escapeHtml(turtleDraftValue(t, "status") || t.status)} · ${escapeHtml(turtleDraftValue(t, "health") || t.health)}`}</p>
         </div>
         ${t.sharedView ? `<span class="shared-turtle-badge">公开分享</span>` : `<button class="detail-more" data-toggle-turtle-menu="${t.id}" aria-label="档案操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>`}
         ${menuOpen ? `
@@ -5786,7 +5830,7 @@ function pageTurtleDetail() {
         ` : ""}
       </section>
       ${isEditing ? `
-      <form class="breeding-form fresh-card turtle-detail-edit-form" id="turtleDetailForm">
+      <form class="breeding-form fresh-card turtle-detail-edit-form" id="turtleDetailForm" data-entity-id="${escapeHtml(t.id)}">
         <div class="photo-uploader breeding-photo-box">
           <img src="${escapeHtml(photo)}" alt="${escapeHtml(species.name || t.speciesName)}">
           <div>
@@ -5837,7 +5881,7 @@ function pageTurtleDetail() {
       </form>
       ` : `${turtleReadOnlyDetail(t, species, photo)}${archiveTimeline(t)}${turtleDetailGrowthChart(t)}`}
       ${t.sharedView ? `<section class="shared-turtle-note">由龟友手账生成 · 仅展示主人选择公开的成长信息</section>` : ""}
-      <section class="section-title"><h3>成长记录</h3></section>
+      ${!t.sharedView || historyList.length ? `<section class="section-title"><h3>成长记录</h3></section>` : ""}
       ${historyList.map((h, index) => `
         <div class="growth-history-entry">
           <article class="history-card growth-history-card fresh-card">
@@ -5846,14 +5890,14 @@ function pageTurtleDetail() {
               <small>${formatTime(h.updatedAt)}</small>
             </div>
             <div class="growth-comparison">
-              ${renderTurtleGrowthSnapshot(h.oldSnapshot || { carapaceLength: h.oldLength }, h.oldPhoto, "更新前")}
+              ${renderTurtleGrowthSnapshot(h.oldSnapshot || { carapaceLength: h.oldLength }, h.oldPhoto, "更新前", false, t.sharedView)}
               <span class="growth-inline-arrow" aria-hidden="true">→</span>
-              ${renderTurtleGrowthSnapshot(h.newSnapshot || { carapaceLength: h.newLength }, h.newPhoto, "更新后", true)}
+              ${renderTurtleGrowthSnapshot(h.newSnapshot || { carapaceLength: h.newLength }, h.newPhoto, "更新后", true, t.sharedView)}
             </div>
           </article>
           ${index < historyList.length - 1 ? `<div class="growth-down-arrow" aria-hidden="true"><span>↓</span><small>继续成长</small></div>` : ""}
         </div>
-      `).join("") || `<div class="empty small-empty"><div><strong>暂时还没有成长记录</strong></div></div>`}
+      `).join("") || (t.sharedView ? "" : `<div class="empty small-empty"><div><strong>暂时还没有成长记录</strong></div></div>`)}
     </main>
     ${bottomNav()}
   `;
@@ -5861,12 +5905,13 @@ function pageTurtleDetail() {
 
 function turtleReadOnlyDetail(t, species, photo) {
   const medicalCost = t.sharedView ? 0 : turtleMedicalCost(t);
+  const sharedFields = t.sharedView ? publicTurtleDetailFields(t) : "";
   return `
     <section class="turtle-detail-hero fresh-card detail-photo-card">
       <img class="growth-preview-photo" src="${escapeHtml(photo)}" alt="${escapeHtml(species.name || t.speciesName)}" data-growth-photo-preview role="button" tabindex="0" title="点击放大">
       <span class="detail-photo-hint">点击照片放大</span>
     </section>
-    <section class="detail-grid-card fresh-card">
+    ${t.sharedView ? (sharedFields ? `<section class="detail-grid-card fresh-card">${sharedFields}</section>` : "") : `<section class="detail-grid-card fresh-card">
       <div class="detail-grid-wide"><span>性别</span><strong>${escapeHtml(t.gender || "-")}</strong></div>
       ${["hatchling", "juvenile", "adult"].includes(t.stage) ? `<div class="detail-grid-wide"><span>阶段</span><strong>${({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[t.stage]}</strong></div>` : ""}
       <div><span>体重</span><strong>${escapeHtml(t.weight === "" || t.weight == null ? "-" : t.weight)}g</strong></div>
@@ -5880,7 +5925,7 @@ function turtleReadOnlyDetail(t, species, photo) {
       <div class="detail-grid-wide"><span>购入价</span><strong>${t.price !== "" && t.price != null ? `¥${money(t.price)}` : "-"}</strong></div>
       ${medicalCost > 0 ? `<div><span>累计看病花费</span><strong>¥${money(medicalCost)}</strong></div><div><span>总成本</span><strong>¥${money(turtleTotalCost(t))}</strong></div>` : ""}
       <div><span>龟池</span><strong>${escapeHtml(turtlePoolName(t.poolId))}</strong></div>
-    </section>
+    </section>`}
     ${t.note ? `<section class="fresh-card note-card">${escapeHtml(t.note)}</section>` : ""}
   `;
 }
@@ -6211,7 +6256,7 @@ function careRecordTurtles(refs) {
 function careRecordTime(record) {
   const date = new Date(record.createdAt || "");
   if (!/\d{2}:\d{2}/.test(record.createdAt || "") || !Number.isFinite(date.getTime())) return '<span class="care-record-time">记录时间未保存</span>';
-  const time = new Intl.DateTimeFormat("zh-CN", { timeZone: CHINA_TIME_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date);
+  const time = chinaTimeFormatter.format(date);
   const createdDate = formatDate(date);
   return `<time class="care-record-time" datetime="${escapeHtml(record.createdAt)}" title="${escapeHtml(formatTime(record.createdAt))}">记录于 ${createdDate !== record.date ? `${createdDate} ` : ""}${time}</time>`;
 }
@@ -6251,7 +6296,8 @@ function careTurtlePicker(draft) {
   const refs = TurtleCare.normalizeTurtleRefs(draft.turtleRefs);
   const selected = new Set(refs.map(ref => ref.id));
   const available = (state.turtles || []).filter(turtle => TurtleBatches.isActive(turtle) || selected.has(String(turtle.id)));
-  const missing = refs.filter(ref => !available.some(turtle => String(turtle.id) === ref.id));
+  const availableIds = new Set(available.map(turtle => String(turtle.id)));
+  const missing = refs.filter(ref => !availableIds.has(ref.id));
   const chip = ref => `<button type="button" data-care-remove-turtle="${escapeHtml(ref.id)}" aria-label="移除关联：${escapeHtml(ref.code || ref.speciesName || "原乌龟")}">${escapeHtml(ref.code || ref.speciesName || "原乌龟")} <span aria-hidden="true">×</span></button>`;
   return `<div class="care-field"><span>关联乌龟</span><select class="select" name="careTurtleIds" multiple data-archive-directory aria-label="关联乌龟，可多选">
     ${available.map(turtle => `<option value="${escapeHtml(turtle.id)}" ${selected.has(String(turtle.id)) ? "selected" : ""}>${escapeHtml(turtle.code || turtle.name || "未命名乌龟")} · ${escapeHtml(archiveSpeciesName(turtle))}</option>`).join("")}
@@ -6270,7 +6316,8 @@ function pageCareRecords() {
     if (!groups.has(record.date)) groups.set(record.date, []);
     groups.get(record.date).push(record);
   }
-  const todayCount = (state.careRecords || []).filter(record => record.date === formatDate(new Date())).length;
+  const today = formatDate(new Date());
+  const todayCount = (state.careRecords || []).filter(record => record.date === today).length;
   return `${topbar("日常养护", true)}
     <main class="content page-fresh workspace-page care-page">
       ${careTabs()}
@@ -6278,7 +6325,7 @@ function pageCareRecords() {
       ${draft ? `<form class="fresh-card care-form" id="careForm">
         <div class="form-head"><div><p class="eyebrow dark">${draft.id ? "编辑" : "新增"}</p><h3>记录一次养护</h3></div><button class="danger-link" type="button" data-cancel-care>取消</button></div>
         ${draft.planNotice ? `<p class="work-hint">${escapeHtml(draft.planNotice)}</p>` : ""}
-        <label class="care-field"><span>日期</span><input class="field" type="date" name="date" required max="${formatDate(new Date())}" value="${escapeHtml(draft.date)}"></label>
+        <label class="care-field"><span>日期</span><input class="field" type="date" name="date" required max="${today}" value="${escapeHtml(draft.date)}"></label>
         <div class="care-field"><span id="careItemLabel">事项</span><div aria-labelledby="careItemLabel">${careItemPicker(draft)}</div></div>
         ${draft.itemId === "manual" ? `<label class="care-field"><span>手动备注</span><input class="field" name="manualTitle" required maxlength="40" placeholder="例如：晒背、清洗过滤器" value="${escapeHtml(draft.manualTitle || "")}"></label><p class="care-form-hint">保存后，下次可直接从事项列表选择。</p>` : ""}
         <label class="care-field"><span>龟池</span><select class="select" name="poolId"><option value="">不关联龟池</option>${draft.poolId && !(state.turtlePools || []).some(pool => pool.id === draft.poolId) ? `<option value="${escapeHtml(draft.poolId)}" selected>${escapeHtml(draft.poolName || "原龟池")}（已删除）</option>` : ""}${(state.turtlePools || []).map(pool => `<option value="${escapeHtml(pool.id)}" ${draft.poolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name)}</option>`).join("")}</select></label>
@@ -6530,6 +6577,7 @@ function ledgerDateRange(preset = state.ledgerDatePreset || "all") {
 }
 
 function pageLedger() {
+  const sourceRecords = state.ledgerRecords || [];
   const dateRange = ledgerDateRange();
   const inDateRange = item => {
     const date = item.recordDate || formatDate(item.createdAt);
@@ -6537,13 +6585,22 @@ function pageLedger() {
     if (dateRange.to && date > dateRange.to) return false;
     return true;
   };
-  const allRecords = TurtleBatches.groupLedgerRecords((state.ledgerRecords || []).filter(inDateRange));
+  const allRecords = TurtleBatches.groupLedgerRecords(sourceRecords.filter(inDateRange));
   const records = allRecords.filter(item => state.ledgerTab === "all" || item.type === state.ledgerTab);
-  const hasLedgerRecords = (state.ledgerRecords || []).length > 0;
-  const purchaseTotal = allRecords.filter(item => item.type === "purchase").reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const soldTotal = allRecords.filter(item => item.type === "sold").reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const lossTotal = allRecords.filter(item => item.type === "loss").reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const otherTotal = allRecords.filter(item => item.type === "other").reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const hasLedgerRecords = sourceRecords.length > 0;
+  const { purchase: purchaseTotal, sold: soldTotal, loss: lossTotal, other: otherTotal } = ledgerMoneyStats(allRecords);
+  const turtlesById = new Map();
+  for (const turtle of state.turtles) if (!turtlesById.has(turtle.id)) turtlesById.set(turtle.id, turtle);
+  const followupsByTurtle = new Map();
+  const purchaseIds = new Set(records.filter(item => item.type === "purchase" && item.turtleId).map(item => item.turtleId));
+  if (purchaseIds.size) {
+    for (const record of sourceRecords) {
+      if (!purchaseIds.has(record.turtleId) || !["sold", "loss"].includes(record.type)) continue;
+      if (!followupsByTurtle.has(record.turtleId)) followupsByTurtle.set(record.turtleId, []);
+      followupsByTurtle.get(record.turtleId).push(record);
+    }
+    for (const followups of followupsByTurtle.values()) followups.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  }
   const profit = soldTotal - purchaseTotal - lossTotal - otherTotal;
   const profitLabel = profit > 0 ? "当前盈利" : profit < 0 ? "当前亏损" : "当前结余";
   const profitPrefix = profit > 0 ? "+" : profit < 0 ? "-" : "±";
@@ -6586,7 +6643,7 @@ function pageLedger() {
           return `<button class="tab ${state.ledgerTab === key ? "active" : ""}" data-ledger-tab="${key}">${label}</button>`;
         }).join("")}
       </section>
-      ${records.map(ledgerRow).join("") || visualEmpty(hasLedgerRecords ? "search" : "receipt", hasLedgerRecords ? "没有符合筛选的账目" : "还没有账本记录", hasLedgerRecords ? "可以切换日期或分类，查看其他账目。" : "记下一笔龟粮、设备或日常开销，花费会更清楚。", hasLedgerRecords ? "" : `<button class="primary" type="button" data-new-ledger="other">记第一笔支出</button>`)}
+      ${records.map(item => ledgerRow(item, turtlesById.get(item.turtleId), followupsByTurtle.get(item.turtleId)?.[0])).join("") || visualEmpty(hasLedgerRecords ? "search" : "receipt", hasLedgerRecords ? "没有符合筛选的账目" : "还没有账本记录", hasLedgerRecords ? "可以切换日期或分类，查看其他账目。" : "记下一笔龟粮、设备或日常开销，花费会更清楚。", hasLedgerRecords ? "" : `<button class="primary" type="button" data-new-ledger="other">记第一笔支出</button>`)}
     </main>
     ${bottomNav()}
   `;
@@ -7192,38 +7249,33 @@ function ledgerForm() {
   `;
 }
 
-function ledgerRecordPhoto(item) {
+function ledgerRecordPhoto(item, linkedTurtle) {
   if (item.type !== "loss") return item.photo || "";
-  const turtle = state.turtles.find(t => t.id === item.turtleId);
-  return turtle?.photo || item.turtleSnapshot?.photo || item.photo || (item.turtleId ? defaultPhoto : "");
+  return linkedTurtle?.photo || item.turtleSnapshot?.photo || item.photo || (item.turtleId ? defaultPhoto : "");
 }
 
-function ledgerMovementLabel(item) {
-  const turtle = item.turtleSnapshot || state.turtles.find(t => t.id === item.turtleId);
+function ledgerMovementLabel(item, linkedTurtle) {
+  const turtle = item.turtleSnapshot || linkedTurtle;
   return turtle?.batchName || (turtle ? turtleBatchLabel(turtle) : "未命名批次");
 }
 
-function ledgerRow(item) {
-  const photo = ledgerRecordPhoto(item);
-  const turtle = state.turtles.find(t => t.id === item.turtleId) || item.turtleSnapshot;
+function ledgerRow(item, linkedTurtle, followup) {
+  const photo = ledgerRecordPhoto(item, linkedTurtle);
+  const turtle = linkedTurtle || item.turtleSnapshot;
   const typeText = ledgerTypeText(item.type);
   const isOther = item.type === "other";
-  const nickname = item.movementRecords ? ledgerMovementLabel(item) : isOther ? (item.title || "未命名支出") : (turtle?.code || String(item.title || "未关联档案").split(" · ")[0] || "未关联档案");
+  const nickname = item.movementRecords ? ledgerMovementLabel(item, linkedTurtle) : isOther ? (item.title || "未命名支出") : (turtle?.code || String(item.title || "未关联档案").split(" · ")[0] || "未关联档案");
   const speciesName = isOther ? (item.category || "日常养护支出") : (turtle?.speciesName || item.speciesName || String(item.title || "").split(" · ").slice(1).join(" · ") || "未填写品种");
   const weight = item.weight || turtle?.weight || "";
   const carapaceLength = item.carapaceLength || turtle?.carapaceLength || "";
   const weightText = weight !== "" ? `${weight}g` : "—g";
   const carapaceText = carapaceLength !== "" ? `背甲 ${carapaceLength}cm` : "背甲 —cm";
-  const linkedFollowup = item.type === "purchase" && item.turtleId
-    ? (state.ledgerRecords || [])
-      .filter(record => record.turtleId === item.turtleId && ["sold", "loss"].includes(record.type))
-      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0]
-    : null;
+  const linkedFollowup = item.type === "purchase" ? followup : null;
   const linkedStatus = linkedFollowup ? `已${ledgerTypeText(linkedFollowup.type)}` : "";
   const menuOpen = state.openLedgerMenuId === item.id;
   return `
     <article class="fresh-card ledger-row ${menuOpen ? "ledger-menu-open" : ""}" data-view-ledger="${item.id}">
-      ${photo ? `<img class="ledger-thumb" src="${escapeHtml(photo)}" alt="${typeText}照片">` : `<div class="ledger-thumb ledger-thumb-placeholder" role="img" aria-label="${escapeHtml(isOther ? (item.category || "支出") : typeText)}默认图案，未添加照片">${TurtleArtwork.svg(TurtleArtwork.ledgerKind(item))}</div>`}
+      ${photo ? `<img class="ledger-thumb" src="${escapeHtml(photo)}" alt="${typeText}照片" loading="lazy" decoding="async">` : `<div class="ledger-thumb ledger-thumb-placeholder" role="img" aria-label="${escapeHtml(isOther ? (item.category || "支出") : typeText)}默认图案，未添加照片">${TurtleArtwork.svg(TurtleArtwork.ledgerKind(item))}</div>`}
       <div class="ledger-row-main">
         <div class="ledger-row-title-line">
           <div class="ledger-row-title"><span class="ledger-inline-type ${item.type}">${typeText}</span><strong class="ledger-title-text">${escapeHtml(nickname)}</strong></div>
@@ -7245,9 +7297,10 @@ function ledgerRow(item) {
 function pageLedgerDetail() {
   const item = TurtleBatches.groupLedgerRecords(state.ledgerRecords || []).find(record => record.id === state.selectedLedgerId || record.movementRecords?.some(member => member.id === state.selectedLedgerId));
   if (!item) return `${topbar("账本详情", true)}<main class="content page-fresh"><div class="empty"><strong>没有找到这条记录</strong></div></main>`;
-  const turtle = state.turtles.find(t => t.id === item.turtleId) || item.turtleSnapshot;
+  const linkedTurtle = state.turtles.find(t => t.id === item.turtleId);
+  const turtle = linkedTurtle || item.turtleSnapshot;
   const typeText = ledgerTypeText(item.type);
-  const photo = ledgerRecordPhoto(item);
+  const photo = ledgerRecordPhoto(item, linkedTurtle);
   const amountPrefix = item.type === "sold" ? "+" : "-";
   const isOther = item.type === "other";
   return `
@@ -7256,7 +7309,7 @@ function pageLedgerDetail() {
       <section class="ledger-detail-hero">${photo ? `<img src="${escapeHtml(photo)}" alt="${typeText}照片">` : `<div class="ledger-detail-empty">${typeText}</div>`}</section>
       <section class="fresh-card ledger-detail-card">
         <div class="ledger-detail-head"><span class="ledger-inline-type ${item.type}">${typeText}</span><strong class="${item.type !== "sold" ? "danger-text" : ""}">${amountPrefix}${money(item.amount)}</strong></div>
-        <h2>${item.movementRecords ? escapeHtml(ledgerMovementLabel(item)) : isOther ? escapeHtml(item.title || "未命名支出") : escapeHtml(turtle ? `${turtle.code} · ${turtle.speciesName}` : (item.title || "未关联档案"))}</h2>
+        <h2>${item.movementRecords ? escapeHtml(ledgerMovementLabel(item, linkedTurtle)) : isOther ? escapeHtml(item.title || "未命名支出") : escapeHtml(turtle ? `${turtle.code} · ${turtle.speciesName}` : (item.title || "未关联档案"))}</h2>
         <p class="muted">${item.recordDate || formatDate(item.createdAt)}</p>
         <div class="detail-grid">
           ${item.movementRecords ? `<div><span>本次${typeText}数量</span><strong>${item.movementRecords.length} 只</strong></div><div><span>品种</span><strong>${escapeHtml(turtle?.speciesName || "未填写品种")}</strong></div><div><span>记录时间</span><strong>${formatTime(item.createdAt)}</strong></div>` : isOther ? `<div><span>支出分类</span><strong>${escapeHtml(item.category || "其他")}</strong></div><div><span>凭证</span><strong>${item.photo ? "已上传" : "未上传"}</strong></div>` : `
@@ -7488,7 +7541,7 @@ function pageBreedingDetail() {
         <p>${record.batchId ? "批次繁殖" : isManual ? "手动记录" : "单龟繁殖"} · ${escapeHtml(record.poolName || turtlePoolName(record.poolId))}</p>
         <div class="breeding-overview-stats"><div><span>产蛋</span><strong>${Number(record.eggCount) || 0}<small>枚</small></strong></div><div><span>受精</span><strong>${Number(record.fertileCount) || 0}<small>枚</small></strong></div><div><span>已孵化</span><strong>${hatchProgress.previousCount}<small>只</small></strong></div></div>
       </section>
-      <form class="breeding-form breeding-editor" id="breedingDetailForm">
+      <form class="breeding-form breeding-editor" id="breedingDetailForm" data-entity-id="${escapeHtml(record.id)}">
         <section class="fresh-card breeding-section">
         <div class="breeding-section-heading"><h3>基本资料</h3><span>产蛋信息</span></div>
         <div class="photo-uploader breeding-photo-box">
@@ -8881,7 +8934,7 @@ function bindSyncPageActions() {
 
 function bindEvents() {
   window.TurtleSearch?.bind();
-  $app.syncNativeEdgeBack?.();
+  $app.syncNativeEdgeBack?.(true);
   bindCareEvents();
   window.TurtleWeather?.bind(weatherContext());
   bindWorkspaceUI();
@@ -8965,15 +9018,6 @@ function bindEvents() {
       navigationState.marketDraftDescriptionTemplate = "";
       navigationState.marketLocationStatus = "idle";
     }
-    if (targetPage === "market" && state.page !== "market") {
-      marketLastLoadedAt = 0;
-      Object.assign(navigationState, {
-        marketFeedInitialized: false,
-        marketFeedNextOffset: 0,
-        marketFeedHasMore: true,
-        marketFeedLoadingMore: false
-      });
-    }
     if (targetPage === "species") {
       navigationState.speciesPickerForAdd = state.page === "add";
       navigationState.speciesPickerForLedger = state.page === "ledger" && state.ledgerDraftType === "purchase";
@@ -8982,7 +9026,7 @@ function bindEvents() {
     }
       // 龟友圈的内容随后会由接口在原列表中补齐。不要先播放淡入缩放
       // 再补数据，否则在 iPhone 上会像页面重新渲染了一次。
-      setState(navigationState, targetPage === "community" ? { pageMotion: "none" } : {});
+      setState(navigationState, { skipSave: true, ...(targetPage === "community" ? { pageMotion: "none" } : {}) });
       if (targetPage === "messages") void refreshMessageUnread(true, { renderMessages: true });
     });
   });
@@ -9367,7 +9411,9 @@ function bindEvents() {
   }));
   document.querySelectorAll("[data-rating]").forEach(btn => btn.addEventListener("click", () => {
     if (!requireLogin()) return;
-    setState({ satisfactionRating: Number(btn.dataset.rating) });
+    setState({ satisfactionRating: Number(btn.dataset.rating) }, { preserveInputValues: true });
+    const rating = $app.querySelector('#satisfactionForm input[name="rating"]');
+    if (rating) rating.value = String(state.satisfactionRating);
   }));
   document.querySelector("#satisfactionForm")?.addEventListener("submit", submitPublicSatisfaction);
   document.querySelectorAll("[data-delete-review]").forEach(btn => btn.addEventListener("click", () => deletePublicReview(btn.dataset.deleteReview)));
@@ -10177,6 +10223,30 @@ async function refreshPublicReviews(force = false) {
   }
 }
 
+function beginPublicFormSubmission(formElement, fieldName, action) {
+  const phone = state.loggedInPhone, token = currentCloudToken(), identity = formRestoreIdentity(formElement);
+  const key = JSON.stringify([phone, token, action, identity]);
+  const pending = beginPublicFormSubmission.pending || (beginPublicFormSubmission.pending = new Set());
+  if (pending.has(key)) { toast("正在提交，请稍候；新输入的内容会保留"); return null; }
+  pending.add(key);
+  const value = formElement.elements.namedItem(fieldName)?.value;
+  const isCurrent = () => state.loggedInPhone === phone && currentCloudToken() === token;
+  return {
+    isCurrent,
+    clearUnchanged() {
+      if (!isCurrent()) return false;
+      const forms = [...$app.querySelectorAll('form')].filter(form => formRestoreIdentity(form) === identity);
+      const form = forms.length === 1 ? forms[0] : null;
+      const input = form?.elements.namedItem(fieldName);
+      if (!input || input.value !== value) return false;
+      input.value = "";
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    },
+    finish: () => pending.delete(key)
+  };
+}
+
 async function submitPublicSatisfaction(event) {
   if (!CONFIGURED_SMS_BACKEND) return submitSatisfaction(event);
   event.preventDefault();
@@ -10185,17 +10255,22 @@ async function submitPublicSatisfaction(event) {
   const comment = String(form.get("comment") || "").trim();
   const rating = Number(form.get("rating") || state.satisfactionRating || 5);
   if (!comment) return toast("请填写评价内容");
+  const request = beginPublicFormSubmission(event.currentTarget, "comment", "review-create");
+  if (!request) return;
   try {
     const result = await apiPost("/api/reviews/create", reviewAuthPayload({ rating, comment }));
+    if (!request.isCurrent()) return;
+    request.clearUnchanged();
     publicReviewsLastLoadedAt = Date.now();
     setState({
       publicReviews: Array.isArray(result.reviews) ? result.reviews : state.publicReviews,
       activityLogs: logActivity(`提交满意度评价：${rating} 分`, "空间")
-    });
+    }, { preserveInputValues: true, renderPages: ["satisfaction"] });
     toast("评价已提交");
   } catch (error) {
+    if (!request.isCurrent()) return;
     toast(error.message || "评价提交失败");
-  }
+  } finally { request.finish(); }
 }
 
 async function submitReviewComment(event) {
@@ -10205,17 +10280,22 @@ async function submitReviewComment(event) {
   const form = new FormData(event.currentTarget);
   const content = String(form.get("content") || "").trim();
   if (!content) return toast("请填写评论内容");
+  const request = beginPublicFormSubmission(event.currentTarget, "content", "review-comment");
+  if (!request) return;
   try {
     const result = await apiPost("/api/reviews/comment", reviewAuthPayload({ reviewId, content }));
+    if (!request.isCurrent()) return;
+    request.clearUnchanged();
     publicReviewsLastLoadedAt = Date.now();
     setState({
       publicReviews: Array.isArray(result.reviews) ? result.reviews : state.publicReviews,
       activityLogs: logActivity("评论了一条满意度评价", "空间")
-    });
+    }, { preserveInputValues: true, renderPages: ["satisfaction"] });
     toast("评论已发布");
   } catch (error) {
+    if (!request.isCurrent()) return;
     toast(error.message || "评论失败");
-  }
+  } finally { request.finish(); }
 }
 
 async function deletePublicReview(reviewId) {
@@ -10224,7 +10304,7 @@ async function deletePublicReview(reviewId) {
   try {
     const result = await apiPost("/api/reviews/delete", reviewAuthPayload({ reviewId }));
     publicReviewsLastLoadedAt = Date.now();
-    setState({ publicReviews: Array.isArray(result.reviews) ? result.reviews : state.publicReviews }, { skipCloud: true });
+    setState({ publicReviews: Array.isArray(result.reviews) ? result.reviews : state.publicReviews }, { skipCloud: true, preserveInputValues: true, renderPages: ["satisfaction"] });
     toast("评价已删除");
   } catch (error) {
     toast(error.message || "删除失败");
@@ -10237,7 +10317,7 @@ async function deletePublicReviewComment(reviewId, commentId) {
   try {
     const result = await apiPost("/api/reviews/comment/delete", reviewAuthPayload({ reviewId, commentId }));
     publicReviewsLastLoadedAt = Date.now();
-    setState({ publicReviews: Array.isArray(result.reviews) ? result.reviews : state.publicReviews }, { skipCloud: true });
+    setState({ publicReviews: Array.isArray(result.reviews) ? result.reviews : state.publicReviews }, { skipCloud: true, preserveInputValues: true, renderPages: ["satisfaction"] });
     toast("评论已删除");
   } catch (error) {
     toast(error.message || "删除失败");
@@ -10360,18 +10440,24 @@ function marketFeedRequestKey() {
 }
 
 async function refreshMarket(force = false) {
+  if (force && typeof window !== "undefined") window.TurtleFeedUpdates?.clear("market", marketLoading);
   const isMarketFeed = state.page === "market";
   const requestKey = marketFeedRequestKey();
   const requestPhone = state.loggedInPhone;
+  const requestToken = currentCloudToken();
+  const entry = feedEntryRefresh.market;
+  const entryKey = JSON.stringify([requestKey, requestToken]);
   const savedListingIds = savedMarketListingIds();
+  const requestBaseListings = new Map((state.marketListings || []).map(item => [String(item.id), item]));
   // A stale saved login used to make every visible market render ask the
   // server again.  Once apiPost detects 401 it clears that login; this guard
   // prevents a repeated background request/error loop from making the page
   // feel like it is continually refreshing.
   if (!hasCloudSession() || marketLoading) return;
-  if (isMarketFeed && state.marketFeedInitialized && !force) return;
-  if (!force && Date.now() - marketLastLoadedAt < 10000) return;
-  if (isMarketFeed) marketLoadRetryKey = "";
+  const entryDue = entry.pending && (entry.key !== entryKey || Date.now() - entry.at >= 10000);
+  if (isMarketFeed && state.marketFeedInitialized && !force && !entryDue) { entry.pending = false; return; }
+  if (!isMarketFeed && !force && Date.now() - marketLastLoadedAt < 10000) return;
+  if (isMarketFeed) { marketLoadRetryKey = ""; entry.pending = false; }
   marketLoading = true;
   try {
     const sharedListingId = incomingMarketShareLoading
@@ -10380,13 +10466,14 @@ async function refreshMarket(force = false) {
       : "";
     if (sharedListingId) {
       const result = await apiPost("/api/market/detail", marketAuthPayload({ listingId: sharedListingId, mediaVariantsVersion: 1 }));
-      if (state.loggedInPhone !== requestPhone) return;
+      if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
       const sharedListing = normalizeMarketListings([result.listing])[0];
       if (!sharedListing) throw new Error("商品已下架或不存在");
       const retainedListings = (state.marketListings || []).filter(item => item.id !== sharedListing.id);
       marketLastLoadedAt = Date.now();
       incomingMarketShareLoading = false;
-      setState({ marketListings: [sharedListing, ...retainedListings] }, { skipCloud: true, preserveInputValues: true, renderPages: ["market","marketDetail","marketSeller","marketMy","marketFavorites","marketHistory","following","followingProfile","mine"] });
+      setState({ marketListings: [sharedListing, ...retainedListings] }, { skipSave: true, preserveInputValues: true, renderPages: ["market","marketDetail","marketSeller","marketMy","marketFavorites","marketHistory","following","followingProfile","mine"] });
+      deferFeedCacheSave();
       return;
     }
     const result = await apiPost("/api/market/list", marketAuthPayload(isMarketFeed ? {
@@ -10396,7 +10483,7 @@ async function refreshMarket(force = false) {
       mediaVariantsVersion: 1,
       ...marketFeedRequestOptions()
     } : { all: true, savedListingIds, mediaVariantsVersion: 1, deliveryListingId: state.selectedMarketListingId }));
-    if (state.loggedInPhone !== requestPhone || (isMarketFeed && (requestKey !== marketFeedRequestKey() || state.page !== "market"))) return;
+    if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken || (isMarketFeed && (requestKey !== marketFeedRequestKey() || state.page !== "market"))) return;
     const pending = (state.marketListings || []).filter(item => item.pendingLocal);
     const remoteListings = normalizeMarketListings(result.listings || []);
     const savedListings = normalizeMarketListings(result.savedListings || []);
@@ -10425,6 +10512,7 @@ async function refreshMarket(force = false) {
     });
     const accountPatch = result.accountData ? normalizeAccountData(result.accountData) : {};
     marketLastLoadedAt = Date.now();
+    if (isMarketFeed) { entry.at = marketLastLoadedAt; entry.key = entryKey; }
     if (incomingMarketShareListingId && incomingMarketShareListingId === String(state.selectedMarketListingId || "")) {
       incomingMarketShareLoading = false;
     }
@@ -10442,35 +10530,67 @@ async function refreshMarket(force = false) {
         marketFeedLoadingMore: false
       } : {})
     };
+    const applyMarketResponse = (preserveEdits = false) => {
+      if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken || (isMarketFeed && requestKey !== marketFeedRequestKey())) return false;
+      if (!preserveEdits && typeof window !== "undefined") window.TurtleFeedUpdates?.clear("market");
+      const patch = preserveEdits ? Object.fromEntries(["marketListings", "marketFeedError", "marketFeedInitialized", "marketFeedSessionId", "marketFeedOrderIds", "marketFeedNextOffset", "marketFeedHasMore", "marketFeedLoadingMore"].map(key => [key, nextMarketState[key]])) : { ...nextMarketState };
+      if (preserveEdits) {
+        const current = new Map((state.marketListings || []).map(item => [String(item.id), item]));
+        patch.marketListings = patch.marketListings.filter(item => !requestBaseListings.has(String(item.id)) || current.has(String(item.id)))
+          .map(item => current.has(String(item.id)) && current.get(String(item.id)) !== requestBaseListings.get(String(item.id)) ? current.get(String(item.id)) : item);
+        const kept = new Set(patch.marketListings.map(item => String(item.id)));
+        patch.marketFeedOrderIds = patch.marketFeedOrderIds.filter(id => kept.has(String(id)));
+      }
     if (!isMarketFeed && state.page === "market") {
       // The detail request may complete long after back navigation. Preserve
       // the restored list for its entire lifetime, not just a timed grace period.
-      state = { ...state, ...nextMarketState };
-      saveState({ skipCloud: true, preserveInputValues: true, renderPages: ["market","marketDetail","marketSeller","marketMy","marketFavorites","marketHistory","following","followingProfile","mine"] });
+      state = { ...state, ...patch };
+      if (result.accountData) saveState({ skipCloud: true });
       patchMarketSnapshotDetails();
       syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
     } else {
-      setState(nextMarketState, { skipCloud: true, preserveInputValues: true, renderPages: ["market","marketDetail","marketSeller","marketMy","marketFavorites","marketHistory","following","followingProfile","mine"] });
+      setState(patch, { skipSave: !result.accountData, skipCloud: true, preserveInputValues: true, renderPages: ["market","marketDetail","marketSeller","marketMy","marketFavorites","marketHistory","following","followingProfile","mine"] });
     }
+    if (!result.accountData) deferFeedCacheSave();
+    return true;
+    };
+    if (!force && isMarketFeed && !result.accountData && state.marketFeedInitialized && typeof window !== "undefined"
+      && window.TurtleFeedUpdates?.stage("market", { items: remoteListings, hasMore: Boolean(result.hasMore), apply: () => applyMarketResponse(true) })) {
+      state = { ...state, marketFeedError: "" };
+      const errorNotice = $app.querySelector('.market-grid [data-feed-retry="market"]')?.closest('.empty');
+      if (errorNotice) {
+        const card = $app.querySelector('.market-grid .market-card');
+        const beforeTop = card?.getBoundingClientRect().top;
+        const aboveViewport = errorNotice.getBoundingClientRect().bottom <= 0;
+        errorNotice.remove();
+        if (aboveViewport && card && Number.isFinite(beforeTop)) window.scrollBy(0, card.getBoundingClientRect().top - beforeTop);
+      }
+      deferFeedCacheSave();
+      return;
+    }
+    applyMarketResponse();
   } catch (error) {
     if (incomingMarketShareListingId && incomingMarketShareListingId === String(state.selectedMarketListingId || "")) {
       incomingMarketShareLoading = false;
       if (state.page === "marketDetail") render();
     }
     if (error.status !== 405 && error.message !== "方法不支持") console.warn(error.message || "龟集市读取失败");
-    if (isMarketFeed && state.loggedInPhone === requestPhone && requestKey === marketFeedRequestKey()) {
+    if (isMarketFeed && state.loggedInPhone === requestPhone && currentCloudToken() === requestToken && requestKey === marketFeedRequestKey()) {
       marketLastLoadedAt = Date.now();
       state = { ...state, marketFeedError: "load_failed" };
       if (state.page === "market") render();
     }
   } finally {
     marketLoading = false;
-    if (state.page === "market" && requestKey !== marketFeedRequestKey() && hasCloudSession()) void refreshMarket(true);
+    if (typeof window !== "undefined") window.TurtleFeedUpdates?.settled("market");
+    const ownerChanged = requestPhone !== state.loggedInPhone || requestToken !== currentCloudToken();
+    if (state.page === "market" && hasCloudSession() && (ownerChanged || requestKey !== marketFeedRequestKey() || feedEntryRefresh.market.pending
+      || (!isMarketFeed && !state.marketFeedInitialized))) void refreshMarket(ownerChanged || requestKey !== marketFeedRequestKey());
     else setupMarketInfiniteScroll();
   }
 }
 
-function resetMarketFeed(patch = {}) {
+function resetMarketFeed(patch = {}, options = {}) {
   marketLastLoadedAt = 0;
   marketLoadRetryKey = "";
   setState({
@@ -10484,7 +10604,7 @@ function resetMarketFeed(patch = {}) {
     marketFeedNextOffset: 0,
     marketFeedHasMore: true,
     marketFeedLoadingMore: false
-  }, { skipCloud: true });
+  }, { skipCloud: true, ...options });
 }
 
 async function loadMoreMarketListings() {
@@ -10578,7 +10698,7 @@ async function loadMoreMarketListings() {
     console.warn(error.message || "加载更多龟集市商品失败");
   } finally {
     marketLoading = false;
-    if (state.page === "market" && requestKey !== marketFeedRequestKey() && hasCloudSession()) void refreshMarket(true);
+    if (state.page === "market" && hasCloudSession() && (requestKey !== marketFeedRequestKey() || feedEntryRefresh.market.pending)) void refreshMarket(requestKey !== marketFeedRequestKey());
     else setupMarketInfiniteScroll();
   }
 }
@@ -10813,6 +10933,7 @@ function bindMarketSpeciesPicker() {
   let matches = [];
   let activeIndex = -1;
   let closeTimer = 0;
+  let composingSpecies = false;
 
   const closeOptions = () => {
     options.hidden = true;
@@ -10879,12 +11000,16 @@ function bindMarketSpeciesPicker() {
     window.clearTimeout(closeTimer);
     renderOptions(queryForOptions());
   });
-  search.addEventListener("input", () => {
+  const updateSpeciesQuery = () => {
     renderOptions(search.value);
     value.value = "";
     if (matches.length) updateActiveOption(0);
-  });
+  };
+  search.addEventListener("compositionstart", () => { composingSpecies = true; closeOptions(); });
+  search.addEventListener("compositionend", () => { composingSpecies = false; updateSpeciesQuery(); });
+  search.addEventListener("input", event => { if (!composingSpecies && !event.isComposing) updateSpeciesQuery(); });
   search.addEventListener("keydown", event => {
+    if (composingSpecies || event.isComposing || event.keyCode === 229) return;
     if (event.key === "Escape") {
       closeOptions();
       return;
@@ -11369,6 +11494,8 @@ async function submitMarketListing(event) {
   if (!canUseCommunity()) return;
   const formElement = event.currentTarget;
   const editingListingId = state.editingMarketListingId;
+  const publishOwner = state.loggedInPhone, publishToken = currentCloudToken();
+  const samePublisher = () => state.loggedInPhone === publishOwner && currentCloudToken() === publishToken;
   const form = new FormData(formElement);
   const turtle = (state.turtles || []).find(item => item.id === String(form.get("turtleId") || ""));
   const localMedia = (state.marketDraftMedia || []).length
@@ -11458,20 +11585,23 @@ async function submitMarketListing(event) {
   try {
     const mediaItems = [];
     for (const [mediaIndex, media] of localMedia.entries()) {
+      if (!samePublisher()) throw new Error("账号已变更，本次发布已停止");
       const source = media.dataUrl || media.url || "";
       if (!source) continue;
       setPublishingLabel(`正在上传第 ${mediaIndex + 1} 项（共 ${localMedia.length} 项）…`, mediaIndex + 1);
       let posterUrl = persistentVideoPosterUrl(media.posterUrl);
       if (media.type === "video" && media.posterFile) {
         try {
-          const uploadedPoster = await apiUploadMediaFile(media.posterFile);
+          const uploadedPoster = await apiUploadMediaFile(media.posterFile, 0, { owner: { phone: publishOwner, token: publishToken } });
           posterUrl = uploadedPoster.url || posterUrl;
         } catch (error) {
           console.warn("视频封面上传失败", error);
         }
       }
+      if (!samePublisher()) throw new Error("账号已变更，本次发布已停止");
       if (media.file) {
         const uploaded = await apiUploadMediaFile(media.file, media.duration || 0, {
+          owner: { phone: publishOwner, token: publishToken },
           onRetry: ({ attempt, maxAttempts }) => {
             setPublishingLabel(
               `第 ${mediaIndex + 1} 项上传连接波动，正在重试（${attempt + 1}/${maxAttempts}）…`,
@@ -11489,6 +11619,7 @@ async function submitMarketListing(event) {
       }
     }
     const photoUrl = mediaItems[0]?.url || "";
+    if (!samePublisher()) throw new Error("账号已变更，本次发布已停止");
     setPublishingLabel(editingListingId ? "正在保存商品信息…" : "正在发布商品信息…", localMedia.length);
     const result = await apiPost(editingListingId ? "/api/market/update" : "/api/market/create", marketAuthPayload({
       ...payload,
@@ -11497,31 +11628,35 @@ async function submitMarketListing(event) {
       photoUrl,
       mediaItems
     }));
+    if (!samePublisher()) { clearMarketPublishProgress(); return; }
+    window.TurtlePublishDrafts?.published({ kind: "market", phone: publishOwner, listingId: editingListingId });
     localMedia.forEach(media => {
       if (media.file && String(media.dataUrl || "").startsWith("blob:")) URL.revokeObjectURL(media.dataUrl);
       if (String(media.posterUrl || "").startsWith("blob:")) URL.revokeObjectURL(media.posterUrl);
     });
-    state.marketDraftPhoto = "";
-    state.marketDraftMedia = [];
-    state.marketDraftTurtleId = "";
-    state.marketDraftCity = "";
-    state.marketDraftLatitude = "";
-    state.marketDraftLongitude = "";
-    state.marketDraftDescription = "";
-    state.marketDraftDescriptionTemplate = "";
-    state.marketLocationStatus = "idle";
-    state.editingMarketListingId = "";
+    if (state.page !== "marketAdd") {
+      state.marketDraftPhoto = "";
+      state.marketDraftMedia = [];
+      state.marketDraftTurtleId = "";
+      state.marketDraftCity = "";
+      state.marketDraftLatitude = "";
+      state.marketDraftLongitude = "";
+      state.marketDraftDescription = "";
+      state.marketDraftDescriptionTemplate = "";
+      state.marketLocationStatus = "idle";
+      state.editingMarketListingId = "";
+    }
     marketPublishFingerprint = "";
     marketPublishSubmissionId = "";
     marketLastLoadedAt = Date.now();
     clearMarketPublishProgress();
     resetMarketFeed({
-      page: "market",
       myMarketListings: normalizeMarketListings(result.myListings || [])
-    });
+    }, { preserveInputValues: true, renderPages: ["market", "marketMy", "marketFavorites", "marketHistory", "marketSeller"] });
     toast(editingListingId ? "商品已保存并刷新" : "商品已发布，请及时确认在售状态");
   } catch (error) {
     clearMarketPublishProgress();
+    if (!samePublisher()) return;
     if (error.status === 405 || error.message === "方法不支持") {
       toast("服务器尚未更新，暂时无法发布九宫格商品");
       return;
@@ -11923,7 +12058,7 @@ async function contactMarketSeller(listingId, buying = false) {
       ? state.communityChatMessages : readCommunityChatCache(listing.sellerId)?.messages, sent.messages || []);
     const marketListing = normalizeCommunityChatListing(sent.marketListing) || initialListing;
     cacheCommunityChat(listing.sellerId, friend, messages, marketListing);
-    if (state.selectedCommunityFriendId === listing.sellerId) marketChatDraft = "";
+    if (state.selectedCommunityFriendId === listing.sellerId && marketChatDraft === buyMessage) marketChatDraft = "";
     const chatStillVisible = state.page === "communityChat" && state.selectedCommunityFriendId === listing.sellerId;
     if (chatStillVisible) communityChatLoadedKey = `${listing.sellerId}:${Math.floor(Date.now() / 10000)}`;
     if (chatStillVisible) communityChatOpening = false;
@@ -12472,6 +12607,7 @@ function normalizeCommunityPosts(posts = []) {
     const mediaItems = rawMediaItems
       .map(media => ({
         url: media?.url ? apiAssetUrl(media.url) : "",
+        thumbnailUrl: media?.thumbnailUrl ? apiAssetUrl(media.thumbnailUrl) : "",
         posterUrl: media?.posterUrl || media?.poster ? apiAssetUrl(media.posterUrl || media.poster) : "",
         type: media?.type === "video" ? "video" : "image"
       }))
@@ -12499,30 +12635,38 @@ function normalizeCommunityPosts(posts = []) {
 }
 
 async function refreshCommunity(force = false) {
+  if (force && typeof window !== "undefined") window.TurtleFeedUpdates?.clear("community", communityLoading);
   if (!hasCloudSession() || communityLoading) return;
-  if (!force && Date.now() - communityLastLoadedAt < 10000) return;
+  if (!force && Date.now() - communityLastLoadedAt < 10000 && state.communityFeedInitialized) {
+    feedEntryRefresh.community.pending = false;
+    return;
+  }
   communityLoading = true;
+  const feedOnly = state.page === "community";
+  if (feedOnly) feedEntryRefresh.community.pending = false;
   const requestPhone = state.loggedInPhone;
   const requestToken = currentCloudToken();
   const conversationRevision = communityConversationRevision;
   const publicationRevision = communityPublicationRevision;
+  const requestBasePosts = new Map((state.communityPosts || []).map(item => [String(item.id), item]));
   try {
-    const result = await apiPost("/api/community/list", communityAuthPayload({ offset: 0, limit: 10, sort: "latest" }));
+    const result = await apiPost("/api/community/list", communityAuthPayload({ offset: 0, limit: 10, sort: "latest", ...(feedOnly ? { feedOnly: true, mediaVariantsVersion: 1 } : {}) }));
     if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken) return;
     if (publicationRevision !== communityPublicationRevision) return;
-    if (conversationRevision !== communityConversationRevision || communityConversationDeleting.size) return;
-    reconcileCommunityConversationState(result);
-    communityLastLoadedAt = Date.now();
     const hasFriends = Array.isArray(result.friends);
+    if (hasFriends && (conversationRevision !== communityConversationRevision || communityConversationDeleting.size)) return;
+    if (hasFriends || result.conversationState) reconcileCommunityConversationState(result);
+    communityLastLoadedAt = Date.now();
+    feedEntryRefresh.community.pending = false;
     const friends = hasFriends ? mergeCommunityFriends(result.friends) : (state.communityFriends || []);
-    const messageUnreadCount = friends.reduce((sum, friend) => sum + Math.max(0, Number(friend.unreadCount || 0)), 0);
+    const messageUnreadCount = hasFriends ? friends.reduce((sum, friend) => sum + Math.max(0, Number(friend.unreadCount || 0)), 0) : Number(state.messageUnreadCount || 0);
     const profileStats = result.profileStats && typeof result.profileStats === "object"
       ? {
         receivedLikes: Math.max(0, Number(result.profileStats.receivedLikes || 0)),
         followerCount: Math.max(0, Number(result.profileStats.followerCount || 0))
       }
       : state.communityProfileStats;
-    if (deferMessageListRefreshWhileDragging()) return;
+    if (hasFriends && deferMessageListRefreshWhileDragging()) return;
     const communityPosts = normalizeCommunityPosts(result.posts || []);
     const nextCommunityState = {
       communityPosts,
@@ -12539,25 +12683,45 @@ async function refreshCommunity(force = false) {
       communityFriendsError: hasFriends ? false : state.communityFriendsError,
       messageUnreadCount
     };
+    const applyCommunityResponse = (preserveEdits = false) => {
+      if (state.loggedInPhone !== requestPhone || currentCloudToken() !== requestToken || publicationRevision !== communityPublicationRevision) return false;
+      if (!preserveEdits && typeof window !== "undefined") window.TurtleFeedUpdates?.clear("community");
+      const patch = preserveEdits ? Object.fromEntries(["communityPosts", "communityFeedError", "communityFeedInitialized", "communityFeedNextOffset", "communityFeedHasMore", "communityFeedLoadingMore"].map(key => [key, nextCommunityState[key]])) : { ...nextCommunityState };
+      if (preserveEdits) {
+        const current = new Map((state.communityPosts || []).map(item => [String(item.id), item]));
+        patch.communityPosts = communityPosts.filter(item => !requestBasePosts.has(String(item.id)) || current.has(String(item.id)))
+          .map(item => current.has(String(item.id)) && current.get(String(item.id)) !== requestBasePosts.get(String(item.id)) ? current.get(String(item.id)) : item);
+      }
     if (state.page === "community") {
       const previousPosts = state.communityPosts || [];
-      const feedChanged = communityFeedSignature(communityPosts) !== communityFeedSignature(previousPosts);
+      const feedChanged = communityFeedSignature(patch.communityPosts) !== communityFeedSignature(previousPosts);
       // A community refresh arrives after the route has already opened. Keep
       // that page mounted and update only its feed; setState would reconstruct
       // the entire page and produced the visible render/flicker the user saw.
-      state = { ...state, ...nextCommunityState };
-      saveState({ skipCloud: true, preserveInputValues: true, renderPages: ["community","messages","communityFriends","communityProfile","mine"] });
+      state = { ...state, ...patch };
       if (feedChanged || $app.querySelector(".community-feed.is-initial-loading, .community-feed [data-feed-retry]")) {
         $app.querySelector(".community-feed")?.classList.remove("is-initial-loading");
         // Empty success must replace the loading/error notice too.
         const feed = $app.querySelector(".community-feed");
-        if (!communityPosts.length && feed) feed.innerHTML = communityFeedMarkup([]);
-        else patchVisibleCommunityFeed(communityPosts, previousPosts);
+        if (!patch.communityPosts.length && feed) feed.innerHTML = communityFeedMarkup([]);
+        else patchVisibleCommunityFeed(patch.communityPosts, previousPosts);
       }
       syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
     } else {
-      setState(nextCommunityState, { skipCloud: true, preserveInputValues: true, renderPages: ["community","messages","communityFriends","communityProfile","mine"] });
+      setState(patch, { skipSave: true, preserveInputValues: true, renderPages: ["community","messages","communityFriends","communityProfile","mine"] });
     }
+    deferFeedCacheSave();
+    return true;
+    };
+    if (!force && state.page === "community" && state.communityFeedInitialized && typeof window !== "undefined"
+      && window.TurtleFeedUpdates?.stage("community", { items: communityPosts, hasMore: Boolean(result.hasMore), apply: () => applyCommunityResponse(true) })) {
+      const preserved = Object.fromEntries(["communityPosts", "communityFeedInitialized", "communityFeedNextOffset", "communityFeedHasMore", "communityFeedLoadingMore"].map(key => [key, state[key]]));
+      state = { ...state, ...nextCommunityState, ...preserved };
+      syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
+      deferFeedCacheSave();
+      return;
+    }
+    applyCommunityResponse();
   } catch (error) {
     console.warn(error.message || "龟友圈读取失败");
     if (state.loggedInPhone === requestPhone && currentCloudToken() === requestToken && publicationRevision === communityPublicationRevision) {
@@ -12567,6 +12731,9 @@ async function refreshCommunity(force = false) {
     }
   } finally {
     communityLoading = false;
+    if (typeof window !== "undefined") window.TurtleFeedUpdates?.settled("community");
+    const ownerChanged = requestPhone !== state.loggedInPhone || requestToken !== currentCloudToken();
+    if (state.page === "community" && (feedEntryRefresh.community.pending || ownerChanged) && hasCloudSession()) void refreshCommunity(ownerChanged);
   }
 }
 
@@ -12578,14 +12745,16 @@ async function loadMoreCommunityPosts() {
   const isCurrent = () => sameAccount() && publicationRevision === communityPublicationRevision;
   communityLoading = true;
   state = { ...state, communityFeedLoadingMore: true };
-  saveState({ skipCloud: true });
+  deferFeedCacheSave();
   const status = $app.querySelector("[data-community-load-sentinel]");
   if (status) status.textContent = "正在加载更多动态…";
   try {
     const result = await apiPost("/api/community/list", communityAuthPayload({
       offset: Math.max(0, Number(state.communityFeedNextOffset || 0)),
       limit: 10,
-      sort: "latest"
+      sort: "latest",
+      feedOnly: true,
+      mediaVariantsVersion: 1
     }));
     if (!isCurrent() || state.page !== "community") return;
     const incoming = normalizeCommunityPosts(result.posts || []);
@@ -12601,18 +12770,19 @@ async function loadMoreCommunityPosts() {
       communityFeedHasMore: Boolean(result.hasMore),
       communityFeedLoadingMore: false
     };
-    saveState({ skipCloud: true });
     patchVisibleCommunityFeed(communityPosts, existingPosts);
+    deferFeedCacheSave();
   } catch (error) {
     if (!isCurrent()) return;
     state = { ...state, communityFeedLoadingMore: false };
-    saveState({ skipCloud: true });
+    deferFeedCacheSave();
     console.warn(error.message || "加载更多龟友圈动态失败");
   } finally {
     communityLoading = false;
     if (!sameAccount()) return;
     state.communityFeedLoadingMore = false;
     if (state.page !== "community") return;
+    if (feedEntryRefresh.community.pending) { void refreshCommunity(); return; }
     const nextStatus = $app.querySelector("[data-community-load-sentinel]");
     if (nextStatus) nextStatus.textContent = state.communityFeedHasMore ? "继续上滑，加载更多" : "已经到底了";
     setupCommunityInfiniteScroll();
@@ -12773,7 +12943,7 @@ async function submitAdminFeedbackAction(event) {
     const result = await apiPost("/api/admin/feedback/action", communityAuthPayload({ feedbackId, status: String(data.get("status") || "pending"), reply: String(data.get("reply") || "") }));
     const overview = state.operationsOverview || {};
     operationsOverviewLastLoadedAt = Date.now();
-    setState({ operationsOverview: { ...overview, feedback: result.feedback || overview.feedback } }, { skipCloud: true, pageScroll: "preserve" });
+    setState({ operationsOverview: { ...overview, feedback: result.feedback || overview.feedback } }, { skipCloud: true, pageScroll: "preserve", preserveInputValues: true, renderPages: ["operations"] });
     toast("反馈处理结果已保存");
   } catch (error) {
     toast(error.message || "保存失败");
@@ -13341,6 +13511,7 @@ async function submitCommunityPost(event) {
       visibility
     }));
     if (!samePublisher()) { clearCommunityPublishProgress(); return; }
+    window.TurtlePublishDrafts?.published({ kind: "community", phone: publishOwner });
     communityPublicationRevision++;
     clearCommunityDraftMedia();
     communityDraftText = "";
@@ -14011,7 +14182,7 @@ function patchStoredMessageLists(friends) {
       if (!patchMessageListInRoot(template.content, friends)) return false;
       patchMessageActivitySummary(template.content);
       snapshot.html = template.innerHTML;
-      snapshot.previewHtml = buildEdgeBackPreviewHtml(snapshot.html);
+      scheduleEdgeBackPreviewWarmup(snapshot);
       return true;
     });
 }
@@ -14027,8 +14198,8 @@ function patchMessageListInRoot(root, friends) {
     const friend = friends[index] || {};
     const copy = row.querySelector(".message-friend-copy");
     const title = copy?.querySelector("strong");
-    const preview = copy?.querySelector("span");
-    if (title) title.textContent = friend.name || "龟友";
+    const preview = copy?.querySelector(":scope > span");
+    if (title) title.innerHTML = escapeHtml(friend.name || "龟友") + platformAdminBadge(friend);
     if (preview) preview.textContent = friend.lastMessage || "暂无消息";
     const avatarWrap = row.querySelector(".message-friend-avatar-wrap");
     let badge = avatarWrap?.querySelector(":scope > i");
@@ -14647,18 +14818,23 @@ async function submitPublicFeedback(event) {
   const type = String(form.get("type") || "其他");
   const content = String(form.get("content") || "").trim();
   if (!content) return toast("请填写反馈内容");
+  const request = beginPublicFormSubmission(event.currentTarget, "content", "feedback-create");
+  if (!request) return;
   try {
     const result = await apiPost("/api/feedback/create", feedbackAuthPayload({ type, content }));
+    if (!request.isCurrent()) return;
+    const returnToList = state.page === "feedbackAdd" && request.clearUnchanged();
     publicFeedbackLastLoadedAt = Date.now();
     setState({
-      page: "feedback",
+      ...(returnToList ? { page: "feedback" } : {}),
       publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems,
       activityLogs: logActivity(`发布意见反馈：${type}`, "空间")
-    });
+    }, { preserveInputValues: true, renderPages: ["feedback", "feedbackDetail"] });
     toast("反馈已发布");
   } catch (error) {
+    if (!request.isCurrent()) return;
     toast(error.message || "反馈发布失败");
-  }
+  } finally { request.finish(); }
 }
 
 async function toggleFeedbackLike(feedbackId) {
@@ -14666,7 +14842,7 @@ async function toggleFeedbackLike(feedbackId) {
   try {
     const result = await apiPost("/api/feedback/like", feedbackAuthPayload({ feedbackId }));
     publicFeedbackLastLoadedAt = Date.now();
-    setState({ publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems, openFeedbackMenuId: "" }, { skipCloud: true });
+    setState({ publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems, openFeedbackMenuId: "" }, { skipCloud: true, preserveInputValues: true, renderPages: ["feedback", "feedbackDetail"] });
   } catch (error) {
     toast(error.message || "操作失败");
   }
@@ -14679,17 +14855,22 @@ async function submitFeedbackComment(event) {
   const form = new FormData(event.currentTarget);
   const content = String(form.get("content") || "").trim();
   if (!content) return toast("请填写评论内容");
+  const request = beginPublicFormSubmission(event.currentTarget, "content", "feedback-comment");
+  if (!request) return;
   try {
     const result = await apiPost("/api/feedback/comment", feedbackAuthPayload({ feedbackId, content }));
+    if (!request.isCurrent()) return;
+    request.clearUnchanged();
     publicFeedbackLastLoadedAt = Date.now();
     setState({
       publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems,
       activityLogs: logActivity("评论了一条意见反馈", "空间")
-    });
+    }, { preserveInputValues: true, renderPages: ["feedback", "feedbackDetail"] });
     toast("评论已发布");
   } catch (error) {
+    if (!request.isCurrent()) return;
     toast(error.message || "评论失败");
-  }
+  } finally { request.finish(); }
 }
 
 async function deletePublicFeedback(feedbackId) {
@@ -14701,10 +14882,10 @@ async function deletePublicFeedback(feedbackId) {
     const remaining = Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems;
     setState({
       publicFeedbackItems: remaining,
-      page: state.page === "feedbackDetail" ? "feedback" : state.page,
+      page: state.page === "feedbackDetail" && state.selectedFeedbackId === feedbackId ? "feedback" : state.page,
       openFeedbackMenuId: "",
       selectedFeedbackId: state.selectedFeedbackId === feedbackId ? "" : state.selectedFeedbackId
-    }, { skipCloud: true });
+    }, { skipCloud: true, preserveInputValues: true, renderPages: ["feedback", "feedbackDetail"] });
     toast("反馈已删除");
   } catch (error) {
     toast(error.message || "删除失败");
@@ -14717,7 +14898,7 @@ async function deletePublicFeedbackComment(feedbackId, commentId) {
   try {
     const result = await apiPost("/api/feedback/comment/delete", feedbackAuthPayload({ feedbackId, commentId }));
     publicFeedbackLastLoadedAt = Date.now();
-    setState({ publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems }, { skipCloud: true });
+    setState({ publicFeedbackItems: Array.isArray(result.feedbacks) ? result.feedbacks : state.publicFeedbackItems }, { skipCloud: true, preserveInputValues: true, renderPages: ["feedback", "feedbackDetail"] });
     toast("评论已删除");
   } catch (error) {
     toast(error.message || "删除失败");
@@ -15347,6 +15528,8 @@ async function testNativePushNotification() {
 }
 
 async function apiPost(path, payload) {
+  const requestAccount = payload?.token && payload.phone === state.loggedInPhone && payload.token === currentCloudToken()
+    ? { phone: payload.phone, token: payload.token } : null;
   const base = window.TURTLE_API_BASE_URL || "";
   const accountSync = /^\/api\/account\/(load|save)$/.test(path);
   const feedRead = /^\/api\/(market\/(list|detail)|community\/list)$/.test(path);
@@ -15404,6 +15587,11 @@ async function apiPost(path, payload) {
   } finally {
     if (timer) clearTimeout(timer);
     finishFeedback?.();
+  }
+  if (requestAccount && (requestAccount.phone !== state.loggedInPhone || requestAccount.token !== currentCloudToken())) {
+    const error = new Error("账号状态已变化，请在当前账号重新操作");
+    error.code = "STALE_ACCOUNT_RESPONSE";
+    throw error;
   }
   if (response.status === 401 && payload?.phone === state.loggedInPhone && payload?.token && payload.token === currentCloudToken()) {
     clearExpiredCloudSession(data);
@@ -16287,8 +16475,48 @@ function decodeSharedTurtle(value) {
   } catch { return null; }
 }
 
+function publicTurtleText(value) {
+  if (typeof value !== "string" && typeof value !== "number") return "";
+  const text = String(value ?? "").trim();
+  return ["", "-", "未知", "待判断", "未填写", "未关联", "品种未填写", "未命名龟龟"].includes(text) ? "" : text;
+}
+
+function publicTurtleNumber(value) {
+  if (typeof value !== "number" && typeof value !== "string") return "";
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : "";
+}
+
+function publicTurtlePhotoUrl(value) {
+  const text = String(value || "").trim();
+  if (text.length > 4096 || !/^(?:https?:\/\/|\/uploads\/)/i.test(text)) return "";
+  try {
+    const url = new URL(apiAssetUrl(text), window.TURTLE_API_BASE_URL || "https://api.turtleworld.cn/");
+    return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password ? url.toString() : "";
+  } catch { return ""; }
+}
+
+function publicTurtleDetailFields(turtle) {
+  const rows = [
+    ["性别", publicTurtleText(turtle.gender), true],
+    ["阶段", ({ hatchling: "苗子", juvenile: "压成", adult: "种龟" })[turtle.stage], true],
+    ...[["体重", "weight", "g"], ["背甲长", "carapaceLength", "cm"], ["背甲宽", "carapaceWidth", "cm"], ["背高", "shellHeight", "cm"], ["腹甲长", "plastronLength", "cm"]]
+      .map(([label, field, unit]) => [label, publicTurtleNumber(turtle[field]) !== "" ? `${publicTurtleNumber(turtle[field])}${unit}` : ""]),
+    ["入手日期", publicTurtleText(turtle.acquiredDate), true],
+    ["出生日期", publicTurtleText(turtle.birthDate), true]
+  ];
+  return rows.filter(([, value]) => value).map(([label, value, wide]) => `<div${wide ? ` class="detail-grid-wide"` : ""}><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+}
+
+function turtleShareDescription(turtle) {
+  const weight = publicTurtleNumber(turtle.weight);
+  const length = publicTurtleNumber(turtle.carapaceLength);
+  return [...new Set([publicTurtleText(turtle.code), publicTurtleText(turtle.speciesName), ["公", "母"].includes(turtle.gender) ? turtle.gender : "",
+    weight !== "" ? `${weight}g` : "", length !== "" ? `背甲 ${length}cm` : ""].filter(Boolean))].join(" · ");
+}
+
 function publicTurtleSnapshot(turtle) {
-  const publicPhoto = /^https?:\/\//i.test(String(turtle.photo || "")) ? turtle.photo : "";
+  const publicPhoto = publicTurtlePhotoUrl(turtle.photo);
   return {
     id: `shared-${String(turtle.id || "").slice(0, 36)}`,
     sharedView: true,
@@ -16296,8 +16524,8 @@ function publicTurtleSnapshot(turtle) {
     speciesCode: String(turtle.speciesCode || "").slice(0, 20),
     speciesName: String(turtle.speciesName || "品种未填写").slice(0, 50),
     gender: String(turtle.gender || "未知").slice(0, 10),
-    weight: Number(turtle.weight || 0),
-    carapaceLength: Number(turtle.carapaceLength || 0),
+    weight: publicTurtleNumber(turtle.weight),
+    carapaceLength: publicTurtleNumber(turtle.carapaceLength),
     acquiredDate: String(turtle.acquiredDate || "").slice(0, 10),
     status: "成长记录",
     health: "",
@@ -16308,8 +16536,8 @@ function publicTurtleSnapshot(turtle) {
       updatedAt: item.updatedAt,
       oldLength: item.oldLength,
       newLength: item.newLength,
-      oldPhoto: /^https?:\/\//i.test(String(item.oldPhoto || "")) ? item.oldPhoto : "",
-      newPhoto: /^https?:\/\//i.test(String(item.newPhoto || "")) ? item.newPhoto : "",
+      oldPhoto: publicTurtlePhotoUrl(item.oldPhoto),
+      newPhoto: publicTurtlePhotoUrl(item.newPhoto),
       oldSnapshot: { weight: item.oldSnapshot?.weight, carapaceLength: item.oldSnapshot?.carapaceLength, code: turtle.code },
       newSnapshot: { weight: item.newSnapshot?.weight, carapaceLength: item.newSnapshot?.carapaceLength, code: turtle.code }
     }))
@@ -16320,15 +16548,32 @@ async function shareTurtleProfile(turtleId) {
   if (!requireLogin()) return;
   const turtle = state.turtles.find(item => item.id === turtleId);
   if (!turtle) return toast("没有找到这份档案");
-  const payload = encodeSharedTurtle(publicTurtleSnapshot(turtle));
+  const snapshot = publicTurtleSnapshot(turtle);
+  if (!snapshot.photo && isMigratableImage(turtle.photo) && hasCloudSession()) {
+    const owner = { phone: state.loggedInPhone, token: currentCloudToken() };
+    try {
+      snapshot.photo = publicTurtlePhotoUrl(await uploadDataUrlToCloud(turtle.photo, "turtle", { owner }));
+      if (state.loggedInPhone !== owner.phone || currentCloudToken() !== owner.token) return;
+      if (!snapshot.photo) return toast("照片链接无效，请重新同步后分享");
+    }
+    catch (error) { return toast(error.message || "照片同步失败，请重试分享"); }
+  }
+  let payload = encodeSharedTurtle(snapshot);
+  while (payload.length > 12000 && snapshot.measureHistory.length) {
+    snapshot.measureHistory.pop();
+    payload = encodeSharedTurtle(snapshot);
+  }
+  if (payload.length > 12000) return toast("档案链接过长，请精简成长记录后重试");
   const base = String(window.TURTLE_PUBLIC_APP_URL || "https://api.turtleworld.cn/").trim() || "https://api.turtleworld.cn/";
   const url = new URL(base, window.location.href);
   url.search = ""; url.hash = "";
   url.searchParams.set("turtle", payload);
-  const title = `${turtle.code || turtle.speciesName || "龟龟"}的成长档案`;
-  const text = `${turtle.speciesName || "龟龟"} · ${turtle.weight || "-"}g · 背甲 ${turtle.carapaceLength || "-"}cm`;
+  const title = "龟友手账";
+  const text = turtleShareDescription(snapshot);
   try {
-    if (navigator.share) await navigator.share({ title, text, url: url.toString() });
+    const nativeShare = window.Capacitor?.Plugins?.TurtleMediaPicker;
+    if (nativeShare?.shareLink) await nativeShare.shareLink({ title, text, url: url.toString(), thumbnailUrl: snapshot.photo });
+    else if (navigator.share) await navigator.share({ title, text, url: url.toString() });
     else await copyText(url.toString(), "档案链接已复制");
   } catch (error) {
     if (error?.name !== "AbortError") {
@@ -17833,7 +18078,8 @@ function deleteLedgerRecord(id) {
         ? TurtleLossAccounting.undoLoss(data, current)
         : { ...data, ledgerRecords: data.ledgerRecords.filter(item => item.id !== current.id) };
     }
-    setState({ ...data, openLedgerMenuId: "", activityLogs: logActivity(`删除批次${ledgerTypeText(record.type)}记录：${ledgerMovementLabel(movement)}，${records.length} 只`, "账本") });
+    const linkedTurtle = state.turtles.find(turtle => turtle.id === movement.turtleId);
+    setState({ ...data, openLedgerMenuId: "", activityLogs: logActivity(`删除批次${ledgerTypeText(record.type)}记录：${ledgerMovementLabel(movement, linkedTurtle)}，${records.length} 只`, "账本") });
     return;
   }
   if (!record || !confirm(record.type === "loss" && record.lossCostTransferred && !record.duplicateLossOf ? "删除损耗记录后，会恢复对应收购投入和档案状态。单独记录的其他支出会保留。确认删除？" : "要删除这条账本记录吗？")) return;
@@ -19057,8 +19303,10 @@ function buildEdgeBackPreviewHtml(html) {
   return template.innerHTML;
 }
 
-function showEdgeBackPreview(snapshot) {
-  clearEdgeBackPreview();
+function createEdgeBackPreview(snapshot) {
+  const cache = createEdgeBackPreview.cache || (createEdgeBackPreview.cache = new WeakMap());
+  const prepared = snapshot && cache.get(snapshot);
+  if (prepared && prepared.__edgeSourceDom === snapshot.liveDom && prepared.__edgeSourceHtml === snapshot.html && prepared.__edgeSourcePreview === snapshot.previewHtml) return prepared;
   const preview = document.createElement("div");
   // The snapshot is mounted beside #app while it is being revealed.  It must
   // still carry the same phone-shell variables (notably the fixed top-bar
@@ -19076,6 +19324,9 @@ function showEdgeBackPreview(snapshot) {
     preview.__edgeBackSnapshot = snapshot;
     preview.__edgeBackUsesClone = true;
     preview.appendChild(snapshot.liveDom.cloneNode(true));
+    // A frozen previous-page preview must not start another player, embedded
+    // page or media download while the active page is being used.
+    preview.querySelectorAll('video, audio, source, iframe').forEach(node => node.remove());
     // cloneNode copies loading="lazy" and decoding="async", but not the
     // decoded image. A short back swipe can therefore show empty covers and
     // then reveal every photo together at the hand-off. Only warm images that
@@ -19098,6 +19349,36 @@ function showEdgeBackPreview(snapshot) {
     if (!previewHtml) return null;
     preview.innerHTML = previewHtml;
   }
+  if (snapshot) {
+    preview.__edgeSourceDom = snapshot.liveDom;
+    preview.__edgeSourceHtml = snapshot.html;
+    preview.__edgeSourcePreview = snapshot.previewHtml;
+    cache.set(snapshot, preview);
+  }
+  return preview;
+}
+
+function scheduleEdgeBackPreviewWarmup(snapshot) {
+  const prepare = () => {
+    if (edgeBackSnapshots[edgeBackSnapshots.length - 1] !== snapshot || $app.style.transform || $app.classList.contains('edge-back-dragging')) return;
+    createEdgeBackPreview(snapshot);
+  };
+  if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(prepare, { timeout: 500 });
+  else window.setTimeout(prepare, 100);
+}
+
+function showEdgeBackPreview(snapshot) {
+  clearEdgeBackPreview();
+  const preview = createEdgeBackPreview(snapshot);
+  if (!preview) return null;
+  if (snapshot?.liveDom?.hasChildNodes()) {
+    preview.__edgeBackSnapshot = snapshot;
+    preview.__edgeBackUsesClone = true;
+    preview.__edgeBackBottomNav = preview.querySelector(':scope > .bottom-nav');
+  }
+  preview.classList.remove('is-restoring');
+  preview.style.transition = '';
+  preview.style.transform = '';
   document.body.insertBefore(preview, $app);
   // Match the page position that was visible when the user entered the child
   // module. Without this, the preview starts at the document top and then the
@@ -19143,7 +19424,10 @@ function setupEdgeBackAndConversationSwipe() {
     !edgeBackBlocked() && Math.abs((window.visualViewport?.scale || 1) - 1) < .05;
   const snapshotIds = new WeakMap();
   let nextSnapshotId = 0;
-  $app.syncNativeEdgeBack = () => {
+  let edgeRegionCandidates = null;
+  const edgeControls = "input, textarea, select, [contenteditable='true'], [role='slider'], [data-no-edge-back], [data-growth-history-flow], .message-friend-swipe";
+  $app.syncNativeEdgeBack = (layoutChanged = false) => {
+    if (layoutChanged) edgeRegionCandidates = null;
     const plugin = nativeEdgePlugin();
     if (!plugin) return;
     const width = Math.max(1, window.innerWidth), height = Math.max(1, window.innerHeight);
@@ -19152,13 +19436,14 @@ function setupEdgeBackAndConversationSwipe() {
     // finger owns back. Do not turn those animation frames into reconfiguration.
     if (enabled && (gesture?.mode === "edge" || settlingGesture)) return;
     if (!enabled && (gesture?.nativeEdge || settlingGesture?.nativeEdge)) cancelActiveGesture();
-    const excludedRegions = enabled ? [...$app.querySelectorAll("*")].flatMap(node => {
+    // Scroll moves these controls but does not change which nodes can consume
+    // a horizontal gesture. Re-discover them only when page layout changes.
+    if (enabled && !edgeRegionCandidates) edgeRegionCandidates = [...$app.querySelectorAll("*")].filter(node =>
+      node.matches(edgeControls) || (!node.matches('.market-detail-gallery') &&
+        node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)));
+    const excludedRegions = enabled ? edgeRegionCandidates.flatMap(node => {
       const rect = node.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0 || rect.left > 24 || rect.right <= 0 || rect.bottom <= 0 || rect.top >= height) return [];
-      const explicitControl = node.matches("input, textarea, select, [contenteditable='true'], [role='slider'], [data-no-edge-back], [data-growth-history-flow], .message-friend-swipe");
-      // The product gallery's separate edge shield belongs to page back.
-      const horizontalControl = !node.matches('.market-detail-gallery') && node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX);
-      if (!explicitControl && !horizontalControl) return [];
       return [{ x: rect.left / width, y: rect.top / height, width: rect.width / width, height: rect.height / height }];
     }) : [];
     const snapshot = edgeBackSnapshots[edgeBackSnapshots.length - 1];
@@ -19177,13 +19462,23 @@ function setupEdgeBackAndConversationSwipe() {
   // Dialogs can mount outside render(); keep native ownership in sync with them.
   let nativeSyncFrame = 0;
   const scheduleNativeEdgeSync = () => {
-    if (nativeSyncFrame) return;
+    if (nativeSyncFrame || !nativeEdgePlugin()) return;
     nativeSyncFrame = requestAnimationFrame(() => { nativeSyncFrame = 0; $app.syncNativeEdgeBack(); });
   };
-  new MutationObserver(scheduleNativeEdgeSync).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "aria-modal", "hidden", "class"] });
-  window.visualViewport?.addEventListener("resize", scheduleNativeEdgeSync);
+  const invalidateEdgeRegionLayout = () => {
+    edgeRegionCandidates = null;
+    scheduleNativeEdgeSync();
+  };
+  new MutationObserver(records => {
+    if (records.some(record => $app.contains(record.target))) invalidateEdgeRegionLayout();
+    else scheduleNativeEdgeSync();
+  }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "aria-modal", "hidden", "class", "open", "contenteditable", "data-no-edge-back", "data-growth-history-flow"] });
+  if (typeof ResizeObserver === "function") new ResizeObserver(invalidateEdgeRegionLayout).observe($app);
+  $app.addEventListener("load", invalidateEdgeRegionLayout, true);
+  document.fonts?.addEventListener("loadingdone", invalidateEdgeRegionLayout);
+  window.visualViewport?.addEventListener("resize", invalidateEdgeRegionLayout);
   window.visualViewport?.addEventListener("scroll", scheduleNativeEdgeSync);
-  window.addEventListener("resize", scheduleNativeEdgeSync);
+  window.addEventListener("resize", invalidateEdgeRegionLayout);
   document.addEventListener("scroll", scheduleNativeEdgeSync, { passive: true, capture: true });
   $app.deferEdgeGestureRender = () => {
     const owner = gesture?.mode === "edge" ? gesture : settlingGesture;

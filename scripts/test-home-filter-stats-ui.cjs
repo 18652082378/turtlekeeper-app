@@ -53,6 +53,13 @@ const ledgerRecords = [
         checks++;
       }
       await expectMetrics(38, 2, 34, 2, 4, 36);
+      assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.filter-dock select')].flatMap(field => {
+        const style = getComputedStyle(field), context = document.createElement('canvas').getContext('2d');
+        context.font = `${style.fontSize} ${style.fontFamily}`;
+        const text = field.selectedOptions[0].textContent;
+        const available = field.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        return context.measureText(text).width > available + 1 ? [{ text, available, width: field.clientWidth, font: style.fontSize, needed: context.measureText(text).width }] : [];
+      })), [], `${platform}/${width}: default filter labels remain readable beside their dropdown arrow`);
       assert.equal(await page.locator('.archive-species-count').count(), 0, 'All-species view retains the archive row count');
       await page.locator('[data-archive-page="1"]').click(); await expectMetrics(38, 2, 34, 2, 4, 36);
       await page.locator('[data-filter-species]').selectOption('GHG'); await expectMetrics(36, 1, 33, 1, 2, 34);

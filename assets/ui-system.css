@@ -117,6 +117,10 @@ html .phone-shell :is(.work-task > div, .care-history, .care-record-body, .care-
 html .phone-shell .care-history .section-title > span { font-size: 12px !important; font-weight: 400 !important; }
 
 /* Native-sized controls and visible keyboard focus across every feature. */
+html .phone-shell .home-archive-section .filter-dock > select {
+  padding-left: 8px !important;
+  padding-right: 25px !important;
+}
 html :is(button, a, input, select, textarea, summary) { -webkit-tap-highlight-color: transparent; }
 html :is(button, a, summary) { touch-action: manipulation; }
 html .phone-shell :is(.primary, .secondary, .ts-btn) {

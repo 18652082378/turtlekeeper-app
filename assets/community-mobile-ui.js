@@ -199,9 +199,72 @@
     const keyboard = iosKeyboard() || (window.Capacitor?.getPlatform?.() === 'android' && window.Capacitor?.Plugins?.TurtleAndroidWindow);
     try { Promise.resolve(keyboard?.hide ? keyboard.hide() : keyboard?.hideKeyboard?.()).catch(() => {}); } catch (_) { /* Blur remains the browser fallback. */ }
   }
+  const chatInputSelector = '#communityChatForm input[name="content"]';
+  // Keep text and caret only in this session, scoped to the account and recipient.
+  const chatDrafts = new Map();
+  const chatInputOwners = new WeakMap();
+  const chatRequestDrafts = new WeakMap();
+  let chatDraftOwner = '', chatInput = null, chatValueScope = '', chatValueText = '';
+  const chatActive = () => state.page === 'communityChat';
+  const chatScope = (userId = state.selectedCommunityFriendId) => JSON.stringify([owner(), String(userId || ''),
+    String(state.communityConversationState?.clearVersions?.[userId] || '')]);
+  function prepareChatDraftOwner() {
+    const next = owner();
+    if (next !== chatDraftOwner) {
+      const previous = chatDraftOwner;
+      chatDraftOwner = next; chatDrafts.clear(); chatInput = null; chatValueScope = ''; chatValueText = '';
+      if (previous && typeof marketChatDraft !== 'undefined') marketChatDraft = '';
+    }
+    for (const scope of chatDrafts.keys()) {
+      const [, userId] = JSON.parse(scope);
+      if (scope !== chatScope(userId) || (state.communityConversationState?.hiddenIds || []).includes(userId)) chatDrafts.delete(scope);
+    }
+  }
+  function rememberChatDraft(scope, value, selection) {
+    if (!scope) return;
+    if (chatDrafts.size >= 60 && !chatDrafts.has(scope)) chatDrafts.delete(chatDrafts.keys().next().value);
+    const text = String(value || '').slice(0, 1000), previous = chatDrafts.get(scope);
+    chatDrafts.set(scope, { text, start: Math.min(text.length, selection?.start ?? (previous?.text === text ? previous.start : text.length)),
+      end: Math.min(text.length, selection?.end ?? (previous?.text === text ? previous.end : text.length)), direction: selection?.direction || (previous?.text === text ? previous.direction : 'none') });
+  }
+  function adoptChatInput(input) {
+    // Back navigation can restore a retained editor without calling render().
+    if (!chatActive() || !input?.isConnected || !input.matches(chatInputSelector)) return;
+    const context = chatInputOwners.get(input);
+    if (context && (context.owner !== owner() || context.scope !== chatScope())) return;
+    chatInput = input;
+    if (!context) chatInputOwners.set(input, { owner: owner(), scope: chatScope(), userId: String(state.selectedCommunityFriendId || '') });
+  }
+  function captureChatInput(input = chatInput, preferDOM = false) {
+    const context = input && chatInputOwners.get(input);
+    if (!context || context.owner !== owner()) return;
+    if (context.scope !== chatScope(context.userId) || (state.communityConversationState?.hiddenIds || []).includes(context.userId)) {
+      chatDrafts.delete(context.scope); return;
+    }
+    const current = chatActive() && context.scope === chatScope();
+    // A send or quote may intentionally change the draft before replacing its DOM.
+    const value = !preferDOM && current && marketChatDraft !== input.value ? marketChatDraft : input.value;
+    rememberChatDraft(context.scope, value, value === input.value ? { start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection } : null);
+    if (preferDOM && current) { marketChatDraft = value; chatValueScope = context.scope; chatValueText = value; }
+  }
+  function dismissChatKeyboard() {
+    const input = document.activeElement;
+    if (!chatActive() || !input?.matches?.(chatInputSelector)) return;
+    adoptChatInput(input);
+    captureChatInput(input, true);
+    input.blur();
+    const keyboard = iosKeyboard() || (window.Capacitor?.getPlatform?.() === 'android' && window.Capacitor?.Plugins?.TurtleAndroidWindow);
+    try { Promise.resolve(keyboard?.hide ? keyboard.hide() : keyboard?.hideKeyboard?.()).catch(() => {}); } catch (_) { /* Blur remains the browser fallback. */ }
+  }
   let replyDrag = null;
   document.addEventListener('touchstart', event => {
     replyDrag = null;
+    if (chatActive() && event.touches.length === 1 && document.activeElement?.matches?.(chatInputSelector)) {
+      const target = event.target;
+      if (!target?.closest?.('.community-chat-list') || target.closest('[role="dialog"], .image-preview-overlay, .video-preview-overlay, .community-chat-message-menu, input, textarea, [contenteditable="true"]')) return;
+      const touch = event.touches[0]; replyDrag = { x: touch.clientX, y: touch.clientY, id: touch.identifier, kind: 'chat', scope: chatScope(), input: document.activeElement };
+      return;
+    }
     if (!detailActive() || event.touches.length !== 1 ||
         !document.activeElement?.matches?.('.web-community-detail .forum-reply-composer input')) return;
     const target = event.target;
@@ -213,7 +276,10 @@
     if (event.touches.length !== 1 || event.touches[0].identifier !== replyDrag.id) { replyDrag = null; return; }
     const touch = event.touches[0], dy = Math.abs(touch.clientY - replyDrag.y), dx = Math.abs(touch.clientX - replyDrag.x);
     if (dy < 12 || dy < dx * 1.2) return;
-    replyDrag = null; dismissReplyKeyboard();
+    const drag = replyDrag; replyDrag = null;
+    if (drag.kind === 'chat') {
+      if (chatActive() && drag.scope === chatScope() && drag.input === document.activeElement) dismissChatKeyboard();
+    } else dismissReplyKeyboard();
   }, { passive: true });
   for (const name of ['touchend', 'touchcancel']) document.addEventListener(name, () => { replyDrag = null; }, { passive: true });
   // A notification may point into a collapsed thread. Expand its ancestors before locating it.
@@ -368,7 +434,7 @@
     message('正在加载更多帖子…'); syncControls(root);
     try {
       // Unlike the legacy helper, keep the actual request outcome so errors can be retried visibly.
-      const result = await apiPost('/api/community/list', communityAuthPayload({ offset, limit: 10, sort: 'latest' }));
+      const result = await apiPost('/api/community/list', communityAuthPayload({ offset, limit: 10, sort: 'latest', feedOnly: true, mediaVariantsVersion: 1 }));
       if (!sameView()) return;
       const incoming = normalizeCommunityPosts(Array.isArray(result.posts) ? result.posts : []);
       const existing = state.communityPosts || [], ids = new Set(existing.map(post => String(post.id)));
@@ -379,8 +445,9 @@
       const nextOffset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : offset;
       state = { ...state, communityPosts: [...existing, ...appended], communityFeedInitialized: true,
         communityFeedNextOffset: nextOffset, communityFeedHasMore: Boolean(result.hasMore), communityFeedLoadingMore: false };
-      saveState({ skipCloud: true });
       patchVisibleCommunityFeed(state.communityPosts, existing);
+      if (typeof deferFeedCacheSave === 'function') deferFeedCacheSave();
+      else saveState({ skipCloud: true });
       if (!state.communityFeedHasMore) message(appended.length ? `已加载 ${appended.length} 篇新帖子，全部内容已加载完成。` : '本页没有新帖子，全部内容已加载完成。');
       else if (!appended.length) message(nextOffset > offset ? '本页没有新帖子，已移至下一页，可继续加载。' : '本页没有新帖子，服务器尚未提供下一页，可稍后重试。');
       else message(`已加载 ${appended.length} 篇新帖子，可继续加载。`);
@@ -485,6 +552,7 @@
     }
   });
   document.addEventListener('input', event => {
+    if (chatActive() && event.target?.matches?.(chatInputSelector)) { adoptChatInput(event.target); captureChatInput(event.target, true); }
     if (detailActive() && event.target?.matches?.('.forum-reply-composer input[name="content"]')) {
       if (detailOwner !== owner()) return;
       const form = event.target.closest('form'), postId = String(form.dataset.communityCommentForm || '');
@@ -500,7 +568,70 @@
     const more = event.target?.closest?.('.web-community-detail-more[open]');
     if (more) { more.open = false; more.querySelector('summary')?.focus(); }
   });
-  window.TurtleMobileCommunity = Object.freeze({ installed: true, version: 'community-mobile-ui', revision: '20261025-comment-keyboard', openComment, refreshReplyTarget, syncKeyboard });
+  document.addEventListener('selectionchange', () => {
+    if (chatActive() && document.activeElement?.matches?.(chatInputSelector)) { adoptChatInput(document.activeElement); captureChatInput(document.activeElement, true); }
+  });
+  document.addEventListener('focusin', event => {
+    if (event.target?.matches?.(chatInputSelector)) adoptChatInput(event.target);
+  });
+  document.addEventListener('focusout', event => {
+    if (event.target?.matches?.(chatInputSelector)) captureChatInput(event.target);
+  }, true);
+  const renderWithChatDraft = render;
+  render = function (...args) {
+    prepareChatDraftOwner();
+    adoptChatInput(document.querySelector(chatInputSelector));
+    const nextScope = chatActive() ? chatScope() : '';
+    const context = chatInput && chatInputOwners.get(chatInput);
+    const keepFocus = Boolean(nextScope && context?.scope === nextScope && document.activeElement === chatInput);
+    captureChatInput();
+    if (nextScope) {
+      const cached = chatDrafts.get(nextScope);
+      if (nextScope !== chatValueScope && (!marketChatDraft || marketChatDraft === chatValueText)) marketChatDraft = cached?.text || '';
+      rememberChatDraft(nextScope, marketChatDraft);
+      chatValueScope = nextScope; chatValueText = marketChatDraft;
+    }
+    const result = renderWithChatDraft.apply(this, args);
+    chatInput = chatActive() ? document.querySelector(chatInputSelector) : null;
+    const renderedContext = chatInput && chatInputOwners.get(chatInput);
+    if (chatInput && nextScope === chatScope() && (!renderedContext || renderedContext.scope === nextScope)) {
+      chatInputOwners.set(chatInput, { owner: owner(), scope: nextScope, userId: String(state.selectedCommunityFriendId || '') });
+      const cached = chatDrafts.get(nextScope);
+      if (cached?.text === chatInput.value) {
+        if (keepFocus && !chatInput.disabled) chatInput.focus({ preventScroll: true });
+        chatInput.setSelectionRange(cached.start, cached.end, cached.direction);
+      }
+    }
+    return result;
+  };
+  if (typeof applyCommunityChatSendResult === 'function') {
+    // A late acknowledgement can clear only the text that was present when its
+    // request started. New text may have been written after visiting another chat.
+    const originalChatRequestContext = communityChatRequestContext;
+    communityChatRequestContext = function (...args) {
+      const request = originalChatRequestContext.apply(this, args);
+      captureChatInput();
+      const scope = chatScope(request.userId);
+      const text = chatActive() && String(request.userId) === String(state.selectedCommunityFriendId)
+        ? marketChatDraft : chatDrafts.get(scope)?.text || '';
+      chatRequestDrafts.set(request, { scope, text });
+      return request;
+    };
+    const applyChatSendResult = applyCommunityChatSendResult;
+    applyCommunityChatSendResult = function (result, options = {}) {
+      const request = options.requestContext;
+      const current = !request || (request.phone === state.loggedInPhone && request.token === currentCloudToken());
+      const scope = current ? chatScope(request?.userId || state.selectedCommunityFriendId) : '';
+      captureChatInput();
+      const submitted = request && chatRequestDrafts.get(request), cached = scope && chatDrafts.get(scope);
+      const nextOptions = submitted?.scope === scope && cached && cached.text.trim() !== submitted.text.trim()
+        ? { ...options, draft: cached.text } : options;
+      const applied = applyChatSendResult.call(this, result, nextOptions);
+      if (applied !== false && scope && current) rememberChatDraft(scope, nextOptions.draft || '');
+      return applied;
+    };
+  }
+  window.TurtleMobileCommunity = Object.freeze({ installed: true, version: 'community-mobile-ui', revision: '20261101-chat-keyboard', openComment, refreshReplyTarget, syncKeyboard });
   document.documentElement.classList.add('community-mobile-ui');
-  if (active() || detailActive() || (state.page === 'communityAdd')) render();
+  if (active() || detailActive() || chatActive() || (state.page === 'communityAdd')) render();
 })();

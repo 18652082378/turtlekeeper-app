@@ -46,6 +46,7 @@ const root = path.resolve(__dirname, '..');
             marketFeedOrderIds: Array.from({ length: 8 }, (_, index) => 'fixture-' + index),
             marketListings: Array.from({ length: 8 }, (_, index) => ({ id: 'fixture-' + index, title: '分页测试 ' + index, speciesCode: 'GHG', speciesName: '果核蛋龟', price: 100, status: 'active' })) };
           edgeBackSnapshots = []; marketLastLoadedAt = Date.now(); marketLoading = true; render();
+          feedEntryRefresh.market = { pending: false, at: Date.now(), key: JSON.stringify([marketFeedRequestKey(), currentCloudToken()]) };
           hasCloudSession = () => true;
           window.calls = []; window.responses = [];
           window.successPage = (id = 'next-fixture') => ({ listings: [{ id, title: '新商品', speciesCode: 'GHG', speciesName: '果核蛋龟', price: 100, status: 'active' }], rankingSession: 'fixture-session', nextOffset: 9, hasMore: false });
@@ -116,6 +117,25 @@ const root = path.resolve(__dirname, '..');
       assert.equal(await page.evaluate(() => state.marketFeedSessionId), 'fresh-session');
       assert.equal(await page.locator('[data-view-market="fresh-ranking"]').count(), 1);
       assert.equal(await page.locator('[data-view-market="fixture-0"]').count(), 0);
+    });
+    await test('stale tab entry keeps its cached ranking until the new-content notice is accepted', async page => {
+      await page.evaluate(() => {
+        marketLoading = false; feedEntryRefresh.market.at = Date.now() - 10001;
+        responses.push(() => new Promise(resolve => { window.resolveEntry = resolve; }));
+        navigateBottomTab('ledger'); navigateBottomTab('market');
+      });
+      await waitForCalls(page, 1);
+      assert.equal(await page.locator('[data-view-market="fixture-0"]').count(), 1, 'Cached cards remain mounted while the network is pending');
+      await page.evaluate(() => resolveEntry({ ...successPage('new-entry'), rankingSession: 'new-entry-session', nextOffset: 1 }));
+      await page.waitForFunction(() => !marketLoading);
+      await page.locator('[data-feed-update-notice]').waitFor();
+      assert.equal(await page.locator('[data-view-market="fixture-0"]').count(), 1, 'New content does not replace a reading list before confirmation');
+      assert.equal(await page.locator('[data-view-market="new-entry"]').count(), 0);
+      await page.locator('[data-feed-update-notice]').click();
+      assert.equal(await page.locator('[data-view-market="new-entry"]').count(), 1);
+      assert.equal(await page.evaluate(() => calls.length), 1);
+      assert.equal(await page.evaluate(() => state.marketFeedNextOffset), 1);
+      assert.equal(await page.evaluate(() => state.marketFeedSessionId), 'new-entry-session');
     });
     await test('an uninitialized market still fetches its first page when entered', async page => {
       await page.evaluate(() => {

@@ -134,14 +134,17 @@
     if (!ctx.isVisible()) return;
     if (!model.loaded && !model.loading && ctx.phone) { void load(ctx); return; }
     const form = document.querySelector('#weatherForm');
+    let composingCity = false;
     form?.addEventListener('input', () => {
       read(form); model.query = form.elements.cityQuery.value;
       updateConsentGuidance(form);
       const rule = form.querySelector('[data-weather-rule]');
       rule.textContent = ruleText(model.draft);
     });
-    form?.addEventListener('submit', event => { event.preventDefault(); void save(ctx, form); });
-    form?.elements.cityQuery.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); void search(ctx, model.query); } });
+    form?.addEventListener('submit', event => { event.preventDefault(); if (!composingCity) void save(ctx, form); });
+    form?.elements.cityQuery.addEventListener('compositionstart', () => { composingCity = true; });
+    form?.elements.cityQuery.addEventListener('compositionend', () => { composingCity = false; });
+    form?.elements.cityQuery.addEventListener('keydown', event => { if (composingCity || event.isComposing || event.keyCode === 229) return; if (event.key === 'Enter') { event.preventDefault(); void search(ctx, model.query); } });
     document.querySelector('[data-weather-search]')?.addEventListener('click', () => { read(form); void search(ctx, model.query); });
     document.querySelectorAll('[data-weather-location]').forEach(button => button.addEventListener('click', () => { read(form); model.draft.location = model.locations[Number(button.dataset.weatherLocation)]; model.locations = []; repaint(ctx); }));
     document.querySelector('[data-weather-retry]')?.addEventListener('click', () => {

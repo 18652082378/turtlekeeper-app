@@ -12,7 +12,7 @@ assert.equal(JSON.parse(read('capacitor.config.json')).plugins.Keyboard.resize, 
 const project = read("ios/App/App.xcodeproj/project.pbxproj");
 const versions = [...project.matchAll(/MARKETING_VERSION\s*=\s*([^;]+);/g)].map(match => match[1].trim());
 const builds = [...project.matchAll(/CURRENT_PROJECT_VERSION\s*=\s*(\d+);/g)].map(match => Number(match[1]));
-// The approved artwork reads 龟中介; the installed app name remains 龟友手账.
+// User-supplied 龟友手账 artwork, exported as an opaque 1024px icon.
 // Check the actual Xcode catalog, rather than a separate Android/logo source.
 const iconDir = 'ios/App/App/Assets.xcassets/AppIcon.appiconset';
 const iconCatalog = JSON.parse(read(`${iconDir}/Contents.json`));
@@ -21,8 +21,8 @@ const iconFile = iconCatalog.images[0].filename;
 assert.equal(iconFile, 'AppIcon-512@2x.png', 'Unexpected iOS icon catalog file');
 const iconBytes = fs.readFileSync(path.join(root, iconDir, iconFile));
 assert.equal(crypto.createHash('sha256').update(iconBytes).digest('hex'),
-  '1ae4a693bc40e73853b1f6c82b214288bf14b3d8b7582fd0de3dadf091c6631d',
-  'iOS icon differs from the visually approved 龟中介 artwork');
+  '9acdcd3907816ebca33394916471afb5ffe9e81b3b9d598f83d289a307da8a91',
+  'iOS icon differs from the approved 龟友手账 artwork');
 assert.equal(iconBytes.readUInt32BE(16), 1024, 'iOS icon must be 1024px wide');
 assert.equal(iconBytes.readUInt32BE(20), 1024, 'iOS icon must be 1024px high');
 assert.equal(iconBytes[25], 2, 'iOS icon must be RGB without alpha');

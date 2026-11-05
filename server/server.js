@@ -2253,7 +2253,6 @@ function parseMediaDataUrl(value) {
 }
 
 const generateVideoPoster = require('./video-poster').createPosterService({ uploadRoot: UPLOAD_DIR, publish: publishUpload });
-const generateMarketThumbnail = require('./video-poster').createPosterService({ uploadRoot: UPLOAD_DIR, publish: publishUpload, thumbnail: true });
 const mediaVariants = require('./media-variants').createMediaVariantService({ uploadRoot: UPLOAD_DIR, publish: publishUpload });
 
 async function handleUploadMedia(req, res) {
@@ -3336,6 +3335,33 @@ async function handleCommunityList(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
   const user = optionalReviewUser(db, body);
+  if (body.feedOnly === true) {
+    // Feed entry needs only this page, not every post's full comment tree or
+    // the viewer's complete conversation list. Full callers keep the legacy
+    // response below, including friend/profile state used by other modules.
+    const blocked = blockedPhoneSet(user);
+    const chronological = (a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
+      || String(b.id || "").localeCompare(String(a.id || ""));
+    const visible = (Array.isArray(db.communityPosts) ? db.communityPosts : [])
+      .filter(item => !blocked.has(item.authorPhoneRaw) && canViewCommunityPost(db, item, user))
+      .sort(body.sort === "latest" ? chronological : (a, b) => Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned))
+        || new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    const offset = Math.max(0, Math.floor(Number(body.offset) || 0));
+    const limit = Math.min(20, Math.max(1, Math.floor(Number(body.limit) || 10)));
+    const posts = publicCommunityPosts({ ...db, communityPosts: visible.slice(offset, offset + limit) }, user);
+    if (body.sort === "latest") posts.sort(chronological);
+    const targetId = String(body.postId || "");
+    const targetRecord = targetId ? visible.find(post => String(post.id) === targetId) : null;
+    const targetPost = targetRecord ? posts.find(post => String(post.id) === targetId)
+      || publicCommunityPosts({ ...db, communityPosts: [targetRecord] }, user)[0] || null : null;
+    if (body.mediaVariantsVersion === 1) posts.forEach(attachCommunityFeedThumbnails);
+    const nextOffset = offset + posts.length;
+    return sendJson(res, 200, {
+      ok: true, posts, targetPost, hasMore: nextOffset < visible.length, nextOffset, total: visible.length,
+      followedCircleIds: user && Array.isArray(user.communityCircleIds) ? user.communityCircleIds : [],
+      isAdmin: isAdminUser(user)
+    });
+  }
   const allPosts = publicCommunityPosts(db, user);
   if (body.sort === "latest") {
     // Sort the full visible set before pagination; old pinned posts must not
@@ -3360,6 +3386,18 @@ async function handleCommunityList(req, res) {
     followedCircleIds: user && Array.isArray(user.communityCircleIds) ? user.communityCircleIds : [],
     isAdmin: isAdminUser(user)
   });
+}
+
+function attachCommunityFeedThumbnails(post) {
+  // Originals stay available to the detail gallery. A cold cache queues work
+  // in the existing 64-entry serial service and never delays the feed JSON.
+  for (const media of (post.mediaItems || []).slice(0, 3)) {
+    if (media.type !== "image" || !media.url) continue;
+    const thumbnailUrl = mediaVariants.get(media.url)?.thumbnailUrl;
+    if (thumbnailUrl) media.thumbnailUrl = thumbnailUrl;
+    else void mediaVariants.ensure(media.url);
+  }
+  if (post.mediaItems?.[0]?.thumbnailUrl) post.thumbnailUrl = post.mediaItems[0].thumbnailUrl;
 }
 
 function communitySearchScore(post, query) {
@@ -4438,28 +4476,18 @@ async function handleMarketList(req, res) {
     const deliveryListings = [...listings, ...savedListings].sort((a,b) => Number(b.id === body.deliveryListingId) - Number(a.id === body.deliveryListingId));
     deliveryListings.forEach((listing,index) => attachMarketDeliveryMedia(listing, index < 40));
   }
-  // Only process the returned page, never the full catalogue. Two decoders max.
-  // Originals remain available for product details and failed thumbnail builds.
-  if (body.thumbnails === true) {
-    const jobs = listings.slice(0, 20);
-    const worker = async () => {
-      while (jobs.length) {
-        const listing = jobs.shift();
-        const media = listing.mediaItems?.[0];
-        const source = media?.type === "video" ? media.posterUrl : media?.url || listing.photoUrl;
-        if (!source || media?.thumbnailUrl) continue;
-        const thumbnailUrl = await generateMarketThumbnail(source);
-        if (thumbnailUrl && media) media.thumbnailUrl = thumbnailUrl;
-      }
-    };
-    // A cold thumbnail build must never hold up the feed on a busy server.
-    // Completed files are cached and picked up by the next request.
-    let timer;
-    await Promise.race([
-      Promise.all([worker(), worker()]),
-      new Promise(resolve => { timer = setTimeout(resolve, 800); })
-    ]);
-    clearTimeout(timer);
+  // Return the feed before a cold media decode or upload finishes. Modern
+  // clients already queued these derivatives above; legacy clients request
+  // only the thumbnail field. Both use the same bounded, deduplicated queue.
+  if (body.thumbnails === true && body.mediaVariantsVersion !== 1) {
+    listings.slice(0, 20).forEach(listing => {
+      const media = listing.mediaItems?.[0];
+      const source = media?.type === "video" ? media.posterUrl : media?.url || listing.photoUrl;
+      if (!source || media?.thumbnailUrl) return;
+      const thumbnailUrl = mediaVariants.get(source)?.thumbnailUrl;
+      if (thumbnailUrl && media) media.thumbnailUrl = thumbnailUrl;
+      else void mediaVariants.ensure(source);
+    });
   }
   const nextOffset = offset + listings.length;
   return sendJson(res, 200, {
@@ -4964,6 +4992,78 @@ function absoluteShareMediaUrl(source, origin) {
   }
 }
 
+function decodeTurtleSharePreview(value) {
+  const encoded = String(value || "");
+  if (!encoded || encoded.length > 12000 || !/^[A-Za-z0-9_-]+$/.test(encoded)) return null;
+  try {
+    const snapshot = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== "object"
+      || typeof snapshot.id !== "string" || !snapshot.id.trim()
+      || typeof snapshot.code !== "string" || !snapshot.code.trim()) return null;
+    return snapshot;
+  } catch { return null; }
+}
+
+function turtleSharePageHtml(req, url, content) {
+  const encoded = url.searchParams.get("turtle");
+  const snapshot = decodeTurtleSharePreview(encoded);
+  // No account/database lookup is needed: these links already carry a public
+  // snapshot. Unknown fields (including purchase price and owner details) are
+  // never promoted into the title, description, or thumbnail.
+  if (!snapshot) return null;
+  const publicText = (value, maxLength) => typeof value === "string"
+    ? value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, maxLength) : "";
+  const missing = value => !value || /^(?:-|未知|未填写|品种未填写|未命名龟龟|未关联)$/.test(value);
+  const measurement = value => {
+    if ((typeof value !== "number" && typeof value !== "string") || !String(value).trim()) return "";
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? String(number) : "";
+  };
+  const code = publicText(snapshot.code, 40);
+  const species = publicText(snapshot.speciesName, 50);
+  const gender = ["公", "母"].includes(snapshot.gender) ? snapshot.gender : "";
+  const weight = measurement(snapshot.weight);
+  const length = measurement(snapshot.carapaceLength);
+  const info = [missing(code) ? "" : code, missing(species) || species === code ? "" : species,
+    gender, weight ? `${weight}g` : "", length ? `背甲 ${length}cm` : ""].filter(Boolean);
+  const title = "龟友手账";
+  const description = info.join(" · ") || "查看乌龟的成长档案";
+  let origin;
+  try {
+    const candidate = new URL(requestPublicOrigin(req));
+    origin = ["https:", "http:"].includes(candidate.protocol) && !candidate.username && !candidate.password
+      ? candidate.origin : "https://api.turtleworld.cn";
+  } catch { origin = "https://api.turtleworld.cn"; }
+  let imageUrl = "";
+  if (typeof snapshot.photo === "string" && snapshot.photo.trim() && snapshot.photo.length <= 4096) {
+    try {
+      const photo = new URL(snapshot.photo, origin);
+      if (["https:", "http:"].includes(photo.protocol) && !photo.username && !photo.password) imageUrl = photo.toString();
+    } catch {}
+  }
+  const canonicalUrl = new URL(url.pathname || "/", origin);
+  canonicalUrl.searchParams.set("turtle", encoded);
+  const metadata = [
+    `<meta name="description" content="${escapeShareMeta(description)}">`,
+    `<meta property="og:type" content="website">`,
+    `<meta property="og:site_name" content="龟友手账">`,
+    `<meta property="og:title" content="龟友手账">`,
+    `<meta property="og:description" content="${escapeShareMeta(description)}">`,
+    `<meta property="og:url" content="${escapeShareMeta(canonicalUrl.toString())}">`,
+    imageUrl ? `<meta property="og:image" content="${escapeShareMeta(imageUrl)}">` : "",
+    imageUrl.startsWith("https:") ? `<meta property="og:image:secure_url" content="${escapeShareMeta(imageUrl)}">` : "",
+    imageUrl ? `<meta property="og:image:alt" content="${escapeShareMeta(description)}">` : "",
+    imageUrl ? `<link rel="image_src" href="${escapeShareMeta(imageUrl)}">` : "",
+    `<meta name="twitter:card" content="summary_large_image">`,
+    `<meta name="twitter:title" content="龟友手账">`,
+    `<meta name="twitter:description" content="${escapeShareMeta(description)}">`,
+    imageUrl ? `<meta name="twitter:image" content="${escapeShareMeta(imageUrl)}">` : ""
+  ].filter(Boolean).join("\n    ");
+  return Buffer.from(String(content)
+    .replace(/<title>[\s\S]*?<\/title>/i, `<title>${title}</title>`)
+    .replace(/<\/head>/i, `    ${metadata}\n  </head>`), "utf8");
+}
+
 function marketSharePageHtml(req, url, content) {
   const listingId = trimPublicText(url.searchParams.get("market"), 100);
   if (!listingId) return content;
@@ -5046,7 +5146,8 @@ function serveStatic(req, res, url) {
       const contentType = isAppleAppSiteAssociation
         ? "application/json"
         : (mimeTypes[ext] || "application/octet-stream");
-      const pageContent = pathname === "/index.html" ? marketSharePageHtml(req, url, content) : content;
+      const pageContent = pathname === "/index.html"
+        ? turtleSharePageHtml(req, url, content) || marketSharePageHtml(req, url, content) : content;
       // Shared product links are usually opened in the WeChat in-app browser.
       // It can retain app.js/styles.css for a long time, even after a listing
       // link points at a freshly deployed server.  The page shell and its

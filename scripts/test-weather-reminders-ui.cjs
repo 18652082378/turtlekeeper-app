@@ -15,7 +15,9 @@ const root = path.resolve(__dirname, '..');
     return route.fulfill({ body: fs.readFileSync(file), contentType: ({ '.js': 'text/javascript', '.html': 'text/html', '.css': 'text/css' })[path.extname(file)] || 'application/octet-stream' });
   });
   async function check(name, run) {
+    if (process.env.WEATHER_UI_CASE && !name.includes(process.env.WEATHER_UI_CASE)) return;
     const page = await ctx.newPage(), errors = [];
+    page.setDefaultTimeout(6000);
     page.on('pageerror', e => errors.push(e.message));
     try {
       await page.goto('https://weather.test/?skipIntro=1');
@@ -38,7 +40,11 @@ const root = path.resolve(__dirname, '..');
       });
       await page.waitForSelector('#weatherForm input:not([disabled])');
       await run(page); assert.deepEqual(errors, []); results.push({ name, pass: true }); console.log('PASS ' + name);
-    } catch (error) { results.push({ name, pass: false, error: error.stack }); console.error('FAIL ' + name + ': ' + error.message); }
+    } catch (error) {
+      results.push({ name, pass: false, error: error.stack }); console.error('FAIL ' + name + ': ' + error.message);
+      const diagnostic = await page.evaluate(() => { const t = document.createElement('template'); t.innerHTML = TurtleWeather.page(weatherContext()); return { route: [state.page, state.careTab], modelQuery: t.content.querySelector('[name="cityQuery"]')?.value, modelBusy: t.content.querySelector('fieldset')?.disabled, requests, notes, form: [...document.querySelectorAll('#weatherForm input, #weatherForm select')].map(field => ({ name: field.name, value: field.value, checked: field.checked, valid: field.validity.valid, error: field.validationMessage, disabled: field.disabled })), feedback: document.querySelector('.weather-feedback')?.textContent }; }).catch(() => ({}));
+      console.error(JSON.stringify(diagnostic));
+    }
     finally { await page.close(); }
   }
   try {
@@ -109,6 +115,22 @@ const root = path.resolve(__dirname, '..');
     await check('Enter in city search does not submit reminder settings', async page => {
       await page.locator('[name="weatherConsent"]').check(); await page.locator('[name="cityQuery"]').fill('上海'); await page.locator('[name="cityQuery"]').press('Enter'); await page.waitForSelector('[data-weather-location]');
       assert.equal(await page.evaluate(() => requests.some(r => r.route.endsWith('/save'))), false);
+    });
+    await check('Chinese composition Enter and keyCode229 do not search or save until the user confirms', async page => {
+      await page.locator('[name="weatherConsent"]').check();
+      await page.locator('[name="cityQuery"]').fill('上海');
+      await page.locator('[name="cityQuery"]').evaluate(field => {
+        field.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        field.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', isComposing: true }));
+        field.form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+        field.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '上海' }));
+        field.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 229 }));
+      });
+      assert.equal(await page.evaluate(() => requests.filter(item => /\/(locations|save)$/.test(item.route)).length), 0);
+      await page.locator('[name="cityQuery"]').press('Enter');
+      await page.waitForSelector('[data-weather-location]');
+      assert.equal(await page.evaluate(() => requests.filter(item => item.route.endsWith('/locations')).length), 1);
+      assert.equal(await page.evaluate(() => requests.some(item => item.route.endsWith('/save'))), false);
     });
     await check('same-day option saves numeric zero, renders today rule and survives reload', async page => {
       await page.locator('[name="weatherConsent"]').check(); await page.locator('[name="cityQuery"]').fill('上海'); await page.locator('[data-weather-search]').click(); await page.locator('[data-weather-location]').click();

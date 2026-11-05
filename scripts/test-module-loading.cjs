@@ -3,6 +3,7 @@ const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
 const extract=name=>{const start=source.search(new RegExp('(?:async )?function '+name+'\\('));assert(start>=0,name);return source.slice(start,source.indexOf('\n}',start)+2);};
 function setup(){
  const ctx={console:{warn(){}},Date,Map,Set,Number,String,Boolean,structuredClone,
+  feedEntryRefresh:{community:{pending:false}},deferFeedCacheSave(){},
   CONFIGURED_SMS_BACKEND:true,canUseCommunity:()=>true,state:{loggedInPhone:'A',cloudToken:'tokenA',page:'following',communityFriends:[],communityFollowingUsers:[]},
   followingLoading:false,followingLastLoadedAt:0,publicReviewsLoading:false,publicReviewsLastLoadedAt:0,publicFeedbackLoading:false,publicFeedbackLastLoadedAt:0,
   communityUserProfileLoading:false,communityUserProfileLoadedKey:'',communityLoading:false,communityPublicationRevision:0,

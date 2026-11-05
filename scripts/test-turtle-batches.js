@@ -6,7 +6,7 @@ const TurtleBatches = require('../assets/turtle-batches');
 const TurtleLossAccounting = require('../assets/loss-accounting');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../app.js'), 'utf8');
 let message, saved;
-const ctx = { TurtleBatches, TurtleLossAccounting, crypto,
+const ctx = { TurtleBatches, TurtleLossAccounting, crypto, archivePricesHidden: false,
   FormData: class { constructor(values) { this.values = values; } get(key) { return this.values[key] ?? null; } },
   requireLogin: () => true, requireArchiveCapacity: () => true,
   speciesPhoto: () => 'photo.jpg', defaultPhoto: 'photo.jpg', escapeHtml: value => String(value),

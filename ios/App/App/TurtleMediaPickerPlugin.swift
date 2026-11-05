@@ -2,6 +2,7 @@ import AVFoundation
 import AVKit
 import Capacitor
 import ImageIO
+import LinkPresentation
 import Photos
 import UIKit
 import UniformTypeIdentifiers
@@ -13,12 +14,67 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePicker
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "pick", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "exportText", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "shareImage", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "shareImage", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "shareLink", returnType: CAPPluginReturnPromise)
     ]
 
     private var cameraCall: CAPPluginCall?
     private var exportCall: CAPPluginCall?
     private var exportDirectory: URL?
+    private var linkShareCall: CAPPluginCall?
+    private var linkShareSource: TurtleLinkShareItemSource?
+    private var linkThumbnailLoader: TurtleLinkThumbnailLoader?
+
+    @objc func shareLink(_ call: CAPPluginCall) {
+        guard let rawURL = call.getString("url"), let url = TurtleShareWebURL.validated(rawURL) else {
+            call.reject("分享链接无效，请重新生成")
+            return
+        }
+        let requestedTitle = String((call.getString("title") ?? "龟友手账").prefix(120)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = requestedTitle.isEmpty ? "龟友手账" : requestedTitle
+        let text = String((call.getString("text") ?? "").prefix(400)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let thumbnailURL = TurtleShareWebURL.validated(call.getString("thumbnailUrl") ?? "")
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let host = self.bridge?.viewController else {
+                call.reject("分享窗口暂时不可用")
+                return
+            }
+            guard self.linkShareCall == nil, host.presentedViewController == nil else {
+                call.reject("请先关闭当前窗口，再分享档案")
+                return
+            }
+            self.linkShareCall = call
+            let present: (UIImage?) -> Void = { [weak self] image in
+                DispatchQueue.main.async {
+                    guard let self else { call.reject("分享窗口暂时不可用"); return }
+                    guard self.linkShareCall === call else { return }
+                    self.linkThumbnailLoader = nil
+                    guard let host = self.bridge?.viewController, host.presentedViewController == nil else {
+                        self.linkShareCall = nil
+                        call.reject("请先关闭当前窗口，再分享档案")
+                        return
+                    }
+                    let source = TurtleLinkShareItemSource(url: url, title: title, text: text, image: image)
+                    self.linkShareSource = source
+                    let sheet = UIActivityViewController(activityItems: [source], applicationActivities: nil)
+                    sheet.popoverPresentationController?.sourceView = host.view
+                    sheet.popoverPresentationController?.sourceRect = CGRect(x: host.view.bounds.midX, y: host.view.bounds.midY, width: 1, height: 1)
+                    sheet.completionWithItemsHandler = { [weak self] _, completed, _, error in
+                        self?.linkShareCall = nil
+                        self?.linkShareSource = nil
+                        if let error { call.reject("分享失败：" + error.localizedDescription) }
+                        else { call.resolve(["completed": completed, "cancelled": !completed]) }
+                    }
+                    host.present(sheet, animated: true)
+                }
+            }
+            if let thumbnailURL {
+                let loader = TurtleLinkThumbnailLoader(url: thumbnailURL, completion: present)
+                self.linkThumbnailLoader = loader
+                loader.start()
+            } else { present(nil) }
+        }
+    }
 
     @objc func shareImage(_ call: CAPPluginCall) {
         guard let dataUrl = call.getString("dataUrl"), dataUrl.count <= 14000000,
@@ -427,6 +483,141 @@ public class TurtleMediaPickerPlugin: CAPPlugin, CAPBridgedPlugin, UIImagePicker
         FileManager.default.temporaryDirectory
             .appendingPathComponent("turtlekeeper-media-\(UUID().uuidString)")
             .appendingPathExtension(extensionName)
+    }
+}
+
+// Metadata supplies the native share-sheet preview without sharing a second image
+// attachment. The recipient still receives the public URL and can fetch its HTML
+// metadata if its share extension does not consume LinkPresentation metadata.
+private final class TurtleLinkShareItemSource: NSObject, UIActivityItemSource {
+    private let url: URL
+    private let title: String
+    private let image: UIImage?
+    private let metadata: LPLinkMetadata
+
+    init(url: URL, title: String, text: String, image: UIImage?) {
+        self.url = url
+        self.title = title
+        self.image = image
+        let metadata = LPLinkMetadata()
+        metadata.originalURL = url
+        metadata.url = url
+        metadata.title = text.isEmpty ? title : title + "\n" + text
+        if let image {
+            metadata.imageProvider = NSItemProvider(object: image)
+            metadata.iconProvider = NSItemProvider(object: image)
+        }
+        self.metadata = metadata
+        super.init()
+    }
+
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any { url }
+
+    func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? { url }
+
+    func activityViewController(_ activityViewController: UIActivityViewController, subjectForActivityType activityType: UIActivity.ActivityType?) -> String { title }
+
+    func activityViewController(_ activityViewController: UIActivityViewController, thumbnailImageForActivityType activityType: UIActivity.ActivityType?, suggestedSize size: CGSize) -> UIImage? { image }
+
+    func activityViewControllerLinkMetadata(_ activityViewController: UIActivityViewController) -> LPLinkMetadata? { metadata }
+}
+
+private enum TurtleShareWebURL {
+    static func validated(_ value: String) -> URL? {
+        let raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty, raw.count <= 20000, let parts = URLComponents(string: raw),
+              ["http", "https"].contains(parts.scheme?.lowercased() ?? ""),
+              parts.user == nil, parts.password == nil,
+              let host = parts.host?.lowercased(), host.contains("."), !host.contains(":"),
+              host != "localhost", !host.hasSuffix(".localhost"), !host.hasSuffix(".local"), !host.hasSuffix(".internal"),
+              let url = parts.url else { return nil }
+        if host.allSatisfy({ $0.isNumber || $0 == "." }) {
+            let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+            guard labels.count == 4, labels.allSatisfy({ $0 == "0" || !$0.hasPrefix("0") }) else { return nil }
+            let octets = labels.compactMap { Int($0) }
+            guard octets.count == 4, octets.allSatisfy({ (0...255).contains($0) }) else { return nil }
+            if [0, 10, 127].contains(octets[0]) || octets[0] >= 224 ||
+                (octets[0] == 169 && octets[1] == 254) ||
+                (octets[0] == 172 && (16...31).contains(octets[1])) ||
+                (octets[0] == 192 && octets[1] == 168) ||
+                (octets[0] == 100 && (64...127).contains(octets[1])) ||
+                (octets[0] == 198 && (18...19).contains(octets[1])) { return nil }
+        }
+        return url
+    }
+}
+
+// Thumbnail failures must not prevent the URL from being shared. The stream is
+// capped before image decoding, and ImageIO downsamples the first frame directly.
+private final class TurtleLinkThumbnailLoader: NSObject, URLSessionDataDelegate {
+    private let url: URL
+    private let completion: (UIImage?) -> Void
+    private let byteLimit = 4 * 1024 * 1024
+    private var bytes = Data()
+    private var session: URLSession?
+    private var finished = false
+
+    init(url: URL, completion: @escaping (UIImage?) -> Void) {
+        self.url = url
+        self.completion = completion
+        super.init()
+    }
+
+    func start() {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 4
+        configuration.timeoutIntervalForResource = 5
+        configuration.httpShouldSetCookies = false
+        configuration.urlCredentialStorage = nil
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        queue.qualityOfService = .utility
+        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
+        self.session = session
+        session.dataTask(with: url).resume()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(TurtleShareWebURL.validated(request.url?.absoluteString ?? "") == nil ? nil : request)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let response = response as? HTTPURLResponse, (200...299).contains(response.statusCode),
+              TurtleShareWebURL.validated(response.url?.absoluteString ?? "") != nil,
+              response.expectedContentLength <= Int64(byteLimit),
+              response.mimeType?.lowercased().hasPrefix("image/") != false else {
+            completionHandler(.cancel)
+            finish(nil)
+            return
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard !finished, data.count <= byteLimit - bytes.count else { finish(nil); return }
+        bytes.append(data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard !finished else { return }
+        guard error == nil, !bytes.isEmpty,
+              let source = CGImageSourceCreateWithData(bytes as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 256,
+                kCGImageSourceShouldCacheImmediately: true
+              ] as CFDictionary) else { finish(nil); return }
+        finish(UIImage(cgImage: thumbnail))
+    }
+
+    private func finish(_ image: UIImage?) {
+        guard !finished else { return }
+        finished = true
+        bytes.removeAll(keepingCapacity: false)
+        session?.invalidateAndCancel()
+        session = nil
+        completion(image)
     }
 }
 

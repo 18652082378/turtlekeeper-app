@@ -54,9 +54,52 @@ async function main() {
       await page.evaluate(item => { restoredSnapshotRenderHoldUntil = Date.now() + 500; setState({ [item.key]: state[item.key].map(r => ({ ...r, [item.field]: item.after + '再次修改' })) }); }, item);
       assert.ok((await page.locator('#app').innerText()).includes(item.after + '再次修改'));
     }
+    const navigation = await page.evaluate(() => {
+      state = { ...state, page: 'home', loggedInPhone: 'preview' };
+      edgeBackSnapshots = []; render();
+      const originalSave = saveState;
+      const originalBuildPreview = buildEdgeBackPreviewHtml;
+      let writes = 0, previewParses = 0;
+      saveState = () => { writes++; return true; };
+      buildEdgeBackPreviewHtml = (...args) => { previewParses++; return originalBuildPreview(...args); };
+      try {
+        $app.querySelector('[data-page="pools"]').click();
+        const opened = state.page;
+        const eagerPreviewParses = previewParses;
+        const parent = edgeBackSnapshots.at(-1);
+        parent.liveDom = null;
+        showEdgeBackPreview(parent);
+        navigateBack();
+        return { writes, eagerPreviewParses, previewParses, opened, returned: state.page };
+      } finally { saveState = originalSave; buildEdgeBackPreviewHtml = originalBuildPreview; }
+    });
+    assert.deepEqual(navigation, { writes: 0, eagerPreviewParses: 0, previewParses: 1, opened: 'pools', returned: 'home' });
+
+    const lookups = await page.evaluate(() => {
+      const n = 850, reads = { turtles: 0, ledger: 0 };
+      const countReads = (values, key) => new Proxy(values, { get(array, prop) {
+        if (typeof prop === 'string' && /^\d+$/.test(prop)) reads[key]++;
+        return Reflect.get(array, prop);
+      } });
+      const turtles = Array.from({ length: n }, (_, i) => ({ id: 'archive-' + i, code: '龟-' + i, status: '正常饲养', poolId: 'pool-' + (i % 60) }));
+      const records = turtles.flatMap(turtle => [
+        { id: 'purchase-' + turtle.id, turtleId: turtle.id, type: 'purchase', amount: 30, recordDate: '2026-11-01' },
+        { id: 'sold-' + turtle.id, turtleId: turtle.id, type: 'sold', amount: 50, recordDate: '2026-10-01' }
+      ]);
+      state = { ...state, ledgerDatePreset: 'all', ledgerTab: 'purchase', turtles: countReads(turtles, 'turtles'), ledgerRecords: countReads(records, 'ledger'),
+        turtlePools: Array.from({ length: 60 }, (_, i) => ({ id: 'pool-' + i, name: '龟池-' + i, count: 2, countMode: i === 0 ? 'additional' : '' })) };
+      const ledger = pageLedger();
+      const ledgerReads = { ...reads };
+      reads.turtles = 0;
+      const pools = pageTurtlePools();
+      return { n, ledgerReads, poolReads: reads.turtles, linkedRows: (ledger.match(/ledger-linked-status sold/g) || []).length,
+        poolTotal: /<strong>852<\/strong>/.test(pools), legacyReview: /历史手填 2 只，尚未核对/.test(pools) };
+    });
+    assert.deepEqual(lookups, { n: 850, ledgerReads: { turtles: 850, ledger: 3400 }, poolReads: 850, linkedRows: 850, poolTotal: true, legacyReview: true });
     assert.deepEqual(errors, []);
-    recordResult(root, 'navigation-freshness.json', { pass: true, scenarios: 12, externalTraffic: false });
+    recordResult(root, 'navigation-freshness.json', { pass: true, scenarios: 14, navigation, lookups, externalTraffic: false });
     console.log('PASS: breeding, pools, dashboard and care show saved edits immediately on button, gesture and HTML fallback returns; in-place mutations and immediate second edits covered.');
+    console.log('PASS read-only navigation and 850-record association work:', JSON.stringify({ navigation, lookups }));
   } finally { await browser.close(); }
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

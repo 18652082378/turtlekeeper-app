@@ -1,12 +1,13 @@
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { launchBrowser } = require('./browser-test-engine.cjs');
 const source = fs.readFileSync('app.js','utf8');
 const extract = (start,end) => source.slice(source.indexOf(start),source.indexOf(end));
 (async()=>{
-  const browser = await chromium.launch({headless:true, executablePath:process.env.BROWSER_EXECUTABLE});
+  const browser = await launchBrowser();
   try {
     const page = await browser.newPage({viewport:{width:390,height:844}});
+    page.on('pageerror', error => console.error(error.message));
     await page.setContent('<div id="app" class="phone-shell"></div>');
     for(const file of ['styles.css','chat-tools.css','dark-surface-audit.css']) await page.addStyleTag({path:file});
     await page.addStyleTag({content:'.test-card{height:210px;border-bottom:1px solid #555}.test-detail{height:2100px}.test-content{padding-top:90px}'});
@@ -17,6 +18,8 @@ const extract = (start,end) => source.slice(source.indexOf(start),source.indexOf
       pageEnterMotionTimer=null,restoredSnapshotRenderHoldUntil=0,appAnalyticsSessionId=null,renderCount=0;
       var BOTTOM_NAV_ROOT_PAGES=new Set(['market','home','messages','mine','ledger']);
       function saveState(){} function refreshCareReminderTimers(){} function setupMarketInfiniteScroll(){}
+      function marketSearchResultListings(){return state.marketListings || [];} function communityForumPosts(rows){return rows || [];}
+      function recordPageHasChanges(){return false;}
       function setupCommunityInfiniteScroll(){} function syncMobileKeyboardUI(){}
       function updateAccountSaveStatus(){} function canLeaveRecordPage(){return true;}
       function syncPersistentBottomNav(){} function stopMarketDetailVideos(){} function patchMarketSnapshotDetails(){}
@@ -45,12 +48,20 @@ const extract = (start,end) => source.slice(source.indexOf(start),source.indexOf
         const result={header:document.querySelector('.topbar').getBoundingClientRect().top,nav:document.querySelector('.bottom-nav').getBoundingClientRect().top,y:scrollY,card:originalCard.getBoundingClientRect().top};
         setState({page:'child'});return result;
       });
+      await page.evaluate(() => {
+        const snapshot = edgeBackSnapshots.at(-1);
+        createEdgeBackPreview(snapshot);
+        const clone = snapshot.liveDom.cloneNode.bind(snapshot.liveDom);
+        window.dragCloneCount = 0;
+        snapshot.liveDom.cloneNode = (...args) => { dragCloneCount++; return clone(...args); };
+      });
       await page.mouse.move(4,400);await page.mouse.down();await page.mouse.move(190,400,{steps:10});
       await page.waitForTimeout(40);
       const during=await page.evaluate(()=>{
         const root=document.querySelector('.edge-back-preview');
         return {header:root.querySelector('.topbar').getBoundingClientRect().top,nav:root.querySelector('.bottom-nav').getBoundingClientRect().top,card:root.querySelector('[data-card="6"]').getBoundingClientRect().top,renders:renderCount};
       });
+      assert.equal(await page.evaluate(() => dragCloneCount), 0, 'A prepared previous page must not clone its list on the first drag frame');
       for(const key of ['header','nav','card'])assert.ok(Math.abs(during[key]-before[key])<1,`${origin} ${key}: ${during[key]} vs ${before[key]}`);
       const cover=await page.evaluate(()=>{
         const image=document.querySelector('.edge-back-preview [data-card="6"] img');
@@ -63,8 +74,13 @@ const extract = (start,end) => source.slice(source.indexOf(start),source.indexOf
       assert.equal(after.same,true,origin+' retains original DOM');assert.equal(after.renders,during.renders,origin+' does not render on swipe completion');assert.equal(after.y,before.y);assert.equal(after.page,origin);assert.ok(Math.abs(after.nav-before.nav)<1);
       // Cancelled swipe must keep the detail and allow the following button return.
       await page.evaluate(()=>setState({page:'child'}));
-      await page.mouse.move(4,400);await page.mouse.down();await page.mouse.move(35,400,{steps:4});await page.waitForTimeout(120);await page.mouse.move(30,400);await page.mouse.up();await page.waitForTimeout(450);
+      await page.mouse.move(4,400);await page.mouse.down();await page.mouse.move(35,400,{steps:4});await page.waitForTimeout(120);await page.mouse.move(18,400);await page.mouse.up();await page.waitForTimeout(450);
       assert.equal(await page.evaluate(()=>state.page),'child');
+      assert.equal(await page.evaluate(() => {
+        const snapshot = edgeBackSnapshots.at(-1);
+        showEdgeBackPreview(snapshot); clearEdgeBackPreview();
+        return snapshot.liveDom.contains(originalCard);
+      }), true, 'Reusing a cancelled preview must not move cloned nodes into the retained original page');
       await page.evaluate(()=>navigateBack());await page.waitForTimeout(40);
       assert.equal(await page.evaluate(()=>scrollY),before.y);
     }

@@ -22,6 +22,8 @@ async function main() {
         restoredSnapshotRenderHoldUntil=0,appAnalyticsSessionId=null;
       var BOTTOM_NAV_ROOT_PAGES=new Set(['market','messages','home']);
       var marketLoading=false,marketLastLoadedAt=0,incomingMarketShareLoading=false,incomingMarketShareListingId='';
+      var feedEntryRefresh={market:{pending:false,at:0,key:''},community:{pending:false}},feedCacheSaveTicket=0;
+      function currentCloudToken(){return 'fixture-token'} function deferFeedCacheSave(){}
       function saveState(){} function refreshCareReminderTimers(){} function setupMarketInfiniteScroll(){}
       function setupCommunityInfiniteScroll(){} function syncMobileKeyboardUI(){}
       function canLeaveRecordPage(){return true} function updateAccountSaveStatus(){}

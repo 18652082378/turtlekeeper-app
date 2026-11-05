@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const sharp = require(process.env.SHARP_MODULE || 'sharp');
 const root = path.resolve(__dirname, '../..');
-const source = path.join(__dirname, 'branding/guizhongjie-icon-source.png');
+const source = path.join(__dirname, 'branding/guiyou-icon-source.png');
 const res = path.join(root, 'android/app/src/main/res');
 async function main() {
   const store = path.join(root, 'output/android/store');

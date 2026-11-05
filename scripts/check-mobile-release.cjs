@@ -20,7 +20,7 @@ run('scripts/test-mobile-parity.cjs');
 run('scripts/verify-ios-build.js', ['--native']);
 if (!args.includes('--prepare-only')) {
   const failures = [];
-  for (const script of ['scripts/test-api-request-resilience.cjs', 'scripts/test-module-loading.cjs', 'scripts/test-feed-loading-recovery.js', 'scripts/test-notification-summary.js']) {
+  for (const script of ['scripts/test-feed-server-latency.cjs', 'scripts/test-feed-client-latency.cjs', 'scripts/test-turtle-share-server.cjs', 'scripts/test-api-request-resilience.cjs', 'scripts/test-publish-navigation-boundaries.cjs', 'scripts/test-module-loading.cjs', 'scripts/test-feed-loading-recovery.js', 'scripts/test-notification-summary.js']) {
     try { run(script); } catch (e) { failures.push(e.message); }
   }
   // Run both even when the first fails, so one report shows both platforms.
@@ -31,6 +31,10 @@ if (!args.includes('--prepare-only')) {
   try { run('scripts/test-android-ui.cjs', [], { ANDROID_EXTENDED: '1', ANDROID_TYPOGRAPHY: '1', ANDROID_CARDS: '1', ANDROID_LEDGER: '1' }); }
   catch (e) { failures.push(e.message); }
   for (const platform of ['ios', 'android']) {
+    for (const script of ['scripts/test-community-chat-keyboard-ui.cjs', 'scripts/test-feed-updates-ui.cjs', 'scripts/test-publishing-drafts.cjs', 'scripts/test-ui-experience.cjs', 'scripts/test-module-editing-ux.cjs', 'scripts/test-weather-reminders-ui.cjs', 'scripts/test-navigation-freshness.cjs', 'scripts/test-chat-send-gesture-ui.cjs']) {
+      try { run(script, [], { MOBILE_UI_PLATFORM: platform, COMMUNITY_MOBILE_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+      catch (e) { failures.push(e.message); }
+    }
     try { run('scripts/test-community-page-polish.cjs', ['--bundle'], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-community-release-138.cjs', [], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
@@ -45,6 +49,8 @@ if (!args.includes('--prepare-only')) {
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-form-intrinsic-layout.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
+    try { run('scripts/test-form-intrinsic-layout.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium', FORM_ERRORS: '1' }); }
+    catch (e) { failures.push(e.message); }
     try { run('scripts/test-module-workspaces.cjs', [], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-market-publish-layout.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
@@ -52,6 +58,12 @@ if (!args.includes('--prepare-only')) {
     try { run('scripts/test-visual-placeholders-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-breeding-covers-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
+    try { run('scripts/test-feed-media-delivery-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
+    try { run('scripts/test-turtle-share-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
+    try { run('scripts/test-archive-price-privacy-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-home-filter-stats-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }

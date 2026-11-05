@@ -27,6 +27,7 @@ async function main() {
   await assert.rejects(bodyPending, error => error.code === 'FEED_LOAD_TIMEOUT');
 
   const ctx = { console: { warn() {} }, Date, Map, Set,
+    feedEntryRefresh: { market: { pending: false, at: 0, key: '' }, community: { pending: false } }, deferFeedCacheSave() {},
     CONFIGURED_SMS_BACKEND: true, state: { page: 'market', loggedInPhone: 'test', cloudToken: '', marketListings: [] },
     hasCloudSession: () => Boolean(ctx.state.cloudToken),
     currentCloudToken: () => ctx.state.cloudToken,

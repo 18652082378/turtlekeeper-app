@@ -44,5 +44,18 @@ function stalled(_url, { signal }) { calls++; return new Promise((_resolve, reje
   }
   assert.equal(cleaned, cases.length + 1 + 6 + 3 + 1 + 2);
   assert.equal(feedback, cleaned, 'release busy controls after every outcome');
+  for (const change of ['account', 'session']) {
+    let finish;
+    ctx.fetch = () => new Promise(resolve => { finish = resolve; });
+    const request = ctx.apiPost('/api/feedback/comment', auth);
+    if (change === 'account') ctx.state.loggedInPhone = 'another-owner';
+    else ctx.currentCloudToken = () => 'renewed-token';
+    finish({ ok: true, status: 200, json: async () => ({ ok: true, feedbacks: [{ id: 'old-account-private-result' }] }) });
+    await assert.rejects(request, error => error.code === 'STALE_ACCOUNT_RESPONSE', 'Late authenticated results cannot enter another account or session');
+    ctx.state.loggedInPhone = auth.phone; ctx.currentCloudToken = () => auth.token;
+  }
+  ctx.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, user: { phone: 'login-owner' } }) });
+  assert.equal((await ctx.apiPost('/api/account/login', { phone: 'login-owner', password: 'synthetic' })).user.phone, 'login-owner', 'Unauthenticated login keeps its intended target account');
+  assert.equal(feedback, cleaned, 'stale results and login also release busy controls');
   console.log(`PASS: ${cleaned} request outcomes: deadlines, hanging body, malformed JSON, HTTP status, session ownership, legacy responses and busy cleanup.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

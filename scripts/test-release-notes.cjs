@@ -21,13 +21,25 @@ const root = path.resolve(__dirname, '..');
     finally { await ctx.close(); }
   }
   try {
+    await check('1.2.0 shows the current release notes once after upgrade', async (page, setup) => {
+      await setup({ seen: '1.1.9' });
+      await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.0' }));
+      const dialog = page.locator('.release-notes-dialog');
+      await dialog.waitFor();
+      assert.match(await dialog.innerText(), /龟友手账 1\.2\.0/);
+      assert.match(await dialog.innerText(), /星号遮盖购入价格/);
+      await page.getByRole('button', { name: '我知道了' }).click();
+      await setup();
+      await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.0' }));
+      assert.equal(await dialog.count(), 0);
+    });
     await check('1.1.9 introduces the cumulative mobile and server improvements once after upgrade', async (page, setup) => {
       await setup({ seen: '1.1.8' });
       await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.1.9' }));
       await page.waitForSelector('.release-notes-dialog');
       assert.match(await page.locator('.release-notes-dialog').innerText(), /龟友手账 1\.1\.9/);
       assert.match(await page.locator('.release-notes-dialog').innerText(), /最新回复摘要/);
-      assert.equal(await page.locator('.release-notes-dialog li').count(), 4);
+      assert.equal(await page.locator('.release-notes-dialog li').count(), 6);
       await page.getByRole('button', { name: '我知道了' }).click();
       await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.1.9' }));
       assert.equal(await page.locator('.release-notes-dialog').count(), 0);

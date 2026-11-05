@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const platform = process.env.MOBILE_UI_PLATFORM || 'ios';
+const errorMode = process.env.FORM_ERRORS === '1';
 process.env.BROWSER_ENGINE ||= platform === 'ios' ? 'webkit' : 'chromium';
 const { launchBrowser, recordResult } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
@@ -19,7 +20,7 @@ const cases = [
 ];
 (async () => {
   const browser = await launchBrowser(), results = [], errors = [];
-  const output = path.join(root, 'output/form-intrinsic-layout', platform); fs.mkdirSync(output, { recursive: true });
+  const output = path.join(root, 'output/form-intrinsic-layout', platform + (errorMode ? '-errors' : '')); fs.mkdirSync(output, { recursive: true });
   try {
     const page = await browser.newPage({ viewport: { width: 320, height: 844 }, hasTouch: true, reducedMotion: 'reduce' });
     page.on('pageerror', e => errors.push(e.message));
@@ -38,10 +39,20 @@ const cases = [
       await page.evaluate(({ fixture, test, theme }) => {
         state = { ...initialState, ...emptyAccountData(), ...fixture, ...test, cloudToken: '', policyConsentRequired: false, themeColor: theme };
         forceUpdateState = { required: false }; pendingPageEnterMotion = false; render(); scrollTo(0, 0);
+      }, { fixture, test: cases[index], theme });
+      // Publishing editors read account-scoped drafts before mounting forms.
+      // Measure the completed editor rather than its brief loading notice.
+      await page.locator('main form').first().waitFor();
+      await page.evaluate(() => {
         document.querySelectorAll('main details').forEach(el => { el.open = true; });
         document.querySelectorAll('main textarea').forEach(el => { el.cols = 60; });
         document.querySelectorAll('main input:not([type]),main input[type="text"],main input[type="password"]').forEach(el => { el.size = 40; });
-      }, { fixture, test: cases[index], theme });
+      });
+      if (errorMode) await page.evaluate(() => {
+        document.querySelectorAll('main form').forEach(form => form.reportValidity());
+        document.querySelector('.archive-directory-overlay [data-directory-close]')?.click();
+        document.activeElement?.blur();
+      });
       const problems = await page.evaluate(() => {
         const problems = [];
         const visible = el => { const r = el.getBoundingClientRect(), s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden' && !el.closest('[hidden],.sr-only'); };
@@ -74,7 +85,7 @@ const cases = [
         return [...new Set(problems)].slice(0, 12);
       });
       const result = { width, theme, scenario: cases[index], problems }; results.push(result);
-      if (cases[index].memoDraftOpen) {
+      if (cases[index].memoDraftOpen && !errorMode) {
         const before = await page.evaluate(() => JSON.stringify(state.memos));
         await page.locator('.weekday-picker').evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
         for (const chip of await page.locator('.weekday-chip').all()) {
@@ -90,9 +101,9 @@ const cases = [
         if (results.filter(r => r.problems.length).length <= 8) await page.screenshot({ path: path.join(output, `failure-${index}-${width}-${theme}.png`), fullPage: true });
       }
     }
-    recordResult(root, 'form-intrinsic-layout-' + platform + '.json', { checks: results.length, failures: results.filter(r => r.problems.length), errors, results });
+    recordResult(root, 'form-intrinsic-layout-' + platform + (errorMode ? '-errors' : '') + '.json', { checks: results.length, errorMode, failures: results.filter(r => r.problems.length), errors, results });
     assert.deepEqual(errors, []);
     assert.equal(results.filter(r => r.problems.length).length, 0, 'Form intrinsic sizing regressions; see output/form-intrinsic-layout');
-    console.log(`PASS ${platform}: ${results.length} form intrinsic-width checks, optional sections expanded, 280–720px including weekday-grid breakpoints and both themes.`);
+    console.log(`PASS ${platform}: ${results.length} ${errorMode ? 'validation-error' : 'form intrinsic-width'} checks, optional sections expanded, 280–720px including weekday-grid breakpoints and both themes.`);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

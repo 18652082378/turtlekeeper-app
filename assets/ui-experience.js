@@ -166,14 +166,45 @@
     field.removeAttribute('aria-invalid');
     delete field.dataset.uiErrorId;
   }
+  function validationText(field) {
+    const issue = field.validity;
+    if (issue.customError) return field.validationMessage;
+    if (issue.valueMissing) return field.type === 'checkbox' ? '请勾选后继续' : field.matches('select') ? '请选择一项' : '请填写此项';
+    if (issue.badInput) return '请输入有效的数字';
+    if (issue.typeMismatch) return field.type === 'email' ? '请输入有效的邮箱地址' : field.type === 'url' ? '请输入完整有效的网址' : '请检查填写格式';
+    if (issue.rangeUnderflow) return `数值不能小于 ${field.min}`;
+    if (issue.rangeOverflow) return `数值不能大于 ${field.max}`;
+    if (issue.tooShort) return `请至少填写 ${field.minLength} 个字符`;
+    if (issue.tooLong) return `最多填写 ${field.maxLength} 个字符`;
+    if (issue.patternMismatch) return field.title?.trim() || '请按要求的格式填写';
+    if (issue.stepMismatch) return field.step === '1' ? '请填写整数' : '请检查数值的小数位数或填写间隔';
+    return field.validationMessage || '请检查这里的填写内容';
+  }
+  let firstInvalid = null;
   document.addEventListener('invalid', event => {
     const field = event.target;
     if (!field.matches('input, select, textarea')) return;
+    for (let parent = field.parentElement; parent; parent = parent.parentElement) {
+      if (parent.matches('details')) parent.open = true;
+    }
+    if (!firstInvalid) {
+      firstInvalid = field;
+      requestAnimationFrame(() => {
+        const first = firstInvalid; firstInvalid = null;
+        // Native submission owns focus. A background checkValidity() must
+        // never move someone out of the field they are currently editing.
+        if (!first?.isConnected || document.activeElement !== first || !visible(first)) return;
+        const bounds = first.getBoundingClientRect(), viewport = window.visualViewport;
+        const top = viewport?.offsetTop || 0, bottom = top + (viewport?.height || innerHeight);
+        const header = [...document.querySelectorAll('#app > .topbar')].reduce((value, node) => Math.max(value, node.getBoundingClientRect().bottom), top);
+        if (bounds.top < header + 12 || bounds.bottom > bottom - 24) first.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+      });
+    }
     clearFieldError(field);
     const error = document.createElement('small');
     error.id = `ui-error-${++sequence}`;
     error.className = 'ui-field-error';
-    error.textContent = field.validationMessage || '请检查这里的填写内容';
+    error.textContent = validationText(field);
     field.dataset.uiErrorId = error.id;
     field.setAttribute('aria-invalid', 'true');
     field.setAttribute('aria-describedby', [field.getAttribute('aria-describedby'), error.id].filter(Boolean).join(' '));

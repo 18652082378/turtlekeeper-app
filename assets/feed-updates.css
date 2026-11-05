@@ -1,0 +1,4 @@
+.feed-update-notice { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 122px); left: 50%; transform: translateX(-50%); z-index: 1250; display: block; width: max-content; max-width: calc(100vw - 32px); min-height: 44px; border: 1px solid var(--green); border-radius: 24px; padding: 10px 18px; background: var(--green); color: #fff; box-shadow: 0 4px 16px rgba(20, 65, 50, .18); font-size: 14px; font-weight: 650; line-height: 1.5; text-align: center; cursor: pointer; }
+.feed-update-notice:disabled { opacity: .65; cursor: progress; }
+.feed-update-notice:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+html[data-theme-color="dark"] .feed-update-notice { background: #287b64; border-color: #70c9a9; color: #fff; }

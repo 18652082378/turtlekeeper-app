@@ -155,6 +155,37 @@ const root = path.resolve(__dirname, '..');
       assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.community-chat-form')).position), 'fixed');
       assert.equal(await page.evaluate(() => $app.style.transform), ''); assert.equal(await page.locator('.edge-back-preview').count(), 0);
     });
+    await check('iOS scroll measures controls only and refreshes its regions after layout changes', async page => {
+      await page.evaluate(() => {
+        window.nonControlMeasures = 0;
+        const rows = document.createElement('div');
+        for (let i = 0; i < 400; i++) {
+          const row = document.createElement('div');
+          row.textContent = '普通消息';
+          const measure = row.getBoundingClientRect.bind(row);
+          row.getBoundingClientRect = () => { nonControlMeasures++; return measure(); };
+          rows.append(row);
+        }
+        $app.querySelector('main').append(rows);
+      });
+      await enableNative(page);
+      await page.evaluate(async () => {
+        nonControlMeasures = 0;
+        for (let i = 0; i < 6; i++) {
+          scrollTo(0, i * 30);
+          document.dispatchEvent(new Event('scroll'));
+          await new Promise(resolve => requestAnimationFrame(resolve));
+        }
+      });
+      assert.equal(await page.evaluate(() => nonControlMeasures), 0, 'ordinary message rows do not need geometry on scroll');
+      await page.evaluate(() => {
+        const control = document.createElement('div');
+        control.style.cssText = 'position:fixed;left:0;top:160px;width:80px;height:45px;overflow-x:auto';
+        control.innerHTML = '<div style="width:180px">横向内容</div>';
+        $app.append(control);
+      });
+      await page.waitForFunction(() => nativeCalls.at(-1)?.excludedRegions?.some(region => Math.abs(region.y * innerHeight - 160) < 1 && region.x === 0));
+    });
     await check('iOS bridge takes ownership over a pending vertical gesture and tracks freely', async page => {
       await enableNative(page);
       const payload = await page.evaluate(() => nativeCalls[0]); assert.equal(payload.enabled, true); assert.ok(payload.excludedRegions.length > 0);

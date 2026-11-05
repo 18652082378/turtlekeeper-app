@@ -5,6 +5,7 @@ const source = fs.readFileSync(require('node:path').join(__dirname,'../app.js'),
 function extract(a,b){return source.slice(source.indexOf(a),source.indexOf(b,source.indexOf(a)));}
 const calls=[],status={textContent:''};
 const sandbox={ console, Map, Set, Date, JSON, Number, String, Boolean,
+  feedEntryRefresh:{market:{pending:false,at:0,key:''}},currentCloudToken:()=> 'token',deferFeedCacheSave(){},
   state:{loggedInPhone:'buyer',page:'market',marketListings:[],marketFeedInitialized:false,marketFeedHasMore:true},
   marketLoading:false,marketLastLoadedAt:0,incomingMarketShareLoading:false,incomingMarketShareListingId:'',
   savedMarketListingIds:()=>[],hasCloudSession:()=>true,marketRegionCities:()=>[],marketAuthPayload:x=>x,

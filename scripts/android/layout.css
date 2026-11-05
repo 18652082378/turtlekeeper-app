@@ -291,3 +291,7 @@ html .guest-login-slot {
 }
 
 html #app .home-archive-section .filter-dock > :last-child { grid-column: auto !important; }
+@media (max-width: 300px) {
+  html #app .home-archive-section .filter-dock { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  html #app .home-archive-section .filter-dock > :nth-child(n+3) { grid-column: 1 / -1 !important; }
+}

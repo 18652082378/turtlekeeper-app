@@ -48,6 +48,7 @@ const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
       await page.locator('.directory-archive-card').filter({ hasText: name }).first().click();
     }
     async function choosePrompt(name) {
+      await page.locator('#communityPostForm').waitFor();
       const details = page.locator('.community-editor-prompts');
       if (await details.count() && await details.getAttribute('open') === null) await details.locator('summary').click();
       await page.locator(`[data-discovery-prompt="${name}"]`).click();
@@ -157,7 +158,7 @@ const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
       await page.evaluate(() => {
         state.page = 'community'; openCommunityComposer('daily'); communityDraftTitle = '发布中不能覆盖原有图片'; communityDraftText = '本地发布边界测试'; render();
         window.resolveBoundaryPublish = null;
-        window.beforePendingSignature = navigationDataSignature('communityAdd');
+        window.beforePendingSnapshot = { page: 'communityAdd', dataSnapshot: copyNavigationData(navigationDataValues('communityAdd')) };
         apiPost = () => new Promise(resolve => { window.resolveBoundaryPublish = resolve; });
       });
       await page.locator('.community-compose-submit').click();
@@ -171,7 +172,7 @@ const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
       await page.locator('[data-community-quick-media]').setInputFiles({ name: 'pending.png', mimeType: 'image/png', buffer: Buffer.from(png.split(',')[1], 'base64') });
       assert.equal(await page.evaluate(() => state.page), 'community');
       assert.equal(await page.evaluate(() => communityDraftMediaItems.length), 0);
-      assert.equal(await page.evaluate(() => navigationDataSignature('communityAdd') !== beforePendingSignature), true, 'A cached editable form must not be reused during publication');
+      assert.equal(await page.evaluate(() => navigationSnapshotIsCurrent(beforePendingSnapshot)), false, 'A cached editable form must not be reused during publication');
       await page.evaluate(() => setState({ page: 'communityAdd' }, { skipCloud: true }));
       assert.equal(await page.locator('#communityPostForm').count(), 0);
       assert.equal(await page.locator('.discovery-pending').isVisible(), true);
