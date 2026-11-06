@@ -22,6 +22,7 @@ const TurtleCare = require('../assets/care-records');
 const { normalizeSettings: normalizeWeatherSettings, publicWeather, createWeatherProvider, createWeatherDispatcher } = require('./weather-reminders');
 const { mediaUrl: validatedMediaUrl } = require('./media-url');
 const { createPasswordRecovery } = require('./password-recovery');
+const { createMediationService } = require('./mediation-service');
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -590,7 +591,7 @@ function isSuspiciousAccountDataLoss(before = {}, after = {}) {
 }
 
 function emptyDatabase() {
-  return { users: {}, reviews: [], feedbacks: [], communityPosts: [], communityNotifications: [], marketListings: [], friendships: [], messages: [], follows: [], reports: [], systemAnnouncements: [], careReminderDeliveries: {}, appAnalytics: { days: {} }, adminAuditLogs: [] };
+  return { users: {}, reviews: [], feedbacks: [], communityPosts: [], communityNotifications: [], marketListings: [], mediationApplications: [], friendships: [], messages: [], follows: [], reports: [], systemAnnouncements: [], careReminderDeliveries: {}, appAnalytics: { days: {} }, adminAuditLogs: [] };
 }
 
 class DatabaseIntegrityError extends Error {
@@ -621,7 +622,8 @@ function normalizeDatabase(data = {}) {
     communityDailyDeliveries: data.communityDailyDeliveries && typeof data.communityDailyDeliveries === "object" ? data.communityDailyDeliveries : {},
     careReminderDeliveries: data.careReminderDeliveries && typeof data.careReminderDeliveries === "object" ? data.careReminderDeliveries : {},
     appAnalytics: data.appAnalytics && typeof data.appAnalytics === "object" ? data.appAnalytics : { days: {} },
-    adminAuditLogs: Array.isArray(data.adminAuditLogs) ? data.adminAuditLogs : []
+    adminAuditLogs: Array.isArray(data.adminAuditLogs) ? data.adminAuditLogs : [],
+    mediationApplications: Array.isArray(data.mediationApplications) ? data.mediationApplications : []
   };
 }
 
@@ -1884,6 +1886,7 @@ async function handleDeleteAccount(req, res) {
     account.blockedPhones = (Array.isArray(account.blockedPhones) ? account.blockedPhones : []).filter(value => value !== phone);
     account.blacklistedPhones = (Array.isArray(account.blacklistedPhones) ? account.blacklistedPhones : []).filter(value => value !== phone);
   });
+  db.mediationApplications = (db.mediationApplications || []).filter(item => item.ownerId !== user.mediationOwnerId);
   delete db.users[phone];
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, deleted: true });
@@ -5268,12 +5271,30 @@ async function handleTeamRequest(req, res, pathname) {
 setInterval(() => { if (!shuttingDown) applePurchases.refresh().catch(error => console.error('Apple refresh:', error.message)); }, 60000).unref();
 setInterval(() => { if (!shuttingDown) alipayPurchases.refresh().catch(() => console.error('Alipay team reconciliation failed')); }, 60000).unref();
 setInterval(() => teamRequestTimes.clear(), 60000).unref();
+const mediationService = createMediationService({ isAdmin: isAdminUser, audit: recordAdminAudit,
+  listingAllowed: item => !isMarketProhibitedSpecies(item.speciesCode, item.speciesName) });
+async function handleMediationRequest(req, res, action) {
+  const body = await readJson(req), db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  try {
+    const result = mediationService.run(db, user, action, body);
+    const { changed, ...response } = result;
+    if (changed) await writeDatabase(db);
+    res.setHeader('Cache-Control', 'no-store');
+    return sendJson(res, 200, { ok: true, ...response });
+  } catch (error) {
+    if (!error.status) throw error;
+    return sendJson(res, error.status, { ok: false, message: error.message });
+  }
+}
 const server = http.createServer(async (req, res) => {
   let url;
   try { url = new URL(req.url, `http://${req.headers.host}`); }
   catch { res.writeHead(400); res.end('Bad request'); return; }
   if (req.method === "OPTIONS") return sendJson(res, 200, { ok: true });
   try {
+    if (req.method === 'POST' && /^\/api\/mediation\/(create|list|detail|withdraw|update)$/.test(url.pathname)) return await handleMediationRequest(req, res, url.pathname.split('/').at(-1));
     if (req.method === 'POST' && url.pathname === '/api/alipay/team/notify') return await handleAlipayNotification(req, res);
     if (req.method === 'POST' && ['/api/team', '/api/apple/purchases', '/api/apple/notifications', '/api/alipay/team/purchases'].includes(url.pathname)) return await handleTeamRequest(req, res, url.pathname);
     if (req.method === "GET" && url.pathname === "/api/app/version") return handleAppVersion(req, res);

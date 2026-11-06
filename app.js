@@ -3946,11 +3946,13 @@ function sameNavigationData(saved, current) {
 }
 
 function navigationSnapshotIsCurrent(snapshot) {
-  return Boolean(snapshot && snapshot.page !== "team" && sameNavigationData(snapshot.dataSnapshot, navigationDataValues(snapshot.page)));
+  return Boolean(snapshot && !["team", "mediation", "mediationApply", "mediationDetail"].includes(snapshot.page) && sameNavigationData(snapshot.dataSnapshot, navigationDataValues(snapshot.page)));
 }
 
 function backNavigationState() {
   if (state.page === "search") return { page: window.TurtleSearch?.source() || "market" };
+  if (["mediationApply", "mediationDetail"].includes(state.page)) return { page: "mediation" };
+  if (state.page === "mediation") return { page: "mine" };
   return {
     page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForLedger ? "ledger" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" || state.page === "communityProfile" ? "community" : state.page === "communityActivity" || state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "mine" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "",
@@ -4087,6 +4089,7 @@ function navigateBack(options = {}) {
     stopMarketDetailVideos($app, true);
     $app.innerHTML = snapshot.html;
     bindEvents();
+    window.TurtleMediation?.bind(mediationContext());
     if (state.page === "market") {
       patchMarketSnapshotDetails();
       patchSystemAnnouncementOverlay();
@@ -4892,6 +4895,7 @@ function pageMarket() {
       </section>` : ""}
       ${inquiryCode ? `<section class="market-inquiry-summary" role="status"><strong>商品咨询码 ${escapeHtml(inquiryCode)}</strong><p>${listings.length > 1 ? "此码匹配多个商品，请核对图片、标题和卖家后选择。" : "按咨询码查找在售商品，点击商品查看详情。"}</p></section>` : ""}
       ${!keyword ? window.TurtleDiscovery?.marketEntry() || "" : ""}
+      ${!keyword ? window.TurtleMediation?.entry() || "" : ""}
       ${!inquiryCode ? marketAssistControls(regions) : ""}
       ${!inquiryCode ? `<section class="market-stage-tabs">
         ${[["all", "全部"], ["hatchling", "苗子"], ["juvenile", "亚成"], ["adult", "种龟"]].map(([value, label]) => `<button class="${stage === value ? "active" : ""}" type="button" data-market-stage="${value}">${label}</button>`).join("")}
@@ -5096,12 +5100,12 @@ function pageMarketDetail() {
         ${isOwn ? "" : `<div class="market-seller-actions"><button class="${item.sellerFollowed ? "active" : ""}" type="button" data-toggle-community-follow="${item.sellerId}">${item.sellerFollowed ? "已关注" : "关注"}</button><button type="button" data-market-contact="${item.id}">聊一聊</button></div>`}
       </section>
       ${state.isCommunityAdmin ? `<section class="market-safe-note"><b>管理员查看</b><p><button type="button" data-admin-seller-phone="${escapeHtml(item.id)}">查看卖家手机号</button></p></section>` : ""}
-      <section class="market-safe-note"><b>交易咨询</b><p>先看近期实拍或视频，再确认健康、尺寸与交付方式；如需购买，请添加客服微信并发送商品咨询码，沟通购买意向、交付方式与售后约定。</p></section>
+      <section class="market-safe-note"><b>交易与中介服务</b><p>先与卖家确认健康、尺寸、价格与交付方式。如需代收买款、验收后按约放款，可自愿申请中介服务：费率0.68%，每笔最低6.80元；具体费用与验收、放款条件需事前共同确认。</p></section>
     </main>
     <div class="market-detail-actions">
       ${marketFavoriteButton(item, "market-detail-favorite")}
       ${!isOwn ? `<button class="market-contact-action" type="button" data-market-contact="${item.id}">联系卖家</button>` : ""}
-      ${isOwn ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">删除</button><button class="market-sold-action" type="button" data-market-sold="${item.id}">${sold ? "恢复在售" : "标记已售"}</button>` : canDelete ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">管理员删除</button>` : sold ? `<button class="market-sold-disabled" type="button" disabled>该商品已售出</button>` : `<button class="market-want-action" type="button" data-market-platform-service="${item.id}">微信咨询购买</button>`}
+      ${isOwn ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">删除</button><button class="market-sold-action" type="button" data-market-sold="${item.id}">${sold ? "恢复在售" : "标记已售"}</button>` : canDelete ? `<button class="market-delete-action" type="button" data-delete-market="${item.id}">管理员删除</button>` : sold ? `<button class="market-sold-disabled" type="button" disabled>该商品已售出</button>` : `<button class="market-want-action" type="button" data-market-platform-service="${item.id}">申请中介服务</button>`}
     </div>
   `;
 }
@@ -7654,6 +7658,8 @@ function pageMine() {
         <button class="mine-row" data-page="calendar"><span>◷</span><strong>操作日志</strong></button>
         <button class="mine-row" data-page="satisfaction"><span>☆</span><strong>满意度调查</strong></button>
         <button class="mine-row" data-page="feedback"><span>✎</span><strong>意见反馈</strong></button>
+        <button class="mine-row" data-page="mediation"><span>单</span><strong>我的中介申请</strong></button>
+        ${state.isCommunityAdmin ? `<button class="mine-row" data-page="mediation" data-mediation-all><span>管</span><strong>全部中介申请</strong></button>` : ""}
         <button class="mine-row" type="button" data-open-platform-service-dialog><span>客</span><strong>联系人工客服</strong><em class="mine-row-hint">微信</em></button>
         <button class="mine-row" data-page="account"><span>⚙</span><strong>账号与安全</strong></button>
         <button class="mine-row" data-page="rules"><span>☷</span><strong>平台规则与隐私</strong></button>
@@ -8095,7 +8101,8 @@ function pageRules() {
       </section>
       <section class="fresh-card policy-card">
         <h3>一、服务范围</h3>
-        <p>平台提供档案记录、龟友圈内容发布、龟集市商品信息展示、关注和聊天咨询功能。龟集市仅用于信息发布与沟通撮合，不提供在线支付、资金托管、担保交易、验货、物流或售后承诺。</p>
+        <p>平台提供档案记录、龟友圈内容发布、龟集市商品信息展示、关注和聊天咨询功能。龟集市的信息展示与直接联系功能不提供在线支付、资金托管、担保交易、验货、物流或售后承诺。</p>
+        <p>用户可另行自愿申请人工中介服务，由龟友手账运营者联系核实。实际服务包含代收买款及买方验收后按约放款；须在办理前共同确认交易总价、费用承担、验收、取消、争议和放款条件，并阅读完整交易条款。提交申请和进度标记不代表已经收款、退款或放款，不构成银行或支付机构的托管及赔付承诺。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>二、发布与交易要求</h3>
@@ -8129,6 +8136,7 @@ function pagePrivacy() {
       </section>
       <section class="fresh-card policy-card">
         <h3>一、我们收集的信息</h3>
+        <p>仅当你主动提交中介服务申请时，保存申请号、账号标识、交易商品、申请金额、联系方式、补充说明、申请确认版本和处理进度，用于管理员联系与跟进。申请记录仅向申请人和平台管理员展示，不进入公开商品或社区列表。</p>
         <p>注册和登录时收集手机号、密码验证信息与昵称；你主动上传的头像、乌龟档案、龟池、护理、繁殖、账本、龟友圈、商品、聊天和反馈内容会用于提供对应功能。应用会使用随机生成的匿名标识、会话起止时间、主模块停留时长和你主动附带在链接中的推广来源标识统计每日进入次数、独立使用人数、停留时长和推广效果；已登录账号仅以不可逆账号摘要关联到运营统计，不收集设备标识或精确位置。你主动点击定位并授权后，平台仅将所在城市用于商品发布展示。</p>
       </section>
       <section class="fresh-card policy-card">
@@ -8277,6 +8285,7 @@ function pageOperations() {
   const tabs = [["analytics", "增长"], ["market", "集市"], ["feedback", "反馈"], ["safety", "安全"], ["health", "服务"], ["chats", "聊天"]];
   return `
     ${topbar("运营中心", true)}
+    <div class="content"><button class="secondary" type="button" data-page="mediation" data-mediation-all>查看全部中介申请</button></div>
     <main class="content page-fresh operations-page">
       <section class="page-intro compact-intro"><div><p class="eyebrow dark">仅管理员可见</p><h2>运营中心</h2><p>查看今日使用情况，以及用户围绕商品的聊天记录。</p></div></section>
       <section class="memo-tabs operations-tabs">${tabs.map(([key, label]) => `<button class="tab ${tab === key ? "active" : ""}" type="button" data-operations-tab="${key}">${label}</button>`).join("")}</section>
@@ -8328,6 +8337,12 @@ function placeholder(title) {
   return `${topbar(title, true)}<main class="content page-fresh"><div class="empty"><strong>${title}</strong><br>这个入口已经放好，后续可以继续扩展。</div></main>`;
 }
 
+function mediationContext() {
+  return { state: () => state, auth: communityAuthPayload, api: apiPost, topbar, render, toast,
+    navigate: patch => setState(patch, { skipCloud: true, skipSave: true }),
+    requireLogin, copy: copyText, wechat: PLATFORM_SERVICE_WECHAT };
+}
+
 function render() {
   if (!forceUpdateState.required && $app.deferEdgeGestureRender?.()) return;
   marketSearchRenderDeferred = false;
@@ -8345,6 +8360,9 @@ function render() {
     return;
   }
   const pages = {
+    mediation: () => window.TurtleMediation.render(mediationContext()),
+    mediationApply: () => window.TurtleMediation.render(mediationContext()),
+    mediationDetail: () => window.TurtleMediation.render(mediationContext()),
     home: pageHome,
     messages: pageMessages,
     communityActivity: pageCommunityActivity,
@@ -8442,6 +8460,7 @@ function render() {
     window.setTimeout(() => $app.classList.remove("community-chat-enter-motion"), 300);
   }
   bindEvents();
+  window.TurtleMediation?.bind(mediationContext());
   window.TurtleEmotePicker?.sync?.();
   if (state.page === 'team') TurtleTeam.bind();
   window.TurtleUI?.enhance($app);
@@ -9006,6 +9025,7 @@ function bindEvents() {
     if (targetPage === "announcements" && !state.isCommunityAdmin) return toast("仅平台管理员可管理系统公告");
     if (targetPage === "operations" && !state.isCommunityAdmin) return toast("仅平台管理员可查看运营数据");
     const navigationState = { page: targetPage, openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "" };
+    if (targetPage === "mediation") navigationState.mediationScope = el.hasAttribute('data-mediation-all') && state.isCommunityAdmin ? 'all' : 'mine';
     if (targetPage === "memos") navigationState.careTab = "care";
     if (targetPage === "poolAdd") navigationState.editingTurtlePoolId = "";
     if (targetPage === "marketAdd") {
@@ -12358,52 +12378,8 @@ function openMarketTopService() {
 
 function openMarketPlatformService(listingId) {
   const listing = (state.marketListings || []).find(item => item.id === listingId);
-  if (!listing || listing.isOwn || listing.pendingLocal) return;
-  if (state.loggedInPhone && currentCloudToken()) recordMarketWant(listingId);
-
-  document.querySelector(".market-service-overlay")?.remove();
-  const previousFocus = document.activeElement;
-  const inquiryCode = marketInquiryCode(listing);
-  const productName = listing.title || listing.speciesName || "龟集市商品";
-  const consultation = `您好，我想咨询龟集市商品「${productName}」，商品咨询码：${inquiryCode}`;
-  const overlay = document.createElement("div");
-  overlay.className = "market-service-overlay";
-  overlay.innerHTML = `
-    <section class="market-service-dialog" role="dialog" aria-modal="true" aria-labelledby="marketServiceTitle">
-      <div class="market-service-head">
-        <div><small>购买前咨询</small><h2 id="marketServiceTitle">微信咨询购买</h2></div>
-        <button type="button" data-market-service-close aria-label="关闭">×</button>
-      </div>
-      <p class="market-service-product">${escapeHtml(productName)}</p>
-      <div class="market-service-wechat"><span>平台客服微信</span><strong>${escapeHtml(PLATFORM_SERVICE_WECHAT)}</strong></div>
-      <div class="market-service-code"><span>商品咨询码</span><b>${escapeHtml(inquiryCode)}</b></div>
-      <p class="market-service-tip">添加客服微信后，请发送咨询内容或商品咨询码。客服可协助沟通、核验商品信息与交易注意事项，具体交易及责任以买卖双方确认内容为准。</p>
-      <div class="market-service-buttons">
-        <button type="button" data-copy-market-consultation>复制咨询内容</button>
-        <button type="button" data-copy-market-wechat>复制微信号并打开微信</button>
-      </div>
-    </section>
-  `;
-  document.body.appendChild(overlay);
-  document.body.classList.add("market-service-open");
-
-  const close = () => {
-    document.removeEventListener("keydown", onKeydown);
-    document.body.classList.remove("market-service-open");
-    overlay.remove();
-    if (previousFocus?.isConnected) previousFocus.focus();
-  };
-  const onKeydown = event => {
-    if (event.key === "Escape") close();
-  };
-  overlay.querySelectorAll("[data-market-service-close]").forEach(button => button.addEventListener("click", close));
-  overlay.addEventListener("click", event => {
-    if (event.target === overlay) close();
-  });
-  overlay.querySelector("[data-copy-market-consultation]")?.addEventListener("click", () => copyText(consultation, "咨询内容已复制，去微信发送给客服"));
-  overlay.querySelector("[data-copy-market-wechat]")?.addEventListener("click", openPlatformWeChat);
-  document.addEventListener("keydown", onKeydown);
-  overlay.querySelector("[data-copy-market-wechat]")?.focus();
+  if (!listing || listing.pendingLocal || listing.status !== "active") return;
+  window.TurtleMediation?.start(mediationContext(), listing);
 }
 
 function openContentReportDialog(targetType, targetId) {
@@ -15654,7 +15630,7 @@ function appAnalyticsModule() {
   if (["community", "communityAdd", "communityPostDetail", "following", "followingProfile", "communityProfile"].includes(page)) return "壳友圈";
   if (["messages", "communityActivity", "communityFriends", "communityChat"].includes(page)) return "消息";
   if (["ledger", "ledgerDetail", "calendar", "breeding", "breedingAdd", "breedingDetail"].includes(page)) return "账本";
-  if (["mine", "satisfaction", "publicSatisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "reports", "sync", "about", "rules", "privacy", "moderation", "announcements", "operations"].includes(page)) return "空间";
+  if (["mine", "mediation", "mediationApply", "mediationDetail", "satisfaction", "publicSatisfaction", "feedback", "feedbackAdd", "feedbackDetail", "account", "reports", "sync", "about", "rules", "privacy", "moderation", "announcements", "operations"].includes(page)) return "空间";
   return "看板";
 }
 

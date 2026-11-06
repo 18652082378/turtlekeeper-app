@@ -21,6 +21,19 @@ const root = path.resolve(__dirname, '..');
     finally { await ctx.close(); }
   }
   try {
+    await check('1.2.1 introduces mediation applications once after upgrade', async (page, setup) => {
+      await setup({ seen: '1.2.0' });
+      await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.1' }));
+      const dialog = page.locator('.release-notes-dialog');
+      await dialog.waitFor();
+      assert.match(await dialog.innerText(), /龟友手账 1\.2\.1/);
+      assert.match(await dialog.innerText(), /我的中介申请/);
+      assert.match(await dialog.innerText(), /预计服务费/);
+      await page.getByRole('button', { name: '我知道了' }).click();
+      await setup();
+      await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.1' }));
+      assert.equal(await dialog.count(), 0);
+    });
     await check('1.2.0 shows the current release notes once after upgrade', async (page, setup) => {
       await setup({ seen: '1.1.9' });
       await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.0' }));

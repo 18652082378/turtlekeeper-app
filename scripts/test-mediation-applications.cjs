@@ -1,0 +1,85 @@
+'use strict';
+const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
+const { runtime } = require('./mediation-test-runtime.cjs');
+const { TERMS_VERSION, fee } = require('../server/mediation-service');
+const checks = [];
+(async () => {
+  const r = await runtime();
+  const createBody = { requestId: 'synthetic-request-alice-0001', listingId: r.listing.id, title: '客户端不能覆盖快照', speciesName: '果核蛋龟', amount: '1400.00', role: 'buyer', contact: 'test-alice-wechat', note: '合成测试', agreed: true, termsVersion: TERMS_VERSION, status: 'completed', feeCents: 0, applicantPhone: r.accounts.bob };
+  try {
+    for (const action of ['list', 'detail', 'create', 'withdraw', 'update']) assert.equal((await r.post(action, null, {})).status, 401);
+    assert.equal((await r.post('list', 'alice', { scope: 'all', isAdmin: true })).status, 403);
+    checks.push('All endpoints authenticate; all-user scope rejects forged admin flags');
+    const [a, b] = await Promise.all([r.post('create', 'alice', createBody), r.post('create', 'alice', createBody)]);
+    assert.equal(a.status, 200); assert.equal(b.status, 200);
+    assert.equal(a.body.application.id, b.body.application.id); assert.equal(r.disk().mediationApplications.length, 1);
+    const application = a.body.application;
+    assert.equal(application.status, 'pending'); assert.equal(application.product.title, r.listing.title); assert.equal(application.feeCents, 952); assert.equal(application.amountCents, 140000);
+    assert.equal(a.cache, 'no-store');
+    for (const field of ['ownerId', 'requestId', 'requestHash', 'applicantPhone']) assert.equal(Object.hasOwn(application, field), false);
+    assert.equal((await r.post('create', 'alice', { ...createBody, amount: '1500' })).status, 409);
+    checks.push('Concurrent retries create once; conflicting reuse rejected; server owns identity/fee/status/snapshot; private responses are not cached');
+    assert.equal((await r.post('list', 'alice')).body.total, 1); assert.equal((await r.post('list', 'bob')).body.total, 0);
+    for (const action of ['detail', 'withdraw', 'update']) assert.ok([403, 404].includes((await r.post(action, 'bob', { id: application.id, revision: 1, status: 'accepted', reply: 'forged' })).status));
+    const overview = await r.post('list', 'admin', { scope: 'all' });
+    assert.equal(overview.body.total, 1); assert.equal(overview.body.applications[0].applicantPhone, r.accounts.alice);
+    assert.equal((await r.post('list', 'admin', { scope: 'mine' })).body.total, 0);
+    checks.push('Users see only their own applications; admin can list/detail all without exposing records to another account');
+    let current = application;
+    assert.equal((await r.post('update', 'admin', { id: current.id, revision: current.revision, status: 'completed', reply: '跳过受理' })).status, 409);
+    for (const status of ['accepted', 'processing', 'completed']) {
+      const changed = await r.post('update', 'admin', { id: current.id, revision: current.revision, status, reply: `已人工核对：${status}` });
+      assert.equal(changed.status, 200); current = changed.body.application;
+    }
+    assert.equal((await r.post('withdraw', 'alice', { id: current.id, revision: current.revision })).status, 409);
+    assert.equal((await r.post('update', 'admin', { id: current.id, revision: 1, status: 'completed', reply: '旧页面' })).status, 409);
+    assert.equal((await r.post('detail', 'alice', { id: current.id })).body.application.history.length, 4);
+    assert.equal(r.disk().adminAuditLogs.filter(item => item.action === '处理中介申请').length, 3);
+    checks.push('Admin state transitions, public progress history, conflict rejection and audit trail remain consistent');
+    const beforeInvalid = r.disk().mediationApplications.length;
+    for (const amount of ['0', '-2', '1.001', 'NaN', '1e3', {}, '99999999', '']) assert.equal((await r.post('create', 'alice', { ...createBody, requestId: 'invalid-money-' + Math.random().toString(36).slice(2), amount })).status, 400);
+    for (const patch of [{ agreed: false }, { termsVersion: 'old' }, { contact: '' }, { contact: 'a'.repeat(81) }, { title: '<'.repeat(121) }, { role: 'admin' }]) assert.equal((await r.post('create', 'alice', { ...createBody, requestId: 'invalid-fields-' + Math.random().toString(36).slice(2), ...patch })).status, 400);
+    assert.equal(r.disk().mediationApplications.length, beforeInvalid);
+    assert.equal(fee(50000), 680); assert.equal(fee(100000), 680); assert.equal(fee(140000), 952); assert.equal(fee(300000), 2040);
+    checks.push('Invalid money/contact/terms rejected without data writes; fee floor and integer rounding verified');
+    const pending = (await r.post('create', 'bob', { ...createBody, listingId: '', title: '双方已谈好的龟', requestId: 'synthetic-request-bob-0001', role: 'seller', contact: 'test-bob', amount: '500' })).body.application;
+    assert.equal(pending.feeCents, 680);
+    assert.equal((await r.post('withdraw', 'bob', { id: pending.id, revision: 1 })).body.application.status, 'withdrawn');
+    assert.equal((await r.post('detail', 'bob', { id: application.id })).status, 404);
+    const all = await r.post('list', 'admin', { scope: 'all', limit: 1 });
+    assert.equal(all.body.total, 2); assert.equal(all.body.hasMore, true);
+    const second = await r.post('list', 'admin', { scope: 'all', limit: 1, offset: all.body.nextOffset });
+    assert.notEqual(second.body.applications[0].id, all.body.applications[0].id);
+    assert.equal((await r.post('list', 'admin', { scope: 'all', status: 'withdrawn' })).body.total, 1);
+    assert.equal((await r.post('list', 'alice', { keyword: application.code })).body.total, 1);
+    assert.equal((await r.post('list', 'bob', { keyword: application.code })).body.total, 0);
+    checks.push('Independent seller intake, pending withdrawal, pagination and filters preserve isolation');
+    await r.stop(); await r.start();
+    assert.equal((await r.post('detail', 'alice', { id: application.id })).body.application.status, 'completed');
+    assert.equal((await r.post('detail', 'bob', { id: pending.id })).body.application.status, 'withdrawn');
+    assert.equal(r.disk().marketListings[0].wantedPhones.length, 0);
+    assert.equal(r.disk().users[r.accounts.alice].data && Object.keys(r.disk().users[r.accounts.alice].data).length, 0);
+    checks.push('Real server restart retains applications/history and leaves account records and market intent metrics unchanged');
+    console.log('PASS mediation applications: ' + checks.join('; ') + '.');
+    fs.writeFileSync(path.join(__dirname, '../output/mediation-api-results.json'), JSON.stringify({ checkedAt: new Date().toISOString(), realProductionData: false, checks }, null, 2));
+  } finally { await r.stop(); }
+  const sql = await runtime({ records: true });
+  try {
+    const payload = { ...createBody, listingId: sql.listing.id, requestId: 'synthetic-sql-request-0001' };
+    const start = Date.now();
+    const saved = await sql.post('create', 'alice', payload);
+    assert.equal(saved.status, 200); assert.ok(Date.now() - start >= 100, 'Must wait for durable commit');
+    assert.equal(sql.disk().mediationApplications.length, 1);
+    const id = saved.body.application.id;
+    assert.equal((await sql.post('list', 'alice')).body.applications[0].id, id, 'Tracked SQL objects serialize safely');
+    await sql.stop(); await sql.start();
+    assert.equal((await sql.post('detail', 'alice', { id })).body.application.code, saved.body.application.code);
+    fs.writeFileSync(sql.failFile, 'synthetic failure');
+    const failed = await sql.post('update', 'admin', { id, revision: 1, status: 'accepted', reply: '不能虚报成功' });
+    assert.ok(failed.status >= 500); assert.equal(failed.body.ok, false);
+    assert.equal(sql.disk().mediationApplications[0].status, 'pending');
+    await sql.stop(); fs.unlinkSync(sql.failFile); await sql.start();
+    assert.equal((await sql.post('detail', 'alice', { id })).body.application.status, 'pending');
+    console.log('PASS mediation SQL driver: delayed durable acknowledgment, proxy serialization, restart and failed-commit rollback. No production MySQL used.');
+  } finally { await sql.stop(); }
+})().catch(e => { console.error(e); process.exitCode = 1; });

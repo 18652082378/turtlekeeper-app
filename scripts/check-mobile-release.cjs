@@ -24,6 +24,8 @@ run('scripts/verify-ios-build.js', ['--native']);
 if (!args.includes('--prepare-only')) {
   const failures = [];
   const serviceChecks = [
+    'scripts/test-mediation-applications.cjs',
+    'scripts/test-mediation-deploy.cjs',
     'scripts/test-release-history-independence.cjs',
     'scripts/test-feed-server-latency.cjs', 'scripts/test-feed-client-latency.cjs',
     'scripts/test-turtle-share-server.cjs', 'scripts/test-api-request-resilience.cjs',
@@ -45,6 +47,8 @@ if (!args.includes('--prepare-only')) {
   try { run('scripts/test-android-ui.cjs', [], { ANDROID_EXTENDED: '1', ANDROID_TYPOGRAPHY: '1', ANDROID_CARDS: '1', ANDROID_LEDGER: '1' }); }
   catch (e) { failures.push(e.message); }
   for (const platform of ['ios', 'android']) {
+    try { run('scripts/test-mediation-applications-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
     for (const script of ['scripts/test-community-chat-keyboard-ui.cjs', 'scripts/test-feed-updates-ui.cjs', 'scripts/test-publishing-drafts.cjs', 'scripts/test-ui-experience.cjs', 'scripts/test-module-editing-ux.cjs', 'scripts/test-weather-reminders-ui.cjs', 'scripts/test-navigation-freshness.cjs', 'scripts/test-chat-send-gesture-ui.cjs', 'scripts/test-client-mutation-races.cjs', 'scripts/test-data-reliability.cjs', 'scripts/test-media-attribute-safety.cjs', 'scripts/test-single-device-ui.cjs', 'scripts/test-registration-state-ui.cjs', 'scripts/test-message-cache-ui.cjs']) {
       try { run(script, [], { MOBILE_UI_PLATFORM: platform, COMMUNITY_MOBILE_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
       catch (e) { failures.push(e.message); }
