@@ -2,6 +2,8 @@
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const { engine, launchBrowser } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
+const platform = process.env.MOBILE_UI_PLATFORM || 'web';
+const assetRoot = platform === 'ios' ? path.join(root, 'ios/App/App/public') : platform === 'android' ? path.join(root, 'android/app/src/main/assets/public') : root;
 (async () => {
   const browser = await launchBrowser(), outcomes = [];
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
@@ -10,8 +12,8 @@ const root = path.resolve(__dirname, '..');
     if (url.hostname !== 'chat-recovery.test') return route.abort();
     if (url.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: 'window.TURTLE_API_BASE_URL="https://chat-recovery.test";' });
     if (url.pathname.startsWith('/api/')) return route.fulfill({ json: { ok: true, minimumBuild: 0, latestBuild: 0, friends: [], posts: [], messages: [], listings: [], notifications: [], items: [] } });
-    const file = path.resolve(root, '.' + (url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname)));
-    if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
+    const file = path.resolve(assetRoot, '.' + (url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname)));
+    if (!file.startsWith(assetRoot + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
     return route.fulfill({ body: fs.readFileSync(file), contentType: ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml' })[path.extname(file)] || 'application/octet-stream' });
   });
   async function check(name, run) {
@@ -62,11 +64,14 @@ const root = path.resolve(__dirname, '..');
   }
   try {
     await check('20 rapid submits send once and rerender keeps the pending button disabled', async page => {
-      await input(page).fill(' 同一条消息 '); await page.evaluate(() => { for (let i = 0; i < 20; i++) document.querySelector('#communityChatForm input[name="content"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); });
+      await input(page).fill(' 同一条消息 ');
+      const sendWidth = await button(page).evaluate(node => node.getBoundingClientRect().width);
+      await page.evaluate(() => { for (let i = 0; i < 20; i++) document.querySelector('#communityChatForm input[name="content"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); });
       assert.equal(await page.evaluate(() => requests.length), 1); assert.equal(await button(page).isDisabled(), true);
       await page.evaluate(() => render()); assert.equal(await button(page).isDisabled(), true);
       const geometry = await page.evaluate(() => { const form = document.querySelector('#communityChatForm').getBoundingClientRect(); const controls = [...document.querySelectorAll('#communityChatForm input[name="content"], #communityChatForm button')].map(node => node.getBoundingClientRect()); return { fits: controls.every(rect => rect.x >= form.x && rect.right <= form.right + 1), inputWidth: controls[0].width }; });
       assert.equal(geometry.fits, true); assert.ok(geometry.inputWidth > 180);
+      assert.equal(await button(page).evaluate(node => node.getBoundingClientRect().width), sendWidth, 'Sending status retains the input and button widths');
       fs.mkdirSync(path.join(root, 'output/chat-send-qa'), { recursive: true }); await page.screenshot({ path: path.join(root, 'output/chat-send-qa/composer-' + engine + '.png') });
       await finish(page); assert.equal(await input(page).inputValue(), ''); assert.equal(await button(page).isVisible(), false);
       assert.equal(await page.evaluate(() => Object.keys(state.communityChatTextOutbox).length), 0);

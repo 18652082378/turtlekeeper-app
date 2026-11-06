@@ -54,16 +54,18 @@ fs.mkdirSync(output, { recursive: true });
     const prices = () => page.locator('.home-archive-section .turtle-price');
     const badgeGeometry = () => prices().evaluateAll(items => items.map(item => {
       const { x, y, width, height } = item.getBoundingClientRect();
-      return { x, y, width, height };
+      return { x: x + window.scrollX, y: y + window.scrollY, width, height };
     }));
     async function expectUnmovedToggle() {
+      await toggle().scrollIntoViewIfNeeded();
+      await page.evaluate(() => document.fonts.ready);
       const geometry = await badgeGeometry();
       await toggle().click();
       const after = await badgeGeometry();
       assert.equal(after.length, geometry.length);
       geometry.forEach((box, index) => {
         for (const dimension of ['x', 'y', 'width', 'height']) assert(Math.abs(box[dimension] - after[index][dimension]) < 0.1,
-          `Price badge ${dimension} stays fixed during masking`);
+          `Price badge ${index} document ${dimension} stays fixed during masking: ${box[dimension]} -> ${after[index][dimension]}`);
       });
     }
     async function expectMasked(count) {

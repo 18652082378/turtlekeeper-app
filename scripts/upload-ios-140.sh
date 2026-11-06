@@ -11,13 +11,11 @@ manifest=scripts/ios-140-release-files.txt
 if [[ ! -f node_modules/plist/package.json || ! -f node_modules/playwright/package.json ]]; then
   npm ci --cache .npm-cache --no-audit --no-fund
 fi
-# Validate iOS pages with Playwright's matching WebKit build.
+# Validate both packaged apps with Playwright's matching browser builds.
 # Node needs a native path here, including when launched from Git Bash.
-export BROWSER_ENGINE=webkit
+unset BROWSER_ENGINE BROWSER_EXECUTABLE MOBILE_UI_PLATFORM COMMUNITY_MOBILE_PLATFORM
 export PLAYWRIGHT_BROWSERS_PATH="$(node -p 'require("node:path").resolve(".browser-tests")')"
-if ! node -e 'process.exit(require("node:fs").existsSync(require("playwright").webkit.executablePath()) ? 0 : 1)'; then
-  npx playwright install webkit
-fi
+npx playwright install --only-shell chromium webkit
 
 node - <<'NODE'
 const assert = require('node:assert/strict');
@@ -32,12 +30,10 @@ assert.equal(lock.version, '1.2.0');
 assert.equal(lock.packages[''].version, '1.2.0');
 NODE
 node scripts/verify-ios-upload-manifest.cjs
-node scripts/check-mobile-release.cjs --prepare-only
+node scripts/check-mobile-release.cjs
 node scripts/test-native-edge-transport.cjs
 node scripts/test-app-update-policy.cjs
-node scripts/test-release-notes.cjs
-node scripts/test-navigation-freshness.cjs
-MOBILE_UI_PLATFORM=ios node scripts/test-module-editing-ux.cjs
+BROWSER_ENGINE=webkit node scripts/test-release-notes.cjs
 if [[ "${1:-}" == --check ]]; then exit 0; fi
 
 # Build 140 is committed from this worktree and pushed only as a fast-forward.

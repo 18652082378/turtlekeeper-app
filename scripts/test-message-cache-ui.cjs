@@ -1,10 +1,10 @@
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { launchBrowser } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
 const friend = { id: 'cached-friend', name: '缓存会话', lastMessage: '上次的聊天内容', lastMessageAt: '2026-09-14T10:00:00Z', unreadCount: 2 };
 const user = { phone: '13900000008', token: 'cache-test-token', accountName: '缓存测试', termsVersion: '2026-09-01', dataRevision: 'revision-1', updatedAt: '2026-09-17T00:00:00Z', data: { turtles: [], ledgerRecords: [], memos: [], breedingRecords: [] } };
 async function main() {
- const browser = await chromium.launch({ headless: true, channel: 'msedge' });
+ const browser = await launchBrowser();
  try {
   async function open(cached, initialized = false) {
    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });

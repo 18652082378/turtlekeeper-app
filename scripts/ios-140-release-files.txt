@@ -480,6 +480,7 @@ docs/ios-136-release.md
 docs/ios-137-release.md
 docs/ios-138-release.md
 docs/ios-139-release.md
+docs/ios-140-audit-20261106.md
 docs/ios-iap-110-upload.md
 docs/loss-accounting.md
 docs/market-availability-30-days.md

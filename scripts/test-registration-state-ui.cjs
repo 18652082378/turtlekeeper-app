@@ -2,7 +2,7 @@
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const net = require('node:net'), assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { launchBrowser } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
 async function main() {
   const runtime = fs.mkdtempSync(path.join(os.tmpdir(), 'turtle-registration-test-'));
@@ -20,7 +20,7 @@ async function main() {
       try { if ((await fetch(origin + '/api/app/version')).ok) break; } catch {}
       await new Promise(resolve => setTimeout(resolve, 100));
     }
-    browser = await chromium.launch({ channel: 'msedge', headless: true });
+    browser = await launchBrowser();
     for (const scenario of ['same-tab', 'lost-state', 'expired-local-state', 'wrong-code', 'not-sent']) {
       const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
       const page = await context.newPage();

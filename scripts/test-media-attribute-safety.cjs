@@ -2,12 +2,12 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { launchBrowser } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
 const fixture = require('./ui-audit-fixture.cjs');
 
 (async () => {
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
+  const browser = await launchBrowser();
   const results = [];
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -38,6 +38,13 @@ const fixture = require('./ui-audit-fixture.cjs');
         ['valid local image', () => communityMedia({ ...post, mediaItems: [{ type: 'image', url: photo }] })],
         ['archive card labels', () => turtleCard(turtle)],
         ['archive row labels', () => turtleListRow(turtle)],
+        ['breeding row labels', () => breedingRow({ id: 'safe-breeding', motherName: textPayload, date: textPayload })],
+        ['breeding edit fields', () => {
+          state.breedingRecords = [{ id: 'safe-breeding', motherName: textPayload, date: payload, eggCount: payload }];
+          state.selectedBreedingId = 'safe-breeding';
+          return pageBreedingDetail();
+        }],
+        ['growth chart dates', () => turtleDetailGrowthChart({ ...turtle, acquiredDate: textPayload })],
         ['account nickname', () => { state.loggedInPhone = '13900000001'; state.accountName = payload; return pageAccount(); }],
         ['account login drafts', () => { state.loggedInPhone = ''; state.accountMode = 'register'; state.accountDraftPhone = payload; state.accountDraftPassword = payload; state.accountDraftConfirmPassword = payload; return pageAccount(); }],
         ['kept species labels', () => { state.keptSpecies = [textPayload]; return pageBreeds(); }],
@@ -53,7 +60,7 @@ const fixture = require('./ui-audit-fixture.cjs');
         // Trigger the same DOM event synchronously; do not depend on image timing.
         holder.querySelectorAll('*').forEach(el => el.dispatchEvent(new Event('error')));
         const badAttributes = [...holder.querySelectorAll('*')].flatMap(el => [...el.attributes].filter(attr => /^on/i.test(attr.name) || attr.name === 'data-injected').map(attr => attr.name));
-        results.push({ name, executed: window.__mediaProbe, badAttributes, firstSource: holder.querySelector('img,video')?.getAttribute('src') });
+        results.push({ name, executed: window.__mediaProbe, badAttributes, containsText: holder.textContent.includes(textPayload), firstSource: holder.querySelector('img,video')?.getAttribute('src') });
         holder.remove();
       }
       return results;
@@ -64,6 +71,9 @@ const fixture = require('./ui-audit-fixture.cjs');
     for (const result of results) {
       assert.equal(result.executed, 0, `${result.name}: media must never execute injected event code`);
       assert.deepEqual(result.badAttributes, [], `${result.name}: media must stay in its own attribute`);
+    }
+    for (const name of ['breeding row labels', 'growth chart dates']) {
+      assert.equal(results.find(result => result.name === name).containsText, true, name + ': special characters remain readable as literal text');
     }
     assert.equal(results.find(r => r.name === 'valid URL preserves ampersands').firstSource, '/image?a=1&b=2');
     const uploads = await page.evaluate(async () => {

@@ -34,7 +34,7 @@ workflows:
       - name: Check iOS and Android page layouts
         script: |
           set -e
-          npx playwright install chromium webkit
+          npx playwright install --only-shell chromium webkit
           npm run check:mobile
       - name: Apply signing profiles
         script: |
@@ -76,6 +76,9 @@ workflows:
       - output/form-intrinsic-layout-*.json
       - output/discovery-workspace/**/*.png
       - output/discovery-workspace-*.json
+      - output/chat-send-qa/**/*
+      - output/archive-price-privacy/**/*
+      - output/navigation-freshness*.json
       - /Users/builder/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
     publishing:
       app_store_connect:

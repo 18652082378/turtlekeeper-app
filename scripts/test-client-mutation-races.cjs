@@ -66,6 +66,38 @@ const root = path.resolve(__dirname, '..');
     finally { await page.close(); }
   }
   try {
+    await check('reconnect joins a failed cold-start load and retries before flushing the journal', async page => {
+      await page.evaluate(() => {
+        cloudHydrationComplete = false; cloudHydrationStarted = false; cloudHydrationTask = null;
+        persistPendingCloudData(); auditHoldAccountLoad();
+        window.coldStartHydration = startCloudSessionHydration();
+        window.dispatchEvent(new Event('online'));
+        window.dispatchEvent(new Event('online'));
+      });
+      assert.equal(await page.evaluate(() => auditLoadRequests.length), 1, 'concurrent reconnects join the cold-start request');
+      await page.evaluate(() => auditLoadRequests[0].resolve({ ok: true }));
+      await page.waitForFunction(() => auditLoadRequests.length === 2);
+      await page.evaluate(() => auditLoadRequests[1].resolve({ ok: true, user: auditUser() }));
+      await page.waitForFunction(() => cloudHydrationComplete && !readPendingCloudData() && !cloudSyncInFlight);
+      assert.equal(await page.evaluate(() => auditLoadRequests.length), 2, 'one reconnect retry, without waiting for the poll');
+      assert.equal(await page.evaluate(() => state.turtles[0].id), 't1');
+    });
+    for (const oldResult of ['failed', 'loaded']) await check(`a late ${oldResult} hydration cannot finish or migrate another account session`, async page => {
+      const result = await page.evaluate(async oldResult => {
+        cloudHydrationComplete = false; cloudHydrationStarted = false; cloudHydrationTask = null;
+        window.hydrationLoads = []; window.hydrationMigrations = [];
+        refreshCloudAccountFromServer = () => new Promise(resolve => hydrationLoads.push({ phone: state.loggedInPhone, resolve }));
+        migrateEmbeddedImagesToCloud = async () => { hydrationMigrations.push(state.loggedInPhone); return false; };
+        const oldLoad = startCloudSessionHydration();
+        state = { ...state, loggedInPhone: 'audit-b', cloudToken: 'token-b' };
+        const newLoad = startCloudSessionHydration();
+        hydrationLoads[0].resolve(oldResult === 'loaded'); await oldLoad;
+        const during = { owner: cloudHydrationTask?.phone, started: cloudHydrationStarted, migrations: [...hydrationMigrations] };
+        cloudHydrationComplete = true; hydrationLoads[1].resolve(true); await newLoad;
+        return { during, owner: cloudHydrationTask, migrations: hydrationMigrations, complete: cloudHydrationComplete };
+      }, oldResult);
+      assert.deepEqual(result, { during: { owner: 'audit-b', started: true, migrations: [] }, owner: null, migrations: ['audit-b'], complete: true });
+    });
     await check('normal confirmed growth deletion uses its reviewed revision and keeps other records', async page => {
       const result = await page.evaluate(async () => {
         state.careRecords = [{ id: 'cloud-care', itemId: 'feeding', title: '喂食', note: '', date: '2026-09-28' }];

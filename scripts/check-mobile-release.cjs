@@ -6,7 +6,10 @@ if (!process.env.PLAYWRIGHT_BROWSERS_PATH && fs.existsSync(path.join(root, '.bro
 function run(script, args = [], extra = {}) {
   const result = spawnSync(process.execPath, [path.join(root, script), ...args], { cwd: root, env: { ...process.env, ...extra }, stdio: 'inherit', windowsHide: true });
   if (result.error) throw result.error;
-  if (result.status !== 0) throw Error(script + ' failed (' + result.status + ')');
+  if (result.status !== 0) {
+    const target = [extra.MOBILE_UI_PLATFORM || extra.COMMUNITY_MOBILE_PLATFORM, extra.BROWSER_ENGINE].filter(Boolean).join('/');
+    throw Error(script + ' failed (' + result.status + ')' + (target ? ' [' + target + ']' : ''));
+  }
 }
 const args = process.argv.slice(2);
 if (args.some(a => !['--prepared', '--prepare-only'].includes(a)) || args.length > 1) throw Error('Use --prepared or --prepare-only');
@@ -20,7 +23,17 @@ run('scripts/test-mobile-parity.cjs');
 run('scripts/verify-ios-build.js', ['--native']);
 if (!args.includes('--prepare-only')) {
   const failures = [];
-  for (const script of ['scripts/test-feed-server-latency.cjs', 'scripts/test-feed-client-latency.cjs', 'scripts/test-turtle-share-server.cjs', 'scripts/test-api-request-resilience.cjs', 'scripts/test-publish-navigation-boundaries.cjs', 'scripts/test-module-loading.cjs', 'scripts/test-feed-loading-recovery.js', 'scripts/test-notification-summary.js']) {
+  const serviceChecks = [
+    'scripts/test-feed-server-latency.cjs', 'scripts/test-feed-client-latency.cjs',
+    'scripts/test-turtle-share-server.cjs', 'scripts/test-api-request-resilience.cjs',
+    'scripts/test-publish-navigation-boundaries.cjs', 'scripts/test-module-loading.cjs', 'scripts/test-account-sync-races.js',
+    'scripts/test-feed-loading-recovery.js', 'scripts/test-notification-summary.js',
+    'scripts/test-api-workflows.js', 'scripts/test-mysql-records.js', 'scripts/test-mysql-record-api.js',
+    'scripts/test-team-space.js', 'scripts/test-team-breeding.cjs', 'scripts/test-team-visibility.cjs',
+    'scripts/test-reliability-guards.cjs', 'scripts/test-postrelease-server-audit.cjs',
+    'scripts/test-ios-signing.cjs', 'scripts/test-ios-release-readiness.cjs'
+  ];
+  for (const script of serviceChecks) {
     try { run(script); } catch (e) { failures.push(e.message); }
   }
   // Run both even when the first fails, so one report shows both platforms.
@@ -31,7 +44,7 @@ if (!args.includes('--prepare-only')) {
   try { run('scripts/test-android-ui.cjs', [], { ANDROID_EXTENDED: '1', ANDROID_TYPOGRAPHY: '1', ANDROID_CARDS: '1', ANDROID_LEDGER: '1' }); }
   catch (e) { failures.push(e.message); }
   for (const platform of ['ios', 'android']) {
-    for (const script of ['scripts/test-community-chat-keyboard-ui.cjs', 'scripts/test-feed-updates-ui.cjs', 'scripts/test-publishing-drafts.cjs', 'scripts/test-ui-experience.cjs', 'scripts/test-module-editing-ux.cjs', 'scripts/test-weather-reminders-ui.cjs', 'scripts/test-navigation-freshness.cjs', 'scripts/test-chat-send-gesture-ui.cjs']) {
+    for (const script of ['scripts/test-community-chat-keyboard-ui.cjs', 'scripts/test-feed-updates-ui.cjs', 'scripts/test-publishing-drafts.cjs', 'scripts/test-ui-experience.cjs', 'scripts/test-module-editing-ux.cjs', 'scripts/test-weather-reminders-ui.cjs', 'scripts/test-navigation-freshness.cjs', 'scripts/test-chat-send-gesture-ui.cjs', 'scripts/test-client-mutation-races.cjs', 'scripts/test-data-reliability.cjs', 'scripts/test-media-attribute-safety.cjs', 'scripts/test-single-device-ui.cjs', 'scripts/test-registration-state-ui.cjs', 'scripts/test-message-cache-ui.cjs']) {
       try { run(script, [], { MOBILE_UI_PLATFORM: platform, COMMUNITY_MOBILE_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
       catch (e) { failures.push(e.message); }
     }
@@ -51,7 +64,7 @@ if (!args.includes('--prepare-only')) {
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-form-intrinsic-layout.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium', FORM_ERRORS: '1' }); }
     catch (e) { failures.push(e.message); }
-    try { run('scripts/test-module-workspaces.cjs', [], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    try { run('scripts/test-module-workspaces.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-market-publish-layout.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }

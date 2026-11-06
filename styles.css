@@ -6172,9 +6172,13 @@ html[data-theme-color="dark"] .ledger-row .ledger-turtle-meta span {
 }
 
 .community-chat-form.has-send-button { grid-template-columns: minmax(0, 1fr) 42px auto; }
-.community-chat-form .community-chat-send-btn { height: 42px; padding: 0 12px; }
+.community-chat-form .community-chat-send-btn { width: 72px; min-width: 72px; max-width: 72px; height: 42px; padding: 0 8px; font-size: 14px; line-height: 1; white-space: nowrap; }
 .community-chat-form .community-chat-send-btn[hidden] { display: none; }
 .community-chat-form .community-chat-send-btn:disabled { opacity: .65; }
+
+@media (max-width: 350px) {
+  .community-chat-form .community-chat-send-btn { width: 64px; min-width: 64px; max-width: 64px; padding-inline: 5px; font-size: 12px; }
+}
 
 .community-chat-form .community-chat-plus-btn {
   width: 42px;

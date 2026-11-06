@@ -40,7 +40,7 @@ async function main() {
     for (const folder of ['server', 'assets']) {
       await fs.mkdir(path.join(app, folder), { recursive: true });
       for (const name of await fs.readdir(path.join(root, folder))) {
-        if (name.endsWith('.js')) await fs.copyFile(path.join(root, folder, name), path.join(app, folder, name));
+        if (name.endsWith('.js') || name === 'weather-cities.json') await fs.copyFile(path.join(root, folder, name), path.join(app, folder, name));
       }
     }
     await fs.copyFile(path.join(root, 'species-data.js'), path.join(app, 'species-data.js'));

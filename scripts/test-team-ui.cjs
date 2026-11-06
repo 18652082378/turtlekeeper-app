@@ -4,7 +4,7 @@ const { spawn } = require('child_process');
 const assert = require('assert/strict');
 const { fixture } = require('./team-test-fixture');
 const { updateAccess } = require('./team-test-access.cjs');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { launchBrowser } = require('./browser-test-engine.cjs');
 const root = process.env.TEAM_TEST_ROOT ? path.resolve(process.env.TEAM_TEST_ROOT) : path.resolve(__dirname, '..');
 const output = path.join(root, 'output/team-qa');
 async function main() {
@@ -26,7 +26,7 @@ async function main() {
   let browser, logs = ''; child.stdout.on('data', b => logs += b); child.stderr.on('data', b => logs += b);
   try {
     for (let i = 0; i < 100; i++) { try { if ((await fetch(origin + '/api/app/version')).ok) break; } catch {} await new Promise(r => setTimeout(r, 100)); }
-    browser = await chromium.launch({ headless: true, channel: 'msedge' });
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
     const refreshTeam = async () => {
       const previous = await page.locator('[data-team-workspace] [aria-current="page"]').getAttribute('data-tab');

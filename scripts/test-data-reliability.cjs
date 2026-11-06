@@ -42,11 +42,8 @@ async function main() {
   const base = `http://127.0.0.1:${port}`;
   const offlineContexts = new WeakSet();
   async function setOffline(context, offline) {
-    if (engine !== 'webkit') return context.setOffline(offline);
-    // Windows WebKit rejects reload of even an intercepted static document
-    // when its entire context is offline. Native iOS loads bundled web assets;
-    // model that separately: keep static files available, fail every API call,
-    // and persist the navigator.onLine fixture through an actual reload.
+    // Native apps retain bundled pages while the API is unavailable. Model
+    // that consistently across engines, including an actual page reload.
     if (offline) offlineContexts.add(context); else offlineContexts.delete(context);
     for (const page of context.pages()) await page.evaluate(offline => {
       if (offline) localStorage.setItem('__reliability_api_offline', '1');
@@ -103,7 +100,7 @@ async function main() {
       if (width === 1280) user = (await post('/api/account/login', { phone, password: 'IsolatedPass123', termsAccepted: true,
         deviceId: 'reliability-test-device-b', devicePlatform: 'web' })).user;
       const context = await browser.newContext({ viewport: { width, height: 844 } }); contexts.push(context);
-      if (engine === 'webkit') await context.addInitScript(() => {
+      await context.addInitScript(() => {
         Object.defineProperty(navigator, 'onLine', { configurable: true,
           get: () => localStorage.getItem('__reliability_api_offline') !== '1' });
       });
@@ -136,7 +133,16 @@ async function main() {
     const [a, b] = pages;
     assert.notEqual(await a.evaluate(() => currentCloudToken()), await b.evaluate(() => currentCloudToken()), 'two independent authenticated sessions');
     const refresh = page => page.evaluate(() => refreshCloudAccountFromServer());
-    const settled = page => page.waitForFunction(() => !cloudSyncInFlight && !readPendingCloudData());
+    const settled = async page => {
+      await page.bringToFront();
+      try { await page.waitForFunction(() => !cloudSyncInFlight && !readPendingCloudData()); }
+      catch (error) {
+        console.error('Unsettled synthetic account', await page.evaluate(() => ({ hidden: document.hidden, online: navigator.onLine,
+          hydrated: cloudHydrationComplete, scheduled: Boolean(cloudSyncTimer), inFlight: cloudSyncInFlight, paused: cloudSyncIsPaused(),
+          conflict: state.cloudSyncConflict, pending: readPendingCloudData(), revision: state.cloudAccountDataRevision })));
+        throw error;
+      }
+    };
     async function snapshot(page, field) { return page.evaluate(field => accountDataSnapshot(state)[field], field); }
     async function checkEverywhere(field, expected) {
       for (const page of pages) { await refresh(page); assert.deepEqual(await snapshot(page, field), expected, field + ' cross-device full contents'); }
@@ -218,7 +224,7 @@ async function main() {
       engine, platform: process.platform, nativeDevice: false,
       at: new Date().toISOString(), client: release ? revision : 'working tree', server: compat ? 'local server with five reviewed production hotfix functions' : 'local current server',
       environment: `localhost HTTP, synthetic account, JSON store, desktop ${engine}; not production or native iOS`,
-      offlineMode: engine === 'webkit' ? 'bundled static fixture remains available; all API requests aborted; navigator.onLine and online/offline events simulated through reload' : 'browser context offline with routed static fixtures',
+      offlineMode: 'bundled static fixture remains available; all API requests aborted; navigator.onLine and online/offline events simulated through reload',
       results, serverRestart: 'pass',
       pool201: !compat || hotfix ? 'pass' : 'known truncation in old normalization, covered in guard reproduction', hotfix,
       auth: 'distinct tokens on synthetic admin account; ordinary single-session handoff checked by HTTP' }, null, 2));

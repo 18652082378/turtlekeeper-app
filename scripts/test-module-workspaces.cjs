@@ -4,6 +4,8 @@ const fs = require('node:fs'), path = require('node:path'), assert = require('no
 const { launchBrowser, engine } = require('./browser-test-engine.cjs');
 const fixture = require('./ui-audit-fixture.cjs');
 const root = path.resolve(__dirname, '..'), output = path.join(root, 'output/ui-upgrade-132/modules');
+const platform = process.env.MOBILE_UI_PLATFORM || 'web';
+const assetRoot = platform === 'ios' ? path.join(root, 'ios/App/App/public') : platform === 'android' ? path.join(root, 'android/app/src/main/assets/public') : root;
 (async () => {
   fs.mkdirSync(output, { recursive: true });
   const browser = await launchBrowser(), results = [], density = [];
@@ -13,8 +15,8 @@ const root = path.resolve(__dirname, '..'), output = path.join(root, 'output/ui-
     if (url.hostname !== 'modules.test') return route.abort();
     if (url.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: 'window.TURTLE_API_BASE_URL="";' });
     if (url.pathname.startsWith('/api/')) return route.fulfill({ json: { ok: true, posts: [], messages: [], listings: [], friends: [], minimumBuild: 0 } });
-    const file = path.resolve(root, '.' + (url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname)));
-    if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
+    const file = path.resolve(assetRoot, '.' + (url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname)));
+    if (!file.startsWith(assetRoot + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
     return route.fulfill({ body: fs.readFileSync(file), contentType: ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg' })[path.extname(file)] || 'application/octet-stream' });
   });
   const page = await context.newPage(), errors = [];

@@ -413,6 +413,7 @@ let cloudAutoMergeAttempts = 0;
 let syncPageActionBusy = false;
 let syncPageFeedback = "";
 let cloudHydrationStarted = false;
+let cloudHydrationTask = null;
 // A cloud-backed account initially boots from a deliberately lightweight
 // local shell. Until /api/account/load has supplied the real account data,
 // that shell must never be allowed to overwrite the cloud with empty arrays.
@@ -5506,7 +5507,7 @@ function turtleDetailGrowthChart(turtle) {
   const lengthChange = latest.length - first.length;
   const pointMarkup = (field, values, className, unit) => records.map((item, index) => {
     const value = item[field];
-    return `<g><circle class="${className}" cx="${x(index)}" cy="${scaledY(value, values)}" r="5"/><title>${item.date || `第 ${index + 1} 次`} · ${value}${unit}</title></g>`;
+    return `<g><circle class="${className}" cx="${x(index)}" cy="${scaledY(value, values)}" r="5"/><title>${escapeHtml(item.date || `第 ${index + 1} 次`)} · ${value}${unit}</title></g>`;
   }).join("");
   return `
     <section class="detail-growth-chart fresh-card" aria-labelledby="detailGrowthChartTitle">
@@ -5518,7 +5519,7 @@ function turtleDetailGrowthChart(turtle) {
           <polyline class="detail-chart-line weight" points="${weightPoints}"/>
           <polyline class="detail-chart-line length" points="${lengthPoints}"/>
           ${pointMarkup("weight", weights, "detail-chart-point weight", "g")}${pointMarkup("length", lengths, "detail-chart-point length", "cm")}
-          ${records.map((item, index) => `<text x="${x(index)}" y="194" text-anchor="middle">${item.date ? item.date.slice(5).replace("-", "/") : `第${index + 1}次`}</text>`).join("")}
+          ${records.map((item, index) => `<text x="${x(index)}" y="194" text-anchor="middle">${escapeHtml(item.date ? item.date.slice(5).replace("-", "/") : `第${index + 1}次`)}</text>`).join("")}
         </svg>
       </div>
       ${history.length ? `<footer><span>从首次建档到现在</span><strong>${weightChange >= 0 ? "增重" : "减重"} ${Math.abs(weightChange).toFixed(1)}g · 背甲${lengthChange >= 0 ? "增长" : "减少"} ${Math.abs(lengthChange).toFixed(1)}cm</strong></footer>` : turtle.sharedView ? `<footer class="is-empty"><span>已记录当前体重和背甲长度</span></footer>` : `<footer class="is-empty"><span>完成下一次记录后，曲线会自动连接</span><button type="button" data-update-turtle="${escapeHtml(turtle.id)}">记录成长</button></footer>`}
@@ -7500,15 +7501,15 @@ function breedingRow(record) {
       <div class="breeding-row-main">
         ${breedingCoverMarkup(record, "breeding-thumb")}
         <div class="breeding-row-copy">
-          <div class="breeding-row-heading"><strong>${record.motherName || "未填写种母"}</strong></div>
-          <p>${record.date || "未填写日期"} · 龟池 ${escapeHtml(record.poolName || turtlePoolName(record.poolId))}</p>
+          <div class="breeding-row-heading"><strong>${escapeHtml(record.motherName || "未填写种母")}</strong></div>
+          <p>${escapeHtml(record.date || "未填写日期")} · 龟池 ${escapeHtml(record.poolName || turtlePoolName(record.poolId))}</p>
           ${record.note ? `<small>${escapeHtml(record.note)}</small>` : ""}
         </div>
       </div>
       <div class="breeding-stat-grid" aria-label="繁殖数据">
-        <div><span>产蛋</span><strong>${record.eggCount || 0}<em>枚</em></strong></div>
-        <div><span>受精</span><strong>${record.fertileCount || 0}<em>枚</em></strong></div>
-        <div><span>孵化</span><strong>${record.hatchCount || 0}<em>只</em></strong></div>
+        <div><span>产蛋</span><strong>${escapeHtml(record.eggCount || 0)}<em>枚</em></strong></div>
+        <div><span>受精</span><strong>${escapeHtml(record.fertileCount || 0)}<em>枚</em></strong></div>
+        <div><span>孵化</span><strong>${escapeHtml(record.hatchCount || 0)}<em>只</em></strong></div>
       </div>
       ${record.incubationClosed === true ? `<div class="breeding-complete-footer"><span class="breeding-complete-badge">✓ 孵化完成</span></div>` : ""}
       <button class="more-btn breeding-more-btn" data-toggle-breeding-menu="${record.id}" aria-label="繁殖记录操作" aria-expanded="${menuOpen ? "true" : "false"}"><span aria-hidden="true">•••</span></button>
@@ -7553,7 +7554,7 @@ function pageBreedingDetail() {
         </div>
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-breeding-edit-photo-input>
         <div class="breeding-form-grid breeding-fields">
-          <label class="breeding-date-field"><span>日期</span><input class="field" name="date" type="date" value="${record.date || formatDate(new Date())}" required></label>
+          <label class="breeding-date-field"><span>日期</span><input class="field" name="date" type="date" value="${escapeHtml(record.date || formatDate(new Date()))}" required></label>
           <label class="breeding-mother-field"><span>单龟 / 批次</span>
             <select class="select" name="mother" data-archive-directory>
               <option value="manual" ${isManual ? "selected" : ""}>手动备注</option>
@@ -7562,8 +7563,8 @@ function pageBreedingDetail() {
           </label>
           <label class="breeding-pool-field"><span>龟池</span><select class="select" name="poolId"><option value="">暂不关联龟池</option>${turtlePools.map(pool => `<option value="${pool.id}" ${record.poolId === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}</select></label>
           <label class="breeding-manual-mother" ${isManual ? "" : "hidden"}><span>记录名称</span><input class="field" name="manualMother" value="${isManual ? escapeHtml(record.motherName || "") : ""}" placeholder="例如：一号池第一窝"></label>
-          <label><span>产蛋数</span><input class="field" name="eggCount" type="number" min="0" step="1" required value="${record.eggCount || 0}"></label>
-          <label><span>受精数</span><input class="field" name="fertileCount" type="number" min="0" step="1" required value="${record.fertileCount || 0}"></label>
+          <label><span>产蛋数</span><input class="field" name="eggCount" type="number" min="0" step="1" required value="${escapeHtml(record.eggCount || 0)}"></label>
+          <label><span>受精数</span><input class="field" name="fertileCount" type="number" min="0" step="1" required value="${escapeHtml(record.fertileCount || 0)}"></label>
         </div>
         <label class="breeding-note"><span>备注 <small>选填</small></span><textarea name="note" placeholder="产蛋位置、孵化盒编号、温度等">${escapeHtml(record.note || "")}</textarea></label>
         <div class="breeding-detail-actions"><button class="primary" type="submit">保存修改</button></div>
@@ -16342,21 +16343,30 @@ function startCloudAccountRefresh() {
     if (refreshing || document.hidden || navigator.onLine === false || !hasCloudSession()
       || cloudSyncInFlight || cloudImageMigrationInFlight || cloudSyncIsPaused()) return;
     refreshing = true;
+    const phone = state.loggedInPhone, token = currentCloudToken();
+    const sameSession = () => phone === state.loggedInPhone && token === currentCloudToken();
     try {
       // Reconnect must flush the journal before the read guard checks it.
       // A pending offline write used to make every background read return,
       // leaving that write stranded until another edit or a manual sync.
       if (!cloudHydrationComplete) {
+        const joinedHydration = cloudHydrationTask?.phone === phone && cloudHydrationTask?.token === token;
         await startCloudSessionHydration();
-        if (!cloudHydrationComplete || cloudSyncIsPaused()) return;
+        // A cold-start load may already have failed offline when this online
+        // event arrives. Wait for that attempt, then retry once on reconnect.
+        if (joinedHydration && sameSession() && !cloudHydrationComplete && navigator.onLine !== false && !cloudSyncIsPaused()) {
+          await startCloudSessionHydration();
+        }
+        if (!sameSession() || !cloudHydrationComplete || cloudSyncIsPaused()) return;
       }
       if (readPendingCloudData()?.phone === state.loggedInPhone) {
         if (accountHasEmbeddedImages(state)) await migrateEmbeddedImagesToCloud({ silent: true });
-        if (accountHasEmbeddedImages(state) || cloudSyncIsPaused()) return;
+        if (!sameSession() || accountHasEmbeddedImages(state) || cloudSyncIsPaused()) return;
         if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
         cloudSyncTimer = null;
         await pushCloudDataNow();
       }
+      if (!sameSession()) return;
       // Saving a completed edit is safe on any route; only refresh the visible
       // data after the user leaves form inputs, dialogs and contextual menus.
       if (!["home", "ledger", "mine", "sync"].includes(state.page)
@@ -16373,20 +16383,34 @@ function startCloudAccountRefresh() {
 }
 
 async function startCloudSessionHydration() {
-  if (cloudHydrationStarted || !hasCloudSession()) return;
+  if (!hasCloudSession()) return false;
+  const phone = state.loggedInPhone, token = currentCloudToken();
+  if (cloudHydrationTask?.phone === phone && cloudHydrationTask?.token === token) return cloudHydrationTask.promise;
+  if (cloudHydrationComplete) return true;
+  const task = { phone, token };
+  const sameSession = () => phone === state.loggedInPhone && token === currentCloudToken();
+  cloudHydrationTask = task;
   cloudHydrationStarted = true;
-  try {
-    // Loading always happens before saving. In particular, never upload the
-    // empty account shell created during a cold start over real cloud data.
-    const loaded = await refreshCloudAccountFromServer();
-    if (!loaded) return;
-    await migrateEmbeddedImagesToCloud({ silent: true });
-  } catch (error) {
-    console.warn(error.message || "云端数据初始化失败");
-  } finally {
-    if (!cloudHydrationComplete) cloudHydrationStarted = false;
-    consumePendingNativePushAction();
-  }
+  task.promise = (async () => {
+    try {
+      // Loading always happens before saving. In particular, never upload the
+      // empty account shell created during a cold start over real cloud data.
+      const loaded = await refreshCloudAccountFromServer();
+      if (!loaded || !sameSession()) return false;
+      await migrateEmbeddedImagesToCloud({ silent: true });
+      return sameSession() && cloudHydrationComplete;
+    } catch (error) {
+      console.warn(error.message || "云端数据初始化失败");
+      return false;
+    } finally {
+      if (cloudHydrationTask === task) {
+        cloudHydrationTask = null;
+        if (!cloudHydrationComplete || !sameSession()) cloudHydrationStarted = false;
+      }
+      if (sameSession()) consumePendingNativePushAction();
+    }
+  })();
+  return task.promise;
 }
 
 async function verifyServerSmsCode(phone, code) {

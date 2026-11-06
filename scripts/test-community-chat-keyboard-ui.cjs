@@ -17,7 +17,7 @@ const fixture = require('./ui-audit-fixture.cjs')();
 const inputSelector = '#communityChatForm input[name="content"]';
 
 (async () => {
-  const browser = await launchBrowser({ channel: 'chrome' });
+  const browser = await launchBrowser();
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, reducedMotion: 'reduce' });
   const errors = [], results = [];
   page.setDefaultTimeout(6000);
