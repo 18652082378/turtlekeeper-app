@@ -79,6 +79,7 @@ workflows:
       - output/chat-send-qa/**/*
       - output/archive-price-privacy/**/*
       - output/navigation-freshness*.json
+      - output/api-workflow-qa/results.json
       - /Users/builder/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
     publishing:
       app_store_connect:

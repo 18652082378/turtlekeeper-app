@@ -734,7 +734,20 @@ async function main() {
   }
 }
 
-main().catch(error => {
+async function writeWorkflowReport(status, error) {
+  const folder = path.join(__dirname, '..', 'output', 'api-workflow-qa');
+  await fs.mkdir(folder, { recursive: true });
+  await fs.writeFile(path.join(folder, 'results.json'), JSON.stringify({
+    status, checkedAt: new Date().toISOString(), platform: process.platform, node: process.version,
+    scope: 'Isolated local API server and synthetic records; no production service or user data.',
+    ...(error ? { error: { name: error.name, code: error.code, message: error.message, stack: error.stack,
+      actual: error.actual, expected: error.expected } } : {})
+  }, null, 2) + '\n');
+}
+
+main().then(() => writeWorkflowReport('passed')).catch(async error => {
   console.error("API workflow regression failed:", error.stack || error.message);
   process.exitCode = 1;
+  try { await writeWorkflowReport('failed', error); }
+  catch (reportError) { console.error('Could not save API workflow diagnostics:', reportError.message); }
 });

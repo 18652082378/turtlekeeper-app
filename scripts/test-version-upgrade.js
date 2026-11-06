@@ -8,7 +8,8 @@ const batches = require('../assets/turtle-batches');
 const loss = require('../assets/loss-accounting');
 const codec = require('../assets/local-data-codec');
 const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
-const ctx = { crypto, TurtleBatches: batches, TurtleLossAccounting: loss, cleanText: x => x, speciesPhoto: () => '/assets/species/GHG.jpg', formatDate: () => '2026-09-11' };
+const ctx = { crypto, TurtleBatches: batches, TurtleLossAccounting: loss, TurtleCare: require('../assets/care-records'),
+  cleanText: x => x, speciesPhoto: () => '/assets/species/GHG.jpg', formatDate: () => '2026-09-11' };
 vm.createContext(ctx);
 for (const [start, end] of [['function emptyAccountData(', 'function syncRegisteredUsers('], ['function breedingHatchProgress(', 'function confirmBreedingHatch(']]) {
   vm.runInContext(source.slice(source.indexOf(start), source.indexOf(end)), ctx);

@@ -24,6 +24,7 @@ run('scripts/verify-ios-build.js', ['--native']);
 if (!args.includes('--prepare-only')) {
   const failures = [];
   const serviceChecks = [
+    'scripts/test-release-history-independence.cjs',
     'scripts/test-feed-server-latency.cjs', 'scripts/test-feed-client-latency.cjs',
     'scripts/test-turtle-share-server.cjs', 'scripts/test-api-request-resilience.cjs',
     'scripts/test-publish-navigation-boundaries.cjs', 'scripts/test-module-loading.cjs', 'scripts/test-account-sync-races.js',
@@ -87,6 +88,13 @@ if (!args.includes('--prepare-only')) {
     try { run(script); } catch (e) { failures.push(e.message); }
   }
   if (failures.length) {
+    if (failures.some(message => message.startsWith('scripts/test-api-workflows.js failed'))) {
+      const file = path.join(root, 'output/api-workflow-qa/results.json');
+      if (fs.existsSync(file)) {
+        const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (report.status === 'failed') console.error('FAILED API WORKFLOW DETAILS: ' + JSON.stringify(report));
+      }
+    }
     // Keep actionable page details next to the final failure, even when later
     // checks produced several screens of otherwise successful output.
     for (const [platform, engine] of [['ios', 'webkit'], ['android', 'chromium']]) {

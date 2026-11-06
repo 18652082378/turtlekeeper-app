@@ -625,6 +625,7 @@ scripts/download-species-assets.js
 scripts/fixtures/app-update-policy-113.js
 scripts/fixtures/app-update-policy-114.js
 scripts/fixtures/app-update-policy-118.js
+scripts/fixtures/released-1.0.7-upgrade-source.json
 scripts/fixtures/reviewed-account-functions-20260927.js
 scripts/fixtures/reviewed-community-daily-push-20261001.js
 scripts/fixtures/reviewed-server-137-conflicts.json
@@ -832,6 +833,7 @@ scripts/test-publishing-drafts.cjs
 scripts/test-push-deeplink.js
 scripts/test-reconcile-server-137.cjs
 scripts/test-registration-state-ui.cjs
+scripts/test-release-history-independence.cjs
 scripts/test-release-notes.cjs
 scripts/test-reliability-guards.cjs
 scripts/test-reply-dock.js
