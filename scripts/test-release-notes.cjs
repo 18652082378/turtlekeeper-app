@@ -21,6 +21,14 @@ const root = path.resolve(__dirname, '..');
     finally { await ctx.close(); }
   }
   try {
+    await check('1.2.2 explains opt-in species marketplace alerts once after upgrade', async (page, setup) => {
+      await setup({ seen: '1.2.1' });
+      await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.2' }));
+      const dialog = page.locator('.release-notes-dialog'); await dialog.waitFor();
+      assert.match(await dialog.innerText(), /龟友手账 1\.2\.2/); assert.match(await dialog.innerText(), /品种上新提醒/); assert.match(await dialog.innerText(), /确认开启/);
+      await page.getByRole('button', { name: '我知道了' }).click(); await setup();
+      await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.2' })); assert.equal(await dialog.count(), 0);
+    });
     await check('1.2.1 introduces mediation applications once after upgrade', async (page, setup) => {
       await setup({ seen: '1.2.0' });
       await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.1' }));

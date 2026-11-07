@@ -24,6 +24,7 @@ run('scripts/verify-ios-build.js', ['--native']);
 if (!args.includes('--prepare-only')) {
   const failures = [];
   const serviceChecks = [
+    'scripts/test-market-alerts.cjs', 'scripts/test-market-alerts-deploy.cjs', 'scripts/test-community-daily-push.js', 'scripts/test-push-deeplink.js',
     'scripts/test-mediation-applications.cjs',
     'scripts/test-mediation-deploy.cjs',
     'scripts/test-release-history-independence.cjs',
@@ -47,6 +48,8 @@ if (!args.includes('--prepare-only')) {
   try { run('scripts/test-android-ui.cjs', [], { ANDROID_EXTENDED: '1', ANDROID_TYPOGRAPHY: '1', ANDROID_CARDS: '1', ANDROID_LEDGER: '1' }); }
   catch (e) { failures.push(e.message); }
   for (const platform of ['ios', 'android']) {
+    try { run('scripts/test-market-alerts-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
     try { run('scripts/test-mediation-applications-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
     for (const script of ['scripts/test-community-chat-keyboard-ui.cjs', 'scripts/test-feed-updates-ui.cjs', 'scripts/test-publishing-drafts.cjs', 'scripts/test-ui-experience.cjs', 'scripts/test-module-editing-ux.cjs', 'scripts/test-weather-reminders-ui.cjs', 'scripts/test-navigation-freshness.cjs', 'scripts/test-chat-send-gesture-ui.cjs', 'scripts/test-client-mutation-races.cjs', 'scripts/test-data-reliability.cjs', 'scripts/test-media-attribute-safety.cjs', 'scripts/test-single-device-ui.cjs', 'scripts/test-registration-state-ui.cjs', 'scripts/test-message-cache-ui.cjs']) {

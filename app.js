@@ -3946,13 +3946,15 @@ function sameNavigationData(saved, current) {
 }
 
 function navigationSnapshotIsCurrent(snapshot) {
-  return Boolean(snapshot && !["team", "mediation", "mediationApply", "mediationDetail"].includes(snapshot.page) && sameNavigationData(snapshot.dataSnapshot, navigationDataValues(snapshot.page)));
+  return Boolean(snapshot && !["team", "mediation", "mediationApply", "mediationDetail", "marketAlerts", "marketAlertResults"].includes(snapshot.page) && sameNavigationData(snapshot.dataSnapshot, navigationDataValues(snapshot.page)));
 }
 
 function backNavigationState() {
   if (state.page === "search") return { page: window.TurtleSearch?.source() || "market" };
   if (["mediationApply", "mediationDetail"].includes(state.page)) return { page: "mediation" };
   if (state.page === "mediation") return { page: "mine" };
+  if (state.page === "marketAlerts") return { page: "mine" };
+  if (state.page === "marketAlertResults") return { page: "market" };
   return {
     page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForLedger ? "ledger" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" || state.page === "communityProfile" ? "community" : state.page === "communityActivity" || state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "mine" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "",
@@ -7659,6 +7661,7 @@ function pageMine() {
         <button class="mine-row" data-page="satisfaction"><span>☆</span><strong>满意度调查</strong></button>
         <button class="mine-row" data-page="feedback"><span>✎</span><strong>意见反馈</strong></button>
         <button class="mine-row" data-page="mediation"><span>单</span><strong>我的中介申请</strong></button>
+        <button class="mine-row" data-page="marketAlerts"><span>铃</span><strong>品种上新提醒</strong></button>
         ${state.isCommunityAdmin ? `<button class="mine-row" data-page="mediation" data-mediation-all><span>管</span><strong>全部中介申请</strong></button>` : ""}
         <button class="mine-row" type="button" data-open-platform-service-dialog><span>客</span><strong>联系人工客服</strong><em class="mine-row-hint">微信</em></button>
         <button class="mine-row" data-page="account"><span>⚙</span><strong>账号与安全</strong></button>
@@ -7918,6 +7921,7 @@ function pageAccount() {
           </div>
         </section>
         <section class="fresh-card settings-card"><div class="settings-title">每日新帖提醒</div><p class="muted">每天最多一篇无广告的壳友分享，可单独关闭，不影响私聊和其他通知。</p><button class="secondary" type="button" data-daily-push-preference disabled>正在读取设置…</button></section>
+        <section class="fresh-card settings-card"><div class="settings-title">品种上新推荐</div><p class="muted">选择关注品种，主动开启后接收相关商品上新通知。可随时关闭，不影响私信和养护提醒。</p><button class="secondary" type="button" data-page="marketAlerts">设置品种上新提醒</button></section>
         ${nativeVideoCachePlugin() ? `<section class="fresh-card settings-card video-cache-settings">
           <div class="settings-title">视频缓存</div>
           <div class="account-settings-row"><span><strong>本机视频缓存</strong><small>播放过的视频会保存在本机，Wi-Fi 下会提前缓存下一条</small></span><em data-video-cache-size>正在计算</em></div>
@@ -8132,7 +8136,7 @@ function pagePrivacy() {
     ${topbar("隐私政策", true)}
     <main class="content page-fresh compliance-page">
       <section class="page-intro compact-intro compliance-intro">
-        <div><p class="eyebrow dark">生效日期：2026 年 9 月 1 日</p><h2>龟友手账隐私政策</h2><p>个人信息处理者：陈仔健。我们按合法、正当、必要原则处理与你使用服务直接相关的信息。</p></div>
+        <div><p class="eyebrow dark">更新日期：2026 年 11 月 7 日</p><h2>龟友手账隐私政策</h2><p>基础政策自2026年9月1日生效；品种上新推荐条款仅在你另行确认开启后生效。个人信息处理者：陈仔健。我们按合法、正当、必要原则处理与你使用服务直接相关的信息。</p></div>
       </section>
       <section class="fresh-card policy-card">
         <h3>一、我们收集的信息</h3>
@@ -8141,7 +8145,7 @@ function pagePrivacy() {
       </section>
       <section class="fresh-card policy-card">
         <h3>二、使用目的</h3>
-        <p>用于账号认证、跨设备同步、内容发布与展示、买卖双方咨询、内容安全审核、服务运行统计、故障排查和服务改进。你同意通知权限后，通知设备标识仅用于聊天消息等系统提醒。我们不会将你的个人信息用于与上述目的无关的用途。</p>
+        <p>用于账号认证、跨设备同步、内容发布与展示、买卖双方咨询、内容安全审核、服务运行统计、故障排查和服务改进。授权通知后可接收聊天消息等系统提醒。品种上新推荐默认关闭，仅在你选择品种并单独确认开启后发送商品推广通知；可在“品种上新提醒”中随时关闭，不影响私信和养护提醒。在养品种仅用于提供可选建议，乌龟价格、数量等私人档案信息不放入推荐通知。我们不会将你的个人信息用于与上述目的无关的用途。</p>
       </section>
       <section class="fresh-card policy-card">
         <h3>三、存储与共享</h3>
@@ -8343,6 +8347,18 @@ function mediationContext() {
     requireLogin, copy: copyText, wechat: PLATFORM_SERVICE_WECHAT };
 }
 
+function marketAlertsContext() {
+  return { state: () => state, auth: communityAuthPayload, api: apiPost, topbar, render, toast,
+    catalog: window.TURTLE_SPECIES || [], allowed: item => !isMarketProhibitedSpecies(item), card: marketListingCard,
+    requestNotifications: () => setupNativePushNotifications({ requestConsent: true }),
+    navigate: patch => setState(patch, { skipCloud: true, skipSave: true }),
+    merge: listings => {
+      const merged = new Map((state.marketListings || []).map(item => [item.id, item]));
+      for (const item of normalizeMarketListings(listings)) merged.set(item.id, item);
+      state = { ...state, marketListings: [...merged.values()] };
+    } };
+}
+
 function render() {
   if (!forceUpdateState.required && $app.deferEdgeGestureRender?.()) return;
   marketSearchRenderDeferred = false;
@@ -8360,6 +8376,8 @@ function render() {
     return;
   }
   const pages = {
+    marketAlerts: () => window.TurtleMarketAlerts.render(marketAlertsContext()),
+    marketAlertResults: () => window.TurtleMarketAlerts.render(marketAlertsContext()),
     mediation: () => window.TurtleMediation.render(mediationContext()),
     mediationApply: () => window.TurtleMediation.render(mediationContext()),
     mediationDetail: () => window.TurtleMediation.render(mediationContext()),
@@ -8461,6 +8479,7 @@ function render() {
   }
   bindEvents();
   window.TurtleMediation?.bind(mediationContext());
+  window.TurtleMarketAlerts?.bind(marketAlertsContext());
   window.TurtleEmotePicker?.sync?.();
   if (state.page === 'team') TurtleTeam.bind();
   window.TurtleUI?.enhance($app);
@@ -15292,6 +15311,7 @@ async function saveNativePushDeviceToken(deviceToken, recipientId = '') {
   try {
     await apiPost(nativePushPlatform() === 'android' ? "/api/notifications/android/device/register" : "/api/notifications/device/register", communityAuthPayload({
       deviceToken: token,
+      marketAlerts: true,
       platform: nativePushPlatform()
     }));
   } catch (error) {
@@ -15372,7 +15392,7 @@ function queueNativePushAction(notification) {
   const senderId = String(data.senderId || data.senderID || data.sender_id || "").trim();
   const route = String(data.route || "").trim();
   const postId = String(data.postId || "").trim();
-  pendingNativePushAction = { senderId, route, postId, commentId: String(data.commentId || "").trim(), recipientId: String(data.recipientId || ''), receivedAt: Date.now() };
+  pendingNativePushAction = { senderId, route, postId, receiptId: String(data.receiptId || '').trim().slice(0, 100), commentId: String(data.commentId || "").trim(), recipientId: String(data.recipientId || ''), receivedAt: Date.now() };
   consumePendingNativePushAction();
 }
 
@@ -15409,6 +15429,11 @@ function consumePendingNativePushAction() {
   if (action.route === "weather") {
     pendingNativePushAction = null;
     setState({ page: "memos", careTab: "weather" }, { skipCloud: true });
+    return;
+  }
+  if (action.route === 'marketAlerts') {
+    pendingNativePushAction = null;
+    window.TurtleMarketAlerts?.openReceipt(marketAlertsContext(), action.receiptId);
     return;
   }
   if (action.postId) {
@@ -15626,7 +15651,7 @@ function appAnalyticsSource() {
 function appAnalyticsModule() {
   const page = String(state.page || "home");
   if (page === "search") return window.TurtleSearch?.source?.() === "community" ? "壳友圈" : "龟集市";
-  if (["market", "marketAdd", "marketDetail", "marketSeller", "marketMy", "myMarketListings", "marketFavorites", "marketHistory"].includes(page)) return "龟集市";
+  if (["market", "marketAlerts", "marketAlertResults", "marketAdd", "marketDetail", "marketSeller", "marketMy", "myMarketListings", "marketFavorites", "marketHistory"].includes(page)) return "龟集市";
   if (["community", "communityAdd", "communityPostDetail", "following", "followingProfile", "communityProfile"].includes(page)) return "壳友圈";
   if (["messages", "communityActivity", "communityFriends", "communityChat"].includes(page)) return "消息";
   if (["ledger", "ledgerDetail", "calendar", "breeding", "breedingAdd", "breedingDetail"].includes(page)) return "账本";

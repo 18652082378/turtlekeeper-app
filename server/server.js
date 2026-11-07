@@ -23,6 +23,7 @@ const { normalizeSettings: normalizeWeatherSettings, publicWeather, createWeathe
 const { mediaUrl: validatedMediaUrl } = require('./media-url');
 const { createPasswordRecovery } = require('./password-recovery');
 const { createMediationService } = require('./mediation-service');
+const { createMarketAlerts, quotaAvailable: recommendationQuotaAvailable, reserveQuota: reserveRecommendationQuota } = require('./market-alerts');
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -966,6 +967,7 @@ function normalizedPushDevices(devices) {
       token: item?.platform === 'android' ? normalizeAndroidDeviceId(item?.token) : (!item?.platform || item.platform === 'ios') ? normalizeApnsDeviceToken(item?.token || item) : '',
       platform: item?.platform === 'android' ? 'android' : 'ios',
       updatedAt: String(item?.updatedAt || ""),
+      ...(item?.marketAlerts === true ? { marketAlerts: true } : {}),
       ...(item?.sessionHash ? { sessionHash: String(item.sessionHash) } : {})
     }))
     .filter(item => item.token && !seen.has(item.platform + ':' + item.token) && Boolean(seen.add(item.platform + ':' + item.token)))
@@ -985,6 +987,7 @@ async function sendDeviceNotification(device, payload) {
   const user = readDatabase().users?.[device.recipientPhone];
   if (!user || !normalizedPushDevices(user.pushDevices).some(d => d.platform === device.platform && d.token === device.token && d.sessionHash === device.sessionHash)) return { ok: false, skipped: true };
   if (device.sessionHash && !(user.tokens || []).some(t => t.hash === device.sessionHash)) return { ok: false, skipped: true };
+  if (payload.route === 'marketAlerts' && !marketAlertsService.canSend(readDatabase(), user, payload)) return { ok: false, skipped: true };
   const addressedPayload = { ...payload, recipientId: communityUserId(user.phone) };
   return device.platform === 'android' ? androidPush.send(device.token, addressedPayload) : sendApnsNotification(device.token, addressedPayload);
 }
@@ -1037,7 +1040,7 @@ function sendApnsNotification(deviceToken, payload) {
     };
     try {
       client = http2.connect(`https://${APNS_HOST}`);
-      if (["communityDaily", "weather"].includes(payload.route)) client.setTimeout(10000, () => finish({ ok: false, reason: "Reminder push timeout" }));
+      if (["communityDaily", "weather", "marketAlerts"].includes(payload.route)) client.setTimeout(10000, () => finish({ ok: false, reason: "Reminder push timeout" }));
       client.once("error", error => finish({ ok: false, reason: error.message || "APNs connection error" }));
       const request = client.request({
         ":method": "POST",
@@ -1046,7 +1049,7 @@ function sendApnsNotification(deviceToken, payload) {
         "apns-topic": APNS_BUNDLE_ID,
         "apns-push-type": "alert",
         "apns-priority": "10",
-        ...(["communityDaily", "weather"].includes(payload.route) ? { "apns-expiration": "0", "apns-collapse-id": payload.route === "weather" ? "weather-reminder" : "community-daily" } : {})
+        ...(["communityDaily", "weather", "marketAlerts"].includes(payload.route) ? { "apns-expiration": "0", "apns-collapse-id": payload.route === "weather" ? "weather-reminder" : payload.route === 'marketAlerts' ? 'market-alerts' : "community-daily" } : {})
       });
       let status = 0;
       let responseBody = "";
@@ -2018,7 +2021,7 @@ async function handlePushDeviceRegister(req, res) {
   });
   user.pushDevices = [
     ...normalizedPushDevices(user.pushDevices),
-    { token: deviceToken, platform, updatedAt: now, sessionHash: hashValue(String(body.token || "")) }
+    { token: deviceToken, platform, updatedAt: now, sessionHash: hashValue(String(body.token || "")), marketAlerts: body.marketAlerts === true }
   ].filter((item, index, list) => list.findIndex(other => other.token === item.token && other.platform === item.platform) === index).slice(-8);
   user.updatedAt = now;
   await writeDatabase(db);
@@ -4604,6 +4607,7 @@ async function handleMarketCreate(req, res) {
     offlineAt: "",
     offlineReason: ""
   };
+  listing.marketAlertPublishedAt = listing.createdAt;
   db.marketListings = [listing, ...(Array.isArray(db.marketListings) ? db.marketListings : [])];
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, listings: publicMarketListings(db, user), myListings: ownMarketListings(db, user) });
@@ -5271,6 +5275,28 @@ async function handleTeamRequest(req, res, pathname) {
 setInterval(() => { if (!shuttingDown) applePurchases.refresh().catch(error => console.error('Apple refresh:', error.message)); }, 60000).unref();
 setInterval(() => { if (!shuttingDown) alipayPurchases.refresh().catch(() => console.error('Alipay team reconciliation failed')); }, 60000).unref();
 setInterval(() => teamRequestTimes.clear(), 60000).unref();
+const marketAlertsService = createMarketAlerts({ read: readDatabase, write: writeDatabase, catalog: MARKET_SPECIES_CATALOG,
+  allowed: item => !isMarketProhibitedSpecies(item.code, item.name), configured: pushConfigured,
+  devices: user => availablePushDevices(user).filter(device => device.marketAlerts === true && (!device.sessionHash || (user.tokens || []).some(token => token.hash === device.sessionHash))),
+  canView: (db, item, user) => {
+    const seller = db.users[item.sellerPhoneRaw];
+    const expires = typeof marketAvailabilityMeta === 'function' ? Date.parse(marketAvailabilityMeta(item).expiresAt) : Date.parse(item.confirmedAt || item.createdAt) + 30 * 86400000;
+    return Boolean(seller && !usersBlockEachOther(user, seller) && (!Number.isFinite(expires) || expires > Date.now()));
+  }, publicListing: marketListingView, send: sendDeviceNotification, invalidDevice: removeInvalidPushDevice });
+async function handleMarketAlertRequest(req, res, action) {
+  const body = await readJson(req), db = readDatabase();
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  try {
+    const { changed, ...result } = action === 'preference' ? marketAlertsService.preference(user, body) : marketAlertsService.open(db, user, body);
+    if (changed) await writeDatabase(db);
+    res.setHeader('Cache-Control', 'no-store');
+    return sendJson(res, 200, { ok: true, ...result });
+  } catch (error) {
+    if (!error.status) throw error;
+    return sendJson(res, error.status, { ok: false, message: error.message });
+  }
+}
 const mediationService = createMediationService({ isAdmin: isAdminUser, audit: recordAdminAudit,
   listingAllowed: item => !isMarketProhibitedSpecies(item.speciesCode, item.speciesName) });
 async function handleMediationRequest(req, res, action) {
@@ -5295,6 +5321,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return sendJson(res, 200, { ok: true });
   try {
     if (req.method === 'POST' && /^\/api\/mediation\/(create|list|detail|withdraw|update)$/.test(url.pathname)) return await handleMediationRequest(req, res, url.pathname.split('/').at(-1));
+    if (req.method === 'POST' && /^\/api\/market\/alerts\/(preference|open)$/.test(url.pathname)) return await handleMarketAlertRequest(req, res, url.pathname.split('/').at(-1));
     if (req.method === 'POST' && url.pathname === '/api/alipay/team/notify') return await handleAlipayNotification(req, res);
     if (req.method === 'POST' && ['/api/team', '/api/apple/purchases', '/api/apple/notifications', '/api/alipay/team/purchases'].includes(url.pathname)) return await handleTeamRequest(req, res, url.pathname);
     if (req.method === "GET" && url.pathname === "/api/app/version") return handleAppVersion(req, res);
@@ -5411,13 +5438,19 @@ const dispatchDailyCommunityPush = createDailyCommunityDispatcher({
   read: readDatabase, write: writeDatabase,
   configured: pushConfigured,
   devices: availablePushDevices,
+  canRecommend: (db, user, day, campaign) => recommendationQuotaAvailable(db, user, day, campaign, availablePushDevices(user)),
+  reserveRecommendation: reserveRecommendationQuota,
   canReceive: (db, post, user) => canViewCommunityPost(db, post, user) && !blockedPhoneSet(user).has(post.authorPhoneRaw),
   send: async (token, payload, device) => {
     const result = await sendDeviceNotification(device, payload);
     if (!result.ok && !result.skipped) console.warn("Daily community push failed:", result.reason || result.status || "unknown");
   }
 });
-setInterval(() => { if (!shuttingDown) dispatchDailyCommunityPush().catch(error => console.error("Daily community push stopped:", error.message)); }, 60 * 1000).unref();
+async function dispatchRecommendations() {
+  try { await marketAlertsService.dispatch(); } catch (error) { console.error('Market alerts stopped:', error.message); }
+  try { await dispatchDailyCommunityPush(); } catch (error) { console.error('Daily community push stopped:', error.message); }
+}
+setInterval(() => { if (!shuttingDown) void dispatchRecommendations(); }, 60 * 1000).unref();
 setInterval(() => { if (!shuttingDown) runScheduledBackup(); }, 60 * 60 * 1000).unref();
 
 // Videos are streamed directly from iOS. Keep the origin request alive long

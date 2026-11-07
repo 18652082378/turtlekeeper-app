@@ -38,7 +38,7 @@
     return `<section class="discovery-community-entry">${speciesMarkup('community')}</section>`;
   }
   function marketEntry() {
-    return `<section class="discovery-market-entry">${speciesMarkup('market')}<div class="discovery-market-links"><button type="button" data-page="marketFavorites">我的收藏 <span aria-hidden="true">›</span></button><button type="button" data-page="marketMy">我发布的 <span aria-hidden="true">›</span></button></div></section>`;
+    return `<section class="discovery-market-entry">${speciesMarkup('market')}<div class="discovery-market-links"><button type="button" data-page="marketFavorites">我的收藏 <span aria-hidden="true">›</span></button><button type="button" data-page="marketMy">我发布的 <span aria-hidden="true">›</span></button><button type="button" data-page="marketAlerts">上新提醒 <span aria-hidden="true">›</span></button></div></section>`;
   }
   function patchMarketEntry(root) {
     const current = root.querySelector('.discovery-market-entry .discovery-species');

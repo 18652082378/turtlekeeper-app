@@ -55,7 +55,7 @@ function recommendationPayload(post) {
   return { aps: { alert: { title, body: excerpt && excerpt !== title ? excerpt : '点击查看完整内容' }, sound: 'default', ...(image ? { 'mutable-content': 1 } : {}) },
     route: 'communityDaily', postId: post.id, ...(image ? { attachmentUrl: image } : {}) };
 }
-function createDailyCommunityDispatcher({ read, write, send, devices, canReceive, configured, now = () => new Date() }) {
+function createDailyCommunityDispatcher({ read, write, send, devices, canReceive, configured, canRecommend = () => true, reserveRecommendation = () => {}, now = () => new Date() }) {
   let running = false;
   return async function dispatch() {
     if (running || !configured()) return;
@@ -90,13 +90,19 @@ function createDailyCommunityDispatcher({ read, write, send, devices, canReceive
         const post = (db.communityPosts || []).find(item => item.id === delivery.postId);
         if (!eligible(db, post, now())) break;
         const user = db.users[phone];
-        if (!user || user.communityDailyPushEnabled === false || !canReceive(db, post, user)) continue;
+        const campaign = `community:${day}:${delivery.postId}`;
+        if (!user || user.communityDailyPushEnabled === false || !canReceive(db, post, user) || !canRecommend(db, user, day, campaign)) continue;
         for (const device of devices(user)) {
           const key = crypto.createHash('sha256').update((device.platform === 'android' ? 'android:' : '') + device.token).digest('hex');
           if (delivery.attempted[key]) continue;
           delivery.attempted[key] = now().toISOString();
+          reserveRecommendation(user, day, campaign);
           await write(db);
-          const payload = recommendationPayload(post);
+          db = read(); delivery = db.communityDailyDeliveries[day];
+          const currentUser = db.users[phone], currentPost = (db.communityPosts || []).find(item => item.id === delivery.postId);
+          if (clock(now()).day !== day || clock(now()).hour < 9 || clock(now()).hour >= 21 || !currentUser || currentUser.communityDailyPushEnabled === false || !eligible(db, currentPost, now()) || !canReceive(db, currentPost, currentUser) || !canRecommend(db, currentUser, day, campaign)
+            || !devices(currentUser).some(current => current.token === device.token && current.platform === device.platform && current.sessionHash === device.sessionHash)) continue;
+          const payload = recommendationPayload(currentPost);
           await send(device.token, payload, device);
           // Re-read after each await: do not overwrite newer user/account changes.
           db = read(); delivery = db.communityDailyDeliveries[day];
