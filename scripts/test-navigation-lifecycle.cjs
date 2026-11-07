@@ -3,6 +3,10 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const { engine, launchBrowser, artifactName } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
+const platform = process.env.MOBILE_UI_PLATFORM;
+const assetRoot = platform === 'ios' ? path.join(root, 'ios/App/App/public')
+  : platform === 'android' ? path.join(root, 'android/app/src/main/assets/public') : root;
+const testFilters = (process.env.NAVIGATION_TEST_FILTER || '').split(',').map(value => value.trim()).filter(Boolean);
 fs.mkdirSync(path.join(root, 'output'), { recursive: true });
 
 (async () => {
@@ -14,12 +18,12 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       const url = new URL(route.request().url());
       if (url.hostname !== 'lifecycle.test') return route.abort();
       if (url.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: 'window.TURTLE_API_BASE_URL="";' });
-      const file = path.resolve(root, '.' + (url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname)));
-      if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
+      const file = path.resolve(assetRoot, '.' + (url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname)));
+      if (!file.startsWith(assetRoot + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
       return route.fulfill({ body: fs.readFileSync(file), contentType: ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.jpg': 'image/jpeg', '.png': 'image/png', '.svg': 'image/svg+xml' })[path.extname(file)] || 'application/octet-stream' });
     });
     async function check(name, test) {
-      if (process.env.NAVIGATION_TEST_FILTER && !name.includes(process.env.NAVIGATION_TEST_FILTER)) return;
+      if (testFilters.length && !testFilters.some(filter => name.includes(filter))) return;
       const page = await context.newPage();
       const errors = []; page.on('pageerror', e => errors.push(e.message));
       try {
@@ -516,6 +520,50 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       assert.ok(Math.abs(result.y - result.savedY) <= 2 && Math.abs(result.top - result.savedTop) <= 2, 'feed scroll and card geometry must survive handoff');
       assert.equal(result.offset, 25); assert.equal(result.count, '3人想要'); assert.equal(result.favorite, 'true'); assert.equal(result.history, 'nav4');
     });
+    for (const mode of ['gesture', 'native']) await check(`market detail ${mode} keeps contact bar aligned through drag and rebound`, async page => {
+      await page.evaluate(() => {
+        state.marketListings[0].description = '用于测试滚动后的商品详情。'.repeat(120);
+        render();
+        $app.querySelector('[data-view-market="nav0"]').click();
+      });
+      await page.waitForFunction(() => !$app.classList.contains('page-enter-motion'));
+      if (mode === 'native') await enableNative(page);
+      const geometry = () => page.evaluate(() => {
+        const bar = $app.querySelector('.market-detail-actions');
+        const { top, bottom, left, width, height } = bar.getBoundingClientRect();
+        return { top, bottom, left: left - $app.getBoundingClientRect().left, width, height, scrollY, position: getComputedStyle(bar).position };
+      });
+      function aligned(actual, expected, phase) {
+        for (const key of ['top', 'bottom', 'left', 'width', 'height', 'scrollY']) {
+          assert.ok(Math.abs(actual[key] - expected[key]) <= 1, `${phase} ${key}: ${actual[key]} vs ${expected[key]}`);
+        }
+      }
+      for (const offset of [0, 180]) {
+        await page.evaluate(y => scrollTo(0, y), offset);
+        const before = await geometry();
+        assert.equal(before.scrollY, offset);
+        assert.equal(before.position, 'fixed');
+        if (mode === 'native') await page.evaluate(() => { nativeEvent('begin', 28); nativeEvent('move', 126); });
+        else await swipe(page, false);
+        await page.waitForFunction(() => $app.style.transform && getComputedStyle($app).transform !== 'none');
+        aligned(await geometry(), before, 'drag');
+        if (mode === 'native') await page.evaluate(() => nativeEvent('end', 75, 260, { velocityX: -500, peakOffset: 121 }));
+        else { await page.mouse.move(80, 220, { steps: 3 }); await page.mouse.up(); }
+        aligned(await geometry(), before, 'rebound');
+        await page.waitForFunction(() => !$app.style.transform);
+        const after = await geometry();
+        aligned(after, before, 'restored');
+        assert.equal(after.position, 'fixed');
+      }
+      if (mode === 'native') await page.evaluate(() => { nativeEvent('begin', 25); nativeEvent('move', 95, 365); nativeEvent('end', 95, 365); });
+      else {
+        await swipe(page, false);
+        await page.mouse.move(215, 500, { steps: 3 });
+        await page.mouse.up();
+      }
+      await page.waitForFunction(() => state.page === 'market');
+      await page.waitForFunction(() => !document.querySelector('.edge-back-preview'));
+    });
     await check('market feed snapshot still invalidates changed prices, media and ranking', async page => {
       const changes = await page.evaluate(() => {
         state.marketFeedSessionId = 'stable-market-order'; state.marketFeedOrderIds = state.marketListings.map(item => item.id); render();
@@ -582,20 +630,35 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
     });
     await check('native continuous drag avoids repeated DOM hit testing and modal scans', async page => {
       await secondary(page); await enableNative(page);
-      const reads = await page.evaluate(() => {
+      const reads = await page.evaluate(async () => {
         nativeEvent('begin', 20);
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         const query = document.querySelectorAll, hitTest = document.elementFromPoint;
-        let scans = 0, hits = 0;
+        const queryElement = Element.prototype.querySelector;
+        let scans = 0, hits = 0, animationModalScans = 0;
         document.querySelectorAll = function(selector) { if (selector.includes("[role='dialog']")) scans++; return query.call(this, selector); };
         document.elementFromPoint = function(...args) { hits++; return hitTest.apply(this, args); };
-        try { for (let i = 0; i < 120; i++) nativeEvent('move', 25 + i, 220 + i / 2); }
-        finally { document.querySelectorAll = query; document.elementFromPoint = hitTest; }
+        Element.prototype.querySelector = function(selector) {
+          if (this.matches('#app, .edge-back-preview') && selector.includes('[aria-modal="true"]')) animationModalScans++;
+          return queryElement.call(this, selector);
+        };
+        try {
+          for (let i = 0; i < 120; i++) {
+            nativeEvent('move', 25 + i, 220 + i / 2);
+            if (i % 30 === 0) await new Promise(requestAnimationFrame);
+          }
+          await new Promise(requestAnimationFrame);
+        } finally {
+          document.querySelectorAll = query; document.elementFromPoint = hitTest;
+          Element.prototype.querySelector = queryElement;
+        }
         const transform = $app.style.transform;
         nativeEvent('cancel');
-        return { scans, hits, transform };
+        return { scans, hits, transform, animationModalScans };
       });
       assert.equal(reads.scans, 0, 'modal ownership is checked at begin/end and on mutations');
       assert.equal(reads.hits, 0, 'the recognizer already owns the finger');
+      assert.equal(reads.animationModalScans, 0, 'animation style writes must not scan the page for dialogs');
       assert.equal(reads.transform, 'translate3d(139px, 0px, 0px)');
     });
     await check('coalesced native moves retain pull-back intent after a stationary release', async page => {
@@ -673,6 +736,7 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
     fs.writeFileSync(path.join(root, 'output', artifactName('navigation-lifecycle.json')), JSON.stringify(outcomes, null, 2));
     console.log(`Browser engine: ${engine}; desktop simulation, not a native iPhone`);
     console.log(JSON.stringify(outcomes, null, 2));
+    for (const filter of testFilters) assert.ok(outcomes.some(outcome => outcome.name.includes(filter)), 'No navigation case matched ' + filter);
     assert.ok(outcomes.every(x => x.pass), 'all lifecycle cases must pass');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

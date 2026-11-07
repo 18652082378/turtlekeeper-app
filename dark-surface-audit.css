@@ -203,7 +203,7 @@ input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; u
 
 /* Interactive edge-swipe back: page follows the finger and rebounds if released early. */
 #app { position: relative; z-index: 2; touch-action: pan-y; }
-#app.edge-back-dragging { transition: none !important; will-change: transform; }
+#app.edge-back-dragging { will-change: transform; }
 .edge-back-preview {
   position: fixed;
   z-index: 1;

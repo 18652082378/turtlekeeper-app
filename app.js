@@ -1182,15 +1182,23 @@ function captureNavigationFixedLayers(root) {
 function positionEdgePreviewFixedLayers(preview, snapshot) {
   // The underlay is a transformed, scrollable viewport. CSS fixed descendants
   // otherwise scroll with its long contents, unlike the original document.
-  // Pin ONLY the clone to the exact viewport coordinates captured on entry.
-  const bounds = preview.getBoundingClientRect();
+  const offsetTop = preview.scrollTop - preview.clientTop;
+  const offsetLeft = preview.scrollLeft - preview.clientLeft;
   for (const saved of snapshot?.fixedLayers || []) {
     let layer = preview;
     for (const index of saved.path) layer = layer?.children[index];
     if (!layer) continue;
-    for (const [name, value] of Object.entries({ position: "absolute", top: "0px", left: "0px", right: "auto", bottom: "auto", width: `${saved.width}px`, height: `${saved.height}px`, transform: "none", margin: "0px" })) {
+    // Header and bottom bars are direct children of the scrollable preview.
+    // Position them from its scroll offset without forcing layout per bar.
+    const direct = layer.parentElement === preview;
+    const top = direct ? offsetTop + saved.top : 0;
+    const left = direct ? offsetLeft + saved.left : 0;
+    for (const [name, value] of Object.entries({ position: "absolute", top: `${top}px`, left: `${left}px`, right: "auto", bottom: "auto", width: `${saved.width}px`, height: `${saved.height}px`, transform: "none", margin: "0px" })) {
       layer.style.setProperty(name, value, "important");
     }
+    if (direct) continue;
+    // Nested controls can have a different containing block.
+    const bounds = preview.getBoundingClientRect();
     const origin = layer.getBoundingClientRect();
     layer.style.setProperty("top", `${bounds.top + saved.top - origin.top}px`, "important");
     layer.style.setProperty("left", `${bounds.left + saved.left - origin.left}px`, "important");
@@ -19523,7 +19531,7 @@ function setupEdgeBackAndConversationSwipe() {
   const pinEdgeFixedLayers = active => {
     if (active?.edgePinnedLayers?.length) return;
     const appBounds = $app.getBoundingClientRect();
-    const layers = Array.from($app.querySelectorAll(".topbar, .community-chat-product-context, .community-chat-form, .community-chat-tools, .bottom-nav"))
+    const layers = Array.from($app.querySelectorAll(".topbar, .market-detail-actions, .community-chat-product-context, .community-chat-form, .community-chat-tools, .bottom-nav"))
       .filter(layer => getComputedStyle(layer).position === "fixed")
       .map(layer => {
         const bounds = layer.getBoundingClientRect();
@@ -19583,9 +19591,8 @@ function setupEdgeBackAndConversationSwipe() {
   const cancelActiveGesture = () => {
     if (gesture?.nativeEdge) nativeEdgePlugin()?.cancel?.({ generation: nativeEdgeGeneration, sequence: gesture.nativeSequence }).catch(() => {});
     releasePointer(gesture);
-    unpinEdgeFixedLayers(gesture);
-    gesture = null;
     clearPendingEdgeBack();
+    gesture = null;
     flushEdgeRender();
     scheduleNativeEdgeSync();
   };
@@ -19615,9 +19622,10 @@ function setupEdgeBackAndConversationSwipe() {
   };
   const beginEdgeDrag = active => {
     active.mode = "edge";
+    pinEdgeFixedLayers(active);
     active.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
     claimPointer(active, $app);
-    pinEdgeFixedLayers(active);
+    $app.style.transition = "none";
     $app.classList.add("edge-back-dragging");
   };
   const onEdgePointerDown = event => {
@@ -19712,7 +19720,6 @@ function setupEdgeBackAndConversationSwipe() {
     if (!active || event.pointerId !== active.pointerId) return;
     if (active.nativeEdge && !event.nativeEdge) return;
     const dx = event.clientX - active.x;
-    const dy = event.clientY - active.y;
     // The release can carry a newer position than the last move event.
     // Paint and decide from that position so a short swipe has no dead tail.
     if (active.mode === "edge") {
@@ -19742,8 +19749,9 @@ function setupEdgeBackAndConversationSwipe() {
       // when the user pauses before releasing and velocity has become zero.
       const hasForwardFling = releaseVelocity > .35 && dx >= 12;
       const reversed = releaseVelocity < -.25 || active.peakOffset - edgeOffset >= 12;
-      const shouldComplete = !reversed && (dx >= 24 || hasForwardFling) &&
-        (active.nativeEdge || active.page === "communityChat" || Math.abs(dx) > Math.abs(dy));
+      // Direction was decided when the drag was claimed. A later vertical
+      // curve must not turn a committed horizontal drag into a rebound.
+      const shouldComplete = !reversed && (dx >= 24 || hasForwardFling);
       if (shouldComplete && recordPageHasChanges()) {
         const backSnapshot = edgeBackSnapshots[edgeBackSnapshots.length - 1];
         // Native confirm can emit delayed blur/resize on dismissal. End the
@@ -19762,8 +19770,7 @@ function setupEdgeBackAndConversationSwipe() {
       // from distance and finger speed instead of one fixed, mechanical time.
       const remaining = shouldComplete ? width - edgeOffset : edgeOffset;
       const releaseSpeed = Math.max(.42, Math.min(2.35, Math.abs(releaseVelocity || 0)));
-      const settleDuration = active.reducedMotion ? 0 : Math.round(Math.max(145, Math.min(310, remaining / releaseSpeed)));
-      $app.classList.remove("edge-back-dragging");
+      const settleDuration = active.reducedMotion || remaining < 1 ? 0 : Math.round(Math.max(145, Math.min(310, remaining / releaseSpeed)));
       $app.style.transition = `transform ${settleDuration}ms cubic-bezier(.18,.78,.2,1)`;
       $app.style.transform = shouldComplete ? `translate3d(${width}px, 0, 0)` : "translate3d(0, 0, 0)";
       if (active.preview) {
@@ -19784,16 +19791,18 @@ function setupEdgeBackAndConversationSwipe() {
         edgeSettleTimer = 0;
         edgeSettleCleanup?.();
         edgeSettleCleanup = null;
-        unpinEdgeFixedLayers(active);
         if (settlingGesture === active) settlingGesture = null;
         scheduleNativeEdgeSync();
         if (shouldComplete && !rootPages.has(state.page)) {
+          unpinEdgeFixedLayers(active);
           edgeRenderDeferred = false;
           // navigateBack owns the offscreen-to-previous-page hand-off.
           navigateBack({ fromEdgeGesture: true });
         } else {
           $app.style.transition = "";
           $app.style.transform = "";
+          $app.classList.remove("edge-back-dragging");
+          unpinEdgeFixedLayers(active);
           clearEdgeBackPreview();
           flushEdgeRender();
         }
@@ -19804,7 +19813,7 @@ function setupEdgeBackAndConversationSwipe() {
       };
       edgeSettleCleanup = () => $app.removeEventListener("transitionend", handleEdgeTransitionEnd);
       $app.addEventListener("transitionend", handleEdgeTransitionEnd);
-      edgeSettleTimer = window.setTimeout(finishEdgeSettle, active.reducedMotion ? 0 : settleDuration + 90);
+      edgeSettleTimer = window.setTimeout(finishEdgeSettle, settleDuration ? settleDuration + 90 : 0);
     }
     gesture = null;
   };

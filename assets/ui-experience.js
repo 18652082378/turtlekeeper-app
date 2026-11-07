@@ -302,10 +302,17 @@
     };
   }
   const observer = new MutationObserver(records => {
-    if (records.some(record => record.type === 'attributes'
-      ? record.target.matches(modalSelector) || record.target.querySelector(modalSelector)
-      : [...record.addedNodes, ...record.removedNodes].some(node =>
-        node.nodeType === 1 && (node.matches(modalSelector) || node.querySelector(modalSelector))))) scheduleModals();
+    if (records.some(record => {
+      if (record.type === 'attributes') {
+        const target = record.target;
+        // Swipe transforms write the style attribute every frame. These writes
+        // do not change which dialogs are open, so skip the page-wide lookup.
+        if (record.attributeName === 'style' && target.matches('#app.edge-back-dragging, .edge-back-preview')) return false;
+        return target.matches(modalSelector) || target.querySelector(modalSelector);
+      }
+      return [...record.addedNodes, ...record.removedNodes].some(node =>
+        node.nodeType === 1 && (node.matches(modalSelector) || node.querySelector(modalSelector)));
+    })) scheduleModals();
   });
   observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class', 'style'] });
   root.TurtleUI = { enhance, beginRequest, refreshModals };

@@ -48,6 +48,13 @@ if (!args.includes('--prepare-only')) {
   try { run('scripts/test-android-ui.cjs', [], { ANDROID_EXTENDED: '1', ANDROID_TYPOGRAPHY: '1', ANDROID_CARDS: '1', ANDROID_LEDGER: '1' }); }
   catch (e) { failures.push(e.message); }
   for (const platform of ['ios', 'android']) {
+    try {
+      run('scripts/test-navigation-lifecycle.cjs', [], {
+        MOBILE_UI_PLATFORM: platform,
+        BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium',
+        NAVIGATION_TEST_FILTER: 'keeps contact bar aligned,market detail native return,native continuous drag'
+      });
+    } catch (e) { failures.push(e.message); }
     try { run('scripts/test-market-alerts-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-mediation-applications-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
