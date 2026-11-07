@@ -12,27 +12,44 @@
   let templateContent = '';
   const resetDraft = () => { templateContent = ''; };
   const canPublishDraft = () => !templateContent || Boolean(communityDraftText.trim() && communityDraftText.trim() !== templateContent.trim());
+  const interestKey = () => `turtlekeeper-market-interests-v1:${encodeURIComponent(state.loggedInPhone || 'guest')}`;
+  function marketInterests() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(interestKey()) || '{}');
+      const codes = list => new Set(Array.isArray(list) ? list.filter(code => typeof code === 'string') : []);
+      return { added: codes(saved?.added), removed: codes(saved?.removed) };
+    } catch { return { added: new Set(), removed: new Set() }; }
+  }
   function speciesEntries(kind) {
+    const catalog = new Map(accountSpeciesList().map(item => [item.code, item]));
     const entries = new Map();
     const add = (code, reason) => {
-      const item = speciesByCode(code);
-      if (!item || entries.has(item.code) || (kind === 'market' && isMarketProhibitedSpecies(item))) return;
+      const item = catalog.get(code);
+      if (!item || (entries.has(item.code) && entries.get(item.code).reason !== '品种图鉴') || (kind === 'market' && isMarketProhibitedSpecies(item))) return;
       entries.set(item.code, { item, reason });
     };
     (state.turtles || []).filter(item => TurtleBatches.isActive(item)).forEach(item => add(item.speciesCode, '在养'));
     (state.keptSpecies || []).forEach(code => add(code, '常用'));
-    if (kind === 'market') {
+    const interests = kind === 'market' ? marketInterests() : null;
+    if (interests) {
       const favorites = new Set((state.marketFavoriteIds || []).map(String));
-      (state.marketListings || []).forEach(item => { if (favorites.has(String(item.id))) add(item.speciesCode, '收藏'); });
+      if (favorites.size) (state.marketListings || []).forEach(item => { if (favorites.has(String(item.id))) add(item.speciesCode, '收藏'); });
     }
     const personal = entries.size > 0;
     if (!personal) ['GHG', 'HMG', 'TBG', 'AMBKG'].forEach(code => add(code, '品种图鉴'));
+    interests?.added.forEach(code => add(code, '关注'));
+    interests?.removed.forEach(code => entries.delete(code));
     return { personal, entries: kind === 'market' ? [...entries.values()] : [...entries.values()].slice(0, 4) };
+  }
+  function marketInterestCodes() {
+    return speciesEntries('market').entries.filter(({ reason }) => reason !== '品种图鉴').map(({ item }) => item.code);
   }
   function speciesMarkup(kind) {
     const { personal, entries } = speciesEntries(kind);
+    const chips = entries.map(({ item, reason }) => `<button type="button" data-discovery-species="${escapeHtml(item.code)}" data-discovery-source="${kind}"><span class="discovery-species-name">${escapeHtml(item.name)}</span>${reason === '品种图鉴' ? '' : `<small>${reason}</small>`}</button>`).join('');
+    if (kind === 'market') return `<div class="discovery-species" aria-label="按品种找龟"><div class="discovery-species-header"><span>你感兴趣的品种</span><button type="button" data-discovery-manage>管理品种</button></div>${chips ? `<div class="discovery-species-chips">${chips}</div>` : '<p class="discovery-interest-empty">暂无感兴趣的品种，可在管理品种中添加。</p>'}</div>`;
     if (!entries.length) return '';
-    return `<div class="discovery-species" aria-label="${kind === 'market' ? '按品种找龟' : '按品种找龟友'}"><span>${personal ? '你感兴趣的品种' : '从品种开始看看'}</span><div class="discovery-species-chips">${entries.map(({ item, reason }) => `<button type="button" data-discovery-species="${escapeHtml(item.code)}" data-discovery-source="${kind}"><span class="discovery-species-name">${escapeHtml(item.name)}</span>${personal ? `<small>${reason}</small>` : ''}</button>`).join('')}</div></div>`;
+    return `<div class="discovery-species" aria-label="按品种找龟友"><span>${personal ? '你感兴趣的品种' : '从品种开始看看'}</span><div class="discovery-species-chips">${chips}</div></div>`;
   }
   function communityEntry() {
     return `<section class="discovery-community-entry">${speciesMarkup('community')}</section>`;
@@ -46,6 +63,36 @@
     const template = document.createElement('template'); template.innerHTML = speciesMarkup('market');
     const next = template.content.firstElementChild;
     if (next && !current.isEqualNode(next)) current.replaceWith(next);
+  }
+  function interestSelection(entries) {
+    return entries.map(({ item, reason }) => `<button type="button" data-discovery-interest-remove="${escapeHtml(item.code)}" aria-label="移除${escapeHtml(item.name)}"><span>${escapeHtml(item.name)} <small>${reason}</small></span><span aria-hidden="true">×</span></button>`).join('') || '<p class="discovery-interest-empty">暂无感兴趣的品种。</p>';
+  }
+  function interestChoices(codes, query = '') {
+    const selected = new Set(codes);
+    const term = query.trim().toLowerCase();
+    return accountSpeciesList().filter(item => !selected.has(item.code) && !isMarketProhibitedSpecies(item) && `${item.name} ${item.code}`.toLowerCase().includes(term))
+      .map(item => `<button type="button" data-discovery-interest-add="${escapeHtml(item.code)}" aria-label="添加${escapeHtml(item.name)}"><span>${escapeHtml(item.name)}</span><span aria-hidden="true">＋</span></button>`).join('') || '<p class="discovery-interest-empty">没有可添加的匹配品种。</p>';
+  }
+  function marketInterestPage() {
+    const { entries } = speciesEntries('market');
+    return `${topbar('感兴趣的品种', true)}<main class="content market-alert-page market-interest-page">
+      <section class="fresh-card"><h2>当前品种</h2><p class="market-alert-muted">添加或移除龟集市首页的快捷品种。本机按账号保存，上新提醒可单独设置。</p><div class="discovery-interest-list" data-discovery-interest-selected>${interestSelection(entries)}</div></section>
+      <section class="fresh-card"><h2>添加品种</h2><label class="market-alert-search">查找品种<input type="search" data-discovery-interest-search maxlength="60" placeholder="输入品种名称或代码" autocomplete="off"></label><div class="discovery-interest-list" data-discovery-interest-choices>${interestChoices(entries.map(({ item }) => item.code))}</div></section>
+    </main>`;
+  }
+  function changeMarketInterest(page, code, adding) {
+    const item = speciesByCode(code);
+    if (!item || isMarketProhibitedSpecies(item)) return;
+    const { added, removed } = marketInterests();
+    if (adding) { removed.delete(code); added.add(code); }
+    else { added.delete(code); removed.add(code); }
+    try { localStorage.setItem(interestKey(), JSON.stringify({ added: [...added], removed: [...removed] })); }
+    catch { return toast('本机无法保存品种设置，请重试'); }
+    const search = page.querySelector('[data-discovery-interest-search]');
+    const { entries } = speciesEntries('market');
+    page.querySelector('[data-discovery-interest-selected]').innerHTML = interestSelection(entries);
+    page.querySelector('[data-discovery-interest-choices]').innerHTML = interestChoices(entries.map(({ item }) => item.code), search.value);
+    toast(adding ? `已添加${item.name}` : `已移除${item.name}`);
   }
   function composePrompts() {
     const keys = communityDraftTopic === 'identify' ? ['identify'] : communityDraftTopic === 'question' ? ['question'] : communityDraftTopic === 'growth' ? [] : ['habitat', 'feeding', 'breeding'];
@@ -87,10 +134,21 @@
   function bind() {
     if (document.__discoveryBound) return;
     document.__discoveryBound = true;
+    document.addEventListener('input', event => {
+      if (state.page !== 'marketInterests' || !event.target.matches('[data-discovery-interest-search]')) return;
+      const page = event.target.closest('.market-interest-page');
+      const codes = [...page.querySelectorAll('[data-discovery-interest-remove]')].map(button => button.dataset.discoveryInterestRemove);
+      page.querySelector('[data-discovery-interest-choices]').innerHTML = interestChoices(codes, event.target.value);
+    });
     document.addEventListener('click', event => {
       const button = event.target.closest('button');
       if (!button || !button.isConnected) return;
-      if (button.hasAttribute('data-discovery-species')) {
+      if (button.hasAttribute('data-discovery-manage') && state.page === 'market') {
+        setState({ page: 'marketInterests' }, { skipSave: true, skipCloud: true });
+      } else if (state.page === 'marketInterests' && (button.dataset.discoveryInterestAdd || button.dataset.discoveryInterestRemove)) {
+        const page = button.closest('.market-interest-page');
+        changeMarketInterest(page, button.dataset.discoveryInterestAdd || button.dataset.discoveryInterestRemove, Boolean(button.dataset.discoveryInterestAdd));
+      } else if (button.hasAttribute('data-discovery-species')) {
         const item = speciesByCode(button.dataset.discoverySpecies); if (!item) return;
         if (button.dataset.discoverySource === 'community') void TurtleSearch.search('community', item.name, item.code);
         else {
@@ -113,5 +171,5 @@
       } else if (button.hasAttribute('data-discovery-new-post')) openCommunityComposer('daily');
     });
   }
-  window.TurtleDiscovery = { communityEntry, marketEntry, patchMarketEntry, composePrompts, archivePhotoChoice, communityEmpty, bind, resetDraft, canPublishDraft };
+  window.TurtleDiscovery = { communityEntry, marketEntry, marketInterestPage, marketInterestCodes, patchMarketEntry, composePrompts, archivePhotoChoice, communityEmpty, bind, resetDraft, canPublishDraft };
 })();

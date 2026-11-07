@@ -9,7 +9,21 @@ html .phone-shell .discovery-pending > button { min-height: 44px; max-width: 100
 html .phone-shell .market-assist-bar { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; min-width: 0; }
 html .phone-shell .market-assist-bar > button { min-width: 0; min-height: 44px; padding-inline: 2px; font-size: 12px; white-space: nowrap; }
 .discovery-market-entry { margin: 0 0 12px; padding: 12px; border: 1px solid var(--ui-line); border-radius: 14px; background: var(--ui-surface); }
-.discovery-species > span { display: block; margin-bottom: 6px; color: var(--ui-muted); font-size: 11px; }
+.discovery-species > span, .discovery-species-header { display: block; margin-bottom: 6px; color: var(--ui-muted); font-size: 11px; }
+.discovery-species-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; line-height: 1.4; }
+html .phone-shell .discovery-species-header > button {
+  min-height: 24px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ui-accent);
+  font: inherit;
+}
+.discovery-interest-empty { margin: 6px 0; color: var(--ui-muted); font-size: 12px; }
+.discovery-interest-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 128px), 1fr)); gap: 8px; margin-top: 12px; }
+.discovery-interest-list[data-discovery-interest-choices] { max-height: 350px; overflow: auto; overscroll-behavior: contain; padding: 3px; }
+.market-interest-page .discovery-interest-list > button { display: flex; align-items: center; justify-content: space-between; gap: 6px; text-align: left; overflow-wrap: anywhere; font-size: 13px; }
+.discovery-interest-list button small { color: var(--ui-muted); font-size: 10px; }
 .discovery-species-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 html .phone-shell .discovery-species-chips > button { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 44px; padding: 8px 11px; border: 1px solid var(--ui-line); border-radius: 12px; background: var(--ui-surface); color: var(--ui-text); font-size: 12px; text-align: left; overflow-wrap: anywhere; white-space: normal; }
 .discovery-species-chips small { flex: none; color: var(--ui-accent); font-size: 10px; }

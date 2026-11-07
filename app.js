@@ -660,7 +660,7 @@ function readPendingCloudData() {
 function persistPendingCloudData(source = state) {
   if (!source.loggedInPhone || !currentCloudToken()) return false;
   try {
-    localStorage.setItem(PENDING_CLOUD_DATA_STORAGE, TurtleLocalData.stringify({
+    writeLocalBackup(PENDING_CLOUD_DATA_STORAGE, {
       phone: source.loggedInPhone,
       accountName: source.accountName,
       accountAvatar: source.accountAvatar || "",
@@ -671,7 +671,7 @@ function persistPendingCloudData(source = state) {
         && source.cloudMergeBase.revision === source.cloudAccountDataRevision ? source.cloudMergeBase : null,
       conflict: source.cloudSyncConflict?.phone === source.loggedInPhone ? source.cloudSyncConflict : null,
       updatedAt: new Date().toISOString()
-    }));
+    });
     return true;
   } catch (error) {
     console.warn("保存待同步数据失败", error);
@@ -891,8 +891,69 @@ function accountHasEmbeddedImages(source = state) {
 }
 
 let localBackupFailed = false;
+let compactLocalBackup = false;
+
+function withoutLocalFeedCache(snapshot) {
+  // These lists can be fetched again. Keep the account data, merge base,
+  // conversation state and pending messages in the recovery copy.
+  const {
+    marketListings, communityPosts, communityFollowingUsers, communityFollowingPosts,
+    communityFollowingListings, publicReviews, publicFeedbackItems, ...backup
+  } = snapshot;
+  return {
+    ...backup,
+    communityFeedInitialized: false,
+    followingInitialized: false,
+    publicReviewsInitialized: false,
+    publicFeedbackInitialized: false
+  };
+}
+
+function writeLocalBackup(key, snapshot) {
+  const compact = key === STORAGE && compactLocalBackup;
+  const text = TurtleLocalData.stringify(compact ? withoutLocalFeedCache(snapshot) : snapshot);
+  try {
+    localStorage.setItem(key, text);
+  } catch (error) {
+    if (error.name !== "QuotaExceededError") throw error;
+    if (key === STORAGE) {
+      if (compact) throw error;
+      const reduced = TurtleLocalData.stringify(withoutLocalFeedCache(snapshot));
+      if (reduced.length >= text.length) throw error;
+      compactLocalBackup = true;
+      localStorage.setItem(STORAGE, reduced);
+      return;
+    }
+    // The journal has no feed data of its own. Reclaim room by replacing
+    // the existing mirror with a smaller copy of the same saved records.
+    const previous = localStorage.getItem(STORAGE);
+    const saved = previous && TurtleLocalData.parse(previous);
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) throw error;
+    const reduced = TurtleLocalData.stringify(withoutLocalFeedCache(saved));
+    if (reduced.length >= previous.length) throw error;
+    localStorage.setItem(STORAGE, reduced);
+    compactLocalBackup = true;
+    localStorage.setItem(key, text);
+  }
+}
+
+function updateLocalBackupWarning() {
+  if ($app.classList.contains("edge-back-dragging")) return;
+  const main = $app.querySelector("main");
+  const existing = main?.querySelector(":scope > .local-backup-warning");
+  if (!localBackupFailed) {
+    existing?.remove();
+  } else if (main && !existing) {
+    const warning = document.createElement("section");
+    warning.className = "local-backup-warning";
+    warning.setAttribute("role", "alert");
+    warning.innerHTML = `<strong>本地备份未完成</strong><p>请保持页面打开，重试保存或先导出备份。不要清理缓存。</p><button class="secondary" type="button" data-retry-local-backup>重试保存</button><button class="secondary" type="button" data-export-local-backup>导出完整备份</button>`;
+    main.prepend(warning);
+  }
+}
 
 function saveState(options = {}) {
+  const backupPreviouslyFailed = localBackupFailed;
   const accountSignature = accountSyncSignature(state);
   const accountChanged = accountSignature !== lastLocalAccountSignature;
   const registeredUsers = syncRegisteredUsers(state);
@@ -909,7 +970,7 @@ function saveState(options = {}) {
   if (state.loggedInPhone && activeCloudToken) rememberCloudToken(state.loggedInPhone, activeCloudToken);
   state.registeredUsers = registeredUsers;
   try {
-    localStorage.setItem(STORAGE, TurtleLocalData.stringify({
+    writeLocalBackup(STORAGE, {
       ...accountData,
       accountName: state.accountName,
       accountAvatar: state.accountAvatar,
@@ -945,19 +1006,20 @@ function saveState(options = {}) {
       messageUnreadCount: Number(state.messageUnreadCount || 0),
       marketListings: state.marketListings || [],
       themeColor: state.themeColor || accountData.themeColor
-    }));
+    });
     localBackupFailed = false;
   } catch (error) {
-    localBackupFailed = true;
     console.warn("保存本地数据失败", error);
-    toast("本地备份未完成，请保持页面打开，重试保存或先导出备份。不要清理缓存。");
+    if (!localBackupFailed) toast("本地备份未完成，请保持页面打开，重试保存或先导出备份。不要清理缓存。");
+    localBackupFailed = true;
   }
   // Write-ahead journal: the cloud sync may be delayed or interrupted after
   // this local save. It is cleared only after /api/account/save succeeds.
   if (cloudSession && !options.skipCloud && accountChanged) {
     if (persistPendingCloudData()) lastLocalAccountSignature = accountSignature;
     queueCloudSave();
-  } else if (options.skipCloud || !cloudSession) lastLocalAccountSignature = accountSignature;
+  } else if (!localBackupFailed && (options.skipCloud || !cloudSession)) lastLocalAccountSignature = accountSignature;
+  if (localBackupFailed !== backupPreviouslyFailed) updateLocalBackupWarning();
   updateAccountSaveStatus();
   return !localBackupFailed;
 }
@@ -3954,13 +4016,14 @@ function sameNavigationData(saved, current) {
 }
 
 function navigationSnapshotIsCurrent(snapshot) {
-  return Boolean(snapshot && !["team", "mediation", "mediationApply", "mediationDetail", "marketAlerts", "marketAlertResults"].includes(snapshot.page) && sameNavigationData(snapshot.dataSnapshot, navigationDataValues(snapshot.page)));
+  return Boolean(snapshot && !["team", "mediation", "mediationApply", "mediationDetail", "marketInterests", "marketAlerts", "marketAlertResults"].includes(snapshot.page) && sameNavigationData(snapshot.dataSnapshot, navigationDataValues(snapshot.page)));
 }
 
 function backNavigationState() {
   if (state.page === "search") return { page: window.TurtleSearch?.source() || "market" };
   if (["mediationApply", "mediationDetail"].includes(state.page)) return { page: "mediation" };
   if (state.page === "mediation") return { page: "mine" };
+  if (state.page === "marketInterests") return { page: "market" };
   if (state.page === "marketAlerts") return { page: "mine" };
   if (state.page === "marketAlertResults") return { page: "market" };
   return {
@@ -4042,6 +4105,7 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
   persistentBottomNav?.remove();
   stopMarketDetailVideos($app, true);
   $app.replaceChildren(liveDom);
+  updateLocalBackupWarning();
   if (state.page === "marketDetail") hydrateMarketDetailVideos();
   const bottomNav = persistentBottomNav || liveDom.__edgeBackBottomNav || bottomNavFromHtml(snapshot.bottomNavHtml);
   if (bottomNav) {
@@ -4098,6 +4162,7 @@ function navigateBack(options = {}) {
     $app.classList.remove("edge-back-dragging", "page-enter-motion", "community-chat-enter-motion");
     stopMarketDetailVideos($app, true);
     $app.innerHTML = snapshot.html;
+    updateLocalBackupWarning();
     bindEvents();
     window.TurtleMediation?.bind(mediationContext());
     if (state.page === "market") {
@@ -4905,7 +4970,7 @@ function pageMarket() {
       </section>` : ""}
       ${inquiryCode ? `<section class="market-inquiry-summary" role="status"><strong>商品咨询码 ${escapeHtml(inquiryCode)}</strong><p>${listings.length > 1 ? "此码匹配多个商品，请核对图片、标题和卖家后选择。" : "按咨询码查找在售商品，点击商品查看详情。"}</p></section>` : ""}
       ${!keyword ? window.TurtleDiscovery?.marketEntry() || "" : ""}
-      ${!keyword ? window.TurtleMediation?.entry() || "" : ""}
+      ${!keyword ? window.TurtleMediation?.entry(PLATFORM_SERVICE_WECHAT) || "" : ""}
       ${!inquiryCode ? marketAssistControls(regions) : ""}
       ${!inquiryCode ? `<section class="market-stage-tabs">
         ${[["all", "全部"], ["hatchling", "苗子"], ["juvenile", "亚成"], ["adult", "种龟"]].map(([value, label]) => `<button class="${stage === value ? "active" : ""}" type="button" data-market-stage="${value}">${label}</button>`).join("")}
@@ -8357,6 +8422,7 @@ function mediationContext() {
 
 function marketAlertsContext() {
   return { state: () => state, auth: communityAuthPayload, api: apiPost, topbar, render, toast,
+    interests: () => window.TurtleDiscovery?.marketInterestCodes() || [],
     catalog: window.TURTLE_SPECIES || [], allowed: item => !isMarketProhibitedSpecies(item), card: marketListingCard,
     requestNotifications: () => setupNativePushNotifications({ requestConsent: true }),
     navigate: patch => setState(patch, { skipCloud: true, skipSave: true }),
@@ -8384,6 +8450,7 @@ function render() {
     return;
   }
   const pages = {
+    marketInterests: () => window.TurtleDiscovery.marketInterestPage(),
     marketAlerts: () => window.TurtleMarketAlerts.render(marketAlertsContext()),
     marketAlertResults: () => window.TurtleMarketAlerts.render(marketAlertsContext()),
     mediation: () => window.TurtleMediation.render(mediationContext()),
@@ -8454,13 +8521,7 @@ function render() {
   stopMarketDetailVideos($app, true);
   $app.innerHTML = (pages[state.page] || pageHome)() + policyConsentGate() + systemAnnouncementOverlay() + appReviewInviteOverlay();
   updateCloudSyncNotice();
-  if (localBackupFailed) {
-    const warning = document.createElement("section");
-    warning.className = "local-backup-warning";
-    warning.setAttribute("role", "alert");
-    warning.innerHTML = `<strong>本地备份未完成</strong><p>请保持页面打开，重试保存或先导出备份。不要清理缓存。</p><button class="secondary" type="button" data-retry-local-backup>重试保存</button><button class="secondary" type="button" data-export-local-backup>导出完整备份</button>`;
-    $app.querySelector("main")?.prepend(warning);
-  }
+  updateLocalBackupWarning();
   const incomingBottomNav = $app.querySelector(".bottom-nav");
   if (persistentBottomNav && incomingBottomNav) {
     incomingBottomNav.replaceWith(persistentBottomNav);
@@ -15659,7 +15720,7 @@ function appAnalyticsSource() {
 function appAnalyticsModule() {
   const page = String(state.page || "home");
   if (page === "search") return window.TurtleSearch?.source?.() === "community" ? "壳友圈" : "龟集市";
-  if (["market", "marketAlerts", "marketAlertResults", "marketAdd", "marketDetail", "marketSeller", "marketMy", "myMarketListings", "marketFavorites", "marketHistory"].includes(page)) return "龟集市";
+  if (["market", "marketInterests", "marketAlerts", "marketAlertResults", "marketAdd", "marketDetail", "marketSeller", "marketMy", "myMarketListings", "marketFavorites", "marketHistory"].includes(page)) return "龟集市";
   if (["community", "communityAdd", "communityPostDetail", "following", "followingProfile", "communityProfile"].includes(page)) return "壳友圈";
   if (["messages", "communityActivity", "communityFriends", "communityChat"].includes(page)) return "消息";
   if (["ledger", "ledgerDetail", "calendar", "breeding", "breedingAdd", "breedingDetail"].includes(page)) return "账本";

@@ -77,6 +77,31 @@ async function main() {
     });
     assert.deepEqual(navigation, { writes: 0, eagerPreviewParses: 0, previewParses: 1, opened: 'pools', returned: 'home' });
 
+    for (const mode of ['live', 'html']) for (const initiallyFailed of [false, true]) {
+      const result = await page.evaluate(({ mode, initiallyFailed }) => {
+        state = { ...state, page: 'home', policyConsentRequired: false };
+        edgeBackSnapshots = [];
+        const original = Storage.prototype.setItem;
+        let blocked = initiallyFailed;
+        Storage.prototype.setItem = function(key, text) {
+          if (blocked && key === STORAGE) throw new DOMException('Blocked test storage', 'QuotaExceededError');
+          return original.call(this, key, text);
+        };
+        try {
+          saveState({ skipCloud: true }); render();
+          const firstNode = $app.firstElementChild;
+          setState({ page: 'pools' }, { skipSave: true });
+          blocked = !initiallyFailed;
+          const saved = saveState({ skipCloud: true });
+          const snapshot = edgeBackSnapshots.at(-1);
+          if (mode === 'html') snapshot.liveDom = null;
+          navigateBack();
+          return { saved, live: firstNode === $app.firstElementChild, page: state.page, warning: Boolean($app.querySelector('.local-backup-warning')) };
+        } finally { Storage.prototype.setItem = original; localBackupFailed = false; render(); }
+      }, { mode, initiallyFailed });
+      assert.deepEqual(result, { saved: initiallyFailed, live: mode === 'live', page: 'home', warning: !initiallyFailed }, `Backup warning follows current storage status on ${mode} return`);
+    }
+
     const lookups = await page.evaluate(() => {
       const n = 850, reads = { turtles: 0, ledger: 0 };
       const countReads = (values, key) => new Proxy(values, { get(array, prop) {
@@ -99,8 +124,9 @@ async function main() {
     });
     assert.deepEqual(lookups, { n: 850, ledgerReads: { turtles: 850, ledger: 3400 }, poolReads: 850, linkedRows: 850, poolTotal: true, legacyReview: true });
     assert.deepEqual(errors, []);
-    recordResult(root, 'navigation-freshness.json', { pass: true, scenarios: 14, navigation, lookups, externalTraffic: false });
+    recordResult(root, 'navigation-freshness.json', { pass: true, scenarios: 18, navigation, lookups, externalTraffic: false });
     console.log('PASS: breeding, pools, dashboard and care show saved edits immediately on button, gesture and HTML fallback returns; in-place mutations and immediate second edits covered.');
+    console.log('PASS: backup warning reflects the current result on live and HTML returns after storage failure and recovery.');
     console.log('PASS read-only navigation and 850-record association work:', JSON.stringify({ navigation, lookups }));
   } finally { await browser.close(); }
 }

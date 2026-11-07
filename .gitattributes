@@ -68,3 +68,6 @@ deploy/market-alerts-142/server.json text eol=lf
 scripts/upload-ios-143.sh text eol=lf
 scripts/ios-143-release-files.txt text eol=lf
 scripts/ios-143-changes.txt text eol=lf
+scripts/upload-ios-144.sh text eol=lf
+scripts/ios-144-release-files.txt text eol=lf
+scripts/ios-144-changes.txt text eol=lf

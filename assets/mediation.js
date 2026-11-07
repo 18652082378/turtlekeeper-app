@@ -47,8 +47,21 @@
   }
   function scope() { return ctx.state().mediationScope === 'all' && ctx.state().isCommunityAdmin ? 'all' : 'mine'; }
   const description = `<p>提供代收买款、买方验收后按约向卖方放款的人工中介服务。提交申请后由管理员联系核实，双方确认交易与验收约定后再办理。</p><p>中介费按交易总价的 <b>0.68%</b> 计算，每笔最低 <b>6.80元</b>。费用由谁承担、取消或未成交时的费用处理，须在付款前共同确认。</p>`;
-  function entry() {
-    return `<section class="mediation-entry"><div><strong>中介服务</strong><small>代收买款 · 验收后按约放款</small></div><div><button type="button" data-mediation-start>申请中介</button><button type="button" data-mediation-records>我的申请</button></div></section>`;
+  function entry(wechat) {
+    return `<section class="mediation-entry">
+      <div class="mediation-entry-service">
+        <span class="mediation-entry-badge" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5c0 4.4 2.7 7.9 7 10 4.3-2.1 7-5.6 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg></span>
+        <div>
+          <strong>中介服务</strong>
+          <small><span>代收买款 ·</span> <span>验收后按约放款</span></small>
+          <small class="mediation-entry-fee"><span>手续费仅<b>0.68%</b></span> <span>每笔最低 ¥6.80</span></small>
+        </div>
+      </div>
+      <button class="mediation-entry-contact" type="button" data-mediation-copy-wechat aria-label="复制官方中介微信 ${E(wechat)}">
+        <span><small>官方中介微信</small><strong>${E(wechat)}</strong></span>
+        <span class="mediation-entry-copy" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2"/></svg>复制</span>
+      </button>
+    </section>`;
   }
   function notice() {
     if (error) return `<div class="mediation-notice" role="alert"><p>${E(error)}</p><button type="button" data-mediation-retry>重试加载</button></div>`;
@@ -161,7 +174,7 @@
     }
     const on = (selector, fn) => root.querySelectorAll(selector).forEach(button => button.addEventListener('click', fn));
     on('[data-mediation-start]', () => newApplication());
-    on('[data-mediation-records]', () => { list = null; offset = 0; go({ page: 'mediation', mediationScope: 'mine' }); });
+    on('[data-mediation-copy-wechat]', () => { void ctx.copy(ctx.wechat, '官方微信号已复制'); });
     on('[data-mediation-open]', event => open(event.currentTarget.dataset.mediationOpen));
     on('[data-mediation-terms]', () => window.openTradeGuide?.('terms'));
     on('[data-mediation-scope]', event => { list = null; offset = 0; error = ''; loading = ''; generation++; go({ mediationScope: event.currentTarget.dataset.mediationScope }); });

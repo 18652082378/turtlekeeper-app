@@ -72,9 +72,15 @@ async function deploy({ pkg, mode = '--check', root = ROOT, platform = process.p
   const processBefore = info(), env = processBefore.pm2_env, envFile = path.join(root, 'server/.env');
   const port = Number(env.PORT ?? env.env?.PORT ?? (fs.existsSync(envFile) ? regular(envFile).toString().match(/^\s*PORT\s*=\s*['"]?(\d+)['"]?\s*$/m)?.[1] : undefined) ?? 8787);
   ensure(Number.isInteger(port) && port > 0 && port < 65536, 'Invalid API port');
-  const policyRoutes = ['/api/app/version?platform=ios&build=136', '/api/app/version?platform=ios&build=142', '/api/app/version?platform=android&channel=store', '/api/app/version?platform=android&channel=beta', '/api/app/version?platform=web'];
+  const androidStore20 = '/api/app/version?platform=android&channel=store&build=20';
+  const policyRoutes = ['/api/app/version?platform=ios&build=136', '/api/app/version?platform=ios&build=142', androidStore20, '/api/app/version?platform=android&channel=beta', '/api/app/version?platform=web'];
   const policy = [];
-  for (const route of policyRoutes) { const response = await health(port, route); ensure(response.status === 200 && response.json?.ok, 'Existing version API failed'); policy.push(JSON.stringify(response.json)); }
+  for (const route of policyRoutes) {
+    const response = await health(port, route);
+    ensure(response.status === 200 && response.json?.ok, 'Existing version API failed');
+    if (route === androidStore20) ensure(response.json.platform === 'android' && response.json.channel === 'store' && response.json.minimumBuild <= 20 && response.json.latestBuild <= 20, 'Android store build 20 must remain usable without an update prompt');
+    policy.push(JSON.stringify(response.json));
+  }
   const auth = route => health(port, route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   ensure((await auth('/api/account/load')).status === 401, 'Existing account authentication failed');
   log('PASS: API source, module checksum, syntax, PM2 process and iOS/Android/web policy baselines.');

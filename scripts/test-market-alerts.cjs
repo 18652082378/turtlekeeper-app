@@ -47,6 +47,22 @@ function harness() {
   const post = { id: 'post', authorPhoneRaw: 'seller', title: '小龟成长记录', content: '成长', visibility: 'public', createdAt: new Date(h.time - 60000).toISOString() }; post.dailyPushReview = { hash: reviewHash(post) }; h.db.communityPosts = [post];
   const daily = createDailyCommunityDispatcher({ ...h.options, now: () => new Date(h.time), canReceive: () => true, canRecommend: (db, user, day, campaign) => quotaAvailable(db, user, day, campaign, h.options.devices(user)), reserveRecommendation: reserveQuota });
   await daily(); assert.equal(h.sent.length, 1, 'Market first prevents community recommendation that day');
+  const oldAndroid = { platform: 'android', token: 'old-android-store-20', sessionHash: 'legacy-session' };
+  for (const marketFirst of [true, false]) {
+    h = harness(); h.subscribe(); h.advance(12 * 60000); h.add('1'); h.db.communityPosts = [post];
+    const user = h.db.users.buyer, ios = { ...user.device, marketAlerts: true };
+    const supportedAndroid = { ...oldAndroid, token: 'current-android', marketAlerts: true };
+    user.pushDevices = [oldAndroid, ios, supportedAndroid];
+    const devices = user => user.pushDevices || [];
+    const alerts = createMarketAlerts({ ...h.options, devices: user => devices(user).filter(device => device.marketAlerts === true) });
+    const daily = createDailyCommunityDispatcher({ ...h.options, devices, now: () => new Date(h.time), canReceive: () => true,
+      canRecommend: (db, user, day, campaign) => quotaAvailable(db, user, day, campaign, devices(user)), reserveRecommendation: reserveQuota,
+      send: async (_token, data, device) => { h.sent.push({ device, data }); return { ok: true }; } });
+    if (marketFirst) await alerts.dispatch();
+    await daily(); await alerts.dispatch(); await daily();
+    assert.deepEqual(h.sent.filter(({ device }) => device.token === oldAndroid.token).map(({ data }) => data.route), ['communityDaily']);
+    for (const device of [ios, supportedAndroid]) assert.deepEqual(h.sent.filter(entry => entry.device.token === device.token).map(({ data }) => data.route), [marketFirst ? 'marketAlerts' : 'communityDaily']);
+  }
   h = harness(); h.subscribe(); h.advance(12 * 60000); h.add('1'); reserveQuota(h.db.users.buyer, '2026-11-07', 'community:2026-11-07:post'); await h.service.dispatch(); assert.equal(h.sent.length, 0);
   h = harness(); h.subscribe(false); h.advance(3600000); h.add('old'); h.subscribe(true); h.advance(11 * 60000); await h.service.dispatch(); assert.equal(h.sent.length, 0, 'Re-enable never backfills previous publications');
   for (const records of [false, true]) {
@@ -60,6 +76,13 @@ function harness() {
       };
       await register({ marketAlerts: true }); assert.equal(r.disk().users[r.accounts.alice].pushDevices[0].marketAlerts, true, 'New client capability is persisted');
       await register({}); assert.notEqual(r.disk().users[r.accounts.alice].pushDevices[0].marketAlerts, true, 'Old-client registration removes unsupported capability');
+      const legacyDevice = await fetch(r.base + '/api/notifications/android/device/register', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: r.accounts.alice, token: r.token('alice'), deviceToken: 'legacy_android_build20', platform: 'android' })
+      });
+      assert.equal(legacyDevice.status, 200);
+      assert.equal((await legacyDevice.json()).registered, true);
+      assert.notEqual(r.disk().users[r.accounts.alice].pushDevices.find(device => device.platform === 'android')?.marketAlerts, true);
       const before = await post('preference', 'alice'); assert.equal(before.body.settings.enabled, false); assert.equal(before.cache, 'no-store');
       assert.equal((await post('preference', 'alice', { enabled: true, revision: 0, speciesCodes: ['GHG'] })).status, 400);
       const enabled = await post('preference', 'alice', { enabled: true, revision: 0, speciesCodes: ['GHG'], confirmed: true, consentVersion: CONSENT_VERSION }); assert.equal(enabled.status, 200); assert.equal(enabled.body.settings.enabled, true);

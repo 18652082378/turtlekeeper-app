@@ -56,6 +56,7 @@ function recommendationPayload(post) {
     route: 'communityDaily', postId: post.id, ...(image ? { attachmentUrl: image } : {}) };
 }
 function createDailyCommunityDispatcher({ read, write, send, devices, canReceive, configured, canRecommend = () => true, reserveRecommendation = () => {}, now = () => new Date() }) {
+  const sharesQuota = device => device.platform !== 'android' || device.marketAlerts === true;
   let running = false;
   return async function dispatch() {
     if (running || !configured()) return;
@@ -89,23 +90,27 @@ function createDailyCommunityDispatcher({ read, write, send, devices, canReceive
         delivery = db.communityDailyDeliveries[day];
         const post = (db.communityPosts || []).find(item => item.id === delivery.postId);
         if (!eligible(db, post, now())) break;
-        const user = db.users[phone];
+        let user = db.users[phone];
         const campaign = `community:${day}:${delivery.postId}`;
-        if (!user || user.communityDailyPushEnabled === false || !canReceive(db, post, user) || !canRecommend(db, user, day, campaign)) continue;
+        if (!user || user.communityDailyPushEnabled === false || !canReceive(db, post, user)) continue;
         for (const device of devices(user)) {
+          if (!user || user.communityDailyPushEnabled === false) break;
           const key = crypto.createHash('sha256').update((device.platform === 'android' ? 'android:' : '') + device.token).digest('hex');
-          if (delivery.attempted[key]) continue;
+          if (delivery.attempted[key] || (sharesQuota(device) && !canRecommend(db, user, day, campaign))) continue;
           delivery.attempted[key] = now().toISOString();
-          reserveRecommendation(user, day, campaign);
+          if (sharesQuota(device)) reserveRecommendation(user, day, campaign);
           await write(db);
           db = read(); delivery = db.communityDailyDeliveries[day];
-          const currentUser = db.users[phone], currentPost = (db.communityPosts || []).find(item => item.id === delivery.postId);
-          if (clock(now()).day !== day || clock(now()).hour < 9 || clock(now()).hour >= 21 || !currentUser || currentUser.communityDailyPushEnabled === false || !eligible(db, currentPost, now()) || !canReceive(db, currentPost, currentUser) || !canRecommend(db, currentUser, day, campaign)
-            || !devices(currentUser).some(current => current.token === device.token && current.platform === device.platform && current.sessionHash === device.sessionHash)) continue;
+          user = db.users[phone];
+          const currentPost = (db.communityPosts || []).find(item => item.id === delivery.postId);
+          if (clock(now()).day !== day || clock(now()).hour < 9 || clock(now()).hour >= 21 || !user || user.communityDailyPushEnabled === false || !eligible(db, currentPost, now()) || !canReceive(db, currentPost, user)) continue;
+          const currentDevice = devices(user).find(current => current.token === device.token && current.platform === device.platform && current.sessionHash === device.sessionHash);
+          if (!currentDevice || sharesQuota(currentDevice) !== sharesQuota(device) || (sharesQuota(currentDevice) && !canRecommend(db, user, day, campaign))) continue;
           const payload = recommendationPayload(currentPost);
-          await send(device.token, payload, device);
+          await send(currentDevice.token, payload, currentDevice);
           // Re-read after each await: do not overwrite newer user/account changes.
           db = read(); delivery = db.communityDailyDeliveries[day];
+          user = db.users[phone];
         }
       }
       db = read();

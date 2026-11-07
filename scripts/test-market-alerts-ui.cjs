@@ -45,8 +45,52 @@ const assets = path.join(root, platform === 'ios' ? 'ios/App/App/public' : 'andr
         marketLoading = communityLoading = messageUnreadLoading = true; forceUpdateState = { required: false }; edgeBackSnapshots = []; cloudHydrationComplete = true; render();
       }, { base: fixture(), phone: r.accounts[name], token: r.token(name), target });
     }
-    await seed('alice'); await page.locator('[data-page="marketAlerts"]').first().click(); await page.waitForSelector('[data-market-alert-form]');
+    await seed('alice', 'market');
+    for (const width of [320, 390, 980]) {
+      await page.setViewportSize({ width, height: 844 });
+      const header = await page.locator('.discovery-species-header').evaluate(el => ({
+        height: el.getBoundingClientRect().height,
+        sizes: [...el.children].map(child => getComputedStyle(child).fontSize)
+      }));
+      assert.ok(header.height <= 26, `Market species heading stays compact at ${width}px`);
+      assert.equal(header.sizes[0], header.sizes[1], `Heading and action use the same font size at ${width}px`);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('[data-discovery-manage]').click();
+    const interestSearch = page.locator('[data-discovery-interest-search]');
+    await interestSearch.fill('红面泥龟');
+    await page.locator('[data-discovery-interest-add="HMG"]').click();
+    await page.locator('[data-discovery-interest-remove="GHG"]').click();
+    assert.equal(await page.evaluate(() => state.turtles[0].speciesCode), 'GHG');
+    for (const theme of ['teal', 'dark']) for (const width of [280, 390, 1280]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.evaluate(theme => { state.themeColor = theme; render(); }, theme);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `Interest manager ${theme}/${width}`);
+    }
+    await page.locator('[data-back]').click();
+    assert.equal(await page.locator('[data-discovery-species="GHG"]').count(), 0);
+    assert.equal(await page.locator('[data-discovery-species="HMG"]').count(), 1);
+    await seed('bob', 'market');
+    assert.equal(await page.locator('[data-discovery-species="GHG"]').count(), 1);
+    assert.equal(await page.locator('[data-discovery-species="HMG"]').count(), 0);
+    await page.reload(); await seed('alice', 'market');
+    assert.equal(await page.locator('[data-discovery-species="GHG"]').count(), 0);
+    assert.equal(await page.locator('[data-discovery-species="HMG"]').count(), 1);
+    assert.equal(updates, 0);
+    checks.push('Interest manager adds and hides automatic species, survives reload, isolates accounts and never changes alerts');
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('[data-page="marketAlerts"]').first().click(); await page.waitForSelector('[data-market-alert-form]');
     assert.equal(await page.locator('[name="enabled"]').isChecked(), false); assert.match(await page.locator('.market-alert-enable').innerText(), /商品推广通知/);
+    await page.locator('[name="search"]').fill('HMG');
+    const interestAlert = page.locator('[name="species"][value="HMG"]');
+    assert.match(await interestAlert.locator('..').innerText(), /感兴趣/);
+    assert.equal(await interestAlert.isChecked(), false);
+    await interestAlert.check();
+    await page.locator('[name="search"]').fill('找不到的品种');
+    assert.match(await page.locator('[data-market-alert-species]').innerText(), /没有匹配品种/);
+    await page.locator('[data-market-alert-remove="HMG"]').click();
+    assert.equal(await page.locator('[data-market-alert-count]').innerText(), '0');
     await page.locator('[name="search"]').fill('果核蛋龟'); await page.locator('[name="species"][value="GHG"]').check(); await page.locator('[name="enabled"]').check();
     hold = true; await page.locator('[data-market-alert-form] [type="submit"]').click();
     await page.waitForFunction(() => document.querySelector('[data-market-alert-form] [type="submit"]')?.disabled);
@@ -95,7 +139,17 @@ const assets = path.join(root, platform === 'ios' ? 'ios/App/App/public' : 'andr
       if (width === 390) await page.screenshot({ path: path.join(output, 'results-' + theme + '.png'), fullPage: false });
     }
     checks.push('Pending save failure cannot contaminate another page or lock controls; 61 receipt products render in 30-card windows without loss');
+    await seed('alice', 'marketAlerts'); await page.waitForSelector('[data-market-alert-form]');
+    await page.locator('[name="enabled"]').check();
+    await page.locator('[data-market-alert-remove="GHG"]').click();
+    assert.equal(await page.locator('[name="enabled"]').isChecked(), false);
+    await page.locator('[data-market-alert-form] [type="submit"]').click();
+    await page.waitForFunction(() => !document.querySelector('[data-market-alert-form] [type="submit"]')?.disabled);
+    assert.deepEqual(r.disk().users[r.accounts.alice].marketAlertSettings.speciesCodes, []);
+    assert.equal(r.disk().users[r.accounts.alice].marketAlertSettings.enabled, false);
+    assert.deepEqual(await page.evaluate(() => TurtleDiscovery.marketInterestCodes()), ['HMG']);
+    checks.push('Removing the final alert species and saving stops alerts while retaining market interests');
     assert.deepEqual(errors, []); fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ checks, errors }, null, 2));
-    console.log(`PASS ${engine}: market alert consent, save/retry, account isolation, owned receipt tap/detail, pagination and 18 responsive layouts. No real pushes.`);
+    console.log(`PASS ${engine}: market interests and alert species management, consent, save/retry, account isolation, owned receipt tap/detail, pagination and 24 responsive layouts. No real pushes.`);
   } finally { await browser.close(); await r.stop(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

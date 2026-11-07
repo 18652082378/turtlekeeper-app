@@ -21,19 +21,26 @@
     sync(context); generation++; loading = false; error = ''; results = null; resultLimit = 30;
     ctx.navigate({ page: 'marketAlertResults', marketAlertReceiptId: receiptId });
   }
-  function allowedSpecies() { return ctx.catalog.filter(item => ctx.allowed(item)); }
+  function alertSpecies(chosen) {
+    const term = query.trim().toLowerCase();
+    const kept = new Set(value.suggestedSpeciesCodes), interests = new Set(ctx.interests());
+    return ctx.catalog.filter(item => ctx.allowed(item) && `${item.name} ${item.code}`.toLowerCase().includes(term))
+      .map(item => ({ item, reason: kept.has(item.code) ? '在养' : interests.has(item.code) ? '感兴趣' : '' }))
+      .sort((a, b) => Number(chosen.has(b.item.code)) - Number(chosen.has(a.item.code)) || Number(Boolean(b.reason)) - Number(Boolean(a.reason)) || a.item.name.localeCompare(b.item.name, 'zh-CN'));
+  }
+  function selectedMarkup(chosen) {
+    return ctx.catalog.filter(item => chosen.has(item.code)).map(item => `<button type="button" data-market-alert-remove="${E(item.code)}" aria-label="移除${E(item.name)}的上新提醒">${E(item.name)} <span aria-hidden="true">×</span></button>`).join('') || '<small>还没选择品种，可在下方查找添加。</small>';
+  }
   function settingsMarkup() {
     if (!value) return `<section class="fresh-card market-alert-status" role="${error ? 'alert' : 'status'}"><p>${E(error || '正在读取上新提醒设置…')}</p>${error ? '<button type="button" data-market-alert-retry>重新读取</button>' : ''}</section>`;
     const chosen = new Set(value.settings.speciesCodes);
-    const catalog = allowedSpecies(), suggested = new Set(value.suggestedSpeciesCodes);
-    const list = catalog.filter(item => chosen.has(item.code) || !query || `${item.name} ${item.code}`.toLowerCase().includes(query.toLowerCase()))
-      .sort((a, b) => Number(chosen.has(b.code)) - Number(chosen.has(a.code)) || Number(suggested.has(b.code)) - Number(suggested.has(a.code)) || a.name.localeCompare(b.name, 'zh-CN'));
     return `<form class="fresh-card market-alert-form" data-market-alert-form>
       <label class="market-alert-enable"><input type="checkbox" name="enabled" ${value.settings.enabled ? 'checked' : ''}><span><strong>开启品种上新推荐通知</strong><small>我同意按所选品种接收龟集市商品推广通知，可随时在此关闭。</small></span></label>
-      <p>根据在养档案推荐品种，你可以自行选择。保存开启后只提醒新发布的相关在售商品，不补发历史商品。</p>
+      <p>可从在养或感兴趣的品种中选择，也可搜索其他品种。勾选并保存后，只提醒新发布的相关在售商品。</p>
       <div class="market-alert-tools"><span>已选择 <b data-market-alert-count>${chosen.size}</b>/30 个品种</span><button type="button" data-market-alert-kept>选择在养品种</button></div>
+      <div class="market-alert-selected" data-market-alert-selected aria-label="已选上新提醒品种">${selectedMarkup(chosen)}</div>
       <label class="market-alert-search">查找品种<input name="search" type="search" value="${E(query)}" maxlength="60" placeholder="输入品种名称或代码" autocomplete="off"></label>
-      <div class="market-alert-species" data-market-alert-species>${speciesMarkup(list, chosen, suggested)}</div>
+      <div class="market-alert-species" data-market-alert-species>${speciesMarkup(chosen)}</div>
       <div class="market-alert-example"><strong>推送示例</strong><b>你关注的果核蛋龟有新上架</b><span>新增3条商品，精品果核蛋龟母龟出售</span><small>实际显示关注品种、本次符合条件的新增数量和其中最新一条商品标题。</small></div>
       <p class="market-alert-muted">推荐通知每日合计最多1条，含每日新帖推荐；北京时间9:00—21:00发送。同品种上新约10分钟后合并检查，编辑或刷新曝光不重复触发。私信、回复和养护提醒单独处理。</p>
       ${value.settings.enabled && !value.hasPushDevice ? '<p class="market-alert-muted">当前账号尚无可接收通知的设备。保存后可按系统提示授权；也可到手机系统设置中开启本软件通知。</p>' : ''}
@@ -41,8 +48,8 @@
       <div class="market-alert-actions"><button class="primary" type="submit" ${saving ? 'disabled' : ''}>${saving ? '正在保存…' : '保存设置'}</button><button type="button" data-market-alert-retry ${saving || loading ? 'disabled' : ''}>重新读取</button></div>
     </form>`;
   }
-  function speciesMarkup(list, chosen, suggested) {
-    return list.map(item => `<label><input type="checkbox" name="species" value="${E(item.code)}" ${chosen.has(item.code) ? 'checked' : ''}><span>${E(item.name)}${suggested.has(item.code) ? '<small>在养</small>' : ''}</span></label>`).join('') || '<p>没有匹配品种</p>';
+  function speciesMarkup(chosen) {
+    return alertSpecies(chosen).map(({ item, reason }) => `<label><input type="checkbox" name="species" value="${E(item.code)}" ${chosen.has(item.code) ? 'checked' : ''}><span>${E(item.name)}${reason ? `<small>${reason}</small>` : ''}</span></label>`).join('') || '<p>没有匹配品种</p>';
   }
   function render(context) {
     sync(context);
@@ -96,20 +103,38 @@
     }; });
     const form = root.querySelector('[data-market-alert-form]');
     if (form) {
+      const species = form.querySelector('[data-market-alert-species]');
+      const selected = form.querySelector('[data-market-alert-selected]');
+      function updateSelection(chosen) {
+        value.settings.speciesCodes = [...chosen]; dirty = true;
+        form.querySelector('[data-market-alert-count]').textContent = chosen.size;
+        selected.innerHTML = selectedMarkup(chosen);
+        if (!chosen.size && value.settings.enabled) {
+          value.settings.enabled = form.elements.enabled.checked = false;
+          ctx.toast('已取消全部品种，保存后关闭上新提醒');
+        }
+      }
       form.querySelector('[name="enabled"]').onchange = event => { value.settings.enabled = event.target.checked; dirty = true; };
       form.querySelector('[name="search"]').oninput = event => {
         query = event.target.value;
-        const chosen = new Set(value.settings.speciesCodes), suggested = new Set(value.suggestedSpeciesCodes);
-        const list = allowedSpecies().filter(item => chosen.has(item.code) || !query || `${item.name} ${item.code}`.toLowerCase().includes(query.toLowerCase()));
-        form.querySelector('[data-market-alert-species]').innerHTML = speciesMarkup(list, chosen, suggested);
+        species.innerHTML = speciesMarkup(new Set(value.settings.speciesCodes));
       };
-      form.querySelector('[data-market-alert-species]').onchange = event => {
+      species.onchange = event => {
         if (event.target.name !== 'species') return;
         const chosen = new Set(value.settings.speciesCodes);
         if (event.target.checked && chosen.size >= 30 && !chosen.has(event.target.value)) { event.target.checked = false; return ctx.toast('最多关注30个品种'); }
         if (event.target.checked) chosen.add(event.target.value); else chosen.delete(event.target.value);
-        value.settings.speciesCodes = [...chosen]; dirty = true;
-        form.querySelector('[data-market-alert-count]').textContent = chosen.size;
+        updateSelection(chosen);
+      };
+      selected.onclick = event => {
+        const button = event.target.closest('[data-market-alert-remove]');
+        if (!button || saving || loading) return;
+        const code = button.dataset.marketAlertRemove;
+        const chosen = new Set(value.settings.speciesCodes);
+        chosen.delete(code);
+        updateSelection(chosen);
+        const checkbox = [...species.querySelectorAll('input')].find(input => input.value === code);
+        if (checkbox) checkbox.checked = false;
       };
       form.querySelector('[data-market-alert-kept]').onclick = () => {
         value.settings.speciesCodes = [...new Set([...value.settings.speciesCodes, ...value.suggestedSpeciesCodes])].slice(0, 30); dirty = true; redraw();

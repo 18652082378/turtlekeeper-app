@@ -7,6 +7,44 @@ const { extract } = require('./deploy-care-persistence.cjs');
 const root = path.resolve(__dirname, '..');
 const read = name => fs.readFileSync(path.join(root, name), 'utf8').replace(/\r\n/g, '\n');
 const app = read('app.js');
+const codec = require('../assets/local-data-codec');
+const mirrorKey = 'account-mirror', pendingKey = 'pending-journal';
+function backupStorage(capacity) {
+  const records = new Map();
+  const localStorage = {
+    getItem: key => records.get(key) ?? null,
+    setItem(key, text) {
+      const otherSize = [...records].reduce((sum, [other, value]) => sum + (other === key ? 0 : value.length), 0);
+      if (otherSize + text.length > capacity) throw Object.assign(Error('Storage full'), { name: 'QuotaExceededError' });
+      records.set(key, text);
+    }
+  };
+  const context = vm.createContext({ localStorage, STORAGE: mirrorKey, TurtleLocalData: codec, compactLocalBackup: false });
+  for (const name of ['withoutLocalFeedCache', 'writeLocalBackup']) vm.runInContext(extract(app, name), context);
+  return { write: context.writeLocalBackup, read: key => codec.parse(localStorage.getItem(key)) };
+}
+const privateBackup = {
+  loggedInPhone: 'synthetic', turtles: [{ id: 'turtle', photo: 'data:image/jpeg;base64,cGhvdG8=' }],
+  ledgerRecords: [{ id: 'bill', amount: 17 }], cloudMergeBase: { revision: 'base', data: { turtles: [{ id: 'turtle' }] } },
+  cloudSyncConflict: { phone: 'synthetic' }, communityChatTextOutbox: { message: { text: 'unsent' } }
+};
+const fullBackup = { ...privateBackup, marketListings: [{ description: 'public cache'.repeat(250) }], communityFeedInitialized: true };
+const tight = backupStorage(2000);
+tight.write(mirrorKey, fullBackup);
+const compact = tight.read(mirrorKey);
+for (const key of Object.keys(privateBackup)) assert.deepEqual(compact[key], privateBackup[key], 'Quota fallback must preserve ' + key);
+assert.equal(compact.marketListings, undefined);
+assert.equal(compact.communityFeedInitialized, false);
+assert.throws(() => tight.write(mirrorKey, { ...privateBackup, turtles: [{ photo: 'a'.repeat(5000) }] }), /Storage full/);
+assert.deepEqual(tight.read(mirrorKey), compact, 'A failed write keeps the previous durable backup');
+const sharedQuota = backupStorage(4000);
+sharedQuota.write(mirrorKey, fullBackup);
+assert.ok(sharedQuota.read(mirrorKey).marketListings.length, 'Cache survives when storage is available');
+const journal = { phone: 'synthetic', data: { turtles: [{ id: 'edited', note: 'offline edit'.repeat(150) }] }, baseDataRevision: 'base' };
+sharedQuota.write(pendingKey, journal);
+assert.deepEqual(sharedQuota.read(pendingKey), journal);
+assert.deepEqual(sharedQuota.read(mirrorKey), compact, 'Only recoverable cache is reclaimed to fit a pending edit');
+console.log('PASS local backup quota fallback preserves records, photos, conflict base, pending messages and the offline journal.');
 const receipt = vm.runInNewContext('(' + extract(app, 'verifyCloudSaveReceipt') + ')');
 const validateRecovery = vm.runInNewContext('(' + extract(app, 'validateReviewedRecovery') + ')', { reviewedRecoverySignature: JSON.stringify });
 const emptyData = Object.fromEntries(['turtles', 'careRecords', 'careCustomItems', 'carePlans', 'memos', 'breedingRecords', 'turtlePools', 'ledgerRecords', 'activityLogs'].map(f => [f, []]));

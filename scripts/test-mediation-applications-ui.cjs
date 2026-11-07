@@ -40,6 +40,24 @@ const { runtime } = require('./mediation-test-runtime.cjs');
         isCommunityAdmin: name === 'admin', marketListings: [{ ...base.marketListings[0], ...listing, isOwn: false }], marketFeedInitialized: true, mediationScope: 'mine', ...extra };
       marketLoading = communityLoading = messageUnreadLoading = true; forceUpdateState = { required: false }; edgeBackSnapshots = []; render();
     }, { name, target, extra, base: fixture(), phone: r.accounts[name] || '', token: name ? r.token(name) : '', listing: r.listing });
+    await seed('alice', 'market');
+    await page.evaluate(() => {
+      window.originalMediationCopy = copyText;
+      copyText = async text => { window.copiedMediationWechat = text; return true; };
+      render();
+    });
+    const contact = page.locator('.mediation-entry');
+    assert.match(await contact.innerText(), /官方中介微信\s*keyousz001\s*复制/);
+    assert.match(await contact.locator('.mediation-entry-fee').innerText(), /手续费仅0\.68%\s*每笔最低 ¥6\.80/);
+    assert.equal(await contact.getByRole('button').count(), 1);
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      assert.equal(await contact.evaluate(el => el.scrollWidth > el.clientWidth), false);
+    }
+    await contact.getByRole('button', { name: '复制官方中介微信 keyousz001' }).click();
+    assert.equal(await page.evaluate(() => copiedMediationWechat), 'keyousz001');
+    await page.evaluate(() => { copyText = originalMediationCopy; });
+    checks.push('Marketplace card shows the rate and minimum fee and copies the official WeChat number at phone widths');
     await seed('alice');
     await page.locator('[data-page="mediation"]').click();
     await page.waitForSelector('.mediation-empty'); assert.match(await page.locator('.mediation-empty').innerText(), /暂无申请记录/);

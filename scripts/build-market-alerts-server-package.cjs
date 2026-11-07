@@ -27,7 +27,14 @@ function buildPackage() {
   const timerStart = source.indexOf('async function dispatchRecommendations()'), timerEnd = source.indexOf('\nsetInterval(() => { if (!shuttingDown) runScheduledBackup();', timerStart);
   patch('setInterval(() => { if (!shuttingDown) dispatchDailyCommunityPush().catch(error => console.error("Daily community push stopped:", error.message)); }, 60 * 1000).unref();', source.slice(timerStart, timerEnd));
   const base = mediation();
-  const modules = ['server/market-alerts.js', 'server/community-daily-push.js'].map(name => { const bytes = Buffer.from(read(name)); return { name, sha256: hash(bytes), base64: bytes.toString('base64'), previousHashes: name.endsWith('community-daily-push.js') ? ['f8f6a1439fb2feb6070325517f16c1e98af97864a871e34f95afff296cdf6e46'] : [] }; });
+  const modules = ['server/market-alerts.js', 'server/community-daily-push.js'].map(name => {
+    const bytes = Buffer.from(read(name));
+    const previousHashes = name.endsWith('community-daily-push.js') ? [
+      'f8f6a1439fb2feb6070325517f16c1e98af97864a871e34f95afff296cdf6e46',
+      '906aa93e8662bbe55d41d8668f775b396a8e9825a1a0aa03ae306b6a55df0ad2'
+    ] : [];
+    return { name, sha256: hash(bytes), base64: bytes.toString('base64'), previousHashes };
+  });
   modules.push({ ...base.module, previousHashes: [] });
   return { format: 'turtle-market-alerts-api-v1', version: '1.2.2', build: 142, mediation: base, patches, modules };
 }

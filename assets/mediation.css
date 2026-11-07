@@ -2,10 +2,85 @@
 .mediation-page *,.mediation-entry *{box-sizing:border-box;min-width:0}
 .mediation-page .fresh-card{padding:18px;margin-bottom:14px;background:var(--ui-surface,#fff)}
 .mediation-page h2{font-size:19px;margin:0 0 8px}.mediation-page h3{font-size:16px;margin:0 0 12px}
-.mediation-page p{line-height:1.65;overflow-wrap:anywhere;margin:8px 0}.mediation-page button,.mediation-entry button{cursor:pointer;min-height:44px;padding:10px 14px;border:1px solid var(--line,#d9e4df);border-radius:12px;background:var(--ui-surface,#fff);color:var(--green,#1e715b);font:inherit}
-.mediation-page button:disabled{opacity:.55;cursor:default}.mediation-page button.primary,.mediation-entry [data-mediation-start]{background:var(--green,#1e715b);color:#fff;border-color:transparent}
-.mediation-entry{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;background:var(--ui-surface,#fff);border:1px solid var(--line,#d9e4df);border-radius:16px;margin:10px 0}
-.mediation-entry strong,.mediation-entry small{display:block}.mediation-entry small{font-size:11px;color:var(--muted,#64766e);margin-top:4px}.mediation-entry>div:last-child{display:flex;gap:6px;flex-shrink:0}.mediation-entry button{padding:8px 10px;font-size:12px}
+.mediation-page p{line-height:1.65;overflow-wrap:anywhere;margin:8px 0}.mediation-page button{cursor:pointer;min-height:44px;padding:10px 14px;border:1px solid var(--line,#d9e4df);border-radius:12px;background:var(--ui-surface,#fff);color:var(--green,#1e715b);font:inherit}
+.mediation-page button:disabled{opacity:.55;cursor:default}.mediation-page button.primary{background:var(--green,#1e715b);color:#fff;border-color:transparent}
+.mediation-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  margin: 10px 0;
+  background: var(--ui-surface, #fff);
+  border: 1px solid var(--line, #d9e4df);
+  border-radius: 16px;
+}
+
+.mediation-entry-service,
+.mediation-entry-contact,
+.mediation-entry-copy {
+  display: flex;
+  align-items: center;
+}
+
+.mediation-entry-service { gap: 9px; }
+
+.mediation-entry-badge {
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--ui-raised, #f0f5f1);
+  color: var(--ui-accent, #20745b);
+}
+
+.mediation-entry-badge svg { width: 20px; height: 20px; }
+.mediation-entry strong { display: block; line-height: 1.25; }
+.mediation-entry small {
+  display: block;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ui-muted, #65746d);
+}
+.mediation-entry-service small { margin-top: 4px; }
+.mediation-entry-service small span { display: inline-block; }
+.mediation-entry-fee span:first-child { margin-right: 4px; }
+.mediation-entry-fee b { color: var(--ui-accent, #20745b); }
+
+.mediation-entry-contact {
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 7px 9px;
+  border: 1px solid var(--line, #d9e4df);
+  border-radius: 12px;
+  background: var(--ui-raised, #f0f5f1);
+  color: var(--ui-accent, #20745b);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mediation-entry-contact strong { margin-top: 2px; font-size: 14px; overflow-wrap: anywhere; }
+.mediation-entry-contact:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.mediation-entry-copy {
+  flex-shrink: 0;
+  gap: 4px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: var(--ui-surface, #fff);
+  font-size: 11px;
+  font-weight: 600;
+}
+.mediation-entry-copy svg { width: 13px; height: 13px; }
+
+@media (max-width: 400px) {
+  .mediation-entry { gap: 8px; }
+  .mediation-entry-service { gap: 7px; }
+  .mediation-entry-badge { flex-basis: 30px; height: 30px; }
+  .mediation-entry-contact { gap: 8px; }
+}
 .mediation-tabs{display:flex;gap:8px;margin-bottom:12px}.mediation-tabs button{flex:1}.mediation-tabs [aria-pressed=true]{background:var(--green,#1e715b);color:white}
 .mediation-filters{display:grid;grid-template-columns:minmax(100px,1fr) minmax(100px,2fr) auto;align-items:end;gap:8px;margin:16px 0}
 .mediation-filters label,.mediation-form>label{display:grid;gap:8px;font-size:14px;font-weight:600}.mediation-page input,.mediation-page select,.mediation-page textarea{width:100%;max-width:100%;min-height:44px;padding:10px 12px;font:inherit;font-size:16px;border:1px solid var(--line,#d9e4df);border-radius:10px;background:var(--ui-surface,#fff);color:inherit}
@@ -18,6 +93,6 @@
 .mediation-summary dl{margin:16px 0}.mediation-summary dl>div{display:grid;grid-template-columns:90px minmax(0,1fr);gap:12px;margin:12px 0;font-size:14px}.mediation-summary dt{color:var(--muted,#65756e)}.mediation-summary dd{margin:0;overflow-wrap:anywhere}.mediation-prewrap{white-space:pre-wrap}
 .mediation-progress ol{padding:0 0 0 16px;list-style:none;border-left:2px solid var(--line,#d9e4df);margin-left:5px}.mediation-progress li{position:relative;padding:0 0 18px 6px}.mediation-progress li:before{content:'';position:absolute;left:-22px;top:5px;width:10px;height:10px;border-radius:50%;background:var(--green,#1e715b)}.mediation-progress li:last-child{padding-bottom:0}.mediation-progress time{display:block;color:var(--muted,#65756e);font-size:12px;margin:4px 0}.mediation-progress li p{font-size:14px;white-space:pre-wrap}
 .mediation-buttons{display:flex;gap:8px;margin:14px 0}.mediation-buttons button{flex:1}.mediation-pagination{display:flex;align-items:center;justify-content:center;gap:12px;font-size:12px;margin:18px 0}.mediation-empty{text-align:center;padding:32px 16px!important}.mediation-withdraw{display:grid;gap:8px;text-align:center;margin:20px 0}.mediation-withdraw small{font-size:12px;color:var(--muted,#65756e)}.mediation-refresh{width:100%}
-@media(max-width:360px){.mediation-entry{align-items:flex-start;flex-direction:column}.mediation-entry>div:last-child{width:100%}.mediation-entry button{flex:1}.mediation-filters{grid-template-columns:1fr 1fr}.mediation-filters>button{grid-column:1/-1}.mediation-page .fresh-card{padding:14px}.mediation-summary header{flex-wrap:wrap}.mediation-pagination{gap:8px}}
+@media(max-width:360px){.mediation-entry{grid-template-columns:minmax(0,1fr)}.mediation-filters{grid-template-columns:1fr 1fr}.mediation-filters>button{grid-column:1/-1}.mediation-page .fresh-card{padding:14px}.mediation-summary header{flex-wrap:wrap}.mediation-pagination{gap:8px}}
 
-.mediation-page button.primary,.mediation-entry [data-mediation-start],.mediation-tabs [aria-pressed=true]{background:var(--ui-primary-fill,#1e715b)}
+.mediation-page button.primary,.mediation-tabs [aria-pressed=true]{background:var(--ui-primary-fill,#1e715b)}
