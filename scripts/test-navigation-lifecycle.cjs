@@ -473,17 +473,18 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       assert.deepEqual(results.filter(x => !x.pass), []);
     });
     for (const mode of ['button', 'gesture', 'native']) await check(`market detail ${mode} return retains feed DOM after history, view and favorite updates`, async page => {
+      if (mode === 'native') await enableNative(page);
       await page.evaluate(() => {
         state.marketListings = normalizeMarketListings(state.marketListings.map(item => item.id === 'nav4'
           ? { ...item, mediaItems: [{ type: 'video', url: '/fixture.mp4', posterUrl: defaultPhoto, thumbnailUrl: defaultPhoto }] } : item));
         state.marketFeedSessionId = 'stable-market-order';
         state.marketFeedOrderIds = state.marketListings.map(item => item.id);
         state.marketFeedNextOffset = 25;
-        render(); scrollTo(0, 500);
+        render(); scrollPageTo(0, 500);
         window.feedMain = $app.querySelector('main');
         window.feedImage = $app.querySelector('[data-view-market="nav4"] img');
         window.feedCard = $app.querySelector('[data-view-market="nav4"]');
-        window.feedY = scrollY; window.feedTop = feedCard.getBoundingClientRect().top;
+        window.feedY = pageScrollY(); window.feedTop = feedCard.getBoundingClientRect().top;
         recordMarketView = id => updateMarketMetrics(id, { viewCount: 100, impressionCount: 200, wantCount: 3 });
         document.querySelector('[data-view-market="nav4"]').click();
       });
@@ -502,7 +503,6 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
         'detail response without feed thumbnails retains a cover only for unchanged media');
       assert.equal(await page.evaluate(() => navigationSnapshotIsCurrent(edgeBackSnapshots.at(-1))), true, 'detail-only changes cannot invalidate the feed');
       if (mode === 'native') {
-        await enableNative(page);
         await page.evaluate(() => { nativeEvent('begin'); nativeEvent('end'); });
       } else if (mode === 'gesture') {
         await swipe(page);
@@ -511,13 +511,14 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       await page.waitForTimeout(750);
       const result = await page.evaluate(() => ({
         sameMain: feedMain === $app.querySelector('main'), sameImage: feedImage === $app.querySelector('[data-view-market="nav4"] img'),
-        y: scrollY, savedY: feedY, top: feedCard.getBoundingClientRect().top, savedTop: feedTop,
+        y: pageScrollY(), savedY: feedY, top: feedCard.getBoundingClientRect().top, savedTop: feedTop,
         offset: state.marketFeedNextOffset, count: document.querySelector('[data-view-market="nav4"] [data-market-want-count]').textContent,
         favorite: document.querySelector('[data-market-favorite="nav4"]').getAttribute('aria-pressed'),
         history: state.marketHistoryIds[0]
       }));
       assert.equal(result.sameMain, true); assert.equal(result.sameImage, true);
-      assert.ok(Math.abs(result.y - result.savedY) <= 2 && Math.abs(result.top - result.savedTop) <= 2, 'feed scroll and card geometry must survive handoff');
+      assert.ok(Math.abs(result.y - result.savedY) <= 2 && Math.abs(result.top - result.savedTop) <= 2,
+        'feed scroll and card geometry must survive handoff: ' + JSON.stringify(result));
       assert.equal(result.offset, 25); assert.equal(result.count, '3人想要'); assert.equal(result.favorite, 'true'); assert.equal(result.history, 'nav4');
     });
     for (const mode of ['gesture', 'native']) await check(`market detail ${mode} keeps contact bar aligned through drag and rebound`, async page => {

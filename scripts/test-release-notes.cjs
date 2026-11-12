@@ -21,6 +21,19 @@ const root = path.resolve(__dirname, '..');
     finally { await ctx.close(); }
   }
   try {
+    await check('1.2.3 explains stationary navigation and narrow screens once after upgrade', async (page, setup) => {
+      await setup({ seen: '1.2.2' });
+      await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.3' }));
+      const dialog = page.locator('.release-notes-dialog');
+      assert.match(await dialog.innerText(), /龟友手账 1\.2\.3/);
+      assert.match(await dialog.innerText(), /顶部和底部导航保持在原位/);
+      assert.match(await dialog.innerText(), /小屏手机也能看清/);
+      assert.match(await dialog.innerText(), /从图鉴添加常用品种/);
+      await page.getByRole('button', { name: '我知道了' }).click();
+      await setup();
+      await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.3' }));
+      assert.equal(await dialog.count(), 0);
+    });
     await check('1.2.2 explains opt-in species marketplace alerts once after upgrade', async (page, setup) => {
       await setup({ seen: '1.2.1' });
       await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.2' }));

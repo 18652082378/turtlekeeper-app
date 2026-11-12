@@ -288,6 +288,9 @@
     if (rendering) return originalRender.apply(this, args);
     const before = context(), form = document.querySelector(selectors);
     const preserved = form && current(active) && before?.key === active.key ? fields(form) : null;
+    // The picker updates the select before dispatching change. The form's
+    // archive ID still identifies the archive that supplied its other fields.
+    if (preserved && form.id === 'marketListingForm') preserved.turtleId = form.dataset.marketArchiveId || '';
     rendering = true;
     try { originalRender.apply(this, args); } finally { rendering = false; }
     const after = document.querySelector(selectors);

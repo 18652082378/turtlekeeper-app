@@ -57,6 +57,11 @@
   });
 
   function enhance(container = document, updateModalState = true) {
+    const shell = container.id === 'app' ? container : container.querySelector('#app');
+    const main = shell?.querySelector(':scope > main');
+    const heading = shell?.querySelector(':scope > .topbar h1') || main?.querySelector('h1');
+    if (main && heading?.textContent.trim() && !main.hasAttribute('aria-label') && !main.hasAttribute('aria-labelledby'))
+      main.setAttribute('aria-label', heading.textContent.trim());
     container.querySelectorAll('.care-tabs [role="tab"]').forEach(tab => { tab.tabIndex = tab.getAttribute('aria-selected') === 'true' ? 0 : -1; });
     container.querySelectorAll('.bottom-nav').forEach(nav => {
       nav.setAttribute('aria-label', '主导航');
@@ -93,7 +98,7 @@
     container.querySelectorAll('button').forEach(button => {
       if (button.hasAttribute('aria-label') || button.hasAttribute('aria-labelledby')) return;
       const text = button.textContent.trim();
-      const name = { '×': '关闭', '✕': '关闭', '‹': '返回', '←': '返回', '…': '更多操作', '⋯': '更多操作', '+': '新增' }[text];
+      const name = { '×': '关闭', '✕': '关闭', '‹': '返回', '←': '返回', '…': '更多操作', '⋯': '更多操作', '•••': '更多操作', '+': '新增', '＋': '新增' }[text];
       if (name || (!text && button.title)) button.setAttribute('aria-label', name || button.title);
     });
     if (updateModalState) scheduleModals();

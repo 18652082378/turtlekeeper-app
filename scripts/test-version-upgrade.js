@@ -8,16 +8,24 @@ const batches = require('../assets/turtle-batches');
 const loss = require('../assets/loss-accounting');
 const codec = require('../assets/local-data-codec');
 const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
-const ctx = { crypto, TurtleBatches: batches, TurtleLossAccounting: loss, TurtleCare: require('../assets/care-records'),
+const ctx = { window: {}, crypto, TurtleBatches: batches, TurtleLossAccounting: loss, TurtleCare: require('../assets/care-records'),
   cleanText: x => x, speciesPhoto: () => '/assets/species/GHG.jpg', formatDate: () => '2026-09-11' };
 vm.createContext(ctx);
-for (const [start, end] of [['function emptyAccountData(', 'function syncRegisteredUsers('], ['function breedingHatchProgress(', 'function confirmBreedingHatch(']]) {
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../species-data.js'), 'utf8'), ctx);
+for (const [start, end] of [
+  ['const speciesList =', 'const ALPHABET ='],
+  ['function speciesCodeKey(', 'function speciesCatalogKeywords('],
+  ['function emptyAccountData(', 'function syncRegisteredUsers('],
+  ['function breedingHatchProgress(', 'function confirmBreedingHatch(']
+]) {
   vm.runInContext(source.slice(source.indexOf(start), source.indexOf(end)), ctx);
 }
 const normalize = data => JSON.parse(JSON.stringify(ctx.normalizeAccountData(data)));
 const old = createLegacyData();
 const pristine = JSON.stringify(old);
 const migrated = normalize(old);
+assert.deepEqual(normalize({ keptSpecies: ['MSG', 'GHG', 'HMG', 'OLD-MISSING'] }).keptSpecies,
+  ['GHG', 'HMG', 'OLD-MISSING'], 'legacy species codes remain usable and canonical favorites are deduplicated');
 assert.equal(JSON.stringify(old), pristine, 'migration never mutates its source backup');
 assert.deepEqual(migrated.turtles.map(t => t.id), old.turtles.map(t => t.id));
 assert.equal(batches.group(migrated.turtles).length, 3, '500 purchases and old hatch dates 3+2 become three rows');

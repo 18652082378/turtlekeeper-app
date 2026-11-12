@@ -1,0 +1,171 @@
+/* Shared page refinements; feature-specific layouts keep their own structure. */
+#app > main,
+#app :is(form, fieldset, .section-title > span, .section-title > h3) {
+  min-inline-size: 0;
+}
+
+#app :is(.page-intro p, .work-heading p, .space-profile-main, .market-detail-description,
+  .community-detail-copy, .forum-thread-main > :is(h3, p), .feedback-body-button,
+  .feedback-detail-comment, .note-card, .policy-card, .archive-page-count, .ledger-detail-card > h2) {
+  overflow-wrap: anywhere;
+}
+
+#app :is(.ledger-amount, .ledger-summary-value, .ledger-detail-head > strong, .metric-strip strong,
+  .work-stat strong, .report-profit-breakdown b, .turtle-price-amount) {
+  font-variant-numeric: tabular-nums;
+}
+#app > main form details > summary { min-block-size: 44px; align-content: center; }
+
+/* Scroll-to-field and keyboard navigation leave room for stationary bars. */
+#app {
+  --ui-scroll-top: 8px;
+  --ui-scroll-bottom: 12px;
+}
+#app:has(> .topbar) { --ui-scroll-top: calc(var(--fixed-topbar-height, 78px) + 8px); }
+#app:has(> .feed-search-dock) { --ui-scroll-top: calc(var(--fixed-topbar-height, 78px) + 83px); }
+#app:has(> .forum-publish-nav, > .search-workspace-form) { --ui-scroll-top: calc(var(--fixed-topbar-height, 78px) + 76px); }
+#app:has(> .bottom-nav) { --ui-scroll-bottom: calc(var(--fixed-tabbar-height, 78px) + 12px); }
+html.keyboard-open #app { --ui-scroll-bottom: 12px; }
+html.ios-tab-scroll #app > main { --ui-scroll-top: 8px; --ui-scroll-bottom: 12px; }
+#app > main :is(button, a[href], input, select, textarea, summary, [tabindex]) {
+  scroll-margin-block: var(--ui-scroll-top) var(--ui-scroll-bottom);
+}
+html :is([role="dialog"], [role="alertdialog"]) {
+  --ui-scroll-top: 8px;
+  --ui-scroll-bottom: 8px;
+  scroll-padding-block: 8px;
+}
+
+/* Opaque chrome does not need to re-blur content every frame. */
+html #app > :is(.topbar, .bottom-nav, .feed-search-dock) {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+html #app .topbar :is(.community-camera-button, .market-top-add) {
+  min-inline-size: 44px;
+  min-block-size: 44px;
+}
+html #app :is(.market-seller-actions, .community-detail-head .community-author-actions) > button {
+  min-inline-size: 44px;
+  min-block-size: 44px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+@media (max-width: 320px) {
+  html #app .market-seller-card { grid-template-columns: 52px minmax(0, 1fr); }
+  html #app .market-seller-card > .market-seller-actions { grid-column: 2; flex-wrap: wrap; }
+}
+html :is([role="dialog"], [role="alertdialog"]) > header > button[aria-label="关闭"] {
+  flex-shrink: 0;
+  min-inline-size: 44px;
+  min-block-size: 44px;
+}
+#app :is(.primary, .secondary):active:not(:disabled),
+html [role="dialog"] :is(.primary, .secondary):active:not(:disabled) {
+  filter: brightness(.94);
+}
+
+/* The stock select arrow reserves additional room on both WebKit and Chrome.
+   Give it a known width so ordinary Chinese labels don't lose a character. */
+html #app .home-archive-section .filter-dock > select {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  min-inline-size: 0;
+  min-block-size: 44px;
+  padding-inline: 9px 23px !important;
+  text-align: start;
+  text-overflow: ellipsis;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ui-muted) 50%),
+    linear-gradient(135deg, var(--ui-muted) 50%, transparent 50%) !important;
+  background-position: right 13px center, right 9px center !important;
+  background-size: 4px 4px, 4px 4px !important;
+  background-repeat: no-repeat !important;
+}
+html #app .home-archive-section .filter-dock:has([data-toggle-turtle-value-sort]) {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+}
+html #app .home-archive-section .filter-dock > button[data-toggle-turtle-value-sort] {
+  min-inline-size: 0;
+  min-block-size: 44px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 560px) {
+  html #app .home-archive-section .filter-dock:has([data-toggle-turtle-value-sort]) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  html #app .home-archive-section .filter-dock:has([data-toggle-turtle-value-sort]) > :nth-child(n+3) {
+    grid-column: auto !important;
+  }
+}
+@media (max-width: 370px) {
+  html #app .home-archive-section .filter-dock {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  html #app .home-archive-section .filter-dock > [data-sort-turtles]:last-child { grid-column: 1 / -1; }
+}
+
+/* Account forms use the current theme and retain the inline consent link. */
+html #app .auth-tabs {
+  gap: 5px;
+  padding: 5px;
+  background: var(--ui-raised) !important;
+  border: 1px solid var(--ui-line);
+  box-shadow: none !important;
+}
+html #app .auth-tabs > .tab {
+  min-block-size: 44px;
+  border-radius: var(--ui-control-radius);
+  color: var(--ui-text);
+  font-weight: 600;
+}
+html #app .auth-tabs > .tab.active {
+  color: #fff !important;
+  background: var(--ui-primary-fill) !important;
+  box-shadow: none !important;
+}
+html #app #accountForm .survey-field > .field { text-align: start !important; }
+html #app #accountForm .account-login-footer { padding-block-start: 7px; }
+@media (max-width: 360px) {
+  html #app #accountForm > .survey-field {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 5px !important;
+  }
+}
+
+html #app .archive-empty .archive-empty-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 10px;
+  min-height: 44px;
+  max-inline-size: 100%;
+}
+
+#app .report-profit-breakdown {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+#app .report-profit-breakdown > div {
+  min-inline-size: 0;
+  padding: 8px 9px;
+  border-radius: 10px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+#app .report-profit-breakdown b { overflow-wrap: anywhere; }
+#app .reports-page > :is(.report-profit-card, .report-section) + .report-section { margin-block-start: 12px; }
+@media (max-width: 620px) {
+  #app .report-profit-breakdown { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Use the available profile width, then cap the display to two lines. */
+#app .space-profile-name-button { min-block-size: 44px; }
+#app .space-name-line > h2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  max-inline-size: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

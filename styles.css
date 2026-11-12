@@ -213,8 +213,7 @@ button { border: 0; cursor: pointer; }
   animation: pull-refresh-spin .75s linear infinite;
 }
 
-/* 龟集市、消息与龟友圈下拉刷新：垂直滚动仍完全交给 WKWebView 的
-   原生惯性与回弹；提示层只显示状态，绝不再用 JS 移动整页内容。 */
+/* 下拉刷新提示只显示状态，手势滚动由当前内容区处理。 */
 body.pull-refresh-active .content {
   transform: none;
   transition: none;
@@ -764,7 +763,7 @@ body {
   backdrop-filter: blur(16px);
 }
 
-.species-search-card > span {
+.species-search-card > label {
   min-width: 48px;
   min-height: 34px;
   border-radius: 17px;
@@ -780,6 +779,11 @@ body {
   box-shadow: none;
   min-height: 44px;
 }
+
+.species-picker-help { color: var(--ui-muted, var(--muted)); font-size: 12px; line-height: 1.6; }
+.species-search-card .species-picker-help { grid-column: 1 / -1; margin: 0; }
+.species-no-match { padding: 12px; margin: 0 0 12px; }
+.species-no-match[hidden] { display: none; }
 .soft-row {
   width: 100%;
   min-height: 72px;
@@ -8338,7 +8342,7 @@ html[data-theme-color="dark"] .market-title-templates button:active {
   text-align: left;
 }
 
-.market-species-options button:hover,
+.market-species-options button:enabled:hover,
 .market-species-options button.active {
   color: var(--accent);
   background: rgba(47, 167, 127, .12);
@@ -8369,6 +8373,15 @@ html[data-theme-color="dark"] .market-title-templates button:active {
   line-height: 1.45;
 }
 
+.market-species-options [data-market-species-restricted],
+.market-species-options [data-market-species-restricted] small {
+  color: var(--muted);
+}
+
+.market-publish-submit:disabled {
+  opacity: .6;
+}
+
 html[data-theme-color="dark"] .market-species-search-row,
 html[data-theme-color="dark"] .market-species-options {
   border-color: #343434 !important;
@@ -8381,7 +8394,7 @@ html[data-theme-color="dark"] .market-species-search-row input {
   box-shadow: none !important;
 }
 
-html[data-theme-color="dark"] .market-species-options button:hover,
+html[data-theme-color="dark"] .market-species-options button:enabled:hover,
 html[data-theme-color="dark"] .market-species-options button.active {
   color: #bdebd9 !important;
   background: #17352a !important;
@@ -13296,21 +13309,26 @@ html[data-theme-color="dark"] .profile-plan-badge.pro {
   margin-top: -4px !important;
 }
 
-/* New turtle profile: make the species catalogue shortcut easy to find,
-   independent of the two-column form layout above. */
-.form-block > .add-species-hint {
+.form-block > .archive-species-guide {
   grid-column: 1 / -1 !important;
-  justify-self: center !important;
-  margin-top: 8px !important;
-  background: transparent !important;
-  border-color: transparent !important;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 0 4px;
 }
 
-html[data-theme-color="dark"] .form-block > .add-species-hint {
-  color: #07c160 !important;
-  background: transparent !important;
-  border-color: transparent !important;
+.archive-species-guide.is-empty {
+  padding: 12px;
+  border: 1px solid var(--ui-line, var(--line));
+  border-radius: 12px;
+  background: var(--ui-raised, var(--raised-bg));
 }
+
+.archive-species-guide p { flex: 1 1 140px; margin: 0; color: var(--ui-muted, var(--muted)); font-size: 12px; line-height: 1.55; }
+.archive-species-guide > button { min-height: 44px; max-width: 100%; font-size: 13px; }
 
 .archive-mode-card .archive-mode-switch,
 .archive-mode-card .archive-mode-tip {
@@ -19272,6 +19290,12 @@ html .topbar.community-detail-topbar { background: var(--topbar-bg) !important; 
 .custom-species-heading > button { flex: 0 0 auto; width: auto; padding: 10px 14px; }
 #customSpeciesForm { margin-top: 16px; }
 #customSpeciesForm[hidden] { display: none; }
+[data-species-empty][hidden] { display: none; }
+.species-photo-credit { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.species-photo-credit a { color: inherit; text-decoration: underline; }
+.market-species-result { display: flex; align-items: center; gap: 10px; }
+.market-species-result > img { width: 56px; height: 56px; flex: 0 0 56px; object-fit: cover; border-radius: 8px; }
+.market-species-result > div { min-width: 0; }
 #customSpeciesForm > label { display: grid; gap: 8px; margin-top: 14px; }
 .custom-species-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
 
@@ -19860,3 +19884,66 @@ html[data-theme-color="dark"] .breeding-workspace :is(.breeding-overview, .breed
   .breeding-workspace .breeding-overview h2 { font-size: 20px; }
   .breeding-workspace #breedingDetailForm .breeding-hatch-fields { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Native iOS tabs: the document and chrome stay still while main scrolls.
+   Absolute chrome in a stationary shell does not follow WebKit's root scroll. */
+html.ios-tab-scroll,
+html.ios-tab-scroll body {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  overscroll-behavior-y: none;
+}
+html.ios-tab-scroll #app {
+  height: 100%;
+  min-height: 0;
+  overflow: clip;
+}
+html.ios-tab-scroll #app > :is(.topbar, .bottom-nav, .feed-search-dock, .market-floating-add, .guest-login-slot) {
+  position: absolute !important;
+}
+html.ios-tab-scroll #app > main {
+  position: absolute;
+  inset: var(--fixed-topbar-height) 0 var(--fixed-tabbar-height);
+  min-height: 0 !important;
+  margin: 0 !important;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: none;
+  padding-bottom: 24px !important;
+}
+html.ios-tab-scroll #app > main.market-page { padding-bottom: 72px !important; }
+html.ios-tab-scroll #app > main.feed-search-content {
+  top: calc(var(--fixed-topbar-height) + 75px);
+  padding-top: 16px !important;
+}
+html.ios-tab-scroll #app > main.market-search-results-content {
+  top: calc(75px + max(env(safe-area-inset-top), 16px));
+  padding-top: 16px !important;
+}
+html.ios-tab-scroll #app > main > .space-profile-card { margin-top: 0 !important; }
+html.ios-tab-scroll.keyboard-open #app > main { bottom: 0; }
+html.ios-tab-scroll body[style*="overflow: hidden"] #app > main { overflow-y: hidden; }
+
+/* Keep bottom sheets reachable on landscape phones and above the keyboard. */
+html :is(.market-service-overlay, .market-detail-more-overlay, .community-visibility-overlay, .archive-directory-overlay) {
+  bottom: var(--forum-keyboard-bottom, 0px);
+}
+html :is(.market-service-dialog, .market-detail-more-sheet, .community-visibility-sheet) {
+  min-height: 0;
+  max-height: calc(100dvh - var(--forum-keyboard-bottom, 0px) - max(16px, env(safe-area-inset-top)) - max(16px, env(safe-area-inset-bottom)));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+html .archive-directory-dialog {
+  max-height: calc(100dvh - var(--forum-keyboard-bottom, 0px) - max(20px, env(safe-area-inset-top)) - max(20px, env(safe-area-inset-bottom)));
+}
+/* When controls consume the available height, scroll the entire directory
+   rather than collapsing its results to a zero-height nested scroll area. */
+@media (max-height: 450px) {
+  html .archive-directory-dialog { overflow-y: auto; overscroll-behavior: contain; }
+  html .archive-directory-list { flex: 0 0 auto; overflow: visible; }
+}
+html.keyboard-open .archive-directory-dialog { overflow-y: auto; overscroll-behavior: contain; }
+html.keyboard-open .archive-directory-list { flex: 0 0 auto; overflow: visible; }
+html.ios-tab-scroll body:is(.market-service-open, .market-detail-more-open, .content-report-open) #app > main { overflow-y: hidden; }

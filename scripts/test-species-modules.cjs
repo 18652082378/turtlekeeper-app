@@ -1,9 +1,12 @@
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { launchBrowser } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
+const platform = process.env.MOBILE_UI_PLATFORM;
+const publicRoot = platform === 'ios' ? path.join(root, 'ios/App/App/public') :
+  platform === 'android' ? path.join(root, 'android/app/src/main/assets/public') : root;
 const customCode = 'CUS-11111111-1111-4111-8111-111111111111';
 (async () => {
-  const browser = await chromium.launch({headless:true,executablePath:process.env.BROWSER_EXECUTABLE});
+  const browser = await launchBrowser();
   const results = [];
   try {
     const page = await browser.newPage({viewport:{width:390,height:844}});
@@ -13,8 +16,8 @@ const customCode = 'CUS-11111111-1111-4111-8111-111111111111';
       const url = new URL(route.request().url());
       if(url.hostname !== 'species-audit.test') return route.abort();
       if(url.pathname === '/config.js') return route.fulfill({contentType:'text/javascript',body:'window.TURTLE_API_BASE_URL="";'});
-      const file=path.resolve(root,'.'+(url.pathname==='/'?'/index.html':decodeURIComponent(url.pathname)));
-      if(!file.startsWith(root+path.sep)||!fs.existsSync(file)||!fs.statSync(file).isFile()) return route.fulfill({status:404,body:''});
+      const file=path.resolve(publicRoot,'.'+(url.pathname==='/'?'/index.html':decodeURIComponent(url.pathname)));
+      if(!file.startsWith(publicRoot+path.sep)||!fs.existsSync(file)||!fs.statSync(file).isFile()) return route.fulfill({status:404,body:''});
       return route.fulfill({body:fs.readFileSync(file),contentType:({'.js':'text/javascript','.css':'text/css','.html':'text/html','.jpg':'image/jpeg','.png':'image/png','.svg':'image/svg+xml'})[path.extname(file)]||'application/octet-stream'});
     });
     await page.goto('https://species-audit.test/?skipIntro=1');
@@ -38,6 +41,11 @@ const customCode = 'CUS-11111111-1111-4111-8111-111111111111';
       try { await reset(); await run(); results.push({name,pass:true}); console.log('PASS '+name); }
       catch(e) { results.push({name,pass:false,error:e.message}); console.error('FAIL '+name+': '+e.message); }
     }
+    async function chooseArchive(form, name) {
+      await page.locator(form + ' .archive-directory-trigger').click();
+      await page.locator('[data-directory-search]').fill(name);
+      await page.locator('.directory-archive-card').filter({hasText:name}).first().click();
+    }
     await check('market search requires explicit species confirmation',async()=>{
       await page.evaluate(()=>setState({page:'marketAdd'},{skipSave:true}));
       await page.locator('[data-market-species-search]').fill('龟');
@@ -58,6 +66,7 @@ const customCode = 'CUS-11111111-1111-4111-8111-111111111111';
     });
     await check('archive catalogue selects an already-kept species and preserves draft',async()=>{
       await page.evaluate(()=>setState({page:'add'},{skipSave:true}));
+      assert.deepEqual(await page.locator('#turtleForm [name="speciesCode"] option').evaluateAll(options=>options.map(o=>o.value)),['','GHG',customCode]);
       await page.locator('#turtleForm [name="code"]').fill('保留昵称');
       await page.locator('#turtleForm [data-page="species"]').click();
       await page.locator('[data-add-species="GHG"]').click();
@@ -68,6 +77,7 @@ const customCode = 'CUS-11111111-1111-4111-8111-111111111111';
     });
     await check('purchase catalogue returns with chosen species and amount',async()=>{
       await page.evaluate(()=>openLedgerForm('purchase'));
+      assert.deepEqual(await page.locator('#ledgerForm [name="purchaseSpeciesCode"] option').evaluateAll(options=>options.map(o=>o.value)),['','GHG',customCode]);
       await page.locator('#ledgerForm [name="amount"]').fill('123');
       await page.locator('#ledgerForm [name="note"]').fill('收购备注');
       await page.locator('#ledgerForm [data-page="species"]').click();
@@ -80,12 +90,38 @@ const customCode = 'CUS-11111111-1111-4111-8111-111111111111';
       assert.equal(await page.locator('#ledgerForm [name="amount"]').inputValue(),'123');
       assert.equal(await page.locator('#ledgerForm [name="note"]').inputValue(),'收购备注');
     });
+    await check('empty favorites open catalogue first in archive and purchase, then preserve all entered fields',async()=>{
+      await page.evaluate(()=>setState({page:'add',keptSpecies:[]},{skipSave:true}));
+      const archive = page.locator('#turtleForm');
+      assert.equal(await archive.locator('[name="speciesCode"]').isDisabled(),true);
+      await archive.locator('[name="code"]').fill('空常用也保留');
+      await archive.getByRole('button',{name:'去图鉴添加品种'}).click();
+      await page.locator('[data-species-search]').fill('GHG');
+      await page.locator('[data-add-species="GHG"]').and(page.getByRole('button',{name:'加入并使用',exact:true})).click();
+      assert.equal(await archive.locator('[name="speciesCode"]').inputValue(),'GHG');
+      assert.equal(await archive.locator('[name="code"]').inputValue(),'空常用也保留');
+      await page.evaluate(()=>{setState({keptSpecies:[]},{skipSave:true});openLedgerForm('purchase');});
+      const purchase = page.locator('#ledgerForm');
+      assert.equal(await purchase.locator('[name="purchaseSpeciesCode"]').isDisabled(),true);
+      await purchase.locator('[name="amount"]').fill('345');
+      await purchase.locator('[name="note"]').fill('空常用收购备注');
+      await purchase.getByRole('button',{name:'去图鉴添加品种'}).click();
+      await page.locator('[data-species-search]').fill('红面');
+      await page.locator('[data-add-species="HMG"]').and(page.getByRole('button',{name:'加入并使用',exact:true})).click();
+      assert.equal(await purchase.locator('[name="purchaseSpeciesCode"]').inputValue(),'HMG');
+      assert.equal(await purchase.locator('[name="amount"]').inputValue(),'345');
+      assert.equal(await purchase.locator('[name="note"]').inputValue(),'空常用收购备注');
+    });
     await check('market changing archive preserves entered sale fields and uploaded media',async()=>{
-      await page.evaluate(()=>setState({page:'marketAdd',marketDraftMedia:[{dataUrl:'/assets/species/GHG.jpg',type:'image'}]},{skipSave:true}));
+      await page.evaluate(()=>setState({page:'marketAdd'},{skipSave:true}));
+      await page.locator('[data-market-media-input]').setInputFiles({
+        name:'archive-switch.jpg', mimeType:'image/jpeg', buffer:fs.readFileSync(path.join(root,'assets/species/GHG.jpg'))
+      });
+      await page.waitForFunction(()=>state.marketDraftMedia.length===1);
       await page.locator('[name="price"]').fill('456');
       await page.locator('[name="title"]').fill('自己填写的标题');
       await page.locator('[name="delivery"]').selectOption('仅自提');
-      await page.locator('[data-market-turtle-source]').selectOption('g2',{force:true});
+      await chooseArchive('#marketListingForm','二号');
       assert.equal(await page.locator('[name="price"]').inputValue(),'456');
       assert.equal(await page.locator('[name="title"]').inputValue(),'自己填写的标题');
       assert.equal(await page.locator('[name="delivery"]').inputValue(),'仅自提');
@@ -93,18 +129,21 @@ const customCode = 'CUS-11111111-1111-4111-8111-111111111111';
       assert.equal(await page.evaluate(()=>state.marketDraftMedia.length),1);
     });
     await check('community changing archive preserves handwritten growth text',async()=>{
-      await page.evaluate(()=>{communityDraftTopic='growth';communityDraftTurtleId='g1';communityDraftText='';setState({page:'communityAdd'},{skipSave:true});});
+      await page.evaluate(()=>setState({page:'communityAdd'},{skipSave:true}));
+      await page.locator('#communityPostForm').waitFor();
+      await page.locator('[data-community-compose-mode="growth"]').click();
       await page.locator('[name="content"]').fill('今天自己写的成长记录');
-      await page.locator('[data-community-turtle-source]').selectOption('g2',{force:true});
+      await chooseArchive('#communityPostForm','二号');
       assert.equal(await page.locator('[name="content"]').inputValue(),'今天自己写的成长记录');
     });
     await check('editing a listing changes linked species and allows unlinking',async()=>{
       await page.evaluate(()=>{state.myMarketListings=[{id:'listing',turtleId:'g1',speciesCode:'GHG',speciesName:'果核蛋龟',title:'原商品标题',description:'原描述',price:123,media:[]}];beginMarketListingEdit('listing');});
       await page.locator('[name="description"]').fill('修改后的商品说明');
-      await page.locator('[data-market-turtle-source]').selectOption('g2',{force:true});
+      await chooseArchive('#marketListingForm','二号');
       assert.equal(await page.locator('[name="speciesCode"]').inputValue(),'HMG');
       assert.equal(await page.locator('[name="description"]').inputValue(),'修改后的商品说明');
-      await page.locator('[data-market-turtle-source]').selectOption('',{force:true});
+      await page.locator('#marketListingForm .archive-directory-trigger').click();
+      await page.locator('.directory-special-actions').getByRole('button',{name:'不关联档案，从品种库选择'}).click();
       assert.equal(await page.locator('[data-market-turtle-source]').inputValue(),'');
       assert.equal(await page.locator('[name="title"]').inputValue(),'原商品标题');
     });
@@ -184,7 +223,7 @@ const customCode = 'CUS-11111111-1111-4111-8111-111111111111';
       assert.equal(await page.evaluate(()=>state.turtles.find(t=>t.id==='g1').speciesCode),'GHG');
     });
     fs.mkdirSync(path.join(root,'output'),{recursive:true});
-    fs.writeFileSync(path.join(root,'output/species-modules-audit.json'),JSON.stringify({results,errors},null,2));
-    assert.deepEqual(errors,[]);assert.ok(results.every(r=>r.pass),'Some species modules failed; see output/species-modules-audit.json');
+    fs.writeFileSync(path.join(root,`output/species-modules-audit-${platform || 'web'}.json`),JSON.stringify({results,errors},null,2));
+    assert.deepEqual(errors,[]);assert.ok(results.every(r=>r.pass),`Some species modules failed; see output/species-modules-audit-${platform || 'web'}.json`);
   } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

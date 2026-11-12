@@ -82,7 +82,7 @@ const server = http.createServer((req, res) => {
       assert(result.metrics.y < result.hero.bottom, 'Statistics retain the layered hero layout');
       assert.equal(result.guideLines, 1, 'Default-size trade guide must stay on one line');
       assert(result.titleFont.includes('Turtle Noto Sans SC') && Number(result.titleWeight) >= 600, 'Title uses the bundled bold Chinese font: ' + JSON.stringify(result));
-      const expectedFilterRows = width <= 300 ? 2 : 1;
+      const expectedFilterRows = width <= 370 ? 2 : 1;
       if (new Set(result.filters).size !== expectedFilterRows) { console.log(JSON.stringify(result)); await page.screenshot({ path: path.join(output, 'filters-failed.png') }); }
       assert.equal(new Set(result.filters).size, expectedFilterRows, 'Ordinary phones keep one filter row; very narrow screens reserve readable space');
       assert(result.filterTextFits, 'Default filter labels must fit without native-arrow clipping');

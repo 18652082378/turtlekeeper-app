@@ -34,7 +34,7 @@
     const list = accountSpeciesList().filter(item => source !== 'market' || !isMarketProhibitedSpecies(item));
     const ranking = new Map(list.map((item, index) => [item.code, { item, score: 0, reason: '品种图鉴', index }]));
     const add = (code, score, reason) => {
-      const entry = ranking.get(code); if (!entry) return;
+      const entry = ranking.get(speciesCodeKey(code)); if (!entry) return;
       if (score > entry.score) entry.reason = reason;
       entry.score += score;
     };
@@ -71,8 +71,8 @@
       </section>`;
   }
   function suggestions() {
-    const matches = marketPublishSpeciesMatches(query).filter(item => source !== 'market' || !isMarketProhibitedSpecies(item)).slice(0, 8);
-    return `<section class="search-suggestion-list" aria-label="搜索建议"><button type="button" data-search-current>${icon}<span>搜索「${escapeHtml(query)}」</span></button>${matches.map(item => `<button type="button" data-search-species="${escapeHtml(item.code)}">${icon}<span>${escapeHtml(item.name)}</span><small>${escapeHtml(item.code)}</small></button>`).join('')}</section>`;
+    const matches = marketSpeciesMatches(query).slice(0, 8);
+    return `<section class="search-suggestion-list" aria-label="搜索建议"><button type="button" data-search-current>${icon}<span>搜索「${escapeHtml(query)}」</span></button>${matches.map(item => `<button type="button" data-search-species="${escapeHtml(item.code)}">${icon}<span>${escapeHtml(item.name)}</span><small>${source === 'market' && isMarketProhibitedSpecies(item) ? '平台禁售' : escapeHtml(item.code)}</small></button>`).join('')}</section>`;
   }
   function resultMarkup() {
     if (loading) return '<div class="search-feedback" role="status">正在搜索相关帖子…</div>';
@@ -118,7 +118,7 @@
       if (state.page !== 'market') setState({ page: 'market' }, { skipCloud: true, skipEdgeSnapshot: true });
       const patch = { marketSearch: term, marketAssistMenu: '', ...(TurtleMarketInquiry.parse(term) ? { marketStage: 'all', marketRegion: '', marketDelivery: '', marketFreshOnly: false } : {}) };
       if (hasCloudSession()) resetMarketFeed(patch);
-      else setState({ ...patch, marketFeedGeneration: (state.marketFeedGeneration || 0) + 1 }, { skipCloud: true });
+      else setState({ ...patch, marketFeedSessionId: '', marketFeedOrderIds: [], marketFeedGeneration: (state.marketFeedGeneration || 0) + 1 }, { skipCloud: true });
       return;
     }
     const request = ++serial, auth = session();

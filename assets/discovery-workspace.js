@@ -16,15 +16,14 @@
   function marketInterests() {
     try {
       const saved = JSON.parse(localStorage.getItem(interestKey()) || '{}');
-      const codes = list => new Set(Array.isArray(list) ? list.filter(code => typeof code === 'string') : []);
+      const codes = list => new Set(Array.isArray(list) ? list.filter(code => typeof code === 'string').map(speciesCodeKey) : []);
       return { added: codes(saved?.added), removed: codes(saved?.removed) };
     } catch { return { added: new Set(), removed: new Set() }; }
   }
   function speciesEntries(kind) {
-    const catalog = new Map(accountSpeciesList().map(item => [item.code, item]));
     const entries = new Map();
     const add = (code, reason) => {
-      const item = catalog.get(code);
+      const item = speciesByCode(code);
       if (!item || (entries.has(item.code) && entries.get(item.code).reason !== '品种图鉴') || (kind === 'market' && isMarketProhibitedSpecies(item))) return;
       entries.set(item.code, { item, reason });
     };
@@ -70,7 +69,7 @@
   function interestChoices(codes, query = '') {
     const selected = new Set(codes);
     const term = query.trim().toLowerCase();
-    return accountSpeciesList().filter(item => !selected.has(item.code) && !isMarketProhibitedSpecies(item) && `${item.name} ${item.code}`.toLowerCase().includes(term))
+    return accountSpeciesList().filter(item => !selected.has(item.code) && !isMarketProhibitedSpecies(item) && speciesCatalogKeywords(item).includes(term))
       .map(item => `<button type="button" data-discovery-interest-add="${escapeHtml(item.code)}" aria-label="添加${escapeHtml(item.name)}"><span>${escapeHtml(item.name)}</span><span aria-hidden="true">＋</span></button>`).join('') || '<p class="discovery-interest-empty">没有可添加的匹配品种。</p>';
   }
   function marketInterestPage() {
@@ -84,8 +83,8 @@
     const item = speciesByCode(code);
     if (!item || isMarketProhibitedSpecies(item)) return;
     const { added, removed } = marketInterests();
-    if (adding) { removed.delete(code); added.add(code); }
-    else { added.delete(code); removed.add(code); }
+    if (adding) { removed.delete(item.code); added.add(item.code); }
+    else { added.delete(item.code); removed.add(item.code); }
     try { localStorage.setItem(interestKey(), JSON.stringify({ added: [...added], removed: [...removed] })); }
     catch { return toast('本机无法保存品种设置，请重试'); }
     const search = page.querySelector('[data-discovery-interest-search]');

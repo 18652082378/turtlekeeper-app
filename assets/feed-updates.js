@@ -21,7 +21,11 @@
     const entry = pending.get(kind);
     if (!valid(kind, entry) || state.page !== kind || busy(kind) || blocked()) return;
     pending.delete(kind);
-    if (entry.apply() !== false && scroll) window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (entry.apply() !== false && scroll) {
+      const options = { top: 0, behavior: 'smooth' };
+      if (typeof scrollPageTo === 'function') scrollPageTo(options);
+      else window.scrollTo(options);
+    }
     sync();
   }
   function sync() {

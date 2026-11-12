@@ -106,6 +106,8 @@ html .phone-shell .species-row > img { grid-column: 1; grid-row: 1; width: 54px;
 html .phone-shell .species-row > div { grid-column: 2; grid-row: 1; min-width: 0; }
 html .phone-shell .species-row strong { display: block; font-size: 14px; overflow-wrap: anywhere; }
 html .phone-shell .species-row .species-add { grid-column: 3; grid-row: 1; width: 48px; min-height: 44px; padding: 8px 2px; font-size: 12px; }
+html .phone-shell .is-form-picker .species-row { grid-template-columns: 54px minmax(0, 1fr) 68px; }
+html .phone-shell .is-form-picker .species-row .species-add { width: 68px; white-space: normal; line-height: 1.2; }
 html .phone-shell .species-alpha-nav a, html .phone-shell .species-alpha-nav button { min-width: 32px; min-height: 44px; }
 html .phone-shell .community-search-shell button[data-community-search-clear] { width: 44px; height: 44px; }
 /* Search focus follows the rounded control boundary rather than the inner input. */

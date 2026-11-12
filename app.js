@@ -41,15 +41,10 @@ const PLATFORM_SERVICE_WECHAT = "keyousz001";
 const defaultPhoto = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(TurtleArtwork.svg("turtle"));
 
 const speciesList = window.TURTLE_SPECIES || [];
-
-// 与 server/server.js 中的 MARKET_PROHIBITED_SPECIES_CODES 保持一致。
-// 前端用于即时提示；服务器仍会强制校验，避免任何绕过发布。
-const MARKET_PROHIBITED_SPECIES_CODES = new Set([
-  "ABQ", "ALD", "ANG", "BWG", "CBQ", "CSG", "DBG", "DHG", "EBQ", "GBG", "GJG", "HBQ", "HET", "HJG", "HNT", "HYG",
-  "JDG", "JQG", "JTG", "JYG", "KBT", "KNG", "LHG", "LJG", "LKG", "MBG", "MDG", "MJG", "MLG", "MNG", "PDG", "PGG", "PHG",
-  "PTG", "QBT", "QYG", "RTG", "SBQ", "SDG", "SGG", "SHG", "SLG", "SSG", "STG", "XGG", "XPG", "YBG", "YHG", "YLG", "YNT",
-  "YSG", "YTG", "ZRG"
-]);
+const legacySpeciesList = window.TURTLE_LEGACY_SPECIES || [];
+const catalogSpeciesByCode = new Map([...speciesList, ...legacySpeciesList].flatMap(item =>
+  [item.code, ...(item.legacyCodes || [])].map(code => [code, item])
+));
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 const SPECIES_IMAGE_CACHE = "turtlekeeper-species-image-cache-v1";
 // Relative rather than `/assets/...`: this works both in Capacitor and when
@@ -332,7 +327,7 @@ function normalizeAccountData(data = {}) {
   const next = TurtleLossAccounting.reconcile(TurtleBatches.normalizeLegacyPurchaseCosts({ ...emptyAccountData(), ...(data || {}) }));
   return {
     turtles: TurtleBatches.normalizeHatchBatches(Array.isArray(next.turtles) ? next.turtles : []),
-    keptSpecies: Array.isArray(next.keptSpecies) ? next.keptSpecies : [],
+    keptSpecies: Array.isArray(next.keptSpecies) ? [...new Set(next.keptSpecies.map(speciesCodeKey))] : [],
     customSpecies: normalizeCustomSpecies(next.customSpecies),
     careRecords: TurtleCare.normalizeRecords(next.careRecords),
     careCustomItems: TurtleCare.normalizeItems(next.careCustomItems),
@@ -1118,7 +1113,7 @@ function setState(patch, options = {}) {
     if (!options.skipEdgeSnapshot && !BOTTOM_NAV_ROOT_PAGES.has(patch.page) && $app?.innerHTML) {
       // Removing a tall list clamps the document scroll position immediately.
       // Capture it while that page is still mounted, for both back mechanisms.
-      const sourceScrollY = window.scrollY || 0;
+      const sourceScrollY = pageScrollY() || 0;
       const editorState = state.page === "turtleDetail" && state.updatingTurtleId && !$app.querySelector('#turtleDetailForm')?.__turtleDetailSaved ? {
         selectedTurtleId: state.selectedTurtleId, updatingTurtleId: state.updatingTurtleId,
         turtleDetailDraftId: state.selectedTurtleId, turtleDetailDraft: captureTurtleDetailDraft(),
@@ -1231,7 +1226,11 @@ function detachNavigationSnapshotDom() {
 
 function captureNavigationFixedLayers(root) {
   const rootLeft = root.getBoundingClientRect().left;
-  return [...root.querySelectorAll("*")].filter(node => getComputedStyle(node).position === "fixed").map(node => {
+  const isolatedTabs = root === $app && Boolean(iosTabScroller());
+  return [...root.querySelectorAll("*")].filter(node => {
+    if (isolatedTabs && node.parentElement === root && node.matches(".topbar, .bottom-nav, .feed-search-dock, .market-floating-add, .guest-login-slot")) return true;
+    return getComputedStyle(node).position === "fixed";
+  }).map(node => {
     const bounds = node.getBoundingClientRect();
     const path = [];
     for (let child = node; child !== root; child = child.parentElement) {
@@ -1484,14 +1483,25 @@ function accountSpeciesList() {
 }
 
 function speciesByCode(code) {
-  return accountSpeciesList().find(item => item.code === code);
+  return catalogSpeciesByCode.get(code) || (state.loggedInPhone && /^CUS-/i.test(code)
+    ? accountSpeciesList().find(item => item.code === code)
+    : undefined);
+}
+
+function speciesCodeKey(code) {
+  return catalogSpeciesByCode.get(code)?.code || code;
+}
+
+function speciesCatalogKeywords(item) {
+  if (!item) return "";
+  return [item.name, item.code, item.scientific, ...(item.aliases || []), ...(item.legacyCodes || [])]
+    .filter(Boolean).join(" ").toLowerCase();
 }
 
 function isMarketProhibitedSpecies(speciesOrCode) {
-  const code = typeof speciesOrCode === "object"
-    ? speciesOrCode?.code
-    : speciesOrCode;
-  return MARKET_PROHIBITED_SPECIES_CODES.has(String(code || "").trim().toUpperCase());
+  const code = typeof speciesOrCode === "object" ? speciesOrCode?.code : speciesOrCode;
+  const species = catalogSpeciesByCode.get(String(code || "").trim().toUpperCase());
+  return window.TURTLE_MARKET_RESTRICTED?.(species) ?? true;
 }
 
 function marketSpeciesRestrictionMessage() {
@@ -1517,7 +1527,9 @@ function speciesByImportName(value) {
   if (!raw) return null;
   const code = raw.toUpperCase();
   const aliasCode = SPECIES_IMPORT_ALIASES[raw] || SPECIES_IMPORT_ALIASES[compactSpeciesName(raw)];
-  const exact = speciesByCode(code) || accountSpeciesList().find(item => item.name === raw);
+  const exact = speciesByCode(code) || [...accountSpeciesList(), ...legacySpeciesList].find(item =>
+    [item.name, item.scientific, ...(item.aliases || [])].some(name => name?.toLowerCase() === raw.toLowerCase())
+  );
   if (exact) return exact;
   if (aliasCode) return speciesByCode(aliasCode);
   const compact = compactSpeciesName(raw);
@@ -1563,7 +1575,22 @@ function speciesPhoto(item) {
   if (item.isCustom) return item.photo ? apiAssetUrl(item.photo) : defaultPhoto;
   // Catalogue photos ship with the app.  They are deliberately preferred over
   // cache and network URLs so the whole species page works offline instantly.
-  return `${BUNDLED_SPECIES_IMAGE_ROOT}/${encodeURIComponent(item.code)}.jpg`;
+  if (/^assets\/species\/[A-Z0-9-]+\.(?:jpg|png)$/.test(item.image || "")) return item.image;
+  return item.image ? `${BUNDLED_SPECIES_IMAGE_ROOT}/${encodeURIComponent(item.code)}.jpg` : defaultPhoto;
+}
+
+function speciesPhotoCredit(item) {
+  const credit = item.photoCredit;
+  const reference = item.photoReference;
+  const parts = [];
+  if (credit) {
+    parts.push(credit.kind === "photo" ? "图鉴配图" : credit.kind === "specimen" ? "标本照片" : credit.kind === "illustration" ? "历史图版" : "资料图");
+    parts.push(`<a href="${escapeHtml(credit.source)}" target="_blank" rel="noopener noreferrer">${escapeHtml(credit.author || "原图")}</a>`);
+    parts.push(`<a href="${escapeHtml(credit.licenseUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(credit.license)}</a>`);
+    if (credit.changes) parts.push(escapeHtml(credit.changes));
+  }
+  if (reference) parts.push(`<a href="${escapeHtml(reference.source)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(reference.label)}">查看原始图版</a>`);
+  return parts.length ? `<small class="species-photo-credit">${parts.join(" · ")}</small>` : "";
 }
 
 async function resolveSpeciesImage(item) {
@@ -1664,7 +1691,7 @@ function matchesArchiveFilters(turtle) {
   if (!turtle) return false;
   const species = state.turtleFilter || "all";
   const pool = state.turtlePoolFilter || "all";
-  if (species !== "all" && turtle.speciesCode !== species) return false;
+  if (species !== "all" && speciesCodeKey(turtle.speciesCode) !== speciesCodeKey(species)) return false;
   if (pool === "unassigned") {
     return !turtle.poolId || !(state.turtlePools || []).some(item => item.id === turtle.poolId);
   }
@@ -1695,7 +1722,7 @@ function stats() {
     healthy: active.filter(t => t.health === "健康").length,
     sick: active.filter(t => t.health === "生病").length,
     loss: lostTurtleIds.size,
-    species: new Set(turtles.map(t => t.speciesCode)).size
+    species: new Set(turtles.map(t => speciesCodeKey(t.speciesCode))).size
   };
 }
 
@@ -3588,7 +3615,7 @@ function pageCommunityAdd() {
           ${canAddMedia ? `<button class="community-media-preview community-media-add" type="button" data-community-media-button aria-label="添加图片"><span>＋<small>${mediaItems.length}/9</small></span></button>` : ""}
         </div>
         <p class="community-draft-media-tip">最多选择 9 张图片，发布页展示前三张</p>
-        ${communityDraftTopic === "growth" ? `<section class="community-growth-source forum-publish-growth"><span>关联龟档案</span>${state.turtles?.length ? `<select class="select" data-community-turtle-source data-archive-directory aria-label="关联龟档案">${state.turtles.map(turtle => `<option value="${escapeHtml(turtle.id)}" ${communityDraftTurtleId === turtle.id ? "selected" : ""}>${escapeHtml(turtle.code || "未命名")} · ${escapeHtml(turtle.speciesName || "未填写品种")}</option>`).join("")}</select>` : `<button class="community-create-archive" type="button" data-page="turtleAdd">先建立一份龟档案 ›</button>`}</section>` : ""}
+        ${communityDraftTopic === "growth" ? `<section class="community-growth-source forum-publish-growth"><span>关联龟档案</span>${state.turtles?.length ? `<select class="select" data-community-turtle-source data-archive-directory aria-label="关联龟档案">${state.turtles.map(turtle => `<option value="${escapeHtml(turtle.id)}" ${communityDraftTurtleId === turtle.id ? "selected" : ""}>${escapeHtml(turtle.code || "未命名")} · ${escapeHtml(turtle.speciesName || "未填写品种")}</option>`).join("")}</select>` : `<button class="community-create-archive" type="button" data-page="add">先建立一份龟档案 ›</button>`}</section>` : ""}
         ${window.TurtleDiscovery?.archivePhotoChoice() || ""}
         <section class="forum-publish-settings">
           <div class="forum-publish-setting-head"><span><i>◉</i><b>选择圈子</b></span><small>${communityCircle(communityDraftCircleId).name} ›</small></div>
@@ -4021,13 +4048,16 @@ function navigationSnapshotIsCurrent(snapshot) {
 
 function backNavigationState() {
   if (state.page === "search") return { page: window.TurtleSearch?.source() || "market" };
+  if (state.page === "species" && (state.speciesPickerForAdd || state.speciesPickerForLedger)) {
+    return { page: state.speciesPickerForLedger ? "ledger" : "add", speciesPickerForAdd: false, speciesPickerForLedger: false };
+  }
   if (["mediationApply", "mediationDetail"].includes(state.page)) return { page: "mediation" };
   if (state.page === "mediation") return { page: "mine" };
   if (state.page === "marketInterests") return { page: "market" };
   if (state.page === "marketAlerts") return { page: "mine" };
   if (state.page === "marketAlertResults") return { page: "market" };
   return {
-    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "species" && state.speciesPickerForLedger ? "ledger" : state.page === "species" && state.speciesPickerForAdd ? "add" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" || state.page === "communityProfile" ? "community" : state.page === "communityActivity" || state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "mine" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
+    page: state.page === "turtleDetail" ? "home" : state.page === "ledgerDetail" ? "ledger" : state.page === "marketAdd" ? (state.editingMarketListingId ? "marketMy" : "market") : state.page === "marketDetail" ? "market" : state.page === "followingProfile" ? "following" : state.page === "feedbackAdd" || state.page === "feedbackDetail" ? "feedback" : state.page === "communityAdd" || state.page === "communityPostDetail" || state.page === "communityProfile" ? "community" : state.page === "communityActivity" || state.page === "communityFriends" || state.page === "communityChat" ? "messages" : state.page === "mine" ? "messages" : state.page === "breedingAdd" || state.page === "breedingDetail" ? "breeding" : state.page === "poolAdd" ? "pools" : ["calendar", "satisfaction", "feedback", "account", "reports", "about", "marketFavorites", "marketHistory", "marketMy", "following"].includes(state.page) ? "mine" : "home",
     openTurtleMenuId: "", openLedgerMenuId: "", openBreedingMenuId: "", openFeedbackMenuId: "",
     editingTurtlePoolId: "", editingMarketListingId: "", updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "", growthTaskMemoId: ""
   };
@@ -4112,6 +4142,7 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
     $app.appendChild(bottomNav);
     syncPersistentBottomNav(bottomNav);
   }
+  syncIOSTabScroll();
   if (state.page === "market") {
     patchMarketSnapshotDetails();
     patchSystemAnnouncementOverlay();
@@ -4121,7 +4152,7 @@ function restoreLiveNavigationSnapshot(snapshot, nextState, options = {}) {
   updateAccountSaveStatus();
   syncMobileKeyboardUI();
   $app.syncNativeEdgeBack?.(true);
-  window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
+  scrollPageTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
   restoredSnapshotRenderHoldUntil = Date.now() + 520;
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
@@ -4162,6 +4193,7 @@ function navigateBack(options = {}) {
     $app.classList.remove("edge-back-dragging", "page-enter-motion", "community-chat-enter-motion");
     stopMarketDetailVideos($app, true);
     $app.innerHTML = snapshot.html;
+    syncIOSTabScroll();
     updateLocalBackupWarning();
     bindEvents();
     window.TurtleMediation?.bind(mediationContext());
@@ -4172,7 +4204,7 @@ function navigateBack(options = {}) {
     setupMarketInfiniteScroll();
     setupCommunityInfiniteScroll();
     syncMobileKeyboardUI();
-    window.scrollTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
+    scrollPageTo({ top: Math.max(0, Number(snapshot.scrollY || 0)), left: 0, behavior: "auto" });
     restoredSnapshotRenderHoldUntil = Date.now() + 520;
     window.requestAnimationFrame(() => {
       // The snapshot has now been mounted at the same scroll position as the
@@ -4194,7 +4226,7 @@ function navigateBack(options = {}) {
     skipEdgeSnapshot: true,
     keepEdgeBackPreview: true
   });
-  window.scrollTo({ top: Math.max(0, Number(snapshot?.scrollY || 0)), left: 0, behavior: "auto" });
+  scrollPageTo({ top: Math.max(0, Number(snapshot?.scrollY || 0)), left: 0, behavior: "auto" });
   const handoffPreview = document.querySelector(".edge-back-preview");
   window.requestAnimationFrame(() => {
     if (document.querySelector(".edge-back-preview") === handoffPreview) clearEdgeBackPreview();
@@ -4346,28 +4378,33 @@ function renderMarketDescriptionTemplate(species) {
   state.marketDraftDescriptionTemplate = template;
 }
 
-function marketSpeciesMatches(query) {
-  const keyword = String(query || "").trim().toLowerCase();
+function marketSpeciesMatches(query, { exact = false, publishable = false } = {}) {
+  const normalize = value => String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const keyword = normalize(query);
+  if (exact && !keyword) return [];
   return speciesList
+    .filter(item => !publishable || !isMarketProhibitedSpecies(item))
     .map(item => {
-      const name = String(item.name || "").toLowerCase();
-      const code = String(item.code || "").toLowerCase();
-      let rank = 99;
-      if (!keyword) rank = 4;
-      else if (name.startsWith(keyword)) rank = 0;
-      else if (code.startsWith(keyword)) rank = 1;
-      else if (name.includes(keyword)) rank = 2;
-      else if (code.includes(keyword)) rank = 3;
+      const fields = [item.name, item.code, item.scientific, ...(item.aliases || []), ...(item.legacyCodes || [])].map(normalize);
+      let rank = 3;
+      if (!keyword || fields.includes(keyword)) rank = 0;
+      else if (!exact && fields.some(field => field.startsWith(keyword))) rank = 1;
+      else if (!exact && fields.some(field => field.includes(keyword))) rank = 2;
       return { item, rank };
     })
-    .filter(entry => entry.rank < 99)
+    .filter(entry => entry.rank < 3)
     .sort((left, right) => left.rank - right.rank || left.item.name.localeCompare(right.item.name, "zh-CN"))
     .slice(0, 30)
     .map(entry => entry.item);
 }
 
-function marketPublishSpeciesMatches(query) {
-  return marketSpeciesMatches(query).filter(item => !isMarketProhibitedSpecies(item));
+function isMarketRestrictedRecord(record) {
+  if (!record) return false;
+  if (record.offlineReason === "restricted_species") return true;
+  const species = speciesByCode(record.speciesCode);
+  if (species && isMarketProhibitedSpecies(species)) return true;
+  if (record.speciesName === species?.name) return false;
+  return marketSpeciesMatches(record.speciesName, { exact: true }).some(isMarketProhibitedSpecies);
 }
 
 function flushMarketSearchRefresh() {
@@ -4444,14 +4481,14 @@ function bindMarketSearchSuggestions() {
   const renderSuggestions = () => {
     if (composing || !form.isConnected || state.page !== "market") return;
     const query = String(input.value || "").trim();
-    const matches = query ? marketPublishSpeciesMatches(query).slice(0, 6) : [];
+    const matches = query ? marketSpeciesMatches(query).slice(0, 6) : [];
     if (!matches.length) {
       close();
       return;
     }
     suggestions.innerHTML = matches.map(species => `
       <button type="button" role="option" data-market-search-species="${escapeHtml(species.code)}">
-        <strong>${escapeHtml(species.name)}</strong><small>${escapeHtml(species.code)} · 搜索该品种</small>
+        <strong>${escapeHtml(species.name)}</strong><small>${escapeHtml(species.code)} · ${isMarketProhibitedSpecies(species) ? "平台禁售" : "搜索该品种"}</small>
       </button>
     `).join("");
     suggestions.hidden = false;
@@ -4722,9 +4759,10 @@ function marketListingTime(item = {}) {
 }
 
 function marketSearchResultListings() {
+  const available = item => item?.status === "active" && !isMarketRestrictedRecord(item);
   if (state.marketFeedInitialized && state.marketFeedSessionId) {
     const byId = new Map((state.marketListings || []).map(item => [String(item.id), item]));
-    return (state.marketFeedOrderIds || []).map(id => byId.get(String(id))).filter(item => item?.status === "active");
+    return (state.marketFeedOrderIds || []).map(id => byId.get(String(id))).filter(available);
   }
   const keyword = String(state.marketSearch || "").trim().toLowerCase();
   const stage = state.marketStage || "all";
@@ -4737,11 +4775,13 @@ function marketSearchResultListings() {
     // history/chat references can coexist in local state, so treat the
     // client-side filter as the last line of defence against sold or offline
     // items flashing into the public grid before a remote refresh completes.
-    if (item.status !== "active") return false;
+    if (!available(item)) return false;
     if (inquiryCode) return TurtleMarketInquiry.matches(item, inquiryCode);
     const matchesStage = stage === "all" || item.stage === stage;
     const haystack = `${item.title || ""} ${item.speciesName || ""} ${item.city || ""}`.toLowerCase();
-    const matchesKeyword = !keyword || haystack.includes(keyword);
+    const species = keyword && speciesByCode(item.speciesCode);
+    const matchesKeyword = !keyword || haystack.includes(keyword) ||
+      (species && speciesCatalogKeywords(species).includes(keyword));
     const matchesRegion = !regionCities.length || regionCities.includes(String(item.city || "").trim());
     const matchesDelivery = !delivery || String(item.delivery || "") === delivery;
     const matchesFresh = !state.marketFreshOnly || marketListingTime(item) >= freshAfter;
@@ -4945,6 +4985,16 @@ function pageMarket() {
   const stage = state.marketStage || "all";
   const listings = marketSearchResultListings();
   const inquiryCode = TurtleMarketInquiry.parse(keyword);
+  let matchedSpecies = inquiryCode ? [] : marketSpeciesMatches(keyword, { exact: true });
+  if (!matchedSpecies.length && keyword && !inquiryCode) {
+    matchedSpecies = marketSpeciesMatches(keyword).slice(0, 6);
+  }
+  const speciesSummary = matchedSpecies.length ? `<section class="market-species-summary" aria-label="品种图鉴">
+    ${matchedSpecies.map(item => `<div class="market-inquiry-summary market-species-result">
+      ${item.image ? `<img src="${escapeHtml(speciesPhoto(item))}" alt="${escapeHtml(item.name)}的图鉴配图" loading="lazy" data-fallback-photo>` : ""}
+      <div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.scientific || item.code)} · ${isMarketProhibitedSpecies(item) ? "<b>平台禁售</b>" : "品种图鉴"}</p>${speciesPhotoCredit(item)}</div>
+    </div>`).join("")}
+  </section>` : "";
   const regions = [...new Set((state.marketListings || []).map(item => String(item.city || "").trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
   const marketRequiresLogin = CONFIGURED_SMS_BACKEND ? !hasCloudSession() : !state.loggedInPhone;
   const feedNotice = feedLoadNotice("market");
@@ -4969,6 +5019,7 @@ function pageMarket() {
         <span><b>实拍</b> 一龟一图</span><span><b>直聊</b> 买卖双方沟通</span><span><b>透明</b> 状态尺寸清晰</span>
       </section>` : ""}
       ${inquiryCode ? `<section class="market-inquiry-summary" role="status"><strong>商品咨询码 ${escapeHtml(inquiryCode)}</strong><p>${listings.length > 1 ? "此码匹配多个商品，请核对图片、标题和卖家后选择。" : "按咨询码查找在售商品，点击商品查看详情。"}</p></section>` : ""}
+      ${speciesSummary}
       ${!keyword ? window.TurtleDiscovery?.marketEntry() || "" : ""}
       ${!keyword ? window.TurtleMediation?.entry(PLATFORM_SERVICE_WECHAT) || "" : ""}
       ${!inquiryCode ? marketAssistControls(regions) : ""}
@@ -5005,6 +5056,7 @@ function marketRefreshMeta(item = {}) {
 function myMarketListingRow(item) {
   const media = marketListingMediaItems(item)[0];
   const meta = marketRefreshMeta(item);
+  const restricted = isMarketRestrictedRecord(item);
   const preview = media?.type === "video"
     ? `<span class="my-market-media is-video"><img src="${escapeHtml(apiAssetUrl(media.thumbnailUrl || media.posterUrl || defaultPhoto))}" alt="商品视频" loading="lazy"><i>▶</i></span>`
     : `<span class="my-market-media"><img src="${escapeHtml(marketListingPhoto(item))}" alt="${escapeHtml(item.title || "出售乌龟")}"></span>`;
@@ -5019,8 +5071,8 @@ function myMarketListingRow(item) {
       </div>
       <div class="my-market-listing-actions ${item.status === "active" ? "has-offline" : ""} ${item.status === "active" && item.availabilityPolicy === "confirmation-30d-v1" ? "has-confirm" : ""}">
         <button type="button" data-edit-market-listing="${item.id}">编辑</button>
-        ${item.availabilityPolicy === "confirmation-30d-v1" && (item.status === "active" || ["manual", "stale"].includes(item.offlineReason)) ? `<button class="refresh" type="button" data-confirm-market-listing="${item.id}">${item.status === "inactive" ? "确认在售并上架" : "确认仍在售"}</button>` : ""}
-        ${item.status === "active" || item.availabilityPolicy !== "confirmation-30d-v1" ? `<button class="refresh" type="button" data-refresh-market-listing="${item.id}">${item.status === "inactive" ? "重新上架" : "刷新曝光"}</button>` : ""}
+        ${!restricted && item.availabilityPolicy === "confirmation-30d-v1" && (item.status === "active" || ["manual", "stale"].includes(item.offlineReason)) ? `<button class="refresh" type="button" data-confirm-market-listing="${item.id}">${item.status === "inactive" ? "确认在售并上架" : "确认仍在售"}</button>` : ""}
+        ${!restricted && (item.status === "active" || item.availabilityPolicy !== "confirmation-30d-v1") ? `<button class="refresh" type="button" data-refresh-market-listing="${item.id}">${item.status === "inactive" ? "重新上架" : "刷新曝光"}</button>` : ""}
         ${item.status === "active" ? `<button class="offline" type="button" data-offline-market-listing="${item.id}">下架</button>` : ""}
       </div>
     </article>
@@ -5062,10 +5114,11 @@ function pageMarketAdd() {
   if (!(state.marketDraftMedia || []).length && editingListing) state.marketDraftMedia = marketListingMediaItems(editingListing).map(media => ({ dataUrl: media.url, posterUrl: media.posterUrl || "", type: media.type || "image" }));
   if (!(state.marketDraftMedia || []).length && turtle?.photo) state.marketDraftMedia = [{ dataUrl: turtle.photo, type: "image" }];
   const archiveChanged = Boolean(editingListing && state.marketDraftTurtleId !== String(editingListing.turtleId || ""));
-  const turtleSpeciesCode = (archiveChanged ? turtle?.speciesCode : editingListing?.speciesCode || turtle?.speciesCode) || speciesList.find(item => item.name === turtle?.speciesName)?.code || (!turtle ? editingListing?.speciesCode : "") || "";
-  const turtleSpecies = speciesByCode(turtleSpeciesCode);
+  const speciesRecord = archiveChanged ? turtle : editingListing || turtle;
+  const turtleSpecies = speciesByCode(speciesRecord?.speciesCode) || marketSpeciesMatches(speciesRecord?.speciesName, { exact: true })[0];
   const speciesSearchValue = turtleSpecies ? `${turtleSpecies.code} · ${turtleSpecies.name}` : "";
-  const speciesPolicyHint = turtleSpecies && isMarketProhibitedSpecies(turtleSpecies)
+  const restricted = isMarketRestrictedRecord(turtle) || isMarketRestrictedRecord(editingListing);
+  const speciesPolicyHint = restricted
     ? `<p class="market-species-policy-hint">${marketSpeciesRestrictionMessage()}</p>`
     : "";
   const titleValue = editingListing?.title || (turtle ? `${turtle.code || turtle.speciesName || "乌龟"}诚意出售` : "");
@@ -5076,7 +5129,7 @@ function pageMarketAdd() {
   return `
     ${topbar(editingListing ? "编辑出售" : "发布出售", true)}
     <main class="content page-fresh market-publish-page">
-      <form id="marketListingForm" class="market-publish-form" data-entity-id="${escapeHtml(editingListing?.id || 'new')}">
+      <form id="marketListingForm" class="market-publish-form" data-entity-id="${escapeHtml(editingListing?.id || 'new')}" data-market-archive-id="${escapeHtml(state.marketDraftTurtleId || "")}">
         <section class="market-form-card market-source-card">
           <div class="market-form-heading"><b>从档案带入</b><small>减少重复填写，数据更可信</small></div>
           <select class="select" name="turtleId" data-market-turtle-source data-archive-directory>
@@ -5094,10 +5147,10 @@ function pageMarketAdd() {
           <div class="market-field-group"><span>品种<i class="required-mark" aria-hidden="true">*</i></span><div class="market-species-picker" data-market-species-picker>
             <div class="market-species-search-row">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"></circle><path d="m15.5 15.5 4.2 4.2"></path></svg>
-              <input type="search" value="${escapeHtml(speciesSearchValue)}" placeholder="输入品种名称或代码" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="marketSpeciesOptions" data-market-species-search>
+              <input type="search" value="${escapeHtml(speciesSearchValue)}" placeholder="输入品种名称、学名或代码" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="marketSpeciesOptions" data-market-species-search>
               <button type="button" aria-label="展开品种选项" data-market-species-toggle>⌄</button>
             </div>
-            <input type="hidden" name="speciesCode" value="${escapeHtml(turtleSpeciesCode)}" data-market-species-value>
+            <input type="hidden" name="speciesCode" value="${escapeHtml(turtleSpecies?.code || "")}" data-market-species-value>
             <div class="market-species-options" id="marketSpeciesOptions" role="listbox" hidden data-market-species-options></div>
             ${speciesPolicyHint}
           </div></div>
@@ -5121,7 +5174,7 @@ function pageMarketAdd() {
           <label><span>详细说明<i class="required-mark" aria-hidden="true">*</i></span><textarea name="description" maxlength="600" placeholder="可填写开食情况、饲养环境、健康状态及转让原因" data-market-description data-market-description-template="${escapeHtml(descriptionTemplate)}" required>${escapeHtml(descriptionValue)}</textarea></label>
         </section>
         <section class="market-safe-note"><b>交易提示</b><p>发布前请如实描述健康状态；交易前充分沟通并核对实物，不要脱离双方确认的联系方式盲目付款。</p></section>
-        <button class="market-publish-submit" type="submit">${editingListing ? "保存并刷新" : "确认发布"}</button>
+        <button class="market-publish-submit" type="submit"${restricted ? " disabled" : ""}>${editingListing ? "保存并刷新" : "确认发布"}</button>
       </form>
     </main>
   `;
@@ -5136,6 +5189,11 @@ function pageMarketDetail() {
   }
   const isOwn = Boolean(item.isOwn || item.pendingLocal);
   const canDelete = isOwn || state.isCommunityAdmin;
+  if (isMarketRestrictedRecord(item)) {
+    return `${topbar("商品详情", true)}<main class="content page-fresh market-detail-page">
+      <div class="empty"><strong>${escapeHtml(item.speciesName || "乌龟")}</strong><p>${marketSpeciesRestrictionMessage()}</p>
+        ${canDelete ? `<button type="button" data-delete-market="${escapeHtml(item.id)}">删除商品</button>` : ""}</div></main>`;
+  }
   const sold = item.status === "sold";
   const mediaItems = marketListingMediaItems(item);
   const firstMediaIsVideo = mediaItems[0]?.type === "video";
@@ -5387,6 +5445,12 @@ function archivePageData(list) {
 }
 
 function bindArchivePagination() {
+  document.querySelector("[data-reset-archive-filters]")?.addEventListener("click", () => {
+    window.clearTimeout(archiveSearchTimer);
+    archiveListView.query = "";
+    archiveListView.page = 0;
+    setState({ turtleFilter: "all", turtlePoolFilter: "all", openTurtleMenuId: "" }, { skipSave: true });
+  });
   document.querySelector("[data-toggle-archive-prices]")?.addEventListener("click", () => {
     archivePricesHidden = !archivePricesHidden;
     // A device display preference must never write or sync financial records.
@@ -5449,10 +5513,10 @@ function archiveDashboardSection() {
     if (!medicalByTurtle.has(record.turtleId)) medicalByTurtle.set(record.turtleId, []);
     medicalByTurtle.get(record.turtleId).push(record);
   }
-  const speciesOptions = [...new Set(state.turtles.map(t => t.speciesCode))]
+  const speciesOptions = [...new Set(state.turtles.map(t => speciesCodeKey(t.speciesCode)))]
     .map(code => speciesByCode(code) || { code, name: code });
   const poolOptions = state.turtlePools || [];
-  const selectedSpecies = state.turtleFilter && state.turtleFilter !== "all" ? state.turtleFilter : "";
+  const selectedSpecies = state.turtleFilter && state.turtleFilter !== "all" ? speciesCodeKey(state.turtleFilter) : "";
   const speciesTurtles = selectedSpecies ? state.turtles.filter(matchesArchiveFilters) : [];
   const maleCount = speciesTurtles.filter(t => String(t.gender || "").trim() === "公").length;
   const femaleCount = speciesTurtles.filter(t => String(t.gender || "").trim() === "母").length;
@@ -5462,22 +5526,22 @@ function archiveDashboardSection() {
     <section class="home-archive-section" data-turtle-reorder-list>
       ${ledgerDashboardPicker ? `<div class="ledger-dashboard-picker"><div><strong>选择要关联的档案</strong><p>点击下方档案，返回售出表单继续填写。</p></div><button class="secondary" type="button" data-cancel-ledger-picker>取消选择</button></div>` : ""}
       <label class="archive-search"><span class="sr-only">搜索档案</span><input class="field" type="search" data-archive-search value="${escapeHtml(archiveListView.query)}" placeholder="搜索编号、昵称、品种或批次" aria-label="搜索档案"></label>
-      <section class="filter-dock">
+      <section class="filter-dock" aria-label="档案筛选与排序">
         <select class="select" data-filter-species aria-label="按品种筛选">
           <option value="all">全部品种</option>
-          ${speciesOptions.map(s => `<option value="${escapeHtml(s.code)}" ${state.turtleFilter === s.code ? "selected" : ""}>${escapeHtml(s.name)}</option>`).join("")}
+          ${speciesOptions.map(s => `<option value="${escapeHtml(s.code)}" ${speciesCodeKey(state.turtleFilter) === s.code ? "selected" : ""}>${escapeHtml(s.name)}</option>`).join("")}
         </select>
         <select class="select" data-filter-pool aria-label="按龟池筛选">
           <option value="all">全部龟池</option>
-          <option value="unassigned" ${state.turtlePoolFilter === "unassigned" ? "selected" : ""}>未关联龟池</option>
+          <option value="unassigned" ${state.turtlePoolFilter === "unassigned" ? "selected" : ""}>未关联</option>
           ${poolOptions.map(pool => `<option value="${pool.id}" ${state.turtlePoolFilter === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")}</option>`).join("")}
         </select>
         <select class="select" data-sort-turtles aria-label="档案排序">
           <option value="default" ${state.turtleSort === "default" ? "selected" : ""}>默认排序</option>
           <option value="latest" ${state.turtleSort === "latest" ? "selected" : ""}>最新添加</option>
           <option value="weight" ${state.turtleSort === "weight" ? "selected" : ""}>克重排序</option>
-          <option value="shellLength" ${state.turtleSort === "shellLength" ? "selected" : ""}>背甲长度排序</option>
-          <option value="${state.turtleSort === "valueDesc" ? "valueDesc" : "valueAsc"}" ${["valueAsc", "valueDesc"].includes(state.turtleSort) ? "selected" : ""}>价值排序${state.turtleSort === "valueAsc" ? " ↑" : state.turtleSort === "valueDesc" ? " ↓" : ""}</option>
+          <option value="shellLength" ${state.turtleSort === "shellLength" ? "selected" : ""}>背甲长度</option>
+          <option value="${state.turtleSort === "valueDesc" ? "valueDesc" : "valueAsc"}" ${["valueAsc", "valueDesc"].includes(state.turtleSort) ? "selected" : ""}>价值排序</option>
         </select>
         ${["valueAsc", "valueDesc"].includes(state.turtleSort) ? `<button class="select" type="button" data-toggle-turtle-value-sort aria-label="切换为价值${state.turtleSort === "valueAsc" ? "降序" : "升序"}">价值${state.turtleSort === "valueAsc" ? "升序 ↑" : "降序 ↓"}</button>` : ""}
       </section>
@@ -5487,7 +5551,7 @@ function archiveDashboardSection() {
         : `共 ${page.total} 条${page.total ? ` · 当前显示 ${page.start + 1}–${page.start + page.rows.length} 条` : ""}`}</p>
       <button class="archive-price-toggle" type="button" data-toggle-archive-prices aria-pressed="${archivePricesHidden}" aria-label="${archivePricesHidden ? "显示档案列表价格" : "隐藏档案列表价格"}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>${archivePricesHidden ? `<path d="m3 3 18 18"/>` : ""}</svg><span>${archivePricesHidden ? "显示价格" : "隐藏价格"}</span></button>
       </div>
-      ${page.rows.map(turtle => turtleListRow(turtle, medicalByTurtle.get(turtle.id) || [])).join("") || `<div class="empty"><div><strong>${state.turtles.length ? "没有符合条件的档案" : "还没有乌龟档案"}</strong><p>${state.turtles.length ? "试试其他关键词、品种或龟池。" : "点击右上角加号，创建第一份档案。"}</p></div></div>`}
+      ${page.rows.map(turtle => turtleListRow(turtle, medicalByTurtle.get(turtle.id) || [])).join("") || `<div class="empty archive-empty"><div><strong>${state.turtles.length ? "没有符合条件的档案" : "还没有乌龟档案"}</strong><p>${state.turtles.length ? "试试其他关键词、品种或龟池。" : "创建档案后，就能记录成长、养护和账目。"}</p>${state.turtles.length ? '<button class="secondary archive-empty-action" type="button" data-reset-archive-filters>清除筛选</button>' : ledgerDashboardPicker ? '' : '<button class="primary archive-empty-action" type="button" data-page="add">创建档案</button>'}</div></div>`}
       ${page.pages > 1 ? `<nav class="archive-pagination" aria-label="档案分页"><button class="secondary" type="button" data-archive-page="${archiveListView.page - 1}" ${archiveListView.page === 0 ? "disabled" : ""}>上一页</button><span>${archiveListView.page + 1} / ${page.pages}</span><button class="secondary" type="button" data-archive-page="${archiveListView.page + 1}" ${archiveListView.page + 1 >= page.pages ? "disabled" : ""}>下一页</button></nav>` : ""}
     </section>
   `;
@@ -5881,7 +5945,7 @@ function pageTurtleDetail() {
   if (!t) return `${topbar("档案详情", true)}<main class="content page-fresh"><div class="empty"><strong>没有找到这份档案</strong></div></main>${bottomNav()}`;
   if (t.batchId && !t.sharedView) return pageTurtleBatchDetail(t);
   const isEditing = !t.sharedView && state.updatingTurtleId === t.id;
-  const speciesCode = isEditing ? (turtleDraftValue(t, "speciesCode") || t.speciesCode) : t.speciesCode;
+  const speciesCode = speciesCodeKey(isEditing ? (turtleDraftValue(t, "speciesCode") || t.speciesCode) : t.speciesCode);
   const species = speciesByCode(speciesCode) || speciesByCode(t.speciesCode) || { code: speciesCode, name: t.speciesName };
   const nickname = isEditing ? (turtleDraftValue(t, "code") || t.code) : t.code;
   const photo = isEditing && state.updateDraftPhoto === "__CLEAR__" ? defaultPhoto : (isEditing ? state.updateDraftPhoto : "") || t.photo || speciesPhoto(species) || defaultPhoto;
@@ -5920,7 +5984,7 @@ function pageTurtleDetail() {
         </div>
         <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-update-photo-input>
         <div class="breeding-form-grid">
-          <label><span>品种代码</span><select class="select" name="speciesCode" required>${!speciesByCode(speciesCode) ? `<option value="${escapeHtml(speciesCode || "")}" selected>${escapeHtml(archiveSpeciesName(t))}（原品种）</option>` : ""}${accountSpeciesList().map(item => `<option value="${item.code}" ${item.code === speciesCode ? "selected" : ""}>${item.isCustom ? "自建" : item.code} · ${escapeHtml(item.name)}</option>`).join("")}</select></label>
+          <label><span>品种代码</span><select class="select" name="speciesCode" required>${!speciesByCode(speciesCode) || species.referenceOnly ? `<option value="${escapeHtml(speciesCode || "")}" selected>${escapeHtml(archiveSpeciesName(t))}（原品种）</option>` : ""}${accountSpeciesList().map(item => `<option value="${item.code}" ${item.code === speciesCode ? "selected" : ""}>${item.isCustom ? "自建" : item.code} · ${escapeHtml(item.name)}</option>`).join("")}</select></label>
           <label><span>龟龟昵称</span><input class="field" name="code" value="${escapeHtml(nickname || "")}" placeholder="例如：小核桃、黑豆、将军"></label>
           <label><span>龟池</span><select class="select" name="poolId"><option value="">暂不关联龟池</option>${(state.turtlePools || []).map(pool => `<option value="${pool.id}" ${turtleDraftValue(t, "poolId") === pool.id ? "selected" : ""}>${escapeHtml(pool.name || "未命名龟池")} · ${turtlePoolTypeLabel(pool.type)}</option>`).join("")}</select></label>
           <div class="detail-choice-row">
@@ -6082,10 +6146,7 @@ async function submitCustomSpecies(event) {
     const species = customSpecies.find(item => item.code === result.species?.code);
     if (!species) throw new Error("保存结果不完整，请刷新后重试");
     const pickForForm = state.page === "species" && form.isConnected;
-    setState({
-      customSpecies, keptSpecies: [...new Set([...state.keptSpecies, species.code])],
-      ...(pickForForm ? speciesSelectionPatch(species.code) : {})
-    });
+    saveKeptSpecies({ customSpecies, keptSpecies: [...new Set([...state.keptSpecies, species.code])] }, pickForForm ? species.code : "");
     toast("自建品种已保存，仅当前账号可用");
   } catch (error) {
     if (stillCurrent()) toast(error.status === 405 ? "自建品种服务暂未启用，请稍后重试" : error.message || "保存失败，请重试");
@@ -6100,9 +6161,17 @@ function pageSpecies() {
     .sort((a, b) => Number(Boolean(b.isCustom)) - Number(Boolean(a.isCustom)) || a.letter.localeCompare(b.letter) || a.name.localeCompare(b.name, "zh-CN"));
   const groups = Object.entries(groupBy(list, "letter"));
   const availableLetters = new Set(groups.map(([letter]) => letter));
+  const customCount = list.length - speciesList.length;
+  const picking = state.speciesPickerForAdd || state.speciesPickerForLedger;
+  const searchCard = `<section class="species-search-card fresh-card">
+    <label for="speciesCatalogueSearch">搜索品种</label>
+    <input id="speciesCatalogueSearch" class="field fresh-search" data-species-search type="search" placeholder="搜索名称、学名、别名或代码">
+    ${picking ? '<p class="species-picker-help">找到后点「加入并使用」，即可回到表单继续填写。</p>' : ""}
+  </section><p class="fresh-card species-picker-help species-no-match" data-species-empty role="status" ${list.length ? "hidden" : ""}>没有匹配的品种。试试其他名称、学名或代码，也可以自建品种。</p>`;
   return `
-    ${topbar("品种选择", true)}
-    <main class="content page-fresh species-page">
+    ${topbar(picking ? "从品种图鉴添加" : "品种选择", true)}
+    <main class="content page-fresh species-page${picking ? " is-form-picker" : ""}">
+      ${picking ? searchCard : ""}
       <section class="custom-species-card fresh-card">
         <div class="custom-species-heading"><div><h3>没有找到自己的品种？</h3><p>自建品种仅供当前账号使用</p></div><button class="primary" type="button" data-create-custom-species aria-expanded="false" aria-controls="customSpeciesForm">自建品种</button></div>
         <form id="customSpeciesForm" hidden>
@@ -6120,14 +6189,12 @@ function pageSpecies() {
       <section class="page-intro species-intro compact-intro">
         <div>
           <p class="eyebrow dark">图鉴</p>
-          <h2>${list.length} 个可选品种</h2>
-          <p>按首字母分组，搜索中文名称或代码后可直接加入常用品种。</p>
+          <h2>${speciesList.length} 个图鉴物种</h2>
+          ${customCount ? `<p>另有 ${customCount} 个自建品种</p>` : ""}
+          <p>按首字母分组，可用中文名、学名、别名或代码搜索。</p>
         </div>
       </section>
-      <section class="species-search-card fresh-card">
-        <span>搜索</span>
-        <input class="field fresh-search" data-species-search placeholder="搜索中文名称或代码">
-      </section>
+      ${picking ? "" : searchCard}
       <nav class="species-alpha-nav" aria-label="品种首字母导航">
         ${ALPHABET.map(letter => `<button class="${availableLetters.has(letter) ? "" : "muted"}" data-scroll-letter="${letter}" type="button">${letter}</button>`).join("")}
       </nav>
@@ -6135,14 +6202,14 @@ function pageSpecies() {
         <section class="species-section" data-letter-section="${letter}">
           <div class="species-letter"><h3>${letter}</h3><span>${items.length} 个品种</span></div>
           ${items.map(item => `
-            <article class="species-row fresh-card ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-species-keywords="${escapeHtml(item.name.toLowerCase())} ${escapeHtml(item.code.toLowerCase())}">
+            <article class="species-row fresh-card ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-species-keywords="${escapeHtml(speciesCatalogKeywords(item))}">
               <img class="species-photo" src="${escapeHtml(speciesPhoto(item))}" alt="${escapeHtml(item.name)}" data-species-img="${escapeHtml(item.code)}" data-fallback-photo loading="lazy">
-              <div><strong>${escapeHtml(item.name)}</strong><small>${item.isCustom ? "自建 · 仅自己可见" : escapeHtml(item.code)}</small></div>
-              <button class="species-add ${state.keptSpecies.includes(item.code) ? "selected" : ""}" data-add-species="${escapeHtml(item.code)}">${state.speciesPickerForAdd || state.speciesPickerForLedger ? "选择" : state.keptSpecies.includes(item.code) ? "取消" : "加入"}</button>
+              <div><strong>${escapeHtml(item.name)}</strong><small>${item.isCustom ? "自建 · 仅自己可见" : escapeHtml([item.scientific !== item.name && item.scientific, item.extinct && "已灭绝", item.code].filter(Boolean).join(" · "))}</small>${speciesPhotoCredit(item)}</div>
+              <button class="species-add ${state.keptSpecies.includes(item.code) ? "selected" : ""}" type="button" data-add-species="${escapeHtml(item.code)}">${state.keptSpecies.includes(item.code) ? (picking ? "使用" : "取消") : (picking ? "加入并使用" : "加入")}</button>
             </article>
           `).join("")}
         </section>
-      `).join("") || `<div class="empty small-empty"><div><strong>没有找到匹配品种</strong><br>换一个名称或代码试试</div></div>`}
+      `).join("")}
     </main>
   `;
 }
@@ -6179,8 +6246,23 @@ function pageBreeds() {
   `;
 }
 
+function archiveSpeciesField(name, selectedCode) {
+  const catalog = new Map(accountSpeciesList().map(item => [item.code, item]));
+  const kept = [...new Set(state.keptSpecies)].map(code => catalog.get(code)).filter(Boolean);
+  const hasChoices = kept.length > 0;
+  return `
+    <label class="label" for="${name}">品种 <span class="required">*</span></label>
+    <select class="select" id="${name}" name="${name}" aria-describedby="${name}Guide" required ${hasChoices ? "" : "disabled"}>
+      <option value="">${hasChoices ? "请选择常用品种" : "暂无已添加的品种"}</option>
+      ${kept.map(item => `<option value="${escapeHtml(item.code)}" ${selectedCode === item.code ? "selected" : ""}>${escapeHtml(item.name)} · ${item.isCustom ? "自建" : escapeHtml(item.code)}</option>`).join("")}
+    </select>
+    <div class="archive-species-guide ${hasChoices ? "" : "is-empty"}">
+      <p id="${name}Guide">${hasChoices ? "这里只显示已加入的常用品种。" : "先在图鉴搜索品种，点「加入并使用」后继续。"}</p>
+      <button class="${hasChoices ? "secondary" : "primary"}" type="button" data-page="species" data-archive-species-guide>去图鉴添加品种</button>
+    </div>`;
+}
+
 function pageAdd() {
-  const kept = state.keptSpecies.length ? state.keptSpecies.map(code => speciesByCode(code)).filter(Boolean) : speciesList.slice(0, 8);
   const today = formatDate(new Date());
   const draftSpeciesCode = turtleFormValue("speciesCode", state.selectedSpeciesCode);
   const draftHealth = turtleFormValue("health", "健康");
@@ -6209,12 +6291,7 @@ function pageAdd() {
             <div><button class="secondary" type="button" data-photo-input-button>上传照片</button><button class="danger-link" type="button" data-photo-clear>清除</button></div>
           </div>
           <input class="hidden-file" type="file" accept="image/*" lang="zh-CN" title="选择图片" aria-label="选择图片" data-photo-input>
-          <div class="label">品种代码 <span class="required">*</span></div>
-          <select class="select" name="speciesCode" required>
-            <option value="">请选择品种</option>
-            ${kept.map(s => `<option value="${s.code}" ${draftSpeciesCode === s.code ? "selected" : ""}>${s.isCustom ? "自建" : s.code} · ${escapeHtml(s.name)}</option>`).join("")}
-          </select>
-          <button class="text-green add-species-hint" type="button" data-page="species">没有这个品种？去图鉴添加</button>
+          ${archiveSpeciesField("speciesCode", draftSpeciesCode)}
           <div class="label">龟池</div>
           <select class="select" name="poolId">
             <option value="">暂不关联龟池</option>
@@ -6825,7 +6902,7 @@ function setupDashboardTurtleReorder() {
     if (active.lastY < edge) speed = -Math.min(16, (edge - active.lastY) * 0.2);
     else if (active.lastY > viewportHeight - edge) speed = Math.min(16, (active.lastY - (viewportHeight - edge)) * 0.2);
     if (!speed) return;
-    window.scrollBy(0, speed);
+    scrollPageBy(0, speed);
     placeDraggingRow(active, active.lastY);
     autoScrollFrame = window.requestAnimationFrame(runAutoScroll);
   };
@@ -7269,9 +7346,7 @@ function ledgerForm() {
           </select>
         ` : ""}
         ${isPurchase ? `
-          <div class="label">品种代码</div>
-          <select class="select" name="purchaseSpeciesCode" required><option value="">请选择品种</option>${accountSpeciesList().map(s => `<option value="${s.code}" ${ledgerFormSelected("purchaseSpeciesCode", s.code)}>${s.isCustom ? "自建" : s.code} · ${escapeHtml(s.name)}</option>`).join("")}</select>
-          <button class="text-green" type="button" data-page="species" style="margin-top:8px;">没有这个品种？去图鉴添加</button>
+          ${archiveSpeciesField("purchaseSpeciesCode", ledgerFormValue("purchaseSpeciesCode"))}
           <div class="label">龟龟昵称</div>
           <input class="field" name="purchaseCode" value="${escapeHtml(ledgerFormValue("purchaseCode"))}" placeholder="例如：小核桃、黑豆、将军">
           <div class="label">性别 <span class="required">*</span></div>
@@ -8433,6 +8508,37 @@ function marketAlertsContext() {
     } };
 }
 
+// Keep iOS tab chrome out of the root WebKit scrolling layer.
+function iosTabScroller() {
+  return document.documentElement.classList.contains("ios-tab-scroll")
+    ? $app.querySelector(":scope > main") : null;
+}
+
+function syncIOSTabScroll() {
+  const main = $app.querySelector(":scope > main");
+  const active = !forceUpdateState.required && window.Capacitor?.getPlatform?.() === "ios" &&
+    window.Capacitor?.isNativePlatform?.() === true &&
+    (BOTTOM_NAV_ROOT_PAGES.has(state.page) || state.page === "mine") &&
+    Boolean(main && $app.querySelector(":scope > .bottom-nav"));
+  document.documentElement.classList.toggle("ios-tab-scroll", active);
+  if (active && state.page === "mine") {
+    const profile = $app.querySelector(":scope > .space-profile-card");
+    if (profile) main.prepend(profile);
+  }
+}
+
+function pageScrollY() {
+  return iosTabScroller()?.scrollTop ?? (window.scrollY || 0);
+}
+
+function scrollPageTo(...args) {
+  (iosTabScroller() || window).scrollTo(...args);
+}
+
+function scrollPageBy(...args) {
+  (iosTabScroller() || window).scrollBy(...args);
+}
+
 function render() {
   if (!forceUpdateState.required && $app.deferEdgeGestureRender?.()) return;
   marketSearchRenderDeferred = false;
@@ -8445,6 +8551,7 @@ function render() {
   applyTheme();
   if (forceUpdateState.required) {
     $app.innerHTML = forceUpdatePage();
+    syncIOSTabScroll();
     bindForceUpdateActions();
     window.TurtleUI?.enhance($app);
     return;
@@ -8509,10 +8616,10 @@ function render() {
   };
   // Reset before replacing content. Resetting after a complete DOM replacement
   // makes iOS recompute fixed surfaces twice and causes the visible tab-bar hop.
-  const preservedScrollY = pendingPageScrollReset ? 0 : (window.scrollY || 0);
+  const preservedScrollY = pendingPageScrollReset ? 0 : (pageScrollY() || 0);
   if (pendingPageScrollReset) {
     pendingPageScrollReset = false;
-    if (window.scrollY > 1) window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    if (pageScrollY() > 1) scrollPageTo({ top: 0, left: 0, behavior: "auto" });
   }
   // Root tab pages retain one physical bottom-nav node between renders. Its
   // safe-area geometry and compositor layer therefore remain stable while only
@@ -8527,7 +8634,8 @@ function render() {
     incomingBottomNav.replaceWith(persistentBottomNav);
     syncPersistentBottomNav(persistentBottomNav);
   }
-  if (preservedScrollY > 0) window.scrollTo({ top: preservedScrollY, left: 0, behavior: "auto" });
+  syncIOSTabScroll();
+  if (preservedScrollY > 0) scrollPageTo({ top: preservedScrollY, left: 0, behavior: "auto" });
   if (pendingPageEnterMotion) {
     pendingPageEnterMotion = false;
     $app.classList.remove("page-enter-motion");
@@ -8620,7 +8728,7 @@ function scrollCommunityChatToLatest() {
   // positioning pass reaches the newest message without waiting for media.
   const anchor = list.querySelector(".community-chat-bottom-anchor");
   if (anchor) anchor.scrollIntoView({ block: "end", inline: "nearest", behavior: "auto" });
-  else window.scrollTo({ top: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight), left: 0, behavior: "auto" });
+  else scrollPageTo({ top: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight), left: 0, behavior: "auto" });
 }
 
 function accountCodeCooldownRemaining() {
@@ -8678,7 +8786,7 @@ function bindArchiveDirectoryPickers() {
 function archiveSpeciesName(turtle, catalogue = null) {
   const name = String(turtle.speciesName || "").trim();
   if (name && !/[\uFFFD\u0000]/.test(name)) return name;
-  const known = catalogue ? catalogue.find(s => s.code === turtle.speciesCode) : speciesByCode(turtle.speciesCode);
+  const known = catalogue ? catalogSpeciesByCode.get(turtle.speciesCode) : speciesByCode(turtle.speciesCode);
   if (known?.name && !/[\uFFFD\u0000]/.test(known.name)) return known.name;
   return turtle.speciesCode ? `品种待确认（${turtle.speciesCode}）` : "品种待确认";
 }
@@ -8804,7 +8912,7 @@ function openArchiveDirectory(select, trigger) {
     return node;
   };
   const photo = (entry, species = false) => {
-    const catalogue = source ? speciesList.find(item => item.code === entry.turtle.speciesCode) : speciesByCode(entry.turtle.speciesCode);
+    const catalogue = source ? catalogSpeciesByCode.get(entry.turtle.speciesCode) : speciesByCode(entry.turtle.speciesCode);
     const fallback = speciesPhoto(catalogue);
     const image = element("img", "directory-photo");
     const archivePhoto = entry.members.find(turtle => turtle.photo)?.photo;
@@ -10827,7 +10935,8 @@ function scheduleMarketPaginationCheck(userRetry = false) {
     const rect = sentinel.getBoundingClientRect();
     const viewportBottom = window.visualViewport
       ? window.visualViewport.offsetTop + window.visualViewport.height : window.innerHeight;
-    if (rect.bottom < 0 || rect.top > viewportBottom + 220) return;
+    const scrollBounds = iosTabScroller()?.getBoundingClientRect();
+    if (rect.bottom < (scrollBounds?.top || 0) || rect.top > Math.min(viewportBottom, scrollBounds?.bottom ?? viewportBottom) + 220) return;
     if (marketLoadRetryKey === marketFeedRequestKey() && !retry) return;
     void loadMoreMarketListings();
   });
@@ -10849,6 +10958,9 @@ function setupMarketPaginationRecovery() {
   }, { passive: true });
   document.addEventListener("touchcancel", () => { touchStartY = null; }, { passive: true });
   window.addEventListener("scroll", () => scheduleMarketPaginationCheck(), { passive: true });
+  $app.addEventListener("scroll", event => {
+    if (event.target === iosTabScroller()) scheduleMarketPaginationCheck();
+  }, { capture: true, passive: true });
   window.addEventListener("wheel", event => { if (event.deltaY > 0) scheduleMarketPaginationCheck(true); }, { passive: true });
   window.addEventListener("resize", () => scheduleMarketPaginationCheck(), { passive: true });
   window.addEventListener("online", () => scheduleMarketPaginationCheck(true));
@@ -11051,8 +11163,6 @@ function bindMarketSpeciesPicker() {
     activeIndex = -1;
   };
 
-  const findMatches = query => marketPublishSpeciesMatches(query);
-
   const updateActiveOption = nextIndex => {
     const buttons = Array.from(options.querySelectorAll("[data-market-species-option]"));
     if (!buttons.length) return;
@@ -11088,15 +11198,18 @@ function bindMarketSpeciesPicker() {
   };
 
   const renderOptions = query => {
-    matches = findMatches(query);
+    const results = marketSpeciesMatches(query, { publishable: !query.trim() });
+    matches = results.filter(item => !isMarketProhibitedSpecies(item));
     activeIndex = -1;
-    const rawMatches = marketSpeciesMatches(query);
-    options.innerHTML = matches.length
-      ? matches.map((item, index) => `
-          <button type="button" id="marketSpeciesOption${index}" role="option" aria-selected="false" data-market-species-option="${escapeHtml(item.code)}">
-            <strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.code)}</small>
-          </button>`).join("")
-      : `<p>${rawMatches.length ? marketSpeciesRestrictionMessage() : "没有找到匹配品种"}</p>`;
+    options.innerHTML = results.length
+      ? results.map((item, index) => {
+        const restricted = isMarketProhibitedSpecies(item);
+        const attrs = restricted ? "disabled aria-disabled=\"true\" data-market-species-restricted" : `data-market-species-option="${escapeHtml(item.code)}"`;
+        return `<button type="button" id="marketSpeciesOption${index}" role="option" aria-selected="false" ${attrs}>
+          <strong>${escapeHtml(item.name)}</strong><small>${restricted ? "平台禁售" : escapeHtml(item.code)}</small>
+        </button>`;
+      }).join("")
+      : "<p>没有找到匹配品种</p>";
     options.hidden = false;
     search.setAttribute("aria-expanded", "true");
     options.querySelectorAll("[data-market-species-option]").forEach(button => {
@@ -11610,14 +11723,17 @@ async function submitMarketListing(event) {
   const localMedia = (state.marketDraftMedia || []).length
     ? state.marketDraftMedia.slice(0, 9)
     : turtle?.photo ? [{ dataUrl: turtle.photo, type: "image" }] : [];
-  const speciesCode = String(form.get("speciesCode") || "");
-  const species = speciesByCode(speciesCode);
+  const species = speciesByCode(String(form.get("speciesCode") || ""));
   if (!species) return toast("请从搜索结果中选择品种");
-  if (isMarketProhibitedSpecies(species)) return toast(marketSpeciesRestrictionMessage());
+  const editingListing = editingListingId && ((state.myMarketListings || []).find(item => item.id === editingListingId) ||
+    (state.marketListings || []).find(item => item.id === editingListingId));
+  if (isMarketProhibitedSpecies(species) || isMarketRestrictedRecord(turtle) || isMarketRestrictedRecord(editingListing)) {
+    return toast(marketSpeciesRestrictionMessage());
+  }
   const payload = {
     turtleId: String(form.get("turtleId") || ""),
     title: String(form.get("title") || "").trim(),
-    speciesCode,
+    speciesCode: species.code,
     speciesName: species?.name || turtle?.speciesName || "",
     stage: String(form.get("stage") || ""),
     gender: String(form.get("gender") || "未知"),
@@ -12058,6 +12174,7 @@ async function mutateMarketAvailability(listingId, action) {
     }
     marketLastLoadedAt = Date.now();
     setState({
+      ...invalidateOlderMarketReads(),
       myMarketListings: normalizeMarketListings(result.myListings || []),
       marketListings: normalizeMarketListings(result.listings || [])
     }, { skipCloud: true });
@@ -12118,6 +12235,7 @@ function openChatMarketListing(listingId) {
 async function contactMarketSeller(listingId, buying = false) {
   const listing = (state.marketListings || []).find(item => item.id === listingId);
   if (!listing || listing.isOwn || listing.pendingLocal) return;
+  if (isMarketRestrictedRecord(listing)) return toast(marketSpeciesRestrictionMessage());
   if (!canUseCommunity()) return;
   const requestContext = communityChatRequestContext(listing.sellerId);
   void recordMarketWant(listingId);
@@ -12467,6 +12585,7 @@ function openMarketTopService() {
 function openMarketPlatformService(listingId) {
   const listing = (state.marketListings || []).find(item => item.id === listingId);
   if (!listing || listing.pendingLocal || listing.status !== "active") return;
+  if (isMarketRestrictedRecord(listing)) return toast(marketSpeciesRestrictionMessage());
   window.TurtleMediation?.start(mediationContext(), listing);
 }
 
@@ -16500,6 +16619,15 @@ function speciesSelectionPatch(code) {
   return {};
 }
 
+function saveKeptSpecies(patch, code) {
+  const selection = code ? speciesSelectionPatch(code) : {};
+  if (!selection.page) return setState(patch);
+  const origin = edgeBackSnapshots.at(-1);
+  if (origin?.page === selection.page) edgeBackSnapshots.pop();
+  setState({ ...patch, ...selection }, { skipEdgeSnapshot: true, pageMotion: "none" });
+  if (origin?.page === selection.page) scrollPageTo({ top: origin.scrollY, left: 0, behavior: "auto" });
+}
+
 function addKeptSpecies(code) {
   if (!requireLogin()) return;
   const species = speciesByCode(code);
@@ -16510,12 +16638,13 @@ function addKeptSpecies(code) {
     return;
   }
   const keptSpecies = state.keptSpecies.includes(code) ? state.keptSpecies : [...state.keptSpecies, code];
-  setState({ keptSpecies, ...speciesSelectionPatch(code) });
+  saveKeptSpecies({ keptSpecies }, code);
   toast(`${species.name} 已加入常用品种`);
 }
 
 function filterSpeciesRows(value) {
   const query = String(value || "").trim().toLowerCase();
+  let matchCount = 0;
   document.querySelectorAll(".species-section").forEach(section => {
     let visible = 0;
     section.querySelectorAll(".species-row").forEach(row => {
@@ -16526,7 +16655,10 @@ function filterSpeciesRows(value) {
     });
     section.hidden = visible === 0;
     section.style.display = visible ? "" : "none";
+    matchCount += visible;
   });
+  const empty = document.querySelector("[data-species-empty]");
+  if (empty) empty.hidden = matchCount > 0;
 }
 
 function removeKeptSpecies(code) {
@@ -17204,12 +17336,13 @@ function submitTurtleDetail(event) {
   const medicalExpense = Number(medicalText || 0);
   const health = ["健康", "生病"].includes(String(form.get("health") || "")) ? String(form.get("health")) : (turtle.health || "健康");
   const sameHealth = health === (turtle.health || "健康");
+  const sameSpecies = species.code === speciesCodeKey(turtle.speciesCode);
   const recordingGrowthTask = (state.memos || []).some(memo => memo.id === state.growthTaskMemoId && memo.growthReminder && memo.turtleId === turtle.id);
   const updated = {
     ...turtle,
     code: String(form.get("code") || "").trim() || turtle.code,
-    speciesCode: species.code,
-    speciesName: species.name,
+    speciesCode: sameSpecies ? turtle.speciesCode : species.code,
+    speciesName: sameSpecies && turtle.speciesName ? turtle.speciesName : species.name,
     poolId: (state.turtlePools || []).some(pool => pool.id === String(form.get("poolId") || "")) ? String(form.get("poolId") || "") : "",
     gender: String(form.get("gender") || "未知"),
     weight,
@@ -17327,7 +17460,7 @@ function submitTurtle(event) {
   if (!requireArchiveCapacity()) return;
   const form = new FormData(event.currentTarget);
   const species = speciesByCode(form.get("speciesCode"));
-  if (!species) return toast("先选择一个品种，再保存档案");
+  if (!species) return toast(event.currentTarget.elements?.speciesCode?.disabled ? "请先到图鉴添加品种，再保存档案" : "先选择一个品种，再保存档案");
   if (state.archivePurchaseMode === "batch") return submitBatchTurtles(form, species, event.currentTarget);
   const weight = Number(form.get("weight"));
   const carapaceLength = Number(form.get("carapaceLength"));
@@ -17724,8 +17857,8 @@ function scrollFormBelowTopbar(selector) {
   $app.classList.remove("page-enter-motion");
   // Include the fixed header's safe-area offset so the form heading remains visible on iOS.
   const topbarBottom = Math.max(0, document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0);
-  const targetTop = window.scrollY + form.getBoundingClientRect().top - topbarBottom - 10;
-  window.scrollTo({ top: Math.max(0, targetTop), left: 0, behavior: "smooth" });
+  const targetTop = pageScrollY() + form.getBoundingClientRect().top - topbarBottom - 10;
+  scrollPageTo({ top: Math.max(0, targetTop), left: 0, behavior: "smooth" });
 }
 
 async function readLedgerPhoto(event) {
@@ -18080,7 +18213,7 @@ function submitLedgerRecord(event) {
   if (type === "purchase" && !turtle) {
     if (!requireArchiveCapacity()) return;
     const species = speciesByCode(form.get("purchaseSpeciesCode"));
-    if (!species) return toast("收购记录需要选择品种");
+    if (!species) return toast(event.currentTarget.elements?.purchaseSpeciesCode?.disabled ? "请先到图鉴添加收购品种" : "收购记录需要选择品种");
     const code = form.get("purchaseCode") || TurtleBatches.codeAllocator(species.isCustom ? species.name : species.code, state.turtles, state.ledgerRecords)();
     turtle = {
       id: crypto.randomUUID(),
@@ -19208,7 +19341,9 @@ function pullRefreshSupportedPage() {
 }
 
 function pageAtTop() {
-  return Math.max(window.scrollY || 0, document.documentElement.scrollTop || 0, document.body.scrollTop || 0) <= 2;
+  const scroller = iosTabScroller();
+  if (scroller) return scroller.scrollTop <= 2;
+  return Math.max(pageScrollY(), document.documentElement.scrollTop || 0, document.body.scrollTop || 0) <= 2;
 }
 
 function pullRefreshIndicator() {
@@ -19226,15 +19361,13 @@ function pullRefreshIndicator() {
 
 function setPullRefreshIndicator({ distance = 0, ready = false, refreshing = false } = {}) {
   const indicator = pullRefreshIndicator();
-  // Do not translate the page while a pull is in progress.  WKWebView keeps
-  // ownership of vertical scrolling, inertia and the iOS rubber-band; this
-  // overlay only reports the refresh state in the exposed area.
+  // Report the gesture without translating the page or the navigation bars.
   const pageOffset = 0;
   const indicatorOffset = refreshing
     ? 58
     : Math.min(PULL_REFRESH_MAX_OFFSET, Math.round(104 * (1 - Math.exp(-Math.max(0, distance) / 80))));
   const indicatorHeight = 36;
-  // The indicator is vertically centred in the newly exposed blank area.
+  // Show the indicator just below the stationary header or search dock.
   const indicatorDistance = indicatorOffset > 0 ? (indicatorOffset + indicatorHeight) / 2 : 0;
   const label = refreshing ? "正在刷新中···" : ready ? "松开即可刷新" : "下拉刷新";
   indicator.style.setProperty("--pull-refresh-distance", `${indicatorDistance}px`);
@@ -19313,6 +19446,7 @@ function setupPullToRefresh() {
     if (!$app.contains(event.target) || event.target.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [aria-modal='true'], [class*='-overlay']")) return;
     // A list inside a dialog/card owns its vertical gesture, even at its edge.
     for (let node = event.target; node && node !== $app; node = node.parentElement) {
+      if (node === iosTabScroller()) break;
       if (node.scrollHeight > node.clientHeight && /auto|scroll/.test(getComputedStyle(node).overflowY)) return;
     }
     // A conversation row owns horizontal tracking from the very first touch.
@@ -19320,7 +19454,8 @@ function setupPullToRefresh() {
     // at its top edge.
     if (event.target.closest(".message-friend-swipe")) return;
     if (document.documentElement.classList.contains("keyboard-open")) return;
-    const headerBottom = document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0;
+    const scroller = iosTabScroller();
+    const headerBottom = scroller?.getBoundingClientRect().top ?? (document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0);
     document.body.style.setProperty("--pull-refresh-header-bottom", `${Math.max(0, headerBottom)}px`);
     pullRefreshState = {
       ...pullRefreshState,
