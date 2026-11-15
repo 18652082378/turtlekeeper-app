@@ -9,6 +9,12 @@ async function main() {
     normalize: data => data });
   const req = (action, extra = {}, who = 1) => service.action({ action, phone: `1390000000${who}`, token: 'token', teamId: 'fixture-team', month, ...extra });
   const edit = async (action, extra, who = 1) => req(action, { revision: (await req('get', {}, who)).team.revision, ...extra }, who);
+  const freeOwner = db.users['13900000008'];
+  assert.equal(freeOwner.teamEntitlement, undefined);
+  assert.equal((await req('list', {}, 8)).canCreate, true);
+  const freeTeam = (await req('create', {}, 8)).team;
+  assert.equal(freeTeam.active, true);
+  assert.equal((await req('get', { teamId: freeTeam.id }, 8)).team.id, freeTeam.id);
   await assert.rejects(req('get', {}, 4), e => e.status === 403);
   await assert.rejects(service.action({ action: 'list', phone: '13900000001', token: 'fake' }), e => e.status === 401);
   const restricted = (await req('get', {}, 3)).team;
@@ -50,10 +56,11 @@ async function main() {
   await edit('member', { id: 'member-2', remove: true });
   await assert.rejects(req('get', {}, 2), e => e.status === 403);
   const owner = db.users['13900000001']; owner.teamEntitlement.expiresAt = '2020-01-01';
-  owner.data.subscriptionPlan = 'pro';
-  assert.equal((await req('get')).team.active, false);
-  await assert.rejects(edit('task', { title: 'should deny', due: `${month}-10`, assignee: 'owner' }), e => e.status === 403);
-  assert.equal((await req('get', {}, 3)).team.turtles.length, 0, 'expiry must hide shared records');
+  assert.equal((await req('get')).team.active, true);
+  await edit('task', { title: '会员到期后仍可分配任务', due: `${month}-10`, assignee: 'owner' });
+  const expiredTeamMember = (await req('get', {}, 3)).team;
+  assert.ok(expiredTeamMember.turtles.length > 0);
+  assert.deepEqual(expiredTeamMember.ledger, [], 'free access still respects module permissions');
   const changed = structuredClone(owner.data); changed.turtles.pop(); recordAccountChange(owner, owner.data, changed);
   assert(owner.teamSpace.logs[0].summary.includes('删除 1')); assert(!Object.hasOwn(owner.teamSpace.logs[0], 'snapshot'));
   const now = Date.now(), token = '11111111-1111-4111-8111-111111111111';
@@ -85,6 +92,6 @@ async function main() {
   assert.equal(persisted.appleAppAccountToken, token);
   assert.deepEqual(persisted.teamEntitlement, owner.teamEntitlement);
   await store.close();
-  console.log(`PASS: team authorization, isolation, invitations, approval, conflicts, financial accuracy, exports, expiry and Apple binding (${writes} durable writes)`);
+  console.log(`PASS: free team creation, expired-owner access, invitations, permissions, data isolation, approvals, exports and historical Apple binding (${writes} durable writes)`);
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

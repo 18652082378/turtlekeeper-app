@@ -7,16 +7,14 @@ html { --turtle-emote-panel-height:0px; }
 html.turtle-emote-open { --turtle-emote-panel-height:min(310px, 44dvh); }
 html #app .turtle-emote-enabled .turtle-emote-toggle { display:grid; place-items:center; flex:0 0 40px; width:40px; min-width:40px; height:44px; min-height:44px; padding:6px; border:0; border-radius:10px; color:var(--text); background:transparent; }
 .turtle-emote-toggle svg { width:26px; height:26px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
-html.community-mobile-ui #app .web-community-detail .forum-reply-composer.turtle-emote-enabled .turtle-emote-toggle { flex-basis:44px; width:44px; min-width:44px; background:transparent; }
-html.community-mobile-ui #app .web-community-detail .forum-reply-composer.turtle-emote-enabled .turtle-emote-toggle svg { width:29px; height:29px; }
+html.community-mobile-ui #app > .forum-reply-composer.turtle-emote-enabled .turtle-emote-toggle { flex-basis:44px; width:44px; min-width:44px; background:transparent; }
+html.community-mobile-ui #app > .forum-reply-composer.turtle-emote-enabled .turtle-emote-toggle svg { width:29px; height:29px; }
 html #app .turtle-emote-enabled .turtle-emote-toggle[aria-expanded="true"] { color:var(--primary); background:var(--soft); }
-html.community-mobile-ui #app .web-community-detail .forum-reply-composer.turtle-emote-enabled { bottom:calc(var(--forum-keyboard-bottom, 0px) + var(--turtle-emote-panel-height)); gap:6px; }
-html.turtle-emote-open.community-mobile-ui #app .web-community-detail .forum-reply-composer { padding-bottom:8px; }
+html.community-mobile-ui #app > .forum-reply-composer.turtle-emote-enabled { gap:6px; }
 html #app .community-chat-form.turtle-emote-enabled { grid-template-columns:minmax(0,1fr) 40px 42px; gap:6px; bottom:calc(var(--forum-keyboard-bottom, 0px) + var(--turtle-emote-panel-height)); }
 html #app .community-chat-form.turtle-emote-enabled.has-send-button { grid-template-columns:minmax(0,1fr) 40px 42px auto; }
 html:is(.keyboard-open,.turtle-emote-open) #app .community-chat-form.turtle-emote-enabled { padding-bottom:8px; }
 html.turtle-emote-open #app .community-chat-list { padding-bottom:calc(92px + var(--turtle-emote-panel-height)); }
-html.turtle-emote-open.community-mobile-ui #app .web-community-detail { padding-bottom:calc(var(--forum-composer-height,104px) + var(--turtle-emote-panel-height) + 12px) !important; }
 html #app .turtle-emote-panel { position:fixed; z-index:49; left:50%; bottom:0; transform:translateX(-50%); width:min(100%,480px); height:var(--turtle-emote-panel-height); box-sizing:border-box; display:flex; flex-direction:column; background:var(--card-bg,#fff); border-top:1px solid var(--divider); padding:0 8px env(safe-area-inset-bottom,0px); color:var(--text); }
 html #app .turtle-emote-panel[hidden] { display:none; }
 .turtle-emote-tabs { display:flex; flex:0 0 auto; gap:3px; align-items:center; padding:5px 2px; border-bottom:1px solid var(--divider); }

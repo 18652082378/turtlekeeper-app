@@ -137,9 +137,9 @@ assert.deepEqual(zlib.gunzipSync(bytes), fs.readFileSync(path.join(__dirname, 'd
       }
       assert.ok(ready, output);
       let result = await post('/api/market/detail', { listingId: TARGET.id }); assert.equal(result.listing.impressionCount, 134); assert.equal(result.listing.wantCount, 1); assert.equal(result.listing.viewCount, 26);
-      result = await post('/api/market/list', { keyword: TARGET.title }); assert.equal(result.listings.find(item => item.id === TARGET.id).wantCount, 1);
-      result = await post('/api/market/impression', { listingId: TARGET.id }); assert.equal(result.impressionCount, 135); assert.equal(result.wantCount, 1);
-      result = await post('/api/market/view', { listingId: TARGET.id }); assert.equal(result.viewCount, 27); assert.equal(result.wantCount, 1);
+      result = await post('/api/market/list', { phone, token, keyword: TARGET.title }); assert.equal(result.listings.find(item => item.id === TARGET.id).wantCount, 1);
+      result = await post('/api/market/impression', { phone, token, listingId: TARGET.id }); assert.equal(result.impressionCount, 135); assert.equal(result.wantCount, 1);
+      result = await post('/api/market/view', { phone, token, listingId: TARGET.id }); assert.equal(result.viewCount, 27); assert.equal(result.wantCount, 1);
       for (let i = 0; i < 2; i++) { result = await post('/api/market/want', { phone, token, listingId: TARGET.id }); assert.equal(result.wantCount, 2); }
       const stored = JSON.parse(fs.readFileSync(path.join(apiDir, 'data/app-data.json')));
       assert.deepEqual(targetListingForTest(stored).wantedPhones, [phone]); assert.equal(targetListingForTest(stored).manualMetricAdjustment.operation, OPERATION);

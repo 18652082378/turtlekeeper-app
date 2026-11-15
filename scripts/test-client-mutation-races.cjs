@@ -4,8 +4,7 @@ const { engine, launchBrowser, artifactName } = require('./browser-test-engine.c
 const root = path.resolve(__dirname, '..');
 (async () => {
   const browser = await launchBrowser();
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
-  await context.route('**/*', route => {
+  const routeFixture = route => {
     const url = new URL(route.request().url());
     if (url.hostname !== 'client-mutation.test') return route.abort();
     if (url.pathname === '/config.js') return route.fulfill({ contentType: 'text/javascript', body: 'window.TURTLE_API_BASE_URL="https://client-mutation.test";' });
@@ -13,9 +12,11 @@ const root = path.resolve(__dirname, '..');
     const file = path.resolve(root, '.' + (url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname)));
     if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
     return route.fulfill({ body: fs.readFileSync(file), contentType: ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml' })[path.extname(file)] || 'application/octet-stream' });
-  });
+  };
   const outcomes = [];
   async function check(name, run) {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    await context.route('**/*', routeFixture);
     const page = await context.newPage();
     try {
       await page.goto('https://client-mutation.test/?skipIntro=1');
@@ -63,7 +64,7 @@ const root = path.resolve(__dirname, '..');
       await run(page);
       outcomes.push({ name, pass: true });
     } catch (error) { outcomes.push({ name, pass: false, error: error.message }); }
-    finally { await page.close(); }
+    finally { await context.close(); }
   }
   try {
     await check('reconnect joins a failed cold-start load and retries before flushing the journal', async page => {
@@ -74,6 +75,7 @@ const root = path.resolve(__dirname, '..');
         window.dispatchEvent(new Event('online'));
         window.dispatchEvent(new Event('online'));
       });
+      await page.waitForFunction(() => auditLoadRequests.length > 0);
       assert.equal(await page.evaluate(() => auditLoadRequests.length), 1, 'concurrent reconnects join the cold-start request');
       await page.evaluate(() => auditLoadRequests[0].resolve({ ok: true }));
       await page.waitForFunction(() => auditLoadRequests.length === 2);
@@ -86,11 +88,19 @@ const root = path.resolve(__dirname, '..');
       const result = await page.evaluate(async oldResult => {
         cloudHydrationComplete = false; cloudHydrationStarted = false; cloudHydrationTask = null;
         window.hydrationLoads = []; window.hydrationMigrations = [];
-        refreshCloudAccountFromServer = () => new Promise(resolve => hydrationLoads.push({ phone: state.loggedInPhone, resolve }));
+        let firstStarted, secondStarted;
+        const firstRequest = new Promise(resolve => { firstStarted = resolve; });
+        const secondRequest = new Promise(resolve => { secondStarted = resolve; });
+        refreshCloudAccountFromServer = () => new Promise(resolve => {
+          hydrationLoads.push({ phone: state.loggedInPhone, resolve });
+          if (hydrationLoads.length === 1) firstStarted(); else secondStarted();
+        });
         migrateEmbeddedImagesToCloud = async () => { hydrationMigrations.push(state.loggedInPhone); return false; };
         const oldLoad = startCloudSessionHydration();
+        await firstRequest;
         state = { ...state, loggedInPhone: 'audit-b', cloudToken: 'token-b' };
         const newLoad = startCloudSessionHydration();
+        await secondRequest;
         hydrationLoads[0].resolve(oldResult === 'loaded'); await oldLoad;
         const during = { owner: cloudHydrationTask?.phone, started: cloudHydrationStarted, migrations: [...hydrationMigrations] };
         cloudHydrationComplete = true; hydrationLoads[1].resolve(true); await newLoad;

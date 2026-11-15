@@ -23,14 +23,44 @@
   const originalDetail = pageCommunityPostDetail, originalSubmitComment = submitCommunityComment;
   let detailOwner = '', detailDrafts = new Map(), detailSending = new Map(), detailAttempts = new Map();
   const detailActive = () => state.page === 'communityPostDetail';
+  const replyFormSelector = '.forum-reply-composer';
   let accessoryDesired = null, accessoryQueue = Promise.resolve(), composerObserved = null, composerObserver = null;
+  let replyKeyboardInset = 0, replyKeyboardTarget = 0, replyKeyboardFrame = 0;
+  let replyViewportHeight = 0, replyKeyboardFullHeight = 0, replyKeyboardClosing = false;
   function iosKeyboard() {
     const cap = window.Capacitor;
     if (cap?.getPlatform?.() !== 'ios' || !cap.isNativePlatform?.() || !cap.isPluginAvailable?.('Keyboard')) return null;
     return cap.Plugins?.Keyboard || cap.registerPlugin?.('Keyboard');
   }
+  function placeReplyDock(form) {
+    // The native plugin can resize the WebView after the keyboard animation.
+    // Subtract that resize so the toolbar stays at the same screen position.
+    if (!form) return;
+    const tracking = replyKeyboardInset > 0 || replyKeyboardTarget > 0 || replyKeyboardFrame !== 0 || replyKeyboardClosing;
+    form.style.setProperty('--reply-keyboard-height', replyKeyboardInset + 'px');
+    form.style.setProperty('--reply-viewport-height', replyViewportHeight + 'px');
+    form.style.setProperty('--reply-safe-fraction', String(Math.max(0, 1 - replyKeyboardInset / (replyKeyboardFullHeight || 1))));
+    form.classList.toggle('reply-keyboard-positioned', tracking);
+  }
+  function animateReplyKeyboard(nextInset) {
+    if (!composerObserved || nextInset === replyKeyboardTarget) return;
+    if (nextInset && !replyKeyboardTarget && !replyKeyboardInset) replyViewportHeight = Math.max(window.innerHeight, mobileKeyboardBaseHeight);
+    if (nextInset) replyKeyboardFullHeight = nextInset;
+    replyKeyboardTarget = nextInset;
+    cancelAnimationFrame(replyKeyboardFrame);
+    const from = replyKeyboardInset, start = performance.now();
+    const duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 250;
+    const tick = now => {
+      const progress = duration ? Math.min(1, (now - start) / duration) : 1;
+      const eased = progress * progress * (3 - 2 * progress);
+      replyKeyboardInset = from + (nextInset - from) * eased;
+      replyKeyboardFrame = progress < 1 ? requestAnimationFrame(tick) : 0;
+      placeReplyDock(composerObserved);
+    };
+    tick(start);
+  }
   function syncKeyboard() {
-    const form = detailActive() ? document.querySelector('.web-community-detail .forum-reply-composer') : null;
+    const form = detailActive() ? $app.querySelector(replyFormSelector) : null;
     if (form !== composerObserved) {
       composerObserver?.disconnect(); composerObserved = form;
       if (form && typeof ResizeObserver === 'function') {
@@ -39,9 +69,17 @@
         });
         composerObserver.observe(form);
       }
-      if (!form) document.documentElement.style.removeProperty('--forum-composer-height');
+      if (!form) {
+        cancelAnimationFrame(replyKeyboardFrame);
+        replyKeyboardFrame = replyKeyboardInset = replyKeyboardTarget = 0;
+        replyKeyboardClosing = false;
+        document.documentElement.style.removeProperty('--forum-composer-height');
+      }
     }
-    if (form) document.documentElement.style.setProperty('--forum-composer-height', Math.ceil(form.getBoundingClientRect().height) + 'px');
+    if (form) {
+      if (iosKeyboard()) placeReplyDock(form);
+      document.documentElement.style.setProperty('--forum-composer-height', Math.ceil(form.getBoundingClientRect().height) + 'px');
+    }
     const keyboard = iosKeyboard();
     if (!keyboard?.setAccessoryBarVisible) return;
     const visible = !detailActive() && state.page !== 'communityChat';
@@ -50,6 +88,20 @@
     // Serialize bridge calls so a late detail response cannot hide another page's toolbar.
     accessoryQueue = accessoryQueue.then(() => keyboard.setAccessoryBarVisible({ isVisible: visible })).catch(() => {
       if (accessoryDesired === visible) accessoryDesired = null;
+    });
+  }
+  for (const name of ['keyboardWillShow', 'keyboardDidShow', 'keyboardWillHide', 'keyboardDidHide']) {
+    window.addEventListener(name, event => {
+      if (!detailActive() || !iosKeyboard()) return;
+      const height = Number(event.keyboardHeight ?? event.detail?.keyboardHeight);
+      const showing = name === 'keyboardWillShow' || name === 'keyboardDidShow';
+      if (showing && Math.abs((window.visualViewport?.scale || 1) - 1) > .05) return;
+      const inset = showing && height > 80 ? height : 0;
+      if (inset && name === 'keyboardDidShow' && replyKeyboardTarget > 0 && Math.abs(inset - replyKeyboardTarget) <= 1) return;
+      replyKeyboardClosing = name === 'keyboardWillHide' && (replyKeyboardClosing || replyKeyboardTarget > 0);
+      syncKeyboard();
+      if (!showing && name === 'keyboardDidHide' && replyKeyboardTarget === 0) return;
+      animateReplyKeyboard(inset);
     });
   }
   function prepareDetailOwner() {
@@ -172,7 +224,7 @@
     form.setAttribute('aria-busy', String(pending));
   }
   function focusReply() {
-    const input = document.querySelector('.web-community-detail-discussion input[name="content"]');
+    const input = $app.querySelector(`${replyFormSelector} input[name="content"]`);
     if (!input || input.disabled) return;
     input.focus({ preventScroll: true });
   }
@@ -185,14 +237,14 @@
   }
   function refreshReplyTarget() {
     if (!detailActive()) return false;
-    const form = document.querySelector('.web-community-detail .forum-reply-composer');
+    const form = $app.querySelector(replyFormSelector);
     if (!form) return false;
     // Keep the same focused input, selection and scroll position when changing recipients.
     updateReplyTarget(form); focusReply(); return true;
   }
   function dismissReplyKeyboard() {
     const input = document.activeElement;
-    if (!detailActive() || !input?.matches?.('.web-community-detail .forum-reply-composer input')) return;
+    if (!detailActive() || !input?.matches?.('.forum-reply-composer input')) return;
     const form = input.closest('form');
     if (detailOwner === owner()) detailDrafts.set(String(form.dataset.communityCommentForm || ''), input.value);
     input.blur();
@@ -266,7 +318,7 @@
       return;
     }
     if (!detailActive() || event.touches.length !== 1 ||
-        !document.activeElement?.matches?.('.web-community-detail .forum-reply-composer input')) return;
+        !document.activeElement?.matches?.('.forum-reply-composer input')) return;
     const target = event.target;
     if (!target?.closest?.('.web-community-detail') || target.closest('.forum-reply-composer, [role="dialog"], .image-preview-overlay, .video-preview-overlay')) return;
     const touch = event.touches[0]; replyDrag = { x: touch.clientX, y: touch.clientY, id: touch.identifier };
@@ -353,7 +405,7 @@
       figure.append(caption);
     }
     const discussion = document.createElement('aside'); discussion.className = 'web-community-detail-discussion'; discussion.setAttribute('aria-label', '帖子回复');
-    main.append(discussion); discussion.append(replies, form);
+    main.append(discussion); discussion.append(replies);
     const empty = replies.querySelector('.empty');
     if (empty) empty.innerHTML = `<div><span class="web-community-empty-art" aria-hidden="true">${icon('question')}</span><strong>还没有回复</strong><p>说说你的看法，开启这篇讨论。</p><button type="button" data-web-community-action="reply-focus">写第一条回复</button></div>`;
     const input = form.querySelector('input[name="content"]');
@@ -631,7 +683,7 @@
       return applied;
     };
   }
-  window.TurtleMobileCommunity = Object.freeze({ installed: true, version: 'community-mobile-ui', revision: '20261101-chat-keyboard', openComment, refreshReplyTarget, syncKeyboard });
+  window.TurtleMobileCommunity = Object.freeze({ installed: true, version: 'community-mobile-ui', revision: '20261115-reply-keyboard', openComment, refreshReplyTarget, syncKeyboard });
   document.documentElement.classList.add('community-mobile-ui');
   if (active() || detailActive() || chatActive() || (state.page === 'communityAdd')) render();
 })();

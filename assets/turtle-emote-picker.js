@@ -117,7 +117,7 @@
     observer.observe(form,{subtree:true,attributes:true,attributeFilter:['disabled','aria-busy']});
   }
   function sync() {
-    const nextForm = state.page === 'communityPostDetail' ? document.querySelector('.web-community-detail .forum-reply-composer')
+    const nextForm = state.page === 'communityPostDetail' ? $app.querySelector(':scope > .forum-reply-composer')
       : state.page === 'communityChat' ? document.getElementById('communityChatForm') : null;
     const nextInput = nextForm?.querySelector('input[name="content"]'), nextRoute=scope();
     if (route !== nextRoute || !nextInput) {

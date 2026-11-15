@@ -12,7 +12,7 @@ async function main() {
   const origin = `http://127.0.0.1:${port}`;
   const server = spawn(process.execPath, ['server/server.js'], { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, HOST: '127.0.0.1', PORT: String(port), TURTLE_RUNTIME_DIR: runtime,
-      MYSQL_HOST: '', MYSQL_URL: '', SMS_PROVIDER: 'mock', SMS_MOCK: 'true', APNS_KEY_PATH: '', APNS_KEY_BASE64: '' } });
+      MYSQL_HOST: '', MYSQL_URL: '', SMS_PROVIDER: 'mock', NODE_ENV: "test", SMS_MOCK: 'true', APNS_KEY_PATH: '', APNS_KEY_BASE64: '' } });
   let browser, logs = '';
   server.stdout.on('data', b => logs += b); server.stderr.on('data', b => logs += b);
   try {
@@ -60,7 +60,7 @@ async function main() {
       if (scenario === 'wrong-code' || scenario === 'not-sent') {
         assert.equal(response.status(), 400);
         assert.equal(result.ok, false);
-        assert.equal(result.message, scenario === 'wrong-code' ? '验证码不正确' : '请先获取验证码');
+        assert.equal(result.message, scenario === 'wrong-code' ? '验证码不正确或已失效' : '请先获取注册验证码');
         assert(!await page.evaluate(() => state.loggedInPhone));
       } else {
         assert.equal(response.status(), 200); assert.equal(result.user.phone, phone);

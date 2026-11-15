@@ -3,7 +3,6 @@ const fs = require('fs'), path = require('path'), os = require('os'), net = requ
 const { spawn } = require('child_process');
 const assert = require('assert/strict');
 const { fixture } = require('./team-test-fixture');
-const { updateAccess } = require('./team-test-access.cjs');
 const { launchBrowser } = require('./browser-test-engine.cjs');
 const root = process.env.TEAM_TEST_ROOT ? path.resolve(process.env.TEAM_TEST_ROOT) : path.resolve(__dirname, '..');
 const output = path.join(root, 'output/team-qa');
@@ -22,7 +21,7 @@ async function main() {
   const port = await new Promise(resolve => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
   const origin = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ['server/server.js'], { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, HOST: '127.0.0.1', PORT: String(port), TURTLE_RUNTIME_DIR: runtime, MYSQL_HOST: '', MYSQL_URL: '', TURTLE_TEAM_TEST: '1', SMS_PROVIDER: 'mock', SMS_MOCK: 'true', APPLE_IAP_KEY_ID: '', APNS_KEY_PATH: '', APNS_KEY_BASE64: '' } });
+    env: { ...process.env, HOST: '127.0.0.1', PORT: String(port), TURTLE_RUNTIME_DIR: runtime, MYSQL_HOST: '', MYSQL_URL: '', TURTLE_TEAM_TEST: '1', SMS_PROVIDER: 'mock', NODE_ENV: "test", SMS_MOCK: 'true', APPLE_IAP_KEY_ID: '', APNS_KEY_PATH: '', APNS_KEY_BASE64: '' } });
   let browser, logs = ''; child.stdout.on('data', b => logs += b); child.stderr.on('data', b => logs += b);
   try {
     for (let i = 0; i < 100; i++) { try { if ((await fetch(origin + '/api/app/version')).ok) break; } catch {} await new Promise(r => setTimeout(r, 100)); }
@@ -311,8 +310,7 @@ async function main() {
     assert((await downloadPromise).suggestedFilename().endsWith('.png'));
     await page.locator('[data-ts="close"]').click();
     await page.locator('[data-tab="settings"]').first().click();
-    await page.locator('[data-ts="membership"]').click();
-    await page.locator('[data-ts="preview.back"]').click();
+    assert.equal(await page.locator('[data-ts="membership"], [data-ts="purchase"]').count(), 0);
     await page.waitForSelector('[data-team-workspace]');
     await page.evaluate(() => { state.themeColor = 'dark'; render(); });
     await page.locator('[data-tab="reports"]').first().click();
@@ -368,83 +366,17 @@ async function main() {
     await page.locator('[data-tab="hatching"]').first().click();
     await page.getByText('繁殖与孵化未开放', { exact: true }).waitFor();
     assert.equal(await page.locator('.ts-nest').count(), 0);
-    // New owners must see an explicit blocked state, then gain a real create path.
-    await page.route('**/api/apple/purchases', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, configured: true, appAccountToken: 'ui-preview-account' }) }));
-    await page.evaluate(() => {
-      window.Capacitor = { isNativePlatform: () => true, getPlatform: () => 'ios', Plugins: { TurtlePurchases: {
-        addListener: async () => ({ remove() {} }),
-        products: async () => ({ products: [{ id: 'keyoushouzhang.team.monthly', displayPrice: '¥18.00' }, { id: 'keyoushouzhang.team.yearly', displayPrice: '¥128.00' }] }),
-        restore: async () => ({ transactions: [] }),
-        purchase: async ({ productId }) => { window.previewPurchase = productId; return { cancelled: true }; },
-        manage: async () => { window.previewManage = true; }
-      } } };
-      state.loggedInPhone = '13900000008'; state.themeColor = 'forest'; render();
+    // A regular account gets the real create action without a billing request.
+    const billingRequests = [];
+    page.on('request', request => {
+      if (/\/api\/(?:apple\/purchases|alipay\/team\/purchases)$/.test(request.url())) billingRequests.push(request.url());
     });
-    await page.locator('[data-ts="purchase"]:enabled').first().waitFor();
-    await page.waitForSelector('.toast', { state: 'hidden' });
-    const previewWrites = [];
-    const trackPreviewWrites = request => {
-      if (request.url().endsWith('/api/team') && request.method() === 'POST') {
-        const action = request.postDataJSON()?.action;
-        if (!['list', 'get'].includes(action)) previewWrites.push(action);
-      }
-    };
-    page.on('request', trackPreviewWrites);
-    for (const module of ['overview', 'ledger', 'reports', 'hatching', 'care', 'tasks', 'members', 'logs', 'approvals', 'settings']) {
-      await page.locator(`[data-ts="preview.tab"][data-tab="${module}"]`).click();
-      await page.locator(`[data-preview-module="${module}"]`).waitFor();
-      assert((await page.locator('.ts-preview-notice').textContent()).includes('示例数据'));
-      assert.equal(await page.locator('.ts-preview-subscription [data-ts="purchase"]').count(), 2);
-      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-      if (module === 'ledger' || module === 'reports') {
-        for (const kind of ['purchase', 'sold', 'loss', 'other']) {
-          await page.locator(`[data-ts="preview.finance"][data-kind="${kind}"]`).click();
-          assert((await page.locator('.ts-preview-details').textContent()).includes('明细'));
-        }
-      }
-      if (module === 'hatching') {
-        await page.locator('[data-ts="preview.hatch"][data-closed="true"]').click();
-        assert((await page.locator('[data-preview-module]').textContent()).includes('80%'));
-      }
-      await page.evaluate(() => scrollTo(0, 0));
-      await page.screenshot({ path: path.join(output, `preview-${module}.png`), fullPage: true });
-    }
-    await page.locator('[data-preview-module] [data-ts="preview.subscribe"]').click();
-    await page.locator('.ts-hero').waitFor();
-    assert.deepEqual(previewWrites, [], 'Browsing preview must never write or create a team');
-    page.off('request', trackPreviewWrites);
-    for (const [width, height] of [[375, 667], [390, 844], [430, 932]]) {
-      await page.setViewportSize({ width, height });
-      await page.evaluate(() => scrollTo(0, 0));
-      for (const btn of await page.locator('[data-ts="purchase"]').all()) {
-        const box = await btn.boundingBox();
-        assert(box.y >= 0 && box.y + box.height < height - 34, 'Both subscription buttons must fit above the iPhone home indicator');
-      }
-      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No horizontal overflow');
-      await page.screenshot({ path: path.join(output, `membership-first-screen-${width}.png`) });
-    }
-    await page.locator('[data-ts="purchase"]').first().click();
-    assert.equal(await page.evaluate(() => window.previewPurchase), 'keyoushouzhang.team.monthly');
-    await page.locator('[data-ts="manage"]').click();
-    assert(await page.evaluate(() => window.previewManage));
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.evaluate(() => { state.themeColor = 'dark'; render(); scrollTo(0, 0); });
-    await page.screenshot({ path: path.join(output, 'membership-first-screen-dark.png') });
-    await page.evaluate(() => { state.themeColor = 'forest'; render(); });
-    await page.locator('.ts-setup-guide>summary').click();
-    await page.getByText('团队会员未开通', { exact: true }).waitFor();
-    assert(await page.locator('[data-ts="create"]').isDisabled());
-    await page.evaluate(() => scrollTo(0, 0));
-    await page.screenshot({ path: path.join(output, 'member-setup-locked.png'), fullPage: true });
-    updateAccess(path.join(runtime, 'data/team-test-access.json'), '--grant', '13900000008');
-    await page.locator('.ts-setup [data-ts="refresh"]').click();
-    await page.getByText('测试权限已开通', { exact: true }).waitFor();
-    await page.evaluate(() => scrollTo(0, 0));
-    await page.screenshot({ path: path.join(output, 'member-setup-ready.png'), fullPage: true });
+    await page.evaluate(() => { state.loggedInPhone = '13900000008'; render(); });
+    await page.locator('[data-ts="create"]:enabled').waitFor();
+    assert.equal(await page.locator('[data-ts="purchase"], [data-ts="restore"], [data-ts="alipay.purchase"]').count(), 0);
     await page.locator('[data-ts="create"]').click();
     await page.locator('[data-ts="invite"]').waitFor();
-    await page.locator('[data-tab="settings"]').first().click();
-    assert(await page.locator('.ts-test-status').count());
+    assert.deepEqual(billingRequests, []);
     await page.locator('[data-tab="members"]').first().click();
     await page.locator('[data-ts="invite"]').click();
     await page.locator('[name="memberPhone"]').fill('13900000009');
@@ -459,14 +391,13 @@ async function main() {
     await page.waitForSelector('[data-team-workspace]');
     await page.locator('[data-tab="ledger"]').first().click();
     await page.getByText('账本未开放', { exact: true }).waitFor();
-    updateAccess(path.join(runtime, 'data/team-test-access.json'), '--revoke', '13900000008');
-    await refreshTeam();
-    await page.getByText('团队会员已到期 · 当前为功能预览', { exact: true }).waitFor();
-    await page.evaluate(() => { state.loggedInPhone = ''; state.cloudToken = ''; state.themeColor = 'forest'; render(); });
-    await page.waitForSelector('.ts-preview-notice');
-    await page.screenshot({ path: path.join(output, 'membership-mobile.png'), fullPage: true });
-    assert.equal(await page.locator('.ts-preview-tabs [data-tab]').count(), 10);
-    assert.equal(await page.locator('[data-ts="purchase"]').count(), 0, 'Logged-out preview asks for login');
+    await page.locator('[data-tab="settings"]').first().click();
+    await page.getByRole('button', { name: '创建我的团队' }).click();
+    await page.locator('[data-ts="invite"]').waitFor();
+    assert.equal(await page.locator('[data-team-select] option').count(), 2);
+    await page.evaluate(() => { state.loggedInPhone = ''; state.cloudToken = ''; render(); });
+    await page.locator('[data-ts="login"]').waitFor();
+    assert.equal(await page.locator('[data-team-workspace], [data-ts="create"]').count(), 0);
     assert.deepEqual(errors, []);
     fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ results, errors }, null, 2));
     console.log('PASS: 40 viewport/module combinations, all-history ledger, care/growth, per-member dates, scoped data, breeding/hatch rates, task/invitation flows, account isolation and dark mode. Screenshots: ' + output);

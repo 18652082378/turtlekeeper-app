@@ -455,12 +455,18 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
           try {
             edgeBackSnapshots = []; restoredSnapshotRenderHoldUntil = 0;
             setState({ page: route }, { skipSave: true, forceRender: true, pageMotion: 'none' });
+            const form = route === 'marketAdd' ? '#marketListingForm' : route === 'communityAdd' ? '#communityPostForm' : '';
+            const waitForForm = async () => {
+              for (let frame = 0; form && !$app.querySelector(form) && frame < 60; frame++) await new Promise(requestAnimationFrame);
+            };
+            await waitForForm();
             await new Promise(requestAnimationFrame);
             const text = $app.innerText.trim();
             scrollTo(0, 500);
             const y = scrollY;
             setState({ page: route === 'about' ? 'rules' : 'about' }, { skipSave: true, pageMotion: 'none' });
             navigateBack();
+            await waitForForm();
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             const nav = $app.querySelector(':scope > .bottom-nav');
             const fixed = !nav || getComputedStyle(nav).position === 'fixed' && Math.abs(nav.getBoundingClientRect().bottom - innerHeight) <= 2;
@@ -584,19 +590,28 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
     });
     await check('global native priority enables every secondary route and disables every root tab', async page => {
       await enableNative(page);
+      await page.emulateMedia({ reducedMotion: 'reduce' });
       const results = await page.evaluate(async routes => {
         const results = [];
+        const frame = () => new Promise(requestAnimationFrame);
         for (const route of routes) {
           edgeBackSnapshots = []; restoredSnapshotRenderHoldUntil = 0;
           setState({ page: 'home' }, { skipSave: true, forceRender: true, pageMotion: 'none' });
           setState({ page: route }, { skipSave: true, forceRender: true, pageMotion: 'none' });
           await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
           const config = nativeCalls.filter(item => item.method === 'configure').at(-1);
-          results.push({ route, enabled: config.enabled, expected: !BOTTOM_NAV_ROOT_PAGES.has(route) });
+          const expected = !BOTTOM_NAV_ROOT_PAGES.has(route);
+          nativeEvent('begin', 30, 220);
+          nativeEvent('move', 145, 220);
+          const tracksFinger = $app.style.transform === 'translate3d(140px, 0px, 0px)';
+          nativeEvent('end', 145, 220);
+          for (let count = 0; count < 12 && $app.style.transform; count++) await frame();
+          results.push({ route, enabled: config.enabled, expected, tracksFinger, landed: state.page });
         }
         return results;
       }, routes);
-      assert.deepEqual(results.filter(item => item.enabled !== item.expected), []);
+      assert.deepEqual(results.filter(item => item.enabled !== item.expected || item.tracksFinger !== item.expected ||
+        item.landed !== (item.expected ? 'home' : item.route)), []);
       assert.equal(results.length, routes.length);
     });
     for (const route of ['about', 'memos', 'add', 'mine', 'marketDetail']) {
@@ -687,6 +702,52 @@ fs.mkdirSync(path.join(root, 'output'), { recursive: true });
       assert.equal(await page.evaluate(() => state.page), 'about');
       await page.evaluate(() => { nativeEvent('begin'); nativeEvent('end'); });
       await page.waitForFunction(() => state.page === 'market');
+    });
+    await check('global native left-edge return survives a scroll configuration update and keyboard resize', async page => {
+      await secondary(page); await enableNative(page);
+      const oldGeneration = await page.evaluate(() => nativeCalls.filter(item => item.method === 'configure').at(-1).generation);
+      await page.evaluate(() => {
+        const field = document.createElement('input'); field.style.cssText = 'position:fixed;left:0;top:380px;width:180px';
+        $app.append(field); field.focus({ preventScroll: true });
+      });
+      await page.waitForFunction(() => nativeCalls.filter(item => item.method === 'configure').at(-1).excludedRegions.some(r => r.y > .44 && r.y < .46));
+      assert.equal(await page.evaluate(() => nativeCalls.filter(item => item.method === 'configure').at(-1).generation), oldGeneration);
+      await page.evaluate(() => { nativeEvent('begin', 36, 220, { startX: 26 }); nativeEvent('move', 125, 220, { startX: 26 }); });
+      assert.equal(await page.evaluate(() => $app.style.transform), 'translate3d(99px, 0px, 0px)');
+      await page.setViewportSize({ width: 390, height: 525 });
+      await page.evaluate(() => nativeEvent('end', 125, 220, { startX: 26 }));
+      await page.waitForFunction(() => state.page === 'about');
+    });
+    await check('gesture return is available after a direct entry or beyond retained DOM history', async page => {
+      await page.evaluate(() => {
+        setState({ page: 'about' }, { skipSave: true, pageMotion: 'none' }); edgeBackSnapshots = [];
+      });
+      await swipe(page);
+      await page.waitForFunction(() => state.page === 'mine');
+      await page.evaluate(() => {
+        for (const route of ['about', 'rules', 'privacy', 'account', 'calendar']) setState({ page: route }, { skipSave: true, pageMotion: 'none' });
+      });
+      assert.deepEqual(await page.evaluate(() => edgeBackSnapshots.map(item => [item.page, Boolean(item.liveDom)])),
+        [['mine', false], ['about', false], ['rules', true], ['privacy', true], ['account', true]]);
+      for (const route of ['account', 'privacy', 'rules', 'about', 'mine']) {
+        await swipe(page);
+        await page.waitForFunction(route => state.page === route && !$app.style.transform && !document.querySelector('.edge-back-preview'), route);
+      }
+    });
+    await check('global native touch fallback can hand a drag to a late native begin without resetting it', async page => {
+      await secondary(page); await enableNative(page);
+      const before = await page.evaluate(() => {
+        const target = document.elementFromPoint(5, 220);
+        for (const [name, clientX] of [['pointerdown', 5], ['pointermove', 75]]) target.dispatchEvent(new PointerEvent(name, {
+          bubbles: true, pointerId: 1, pointerType: 'touch', isPrimary: true, clientX, clientY: 220
+        }));
+        window.startedPreview = document.querySelector('.edge-back-preview');
+        nativeEvent('begin', 75);
+        return Boolean(startedPreview && startedPreview === document.querySelector('.edge-back-preview'));
+      });
+      assert.equal(before, true);
+      await page.evaluate(() => nativeEvent('end', 125));
+      await page.waitForFunction(() => state.page === 'about');
     });
     await check('global native cancellation reapplies a deferred update without consuming navigation', async page => {
       await secondary(page); await enableNative(page);

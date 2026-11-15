@@ -16,7 +16,7 @@ const root = path.resolve(__dirname, '..');
     child = spawn(process.execPath, ['--require', path.join(root, 'scripts/mysql-record-test-preload.js'), 'server/server.js'], { cwd: root, windowsHide: true,
       env: { ...process.env, HOST: '127.0.0.1', PORT: String(port), MYSQL_URL: '', MYSQL_HOST: 'test-driver', MYSQL_STORAGE_MODE: 'records',
         TURTLE_RUNTIME_DIR: runtime, TURTLE_TEST_RECORD_DRIVER: '1', TURTLE_TEST_DURABLE_FILE: durable, TURTLE_TEST_FAIL_FILE: fail,
-        TURTLE_TEST_COMMIT_DELAY: '120', SMS_PROVIDER: 'mock', SMS_MOCK: 'true', APNS_KEY_ID: '', APNS_KEY_PATH: '', APNS_TEAM_ID: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+        TURTLE_TEST_COMMIT_DELAY: '120', SMS_PROVIDER: 'mock', NODE_ENV: "test", SMS_MOCK: 'true', APNS_KEY_ID: '', APNS_KEY_PATH: '', APNS_TEAM_ID: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { output += chunk; });
     for (let i = 0; i < 100; i++) {
       try { if ((await fetch(base + '/api/app/version')).ok) return; } catch {}
@@ -68,12 +68,43 @@ const root = path.resolve(__dirname, '..');
     assert.equal(loaded.user.data.careRecords[0].turtleRefs[0].id, 'one');
     assert.equal(loaded.user.data.careCustomItems[0].title, '清洗过滤器');
     assert.equal(loaded.user.data.carePlans[0].name, '全选喂食');
+    const replacement = { ...loaded.user.data, turtles: [{ ...loaded.user.data.turtles[0], id: 'another', code: 'ANOTHER' }] };
+    const replaced = await post('/api/account/save', { ...auth, baseDataRevision: loaded.user.dataRevision, data: replacement });
+    const folder = path.join(runtime, 'backups', 'account-snapshots', require('node:crypto').createHash('sha256').update(phone).digest('hex').slice(0, 32));
+    const snapshots = await fs.readdir(folder);
+    assert.equal(snapshots.length, 1, 'replacing an archive at the same count protects the old ID');
+    const protectedAccount = JSON.parse(await fs.readFile(path.join(folder, snapshots[0]), 'utf8')).account;
+    assert.deepEqual(protectedAccount.data, committedData);
+    const { exportRecovery } = require('./export-account-recovery.cjs');
+    const exportFile = path.join(runtime, 'recovery.json');
+    exportRecovery({ snapshots: path.dirname(folder), account: phone, name: snapshots[0], destination: exportFile });
+    const recovered = JSON.parse(await fs.readFile(exportFile, 'utf8'));
+    assert.equal(recovered.backupFormat, 'turtlekeeper-account-v1');
+    assert.deepEqual(recovered.data, committedData);
+    assert.throws(() => exportRecovery({ snapshots: path.dirname(folder), account: phone, name: snapshots[0], destination: exportFile }), { code: 'EEXIST' });
+    const restored = await post('/api/account/save', { ...auth, baseDataRevision: replaced.user.dataRevision, data: committedData });
+    const beforeReduction = await fs.readdir(folder);
+    const sameCountLedger = { ...committedData, ledgerRecords: [{ ...committedData.ledgerRecords[0], id: 'replacement-purchase' }] };
+    const newLedger = await post('/api/account/save', { ...auth, baseDataRevision: restored.user.dataRevision, data: sameCountLedger });
+    const afterReduction = await fs.readdir(folder);
+    const ledgerSnapshotName = afterReduction.find(name => !beforeReduction.includes(name));
+    assert.ok(ledgerSnapshotName, 'replacing an equal number of ledger records also creates a snapshot');
+    assert.equal(JSON.parse(await fs.readFile(path.join(folder, ledgerSnapshotName))).account.data.ledgerRecords[0].id, 'purchase');
+    const final = await post('/api/account/save', { ...auth, baseDataRevision: newLedger.user.dataRevision, data: committedData });
     await fs.writeFile(fail, 'test');
     const failingData = JSON.parse(JSON.stringify(loaded.user.data));
     for (const field of ['turtles', 'careRecords', 'memos', 'breedingRecords', 'turtlePools', 'ledgerRecords', 'careCustomItems', 'carePlans'])
       failingData[field][0] = { ...failingData[field][0], note: 'should roll back', title: 'should roll back', name: 'should roll back' };
     failingData.ledgerRecords.push({ id: 'failed', type: 'other', amount: 999 });
-    await post('/api/account/save', { ...auth, accountName: 'durability test', baseDataRevision: loaded.user.dataRevision, data: failingData }, false);
+    const failingSave = post('/api/account/save', { ...auth, accountName: 'durability test', baseDataRevision: final.user.dataRevision, data: failingData }, false);
+    // Several reads overlap the delayed commit. A pre-save snapshot is valid;
+    // a failed, uncommitted write must never be acknowledged by a read.
+    const overlappingReads = Array.from({ length: 4 }, async (_, index) => {
+      await new Promise(resolve => setTimeout(resolve, (index + 1) * 20));
+      const response = await fetch(base + '/api/account/load', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(auth) });
+      if (response.ok) assert.equal((await response.json()).user.dataRevision, final.user.dataRevision);
+    });
+    await Promise.all([failingSave, ...overlappingReads]);
     assert.equal(JSON.parse(await fs.readFile(durable, 'utf8')).users[phone].data.ledgerRecords.length, 1, 'failed commit cannot leak half-written ledger records');
     assert.deepEqual(JSON.parse(await fs.readFile(durable, 'utf8')).users[phone].data, committedData, 'failed commit leaves the entire account intact');
     await post('/api/account/load', auth, false);

@@ -83,7 +83,7 @@ const hotfix = require('./deploy-reliability-hotfix.cjs');
 const patchedOld = hotfix.patch(old);
 hotfix.verify(patchedOld);
 assert.equal(hotfix.patch(patchedOld), patchedOld, 'deployment is idempotent');
-hotfix.verify(hotfix.patch(read('server/server.js')));
+hotfix.verify(read('server/server.js'));
 assert.throws(() => hotfix.patch(old.replace('next.turtlePools.slice(0, 200)', 'next.turtlePools.slice(0, 199)')), /Unknown normalization/);
 assert.throws(() => hotfix.patch(old.replace('if (!memo.repeat) return true;', 'if (!memo.repeat) return false;')), /Unknown reminder/);
 console.log('PASS: exact receipts for all six modules and care settings; reproduced old reminder issue and verified current correction. LOCAL ONLY.');

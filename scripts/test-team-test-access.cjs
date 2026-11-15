@@ -21,9 +21,9 @@ async function main() {
   assert.deepEqual(updateAccess(file, '--grant', phone, now + 3000), grant, 'retry is idempotent');
   const service = createTeamService({ read: () => db, write: async () => {}, authenticate: (db, p, token) => token === 'token' ? db.users[p] : null, normalize: x => x });
   const call = (who, action, extra = {}) => service.action({ phone: who, token: 'token', action, ...extra });
-  await assert.rejects(call('13900000009', 'create'), e => e.status === 403);
+  assert.equal((await call('13900000009', 'create')).team.active, true);
   const created = (await call(phone, 'create')).team;
-  assert.equal(created.testing, true); assert.equal(created.expiresAt, grant.expiresAt);
+  assert.equal(created.active, true);
   await call(phone, 'invite', { teamId: created.id, revision: created.revision, memberPhone: '13900000009', permissions: { dashboard: 'read', ledger: 'none', tasks: 'read' } });
   const invitation = (await call('13900000009', 'list')).invitations[0];
   await call('13900000009', 'accept', { teamId: created.id, id: invitation.id });
@@ -32,8 +32,9 @@ async function main() {
   await assert.rejects(call('13900000009', 'settings', { teamId: created.id, revision: memberView.revision }), e => e.status === 403);
   updateAccess(file, '--revoke', phone);
   assert.equal(access(user).active, false);
-  assert.equal((await call('13900000009', 'get', { teamId: created.id })).team.active, false);
-  await assert.rejects(call(phone, 'invite', { teamId: created.id, memberPhone: '13900000004' }), e => e.status === 403);
+  assert.equal((await call('13900000009', 'get', { teamId: created.id })).team.active, true);
+  const ownerView = (await call(phone, 'get', { teamId: created.id })).team;
+  await call(phone, 'invite', { teamId: created.id, revision: ownerView.revision, memberPhone: '13900000004' });
   const paid = { phone, teamEntitlement: { source: 'apple', verified: true, expiresAt: new Date(now + 86400000).toISOString() } };
   assert.equal(access(paid).active, true, 'revoking test access preserves paid entitlement');
   fs.writeFileSync(file, '{broken'); assert.equal(access(user).active, false);
@@ -41,6 +42,6 @@ async function main() {
   fs.writeFileSync(file, JSON.stringify({ version: 1, accounts: { [phone]: { issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 8 * 86400000).toISOString() } } }));
   assert.equal(access(user).active, false, 'reject excessive duration');
   assert.throws(() => updateAccess(file, '--grant', '../bad'));
-  console.log('PASS: account-scoped seven-day access, no global test mode, create/invite/accept, member restrictions, expiry/revocation, paid isolation, invalid config, idempotent grant.');
+  console.log('PASS: historical grant handling and billing isolation, free team creation, member restrictions, and access after grant revocation.');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

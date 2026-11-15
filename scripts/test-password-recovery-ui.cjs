@@ -10,7 +10,7 @@ const root=path.resolve(__dirname,'..'),output=path.join(root,'output/password-r
   let child,browser,logs='';
   const call=async(route,body)=>{const r=await fetch(origin+route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return {status:r.status,body:await r.json()};};
   try{
-    child=spawn(process.execPath,['server/server.js'],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,HOST:'127.0.0.1',PORT:String(port),TURTLE_RUNTIME_DIR:runtime,MYSQL_HOST:'',MYSQL_URL:'',SMS_PROVIDER:'mock',SMS_MOCK:'true',APNS_KEY_PATH:'',APNS_KEY_BASE64:''}});
+    child=spawn(process.execPath,['server/server.js'],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,HOST:'127.0.0.1',PORT:String(port),TURTLE_RUNTIME_DIR:runtime,MYSQL_HOST:'',MYSQL_URL:'',SMS_PROVIDER:'mock',NODE_ENV: "test", SMS_MOCK:'true',APNS_KEY_PATH:'',APNS_KEY_BASE64:''}});
     child.stdout.on('data',b=>logs+=b); child.stderr.on('data',b=>logs+=b);
     let ready=false; for(let i=0;i<100;i++){try{if((await fetch(origin+'/api/app/version')).ok){ready=true;break}}catch{}await new Promise(r=>setTimeout(r,100));}
     assert.ok(ready,'isolated server should start');
@@ -19,11 +19,7 @@ const root=path.resolve(__dirname,'..'),output=path.join(root,'output/password-r
     const reg=await call('/api/account/register',{phone,password:oldPassword,code:sent.body.code,termsAccepted:true,data:{turtles:[{id:'keep-turtle',code:'keep-001',speciesCode:'GHG',nickname:'保留档案',status:'在养'}]}});
     assert.equal(reg.status,200); const oldToken=reg.body.user.token;
     assert.equal((await call('/api/account/password/reset',{phone,code:sent.body.code,password})).status,400);
-    assert.equal((await call('/api/sms/send',{phone,purpose:'reset_password'})).status,200);
-    // Allow a new UI challenge in the isolated mock store, never on a live server.
-    const saved=JSON.parse(fs.readFileSync(path.join(runtime,'data/sms-state.json'),'utf8'));
-    const recoveryCode=Object.values(saved.codes)[0]; assert.equal(recoveryCode.purpose,'reset_password');
-    // Domain tests cover expiry; real API checks wrong/reused/cross-purpose codes.
+    assert.equal((await call('/api/sms/send',{phone,purpose:'reset_password'})).status,429,'registration and recovery share an SMS cooldown');
     assert.equal((await call('/api/sms/verify',{phone,code:'000000'})).status,400);
     assert.equal((await call('/api/account/password/reset',{phone,code:'000000',password})).status,400);
     browser=await launchBrowser();fs.mkdirSync(output,{recursive:true});
@@ -68,12 +64,9 @@ const root=path.resolve(__dirname,'..'),output=path.join(root,'output/password-r
     assert.equal(await page.locator('[data-recovery-password-error]').isVisible(),true);
     await page.locator('#passwordRecoveryForm [name="confirmPassword"]').fill(password);
     const code=await call('/api/account/password/reset',{phone,code:'111111',password:'tiny'});assert.equal(code.status,400);
-    // The challenge is retained from the real SMS API; derive the known code via a captured initial SMS response.
-    const smsPath=path.join(runtime,'data/sms-state.json');
-    // Restart once with aged SMS timestamp; this also verifies persisted challenges.
+    // Restart the isolated test instance so the browser can request a fresh code.
     child.kill();await new Promise(r=>child.once('exit',r));
-    const smsState=JSON.parse(fs.readFileSync(smsPath,'utf8'));smsState.codes[phone].lastSentAt=Date.now()-61000;fs.writeFileSync(smsPath,JSON.stringify(smsState));
-    child=spawn(process.execPath,['server/server.js'],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,HOST:'127.0.0.1',PORT:String(port),TURTLE_RUNTIME_DIR:runtime,MYSQL_HOST:'',MYSQL_URL:'',SMS_PROVIDER:'mock',SMS_MOCK:'true',APNS_KEY_PATH:'',APNS_KEY_BASE64:''}});
+    child=spawn(process.execPath,['server/server.js'],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,HOST:'127.0.0.1',PORT:String(port),TURTLE_RUNTIME_DIR:runtime,MYSQL_HOST:'',MYSQL_URL:'',SMS_PROVIDER:'mock',NODE_ENV: "test", SMS_MOCK:'true',APNS_KEY_PATH:'',APNS_KEY_BASE64:''}});
     child.stdout.on('data',b=>logs+=b);child.stderr.on('data',b=>logs+=b);
     for(let i=0;i<100;i++){try{if((await fetch(origin+'/api/app/version')).ok)break}catch{}await new Promise(r=>setTimeout(r,100));}
     const smsResponse=page.waitForResponse(r=>r.url().endsWith('/api/sms/send'));

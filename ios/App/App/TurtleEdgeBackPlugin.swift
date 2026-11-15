@@ -37,6 +37,8 @@ public class TurtleEdgeBackPlugin: CAPPlugin, CAPBridgedPlugin, UIGestureRecogni
         recognizer.maximumNumberOfTouches = 1
         recognizer.delegate = self
         recognizer.cancelsTouchesInView = true
+        recognizer.delaysTouchesBegan = false
+        recognizer.delaysTouchesEnded = false
         recognizer.isEnabled = false
         webView.addGestureRecognizer(recognizer)
         // Outside the edge UIKit fails this recognizer immediately; ordinary
@@ -93,7 +95,7 @@ public class TurtleEdgeBackPlugin: CAPPlugin, CAPBridgedPlugin, UIGestureRecogni
               bridge?.viewController?.presentedViewController == nil,
               abs(webView.scrollView.zoomScale - 1) < 0.05 else { return false }
         let point = touch.location(in: webView)
-        guard point.x >= 0, point.x <= 24 else { return false }
+        guard point.x >= 0, point.x <= 28 else { return false }
         let normalized = CGPoint(x: point.x / webView.bounds.width, y: point.y / webView.bounds.height)
         guard !excludedRegions.contains(where: { $0.contains(normalized) }) else { return false }
         // Freeze momentum on this touch, before waiting for pan recognition.

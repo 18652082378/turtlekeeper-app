@@ -8,6 +8,7 @@ const https = require("https");
 const http2 = require("http2");
 const path = require("path");
 const { URL } = require("url");
+const { requestAddress, createRequestBudget } = require("./request-budget");
 const { appUpdatePolicy } = require("./app-update-policy");
 const { createMarketRankPager } = require("./market-ranking");
 const marketInquiry = require("../assets/market-inquiry");
@@ -59,10 +60,21 @@ const MYSQL_HOST = String(process.env.MYSQL_HOST || "").trim();
 const MYSQL_ENABLED = Boolean(MYSQL_URL || MYSQL_HOST);
 const MYSQL_STORAGE_MODE = String(process.env.MYSQL_STORAGE_MODE || "legacy").trim();
 const SMS_STATE_FILE = path.resolve(DATA_DIR, "sms-state.json");
+const TEST_SMS_ENABLED = process.env.NODE_ENV === "test" && process.env.SMS_MOCK === "true" &&
+  Boolean(process.env.TURTLE_RUNTIME_DIR) && RUNTIME_ROOT !== __dirname && ["127.0.0.1", "::1"].includes(HOST);
+const TRUST_LOCAL_PROXY = process.env.TRUST_LOCAL_PROXY === "true";
+const authBudget = createRequestBudget();
+const loginAttempts = createRequestBudget();
+const marketReadBudget = createRequestBudget();
+const marketMetricBudget = createRequestBudget({ capacity: 100000 });
+const rateLimited = (res, seconds = 60) => {
+  res.setHeader("Retry-After", String(seconds));
+  return sendJson(res, 429, { ok: false, code: "RATE_LIMITED", message: "操作太频繁，请稍后再试" });
+};
 const UPLOAD_DIR = path.resolve(RUNTIME_ROOT, "uploads");
 const BACKUP_DIR = path.resolve(RUNTIME_ROOT, "backups");
-// Small, per-account recovery snapshots are separate from the daily full
-// backup. They are written only before a record-count reduction, so an
+// Per-account recovery snapshots are separate from the daily full backup.
+// They are written before records are removed or replaced, so an
 // accidental client-side wipe can be restored without rolling back anyone
 // else's account.
 const ACCOUNT_SNAPSHOT_DIR = path.resolve(BACKUP_DIR, "account-snapshots");
@@ -167,7 +179,6 @@ function marketSpeciesRestrictionMessage() {
   return "该品种属于龟集市平台禁售范围，无法发布";
 }
 const smsCodes = new Map();
-const verifiedPhones = new Map();
 let lastServerBackupDate = "";
 let apnsPrivateKey = null;
 let apnsJwtCache = { token: "", createdAt: 0 };
@@ -234,14 +245,11 @@ function persistSmsState() {
   for (const [phone, item] of smsCodes) {
     if (!item || now > Number(item.expiresAt || 0)) smsCodes.delete(phone);
   }
-  for (const [phone, expiresAt] of verifiedPhones) {
-    if (now > Number(expiresAt || 0)) verifiedPhones.delete(phone);
-  }
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const tempFile = `${SMS_STATE_FILE}.${process.pid}.tmp`;
   fs.writeFileSync(tempFile, JSON.stringify({
-    codes: Object.fromEntries(smsCodes),
-    verifiedPhones: Object.fromEntries(verifiedPhones)
+    mode: TEST_SMS_ENABLED ? "test" : "production",
+    codes: Object.fromEntries(smsCodes)
   }), "utf8");
   fs.renameSync(tempFile, SMS_STATE_FILE);
 }
@@ -250,8 +258,8 @@ function loadSmsState() {
   try {
     if (!fs.existsSync(SMS_STATE_FILE)) return;
     const saved = JSON.parse(fs.readFileSync(SMS_STATE_FILE, "utf8"));
+    if (saved.mode !== (TEST_SMS_ENABLED ? "test" : "production")) return;
     for (const [phone, item] of Object.entries(saved.codes || {})) smsCodes.set(phone, item);
-    for (const [phone, expiresAt] of Object.entries(saved.verifiedPhones || {})) verifiedPhones.set(phone, Number(expiresAt));
     persistSmsState();
   } catch (error) {
     console.warn("读取短信验证状态失败，将使用新的验证状态", error.message);
@@ -326,6 +334,7 @@ function sendJson(res, status, body) {
     if (res.writableEnded || res.destroyed) return;
     res.writeHead(code, {
       "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Range, X-Auth-Phone, X-Auth-Token, X-Media-Duration",
@@ -460,10 +469,11 @@ function normalizeAccountData(data = {}) {
       updatedAt: String(pool?.updatedAt || "")
     })).filter(pool => pool.name && pool.type) : [],
     syncEnabled: Boolean(next.syncEnabled),
-    subscriptionPlan: ["free", "member", "pro"].includes(next.subscriptionPlan) ? next.subscriptionPlan : "free",
-    subscriptionCycle: next.subscriptionCycle || "",
-    subscriptionStartedAt: next.subscriptionStartedAt || "",
-    subscriptionExpiresAt: next.subscriptionExpiresAt || "",
+    // Keep the legacy response shape. Paid team access uses verified purchases.
+    subscriptionPlan: "free",
+    subscriptionCycle: "",
+    subscriptionStartedAt: "",
+    subscriptionExpiresAt: "",
     professionalOutput: next.professionalOutput || "",
     activityLogs: Array.isArray(next.activityLogs) ? next.activityLogs : [],
     themeColor: next.themeColor || "teal"
@@ -500,7 +510,12 @@ function accountRecordCounts(data = {}) {
 function accountDataWasReduced(before = {}, after = {}) {
   const previous = accountRecordCounts(before);
   const next = accountRecordCounts(after);
-  return Object.keys(previous).some(field => next[field] < previous[field]);
+  return Object.keys(previous).some(field => {
+    if (next[field] < previous[field]) return true;
+    const id = record => typeof record === "string" ? record : String(record?.id || "");
+    const remaining = new Set((Array.isArray(after[field]) ? after[field] : []).map(id));
+    return (Array.isArray(before[field]) ? before[field] : []).some(record => id(record) && !remaining.has(id(record)));
+  });
 }
 
 function nestedGrowthHistoryWasReduced(before = {}, after = {}) {
@@ -721,27 +736,43 @@ function pruneAccountSnapshots(folder) {
   files.slice(ACCOUNT_SNAPSHOT_LIMIT).forEach(file => fs.rmSync(file.path, { force: true }));
 }
 
-function createAccountRecoverySnapshot(user) {
+function createAccountRecoverySnapshot(user, reason = "before-record-reduction") {
   if (!user?.phone || !accountDataHasContent(user.data || {})) return "";
   const folder = accountSnapshotFolder(user.phone);
-  fs.mkdirSync(folder, { recursive: true });
+  fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
+  if (fs.lstatSync(ACCOUNT_SNAPSHOT_DIR).isSymbolicLink() || fs.lstatSync(folder).isSymbolicLink()) throw new Error("恢复目录不能是符号链接");
   const now = new Date();
   const file = path.resolve(folder, `${backupTimeKey(now)}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.json`);
   const snapshot = {
     createdAt: now.toISOString(),
-    reason: "before-record-reduction",
+    reason,
     phoneHash: crypto.createHash("sha256").update(String(user.phone)).digest("hex"),
     account: {
       accountName: user.accountName || "",
       accountAvatar: user.accountAvatar || "",
       data: normalizeAccountData(user.data || {}),
-      updatedAt: user.updatedAt || ""
+      updatedAt: user.updatedAt || "",
+      dataRevision: accountDataRevision(user)
     }
   };
   const temporary = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(snapshot, null, 2), "utf8");
-  fs.renameSync(temporary, file);
-  pruneAccountSnapshots(folder);
+  try {
+    const descriptor = fs.openSync(temporary, "wx", 0o600);
+    try {
+      fs.writeFileSync(descriptor, JSON.stringify(snapshot), "utf8");
+      fs.fsyncSync(descriptor);
+    } finally { fs.closeSync(descriptor); }
+    fs.renameSync(temporary, file);
+    if (process.platform !== "win32") {
+      const directory = fs.openSync(folder, "r");
+      try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+    }
+  } catch (error) {
+    try { fs.unlinkSync(temporary); } catch {}
+    throw error;
+  }
+  try { pruneAccountSnapshots(folder); }
+  catch (error) { console.warn("旧账户恢复快照清理失败：", error.name); }
   return file;
 }
 
@@ -792,29 +823,13 @@ function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
 }
 
 function verifyPassword(password, user) {
-  if (!user?.passwordSalt || !user?.passwordHash) return false;
-  const { hash } = hashPassword(password, user.passwordSalt);
-  return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(user.passwordHash, "hex"));
+  const stored = /^[a-f0-9]{128}$/i.test(user?.passwordHash || "") && user.passwordSalt ? user.passwordHash : "";
+  const { hash } = hashPassword(password, stored ? user.passwordSalt : "unregistered-login");
+  return Boolean(stored) && crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(stored, "hex"));
 }
 
 function makeAuthToken() {
   return crypto.randomBytes(32).toString("hex");
-}
-
-function rememberVerifiedPhone(phone) {
-  verifiedPhones.set(phone, Date.now() + 10 * 60 * 1000);
-  persistSmsState();
-}
-
-function hasVerifiedPhone(phone) {
-  const expiresAt = verifiedPhones.get(phone);
-  if (!expiresAt) return false;
-  if (Date.now() > expiresAt) {
-    verifiedPhones.delete(phone);
-    persistSmsState();
-    return false;
-  }
-  return true;
 }
 
 function accountDataRevision(user) {
@@ -881,14 +896,17 @@ function accountNameForPhone(value, phone, fallback = "") {
 }
 
 function makeCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(crypto.randomInt(100000, 1000000));
 }
 
-function storeCode(phone, code) {
+function storeCode(phone, code, purpose, mode) {
   const salt = crypto.randomBytes(16).toString("hex");
   smsCodes.set(phone, {
     codeHash: hashValue(`${salt}:${phone}:${code}`),
     salt,
+    purpose,
+    mode,
+    attempts: 0,
     expiresAt: Date.now() + 5 * 60 * 1000,
     lastSentAt: Date.now()
   });
@@ -951,6 +969,7 @@ function requestJson(url) {
           }
         });
       })
+      .setTimeout(10000, function () { this.destroy(new Error("短信服务请求超时")); })
       .on("error", reject);
   });
 }
@@ -1446,93 +1465,101 @@ async function checkAliyunPnvsSms(phone, code) {
   return result.Model && result.Model.VerifyResult === "PASS";
 }
 
+function smsDeliveryMode() {
+  if (TEST_SMS_ENABLED) return "mock";
+  if (process.env.SMS_MOCK === "true") return "";
+  if (process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured()) return "aliyun-pnvs";
+  if (process.env.SMS_PROVIDER === "aliyun" && aliyunConfigured()) return "aliyun";
+  return "";
+}
+
+const smsSending = new Set();
+const registrationChecks = new Set();
+const sms = {
+  mode: smsDeliveryMode,
+  send: (phone, code, mode) => mode === "aliyun-pnvs" ? sendAliyunPnvsSms(phone) : mode === "aliyun" ? sendAliyunSms(phone, code) : Promise.resolve(),
+  check: checkAliyunPnvsSms
+};
 const passwordRecovery = createPasswordRecovery({
-  smsCodes, readDatabase, writeDatabase, validPhone, sendJson, storeCode, forgetCode,
-  persistSmsState, verifiedPhones, hashPassword,
-  sms: {
-    mode: () => process.env.SMS_MOCK !== 'true' && process.env.SMS_PROVIDER === 'aliyun-pnvs' && aliyunPnvsConfigured() ? 'aliyun-pnvs'
-      : process.env.SMS_MOCK !== 'true' && process.env.SMS_PROVIDER === 'aliyun' && aliyunConfigured() ? 'aliyun' : 'mock',
-    send: (phone, code, mode) => mode === 'aliyun-pnvs' ? sendAliyunPnvsSms(phone) : mode === 'aliyun' ? sendAliyunSms(phone, code) : Promise.resolve(),
-    check: checkAliyunPnvsSms
-  }
+  smsCodes, readDatabase, writeDatabase, validPhone, sendJson, forgetCode,
+  persistSmsState, hashPassword,
+  sms
 });
 
 async function handleSendSms(req, res) {
   const body = await readJson(req);
-  if (body.purpose === 'reset_password') return passwordRecovery.send(req, res, body);
   const phone = String(body.phone || "").trim();
   if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
-  if (body.purpose === "register") {
-    const db = readDatabase();
-    if (db.users[phone]) return sendJson(res, 409, { ok: false, message: "手机号已注册，请直接登录" });
-  }
+  const purpose = body.purpose || "register";
+  if (!["register", "reset_password"].includes(purpose)) return sendJson(res, 400, { ok: false, message: "短信申请类型无效" });
+  const mode = sms.mode();
+  if (!mode) return sendJson(res, 503, { ok: false, code: "SMS_UNAVAILABLE", message: "短信服务暂不可用，请稍后再试" });
+  if (!authBudget.take("sms:ip:" + requestAddress(req, TRUST_LOCAL_PROXY), 20, 3600000) ||
+      !authBudget.take("sms:phone:" + phone, 5, 3600000)) return rateLimited(res, 3600);
   const previous = smsCodes.get(phone);
-  if (previous && Date.now() - previous.lastSentAt < 60 * 1000) {
-    return sendJson(res, 429, { ok: false, message: "验证码发送太频繁，请稍后再试" });
-  }
-
+  if (smsSending.has(phone) || Date.now() - Number(previous?.lastSentAt || 0) < 60000 ||
+    !authBudget.take("sms:cooldown:" + phone, 1, 60000)) return rateLimited(res);
+  const registered = Boolean(readDatabase().users[phone]);
+  const accepted = { ok: true, mode, expiresIn: 300 };
+  if (registered !== (purpose === "reset_password")) return sendJson(res, 200, accepted);
+  smsSending.add(phone);
   const code = makeCode();
-  if (process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured() && process.env.SMS_MOCK !== "true") {
-    await sendAliyunPnvsSms(phone);
-    storeCode(phone, "__aliyun_pnvs__");
-    return sendJson(res, 200, { ok: true, mode: "aliyun-pnvs", expiresIn: Number(process.env.ALIYUN_SMS_VALID_TIME || 300) });
-  }
-
-  if (process.env.SMS_PROVIDER === "aliyun" && aliyunConfigured() && process.env.SMS_MOCK !== "true") {
-    await sendAliyunSms(phone, code);
-    storeCode(phone, code);
-    return sendJson(res, 200, { ok: true, mode: "aliyun", expiresIn: 300 });
-  }
-
-  storeCode(phone, code);
-  return sendJson(res, 200, { ok: true, mode: "mock", code, expiresIn: 300 });
+  const deliver = async () => {
+    try {
+      await sms.send(phone, code, mode);
+      storeCode(phone, mode === "aliyun-pnvs" ? "__aliyun_pnvs__" : code, purpose, mode);
+      return true;
+    } catch {
+      console.warn("短信服务商未确认本次发送");
+      return false;
+    } finally { smsSending.delete(phone); }
+  };
+  if (mode === "mock") return sendJson(res, 200, await deliver() ? { ...accepted, code } : accepted);
+  // Do not reflect the provider's latency or response in the public result.
+  void deliver();
+  return sendJson(res, 200, accepted);
 }
 
 async function handleVerifySms(req, res) {
   const body = await readJson(req);
   const phone = String(body.phone || "").trim();
   const code = String(body.code || "").trim();
-  if (smsCodes.get(phone)?.purpose === 'reset_password') return sendJson(res, 400, { ok: false, message: '请在找回密码页面核对此验证码' });
-  if (process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured() && process.env.SMS_MOCK !== "true") {
-    if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
-    if (!code) return sendJson(res, 400, { ok: false, message: "请输入验证码" });
-    const passed = await checkAliyunPnvsSms(phone, code);
-    if (!passed) return sendJson(res, 400, { ok: false, message: "验证码不正确" });
-    forgetCode(phone);
-    rememberVerifiedPhone(phone);
+  if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
+  if (!authBudget.take("sms:verify:" + requestAddress(req, TRUST_LOCAL_PROXY), 60, 600000)) return rateLimited(res, 600);
+  try {
+    await verifyRegistrationCode(phone, code);
     return sendJson(res, 200, { ok: true });
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, message: error.message || "验证码核对失败" });
   }
-
-  const item = smsCodes.get(phone);
-  if (!item) return sendJson(res, 400, { ok: false, message: "请先获取验证码" });
-  if (Date.now() > item.expiresAt) {
-    forgetCode(phone);
-    return sendJson(res, 400, { ok: false, message: "验证码已过期" });
-  }
-  if (!storedCodeMatches(phone, item, code)) return sendJson(res, 400, { ok: false, message: "验证码不正确" });
-  forgetCode(phone);
-  rememberVerifiedPhone(phone);
-  return sendJson(res, 200, { ok: true });
 }
 
 async function verifyRegistrationCode(phone, code) {
-  if (hasVerifiedPhone(phone)) return;
-  if (!code) throw new Error("请输入验证码");
+  const mode = sms.mode();
+  if (!mode) throw new Error("短信服务暂不可用，请稍后再试");
+  if (!/^\d{6}$/.test(code)) throw new Error("请输入 6 位短信验证码");
 
   const item = smsCodes.get(phone);
-  if (!item) throw new Error("请先获取验证码");
+  if (!item || item.purpose !== "register" || item.mode !== mode) throw new Error("请先获取注册验证码");
   if (Date.now() > Number(item.expiresAt || 0)) {
     forgetCode(phone);
     throw new Error("验证码已过期，请重新获取");
   }
 
-  if (process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured() && process.env.SMS_MOCK !== "true") {
-    const passed = await checkAliyunPnvsSms(phone, code);
-    if (!passed) throw new Error("验证码不正确");
-    return;
-  }
-
-  if (!storedCodeMatches(phone, item, code)) throw new Error("验证码不正确");
+  if (Number(item.attempts || 0) >= 5) throw new Error("验证码错误次数过多，请重新获取");
+  if (registrationChecks.has(phone)) throw new Error("正在核对验证码，请稍后再试");
+  registrationChecks.add(phone);
+  try {
+    item.attempts = Number(item.attempts || 0) + 1;
+    persistSmsState();
+    let passed;
+    try {
+      passed = mode === "aliyun-pnvs" ? await sms.check(phone, code) : storedCodeMatches(phone, item, code);
+    } catch {
+      throw new Error("短信服务暂不可用，请稍后再试");
+    }
+    if (!passed || smsCodes.get(phone) !== item || Date.now() > item.expiresAt) throw new Error("验证码不正确或已失效");
+  } finally { registrationChecks.delete(phone); }
 }
 
 function addAccountSession(user, token, body, now) {
@@ -1564,11 +1591,10 @@ async function handleRegister(req, res) {
   const password = String(body.password || "");
   const code = String(body.code || "").trim();
   if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
-  if (password.length < 6) return sendJson(res, 400, { ok: false, message: "密码至少需要 6 位" });
+  if (password.length < 6 || password.length > 128) return sendJson(res, 400, { ok: false, message: "密码需要 6～128 位" });
   if (body.termsAccepted !== true) return sendJson(res, 400, { ok: false, message: "请先阅读并同意服务规则和隐私政策" });
 
-  let db = readDatabase();
-  if (db.users[phone]) return sendJson(res, 409, { ok: false, message: "手机号已注册，请直接登录" });
+  if (!authBudget.take("sms:verify:" + requestAddress(req, TRUST_LOCAL_PROXY), 60, 600000)) return rateLimited(res, 600);
   try {
     await verifyRegistrationCode(phone, code);
   } catch (error) {
@@ -1578,7 +1604,7 @@ async function handleRegister(req, res) {
   // Remote SMS verification yields to other requests. JSON storage returns a
   // snapshot, so retaining it here could overwrite saves/registrations made
   // while the provider was responding. Re-read immediately before mutation.
-  db = readDatabase();
+  const db = readDatabase();
   if (db.users[phone]) return sendJson(res, 409, { ok: false, message: '手机号已注册，请直接登录' });
 
   const passwordInfo = hashPassword(password);
@@ -1608,8 +1634,7 @@ async function handleRegister(req, res) {
   };
   addAccountSession(user, token, body, now);
   db.users[phone] = user;
-  writeDatabase(db);
-  verifiedPhones.delete(phone);
+  await writeDatabase(db);
   forgetCode(phone);
   return sendJson(res, 200, { ok: true, user: publicUserForPolicyClient(user, token, db, body) });
 }
@@ -1619,12 +1644,21 @@ async function handleLogin(req, res) {
   const phone = String(body.phone || "").trim();
   const password = String(body.password || "");
   if (!validPhone(phone)) return sendJson(res, 400, { ok: false, message: "手机号格式不正确" });
+  if (!password || password.length > 4096) return sendJson(res, 400, { ok: false, message: "密码格式不正确" });
   if (body.termsAccepted !== true) return sendJson(res, 400, { ok: false, message: "请先阅读并同意服务规则和隐私政策" });
+  const address = requestAddress(req, TRUST_LOCAL_PROXY);
+  const accountKey = "login:phone:" + phone;
+  const addressAccountKey = "login:pair:" + address + ":" + phone;
+  if (!loginAttempts.take("login:ip:" + address, 120, 600000) ||
+      !loginAttempts.take(accountKey, 20, 600000) ||
+      !loginAttempts.take(addressAccountKey, 8, 600000)) return rateLimited(res, 600);
   const db = readDatabase();
   const user = db.users[phone];
-  if (!user || !verifyPassword(password, user)) {
+  if (!verifyPassword(password, user)) {
     return sendJson(res, 401, { ok: false, message: "手机号或密码不正确" });
   }
+  loginAttempts.clear(accountKey);
+  loginAttempts.clear(addressAccountKey);
   const token = makeAuthToken();
   const now = new Date().toISOString();
   addAccountSession(user, token, body, now);
@@ -1701,7 +1735,12 @@ async function handleSaveAccount(req, res) {
   const db = readDatabase();
   const user = authenticate(db, phone, token);
   if (!user) return sendJson(res, 401, { ok: false, message: "登录已过期，请重新登录" });
-  const accountAvatar = validatedMediaUrl(body.accountAvatar, { allowImageData: true });
+  if (!body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
+    return sendJson(res, 400, { ok: false, code: "INVALID_ACCOUNT_DATA", message: "账号数据格式不正确，未覆盖云端记录" });
+  }
+  const accountAvatar = Object.hasOwn(body, "accountAvatar")
+    ? validatedMediaUrl(body.accountAvatar, { allowImageData: true })
+    : user.accountAvatar || "";
   const incomingData = normalizeAccountData(body.data || {});
   if (user.teamSpace && typeof body.baseDataRevision !== 'string') {
     return sendJson(res, 409, { ok: false, message: '团队共享已启用，请更新客户端并刷新云端数据后再保存' });
@@ -1715,10 +1754,13 @@ async function handleSaveAccount(req, res) {
     return sendJson(res, 409, { ok: false, code: "ACCOUNT_DATA_CONFLICT", message: "其他设备已更新云端，本次保存未覆盖云端数据，请保留本机备份后核对" });
   }
   const existingData = normalizeAccountData(user.data || {});
-  // Older app builds do not send these fields. Preserve them without preventing
-  // a new client from deliberately removing a saved picker option.
-  for (const field of ["careRecords", "careCustomItems", "carePlans"]) {
-    if (!Object.prototype.hasOwnProperty.call(body.data || {}, field)) incomingData[field] = existingData[field];
+  // An omitted collection is not a deletion. Legacy clients can still
+  // update the fields they know, including explicit empty arrays.
+  for (const field of Object.keys(existingData)) {
+    if (!Object.hasOwn(body.data, field)) incomingData[field] = existingData[field];
+    else if (Array.isArray(existingData[field]) && !Array.isArray(body.data[field])) {
+      return sendJson(res, 400, { ok: false, code: "INVALID_ACCOUNT_DATA", message: "记录列表格式不正确，未覆盖云端记录" });
+    }
   }
   // Older care clients omit individual turtle links. Explicit [] from newer
   // clients still clears them; omission preserves the historical associations.
@@ -1730,6 +1772,12 @@ async function handleSaveAccount(req, res) {
   incomingData.careRecords = incomingData.careRecords.map(record => rawCareRecords.has(record.id)
     && !Object.prototype.hasOwnProperty.call(rawCareRecords.get(record.id), "sourceMemoId")
     ? { ...record, sourceMemoId: previousCareRecords.get(record.id)?.sourceMemoId || "" } : record);
+  const incomingTurtleIds = new Set(incomingData.turtles.map(item => String(item?.id || "")));
+  const hasBase = Boolean(body.baseDataRevision || body.baseUpdatedAt);
+  const changedWithoutBase = !hasBase && existingData.turtles.some(item => item?.id && !incomingTurtleIds.has(String(item.id)));
+  if (changedWithoutBase) {
+    return sendJson(res, 409, { ok: false, code: "ACCOUNT_DATA_CONFLICT", message: "删除或移出档案前需要核对云端版本，请更新应用并重新同步" });
+  }
   const incomingHasContent = accountDataHasContent(incomingData);
   // Older clients and stale devices must not erase private catalogue entries.
   incomingData.customSpecies = normalizeCustomSpecies([...new Map([
@@ -1738,15 +1786,17 @@ async function handleSaveAccount(req, res) {
   // Never allow a cold-start client shell (all empty arrays) to erase an
   // account that already has real data. This is deliberately server-side so
   // older app builds are protected too.
-  if (accountDataHasContent(existingData) && !incomingHasContent) {
+  if (accountDataHasContent(existingData) && (!incomingHasContent || !Object.keys(body.data).length)) {
     return sendJson(res, 409, {
       ok: false,
+      code: "ACCOUNT_DATA_CONFLICT",
       message: "检测到空数据写入请求，已保护云端数据；请重新打开应用后再试"
     });
   }
   if (isSuspiciousAccountDataLoss(existingData, incomingData)) {
     return sendJson(res, 409, {
       ok: false,
+      code: "ACCOUNT_DATA_CONFLICT",
       message: "检测到异常的大幅数据减少，已停止保存以保护档案和账本；请重新打开应用后再试"
     });
   }
@@ -1776,11 +1826,17 @@ async function handleSaveAccount(req, res) {
   recordAccountChange(user, existingData, incomingData);
   user.data = incomingData;
   user.updatedAt = new Date(Math.max(Date.now(), (Date.parse(user.updatedAt) || 0) + 1)).toISOString();
-  writeDatabase(db);
+  const reply = JSON.parse(JSON.stringify(publicUserForPolicyClient(user, token, db, body)));
+  try {
+    await writeDatabase(db);
+  } catch (error) {
+    console.error("档案保存未确认提交：", error.name);
+    return sendJson(res, 503, { ok: false, message: "数据库暂未确认保存，请保留本机记录后重试同步" });
+  }
   // A legacy client does not send termsVersion when saving. Return the same
   // compatible version as /account/load so its background auto-save cannot
   // reintroduce a newer agreement version into local state.
-  return sendJson(res, 200, { ok: true, user: publicUserForPolicyClient(user, token, db, body) });
+  return sendJson(res, 200, { ok: true, user: reply });
 }
 
 async function handleDeleteGrowthRecord(req, res) {
@@ -2487,7 +2543,7 @@ function publicFeedbackAuthor(user) {
 
 function publicFeedbackItems(db, viewer) {
   const admin = isAdminUser(viewer);
-  return (Array.isArray(db.feedbacks) ? db.feedbacks : []).map(item => {
+  return (Array.isArray(db.feedbacks) ? db.feedbacks : []).filter(item => canReadFeedback(item, viewer)).map(item => {
     const likes = Array.isArray(item.likes) ? item.likes : [];
     return {
       id: item.id,
@@ -2503,7 +2559,9 @@ function publicFeedbackItems(db, viewer) {
       adminStatus: ["pending", "processing", "resolved", "declined"].includes(item.adminStatus) ? item.adminStatus : "pending",
       adminReply: admin || item.authorPhoneRaw === viewer?.phone ? String(item.adminReply || "") : "",
       processedAt: item.processedAt || "",
-      comments: (Array.isArray(item.comments) ? item.comments : []).map(comment => ({
+      comments: (Array.isArray(item.comments) ? item.comments : []).filter(comment =>
+        admin || comment.authorPhoneRaw === viewer.phone || comment.authorPhoneRaw === REVIEW_ADMIN_PHONE
+      ).map(comment => ({
         id: comment.id,
         content: comment.content || "",
         authorName: comment.authorName || "壳友",
@@ -2514,6 +2572,10 @@ function publicFeedbackItems(db, viewer) {
       }))
     };
   });
+}
+
+function canReadFeedback(item, user) {
+  return Boolean(user && (isAdminUser(user) || item.authorPhoneRaw === user.phone));
 }
 
 async function handleListFeedback(req, res) {
@@ -2560,7 +2622,7 @@ async function handleToggleFeedbackLike(req, res) {
   if (!user) return;
   const feedbackId = String(body.feedbackId || "");
   const feedback = (Array.isArray(db.feedbacks) ? db.feedbacks : []).find(item => item.id === feedbackId);
-  if (!feedback) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
+  if (!feedback || !canReadFeedback(feedback, user)) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
   const likes = Array.isArray(feedback.likes) ? feedback.likes : [];
   feedback.likes = likes.includes(user.phone) ? likes.filter(phone => phone !== user.phone) : [...likes, user.phone];
   writeDatabase(db);
@@ -2576,7 +2638,7 @@ async function handleCreateFeedbackComment(req, res) {
   const content = trimPublicText(body.content, 600);
   if (!content) return sendJson(res, 400, { ok: false, message: "请填写评论内容" });
   const feedback = (Array.isArray(db.feedbacks) ? db.feedbacks : []).find(item => item.id === feedbackId);
-  if (!feedback) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
+  if (!feedback || !canReadFeedback(feedback, user)) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
   const author = publicFeedbackAuthor(user);
   feedback.comments = [
     ...(Array.isArray(feedback.comments) ? feedback.comments : []),
@@ -2602,8 +2664,7 @@ async function handleDeleteFeedback(req, res) {
   const feedbackId = String(body.feedbackId || "");
   const feedbacks = Array.isArray(db.feedbacks) ? db.feedbacks : [];
   const feedback = feedbacks.find(item => item.id === feedbackId);
-  if (!feedback) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
-  if (!isAdminUser(user) && feedback.authorPhoneRaw !== user.phone) return sendJson(res, 403, { ok: false, message: "没有权限删除这条反馈" });
+  if (!feedback || !canReadFeedback(feedback, user)) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
   db.feedbacks = feedbacks.filter(item => item.id !== feedbackId);
   writeDatabase(db);
   return sendJson(res, 200, { ok: true, feedbacks: publicFeedbackItems(db, user) });
@@ -2617,7 +2678,7 @@ async function handleDeleteFeedbackComment(req, res) {
   const feedbackId = String(body.feedbackId || "");
   const commentId = String(body.commentId || "");
   const feedback = (Array.isArray(db.feedbacks) ? db.feedbacks : []).find(item => item.id === feedbackId);
-  if (!feedback) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
+  if (!feedback || !canReadFeedback(feedback, user)) return sendJson(res, 404, { ok: false, message: "反馈不存在" });
   const comment = (Array.isArray(feedback.comments) ? feedback.comments : []).find(item => item.id === commentId);
   if (!comment) return sendJson(res, 404, { ok: false, message: "评论不存在" });
   if (!isAdminUser(user) && comment.authorPhoneRaw !== user.phone) return sendJson(res, 403, { ok: false, message: "没有权限删除这条评论" });
@@ -2758,8 +2819,8 @@ function clearCommunityConversationHistory(db, user, targetPhone) {
   user.communityConversationHiddenPhones = [...new Set([...(user.communityConversationHiddenPhones || []), targetPhone])];
 }
 
-function communityConversationMessages(db, phoneA, phoneB) {
-  return (Array.isArray(db.messages) ? db.messages : [])
+function communityConversationMessages(db, phoneA, phoneB, source = db.messages) {
+  return (Array.isArray(source) ? source : [])
     .filter(item => [item.fromPhone, item.toPhone].includes(phoneA) && [item.fromPhone, item.toPhone].includes(phoneB) && communityMessageVisibleTo(item, phoneA))
     .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
     .map(item => {
@@ -2794,7 +2855,7 @@ function adminCommunityChatConversations(db) {
   const messages = Array.isArray(db.messages) ? db.messages : [];
   const conversations = new Map();
   messages.forEach(message => {
-    if (!message?.fromPhone || !message?.toPhone || message.systemType === "platform_transaction_warning") return;
+    if (!message?.fromPhone || !message?.toPhone) return;
     if (String(message.fromPhone) === REVIEW_ADMIN_PHONE || String(message.toPhone) === REVIEW_ADMIN_PHONE) return;
     const phones = [String(message.fromPhone), String(message.toPhone)].sort();
     const key = phones.join(":");
@@ -2803,13 +2864,13 @@ function adminCommunityChatConversations(db) {
     conversations.set(key, current);
   });
   return [...conversations.values()]
+    .filter(conversation => conversation.messages.some(message => message.systemType !== "platform_transaction_warning"))
     .map(conversation => {
-      const entries = conversation.messages.sort((left, right) => new Date(left.createdAt || 0) - new Date(right.createdAt || 0));
       const users = conversation.phones.map(phone => {
         const user = db.users?.[phone] || {};
         return { id: communityUserId(phone), name: user.accountName || maskPhone(phone), avatar: user.accountAvatar || "", isAdmin: isAdminUser(user) };
       });
-      const publicMessages = communityConversationMessages(db, conversation.phones[0], conversation.phones[1]);
+      const publicMessages = communityConversationMessages(db, conversation.phones[0], conversation.phones[1], conversation.messages);
       const latest = publicMessages[publicMessages.length - 1] || {};
       const marketListings = [...new Map(publicMessages
         .filter(message => message.marketListing?.id)
@@ -2828,10 +2889,12 @@ function adminCommunityChatConversations(db) {
     .sort((left, right) => new Date(right.latestAt || 0) - new Date(left.latestAt || 0));
 }
 
+const analyticsDateFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit"
+});
+
 function analyticsDateKey(date = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit"
-  }).formatToParts(date).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+  const parts = analyticsDateFormatter.formatToParts(date).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
@@ -2844,8 +2907,9 @@ function analyticsDay(db, key = analyticsDateKey()) {
   db.appAnalytics = db.appAnalytics && typeof db.appAnalytics === "object" ? db.appAnalytics : { days: {} };
   db.appAnalytics.days = db.appAnalytics.days && typeof db.appAnalytics.days === "object" ? db.appAnalytics.days : {};
   const days = db.appAnalytics.days;
+  const cutoff = analyticsDateKey(new Date(Date.now() - 400 * 24 * 60 * 60 * 1000));
   Object.keys(days).forEach(dateKey => {
-    if (dateKey < analyticsDateKey(new Date(Date.now() - 400 * 24 * 60 * 60 * 1000))) delete days[dateKey];
+    if (dateKey < cutoff) delete days[dateKey];
   });
   if (!days[key] || typeof days[key] !== "object") days[key] = { sessions: {} };
   days[key].sessions = days[key].sessions && typeof days[key].sessions === "object" ? days[key].sessions : {};
@@ -2925,7 +2989,7 @@ function operationsUserUsage(db, sessions) {
 
 function publicTodayAnalytics(db, selectedDate = analyticsDateKey()) {
   const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(String(selectedDate || "")) ? String(selectedDate) : analyticsDateKey();
-  const day = analyticsDay(db, safeDate);
+  const day = db.appAnalytics?.days?.[safeDate];
   const sessions = publicAnalyticsSessions(day);
   const dwellMs = sessions.reduce((total, session) => total + sessionDwellMs(session), 0);
   const visitors = new Set(sessions.map(session => session.visitorHash).filter(Boolean));
@@ -2972,25 +3036,52 @@ function recentAnalyticsMonths(count = 13) {
 }
 
 function operationsMonthlyGrowth(db, users) {
-  return recentAnalyticsMonths().map(month => {
-    const sessions = Object.entries(db.appAnalytics?.days || {}).filter(([key]) => key.startsWith(`${month}-`)).flatMap(([, day]) => publicAnalyticsSessions(day));
-    const dwellMs = sessions.reduce((total, session) => total + sessionDwellMs(session), 0);
-    return { month, visitCount: sessions.length, uniqueVisitorCount: new Set(sessions.map(item => item.visitorHash).filter(Boolean)).size, activeAccountCount: new Set(sessions.map(item => item.accountHash).filter(Boolean)).size, registeredCount: users.filter(user => analyticsRecordDateKey(user.createdAt).startsWith(month)).length, totalDwellSeconds: Math.round(dwellMs / 1000), averageDwellSeconds: sessions.length ? Math.round(dwellMs / sessions.length / 1000) : 0 };
-  });
+  const months = new Map(recentAnalyticsMonths().map(month => [month, {
+    count: 0, dwellMs: 0, visitors: new Set(), accounts: new Set(), registered: 0
+  }]));
+  for (const [key, day] of Object.entries(db.appAnalytics?.days || {})) {
+    if (key[7] !== "-") continue;
+    const row = months.get(key.slice(0, 7));
+    if (!row) continue;
+    for (const session of publicAnalyticsSessions(day)) {
+      row.count++;
+      row.dwellMs += sessionDwellMs(session);
+      if (session.visitorHash) row.visitors.add(session.visitorHash);
+      if (session.accountHash) row.accounts.add(session.accountHash);
+    }
+  }
+  for (const user of users) {
+    const row = months.get(analyticsRecordDateKey(user.createdAt).slice(0, 7));
+    if (row) row.registered++;
+  }
+  return [...months].map(([month, row]) => ({
+    month, visitCount: row.count, uniqueVisitorCount: row.visitors.size, activeAccountCount: row.accounts.size,
+    registeredCount: row.registered, totalDwellSeconds: Math.round(row.dwellMs / 1000),
+    averageDwellSeconds: row.count ? Math.round(row.dwellMs / row.count / 1000) : 0
+  }));
 }
 
 function operationsMonthlyMarket(db, listings) {
-  const messages = Array.isArray(db.messages) ? db.messages : [];
-  return recentAnalyticsMonths().map(month => {
-    const daily = Object.entries(db.appAnalytics?.days || {}).filter(([key]) => key.startsWith(`${month}-`));
-    const chats = new Set();
-    messages.forEach(message => {
-      if (!analyticsRecordDateKey(message.createdAt).startsWith(month) || !message.marketListing?.id || !message.fromPhone || !message.toPhone) return;
-      if (String(message.fromPhone) === REVIEW_ADMIN_PHONE || String(message.toPhone) === REVIEW_ADMIN_PHONE) return;
-      chats.add(`${message.marketListing.id}:${[message.fromPhone, message.toPhone].sort().join(":")}`);
-    });
-    return { month, publishedCount: listings.filter(item => analyticsRecordDateKey(item.createdAt).startsWith(month)).length, impressions: daily.reduce((sum, [, day]) => sum + Math.max(0, Number(day.market?.impressions) || 0), 0), views: daily.reduce((sum, [, day]) => sum + Math.max(0, Number(day.market?.views) || 0), 0), wants: daily.reduce((sum, [, day]) => sum + Math.max(0, Number(day.market?.wants) || 0), 0), chats: chats.size };
-  });
+  const months = new Map(recentAnalyticsMonths().map(month => [month, {
+    month, publishedCount: 0, impressions: 0, views: 0, wants: 0, chats: new Set()
+  }]));
+  for (const [key, day] of Object.entries(db.appAnalytics?.days || {})) {
+    if (key[7] !== "-") continue;
+    const row = months.get(key.slice(0, 7));
+    if (!row) continue;
+    for (const name of ["impressions", "views", "wants"]) row[name] += Math.max(0, Number(day.market?.[name]) || 0);
+  }
+  for (const listing of listings) {
+    const row = months.get(analyticsRecordDateKey(listing.createdAt).slice(0, 7));
+    if (row) row.publishedCount++;
+  }
+  for (const message of Array.isArray(db.messages) ? db.messages : []) {
+    if (!message.marketListing?.id || !message.fromPhone || !message.toPhone) continue;
+    if (String(message.fromPhone) === REVIEW_ADMIN_PHONE || String(message.toPhone) === REVIEW_ADMIN_PHONE) continue;
+    const row = months.get(analyticsRecordDateKey(message.createdAt).slice(0, 7));
+    if (row) row.chats.add(`${message.marketListing.id}:${[message.fromPhone, message.toPhone].sort().join(":")}`);
+  }
+  return [...months.values()].map(row => ({ ...row, chats: row.chats.size }));
 }
 
 function recordAdminAudit(db, user, action, detail = "") {
@@ -2999,23 +3090,34 @@ function recordAdminAudit(db, user, action, detail = "") {
   db.adminAuditLogs = db.adminAuditLogs.slice(0, 1000);
 }
 
-function operationsSummary(db, selectedDate = analyticsDateKey()) {
+function operationsDateKey(selectedDate) {
   const earliest = analyticsDateKey(new Date(Date.now() - 399 * 24 * 60 * 60 * 1000));
   const todayKey = analyticsDateKey();
   const requestedDate = /^\d{4}-\d{2}-\d{2}$/.test(String(selectedDate || "")) ? String(selectedDate) : todayKey;
-  const dateKey = requestedDate < earliest || requestedDate > todayKey ? todayKey : requestedDate;
-  const analytics = publicTodayAnalytics(db, dateKey);
+  return requestedDate < earliest || requestedDate > todayKey || !Number.isFinite(Date.parse(requestedDate)) ? todayKey : requestedDate;
+}
+
+function operationsGrowth(db, today) {
+  const analytics = publicTodayAnalytics(db, today);
   const users = Object.values(db.users || {}).filter(user => !isAdminUser(user));
-  const sessions = publicAnalyticsSessions(analyticsDay(db, dateKey));
-  const today = dateKey;
+  const sessions = publicAnalyticsSessions(db.appAnalytics?.days?.[today]);
   const registeredToday = users.filter(user => {
     const createdAt = new Date(user.createdAt || 0);
     return Number.isFinite(createdAt.getTime()) && analyticsDateKey(createdAt) === today;
   }).length;
   const activeAccounts = new Set(sessions.map(session => session.accountHash).filter(Boolean));
+  return {
+    analytics: { ...analytics, registeredToday, totalUserCount: users.length, activeAccountCount: activeAccounts.size },
+    userUsage: operationsUserUsage(db, sessions),
+    growthMonthly: operationsMonthlyGrowth(db, users)
+  };
+}
+
+function operationsMarket(db, today) {
   const listings = (Array.isArray(db.marketListings) ? db.marketListings : []).filter(item => String(item?.sellerPhoneRaw || "") !== REVIEW_ADMIN_PHONE);
-  const todayMarket = analyticsMarketMetrics(db, today);
+  const todayMarket = db.appAnalytics?.days?.[today]?.market || {};
   const chatPairsByListing = new Map();
+  const todayChats = new Set();
   (Array.isArray(db.messages) ? db.messages : []).forEach(message => {
     const listingId = message.marketListing?.id;
     if (!listingId || !message.fromPhone || !message.toPhone) return;
@@ -3023,6 +3125,7 @@ function operationsSummary(db, selectedDate = analyticsDateKey()) {
     const pair = [message.fromPhone, message.toPhone].sort().join(":");
     if (!chatPairsByListing.has(listingId)) chatPairsByListing.set(listingId, new Set());
     chatPairsByListing.get(listingId).add(pair);
+    if (analyticsRecordDateKey(message.createdAt) === today) todayChats.add(`${listingId}:${pair}`);
   });
   const listingRows = listings.map(item => {
     const view = marketListingView(db, item);
@@ -3036,6 +3139,22 @@ function operationsSummary(db, selectedDate = analyticsDateKey()) {
     const createdAt = new Date(item.createdAt || 0).getTime();
     return Number.isFinite(createdAt) && Date.now() - createdAt >= 3 * 24 * 60 * 60 * 1000 && !item.impressionCount && !item.viewCount && !item.wantCount && !item.chatCount;
   }).slice(0, 30);
+  return {
+    activeCount: activeListings.length, soldCount: soldListings.length, inactiveCount: inactiveListings.length,
+    today: { publishedCount: listings.filter(item => analyticsRecordDateKey(item.createdAt) === today).length,
+      impressions: Math.max(0, Number(todayMarket.impressions) || 0), views: Math.max(0, Number(todayMarket.views) || 0),
+      wants: Math.max(0, Number(todayMarket.wants) || 0), chats: todayChats.size },
+    monthly: operationsMonthlyMarket(db, listings),
+    totalImpressions: listingRows.reduce((total, item) => total + Number(item.impressionCount || 0), 0),
+    totalViews: listingRows.reduce((total, item) => total + Number(item.viewCount || 0), 0),
+    totalWants: listingRows.reduce((total, item) => total + Number(item.wantCount || 0), 0),
+    totalChats: listingRows.reduce((total, item) => total + Number(item.chatCount || 0), 0),
+    topListings: [...listingRows].sort((left, right) => (right.chatCount * 100 + right.wantCount * 10 + right.viewCount + right.impressionCount * 0.1) - (left.chatCount * 100 + left.wantCount * 10 + left.viewCount + left.impressionCount * 0.1)).slice(0, 20),
+    lowInterestListings
+  };
+}
+
+function operationsFeedback(db) {
   const feedbacks = (Array.isArray(db.feedbacks) ? db.feedbacks : [])
     .filter(item => String(item?.authorPhoneRaw || "") !== REVIEW_ADMIN_PHONE)
     .slice().sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
@@ -3044,28 +3163,33 @@ function operationsSummary(db, selectedDate = analyticsDateKey()) {
     status: ["pending", "processing", "resolved", "declined"].includes(item.adminStatus) ? item.adminStatus : "pending",
     reply: item.adminReply || "", processedAt: item.processedAt || ""
   }));
+  return { pendingCount: feedbackRows.filter(item => item.status === "pending").length, items: feedbackRows };
+}
+
+function operationsSafety(db) {
   const reports = (Array.isArray(db.reports) ? db.reports : []).filter(item =>
     String(item?.reporterPhone || "") !== REVIEW_ADMIN_PHONE && String(item?.targetOwnerPhone || "") !== REVIEW_ADMIN_PHONE
   );
-  return {
-    analytics: { ...analytics, registeredToday, totalUserCount: users.length, activeAccountCount: activeAccounts.size },
-    userUsage: operationsUserUsage(db, sessions),
-    growthMonthly: operationsMonthlyGrowth(db, users),
-    market: {
-      activeCount: activeListings.length, soldCount: soldListings.length, inactiveCount: inactiveListings.length,
-      today: { publishedCount: listings.filter(item => analyticsRecordDateKey(item.createdAt) === today).length, impressions: todayMarket.impressions, views: todayMarket.views, wants: todayMarket.wants, chats: new Set((Array.isArray(db.messages) ? db.messages : []).filter(message => analyticsRecordDateKey(message.createdAt) === today && message.marketListing?.id && message.fromPhone && message.toPhone && String(message.fromPhone) !== REVIEW_ADMIN_PHONE && String(message.toPhone) !== REVIEW_ADMIN_PHONE).map(message => `${message.marketListing.id}:${[message.fromPhone, message.toPhone].sort().join(":")}`)).size },
-      monthly: operationsMonthlyMarket(db, listings),
-      totalImpressions: listingRows.reduce((total, item) => total + Number(item.impressionCount || 0), 0),
-      totalViews: listingRows.reduce((total, item) => total + Number(item.viewCount || 0), 0),
-      totalWants: listingRows.reduce((total, item) => total + Number(item.wantCount || 0), 0),
-      totalChats: listingRows.reduce((total, item) => total + Number(item.chatCount || 0), 0),
-      topListings: [...listingRows].sort((left, right) => (right.chatCount * 100 + right.wantCount * 10 + right.viewCount + right.impressionCount * 0.1) - (left.chatCount * 100 + left.wantCount * 10 + left.viewCount + left.impressionCount * 0.1)).slice(0, 20),
-      lowInterestListings
-    },
-    safety: { pendingReportCount: reports.filter(item => item.status === "pending").length, totalReportCount: reports.length, auditLogs: [] },
-    feedback: { pendingCount: feedbackRows.filter(item => item.status === "pending").length, items: feedbackRows },
-    health: { status: "healthy", uptimeSeconds: Math.round(process.uptime()), database: MYSQL_ENABLED ? "MySQL" : "本地文件", lastBackupDate: lastServerBackupDate || "未记录", memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024) }
-  };
+  return { pendingReportCount: reports.filter(item => item.status === "pending").length, totalReportCount: reports.length, auditLogs: [] };
+}
+
+function operationsHealth() {
+  return { status: "healthy", uptimeSeconds: Math.round(process.uptime()), database: MYSQL_ENABLED ? "MySQL" : "本地文件", lastBackupDate: lastServerBackupDate || "未记录", memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024) };
+}
+
+const operationsSections = {
+  analytics: operationsGrowth,
+  market: (db, date) => ({ market: operationsMarket(db, date) }),
+  feedback: db => ({ feedback: operationsFeedback(db) }),
+  safety: db => ({ safety: operationsSafety(db) }),
+  health: () => ({ health: operationsHealth() }),
+  chats: db => ({ conversations: adminCommunityChatConversations(db) })
+};
+
+function operationsSummary(db, selectedDate, tab) {
+  const date = operationsDateKey(selectedDate);
+  if (tab) return { tab, date, ...operationsSections[tab](db, date) };
+  return Object.assign({}, ...Object.values(operationsSections).map(section => section(db, date)));
 }
 
 async function handleAnalyticsVisit(req, res) {
@@ -3123,11 +3247,14 @@ async function handleAdminOperationsOverview(req, res) {
   const user = requireReviewUser(db, body, res);
   if (!user) return;
   if (!isAdminUser(user)) return sendJson(res, 403, { ok: false, message: "仅平台管理员可查看运营数据" });
-  recordAdminAudit(db, user, "查看运营中心", "读取聊天、统计与服务状态");
-  const overview = operationsSummary(db, body.date);
-  const conversations = adminCommunityChatConversations(db);
+  const tab = body.tab;
+  if (tab !== undefined && (typeof tab !== "string" || !Object.hasOwn(operationsSections, tab))) {
+    return sendJson(res, 400, { ok: false, message: "运营页签无效" });
+  }
+  recordAdminAudit(db, user, "查看运营中心", tab || "全量概览");
+  const overview = operationsSummary(db, body.date, tab);
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, ...overview, conversations });
+  return sendJson(res, 200, { ok: true, ...overview });
 }
 
 async function handleAdminFeedbackAction(req, res) {
@@ -3145,7 +3272,7 @@ async function handleAdminFeedbackAction(req, res) {
   feedback.processedAt = new Date().toISOString();
   recordAdminAudit(db, user, "处理用户反馈", `${feedback.type || "反馈"}：${status}`);
   writeDatabase(db);
-  return sendJson(res, 200, { ok: true, feedback: operationsSummary(db).feedback });
+  return sendJson(res, 200, { ok: true, feedback: operationsFeedback(db) });
 }
 
 function communityFriends(db, viewer) {
@@ -4303,10 +4430,11 @@ function marketWantCount(item, excludeAdmin = false) {
 
 function marketListingView(db, item, viewer = null) {
   const viewerPhone = viewer?.phone || "";
+  const isOwn = Boolean(viewerPhone && item.sellerPhoneRaw === viewerPhone);
   const seller = db.users?.[item.sellerPhoneRaw];
   return {
     id: item.id,
-    turtleId: item.turtleId || "",
+    turtleId: isOwn ? item.turtleId || "" : "",
     title: item.title || "",
     speciesCode: item.speciesCode || "",
     speciesName: item.speciesName || "",
@@ -4336,8 +4464,8 @@ function marketListingView(db, item, viewer = null) {
     sellerId: communityUserId(item.sellerPhoneRaw),
     sellerName: seller?.accountName || item.sellerName || "壳友卖家",
     sellerAvatar: seller?.accountAvatar || item.sellerAvatar || "",
-    sellerIsAdmin: isAdminUser(seller),
-    isOwn: Boolean(viewerPhone && item.sellerPhoneRaw === viewerPhone),
+    sellerIsAdmin: Boolean(viewer && isAdminUser(seller)),
+    isOwn,
     sellerFollowed: Boolean(viewerPhone && item.sellerPhoneRaw !== viewerPhone && isFollowingCommunityUser(db, viewerPhone, item.sellerPhoneRaw)),
     isFriend: Boolean(viewerPhone && item.sellerPhoneRaw !== viewerPhone && isCommunityFriend(db, viewerPhone, item.sellerPhoneRaw)),
     createdAt: item.createdAt
@@ -4374,7 +4502,8 @@ function autoOfflineRestrictedMarketListings(db, now = Date.now()) {
 function publicMarketListings(db, viewer = null) {
   const blocked = blockedPhoneSet(viewer);
   return (Array.isArray(db.marketListings) ? db.marketListings : [])
-    .filter(item => (item.status || "active") === "active" && !blocked.has(item.sellerPhoneRaw))
+    .filter(item => (item.status || "active") === "active" && !blocked.has(item.sellerPhoneRaw) &&
+      !blockedPhoneSet(db.users?.[item.sellerPhoneRaw]).has(viewer?.phone))
     .slice()
     .sort((a, b) => new Date(b.refreshedAt || b.createdAt || 0) - new Date(a.refreshedAt || a.createdAt || 0))
     .map(item => marketListingView(db, item, viewer));
@@ -4392,7 +4521,9 @@ function ownMarketListings(db, user) {
 async function handleMarketVideoPoster(req, res) {
   const body = await readJson(req);
   const db = readDatabase();
-  const user = optionalReviewUser(db, body);
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (!marketReadBudget.take("poster:" + user.phone, 20, 60000)) return rateLimited(res);
   const listing = publicMarketListings(db, user).find(item => item.id === String(body.listingId || ""));
   const media = listing?.mediaItems?.[0];
   if (!media || media.type !== "video") return sendJson(res, 404, { ok: false, message: "商品不存在或不可见" });
@@ -4423,11 +4554,18 @@ async function handleMarketSellerPhone(req, res) {
 
 async function handleMarketList(req, res) {
   const body = await readJson(req);
+  if (!marketReadBudget.take("list:ip:" + requestAddress(req, TRUST_LOCAL_PROXY), 480, 60000)) return rateLimited(res);
   const db = readDatabase();
-  const user = optionalReviewUser(db, body);
+  const user = requireReviewUser(db, body, res);
+  if (!user) return;
+  if (!marketReadBudget.take("list:account:" + user.phone, 60, 60000)) return rateLimited(res);
+  if (body.all === true && !marketReadBudget.take("list:legacy:" + user.phone, 20, 60000)) return rateLimited(res);
+  const requestedLimit = Number(body.limit);
+  const pageLimit = Math.min(24, Math.max(1, Number.isFinite(requestedLimit) && requestedLimit ? Math.floor(requestedLimit) : 8));
   let accountData = null;
   let changed = autoOfflineStaleMarketListings(db);
   if (autoOfflineRestrictedMarketListings(db)) changed = true;
+  let repairBackup = false;
   if (user) {
     user.data = normalizeAccountData(user.data || {});
     (Array.isArray(db.marketListings) ? db.marketListings : [])
@@ -4437,6 +4575,14 @@ async function handleMarketList(req, res) {
         const linked = records.find(item => item.marketListingId === listing.id)
           || (listing.turtleId ? records.find(item => item.type === "sold" && item.turtleId === listing.turtleId) : null);
         if (linked) return;
+        if (!repairBackup) {
+          try { createAccountRecoverySnapshot(user, "before-market-ledger-repair"); }
+          catch (error) {
+            console.error("集市账本修复前备份失败：", error.name);
+            return;
+          }
+          repairBackup = true;
+        }
         syncMarketListingToLedger(user, listing, "sold");
         changed = true;
       });
@@ -4456,7 +4602,6 @@ async function handleMarketList(req, res) {
     .map(id => trimPublicText(id, 100))
     .filter(Boolean))].slice(0, 500);
   const visibleListings = publicMarketListings(db, user);
-  const ranked = body.rankingVersion === 1 ? marketRankPage({ listings: visibleListings, body, owner: user?.phone || "", account: user?.data || {} }) : null;
   const allListings = visibleListings.filter(item => {
     if (marketInquiry.parse(keyword)) return marketInquiry.matches(item, keyword);
     if (stage !== "all" && item.stage !== stage) return false;
@@ -4464,9 +4609,12 @@ async function handleMarketList(req, res) {
     if (!keyword) return true;
     return `${item.title || ""} ${item.speciesName || ""} ${item.city || ""}`.toLowerCase().includes(keyword);
   });
-  const offset = Math.max(0, Math.floor(Number(body.offset || 0)));
-  const requestedLimit = body.all === true ? Math.max(8, allListings.length) : Number(body.limit || 8);
-  const limit = Math.min(200, Math.max(1, Math.floor(requestedLimit)));
+  const requestedOffset = Number(body.offset);
+  const offset = Number.isSafeInteger(requestedOffset) ? Math.max(0, requestedOffset) : 0;
+  const ranked = body.rankingVersion === 1
+    ? marketRankPage({ listings: visibleListings, body: { ...body, offset, limit: pageLimit }, owner: user.phone, account: user.data || {} })
+    : null;
+  const limit = body.all === true ? 200 : pageLimit;
   const listings = ranked ? ranked.listings : allListings.slice(offset, offset + limit);
   const savedIds = user ? new Set([
     ...(Array.isArray(user.data?.marketHistoryIds) ? user.data.marketHistoryIds : []),
@@ -4522,18 +4670,22 @@ function attachMarketDeliveryMedia(listing, queue = true) {
 
 async function handleMarketPublicDetail(req, res) {
   const body = await readJson(req);
+  if (!marketReadBudget.take("detail:ip:" + requestAddress(req, TRUST_LOCAL_PROXY), 240, 60000)) return rateLimited(res);
   const db = readDatabase();
   const viewer = optionalReviewUser(db, body);
   const listingId = trimPublicText(body.listingId, 100);
   const listing = (Array.isArray(db.marketListings) ? db.marketListings : [])
     .find(item => item.id === listingId && (item.status || "active") === "active");
-  if (!listing) return sendJson(res, 404, { ok: false, message: "商品已下架或不存在" });
+  if (!listing || Date.parse(marketAvailabilityMeta(listing).expiresAt) <= Date.now() ||
+    isMarketProhibitedSpecies(listing.speciesCode, listing.speciesName)) {
+    return sendJson(res, 404, { ok: false, message: "商品已下架或不存在" });
+  }
   const seller = db.users?.[listing.sellerPhoneRaw] || null;
   if (viewer && seller && usersBlockEachOther(viewer, seller)) {
     return sendJson(res, 403, { ok: false, message: "该商品当前不可查看" });
   }
   const result = marketListingView(db, listing, viewer);
-  if (body.mediaVariantsVersion === 1) attachMarketDeliveryMedia(result);
+  if (body.mediaVariantsVersion === 1) attachMarketDeliveryMedia(result, Boolean(viewer));
   return sendJson(res, 200, { ok: true, listing: result });
 }
 
@@ -4863,6 +5015,14 @@ async function handleMarketStatus(req, res) {
     return sendJson(res, 400, { ok: false, message: marketSpeciesRestrictionMessage() });
   }
   const previousStatus = listing.status === "sold" ? "sold" : "active";
+  const owner = db.users?.[listing.sellerPhoneRaw] || (listing.sellerPhoneRaw === user.phone ? user : null);
+  if (owner && previousStatus !== status && listing.turtleId) {
+    try { createAccountRecoverySnapshot(owner, "before-market-status-change"); }
+    catch (error) {
+      console.error("集市档案变更前备份失败：", error.name);
+      return sendJson(res, 503, { ok: false, message: "恢复备份暂不可用，商品和档案状态已保留，请稍后重试" });
+    }
+  }
   listing.status = status;
   if (status === "sold") {
     listing.saleMethod = saleMethod;
@@ -4877,7 +5037,6 @@ async function handleMarketStatus(req, res) {
     listing.offlineAt = "";
     listing.offlineReason = "";
   }
-  const owner = db.users?.[listing.sellerPhoneRaw] || (listing.sellerPhoneRaw === user.phone ? user : null);
   let ledgerRecord = null;
   if (owner && previousStatus !== status) {
     ledgerRecord = syncMarketListingToLedger(owner, listing, status);
@@ -4893,38 +5052,26 @@ async function handleMarketStatus(req, res) {
   });
 }
 
-async function handleMarketView(req, res) {
+async function handleMarketMetric(req, res, kind) {
   const body = await readJson(req);
   const db = readDatabase();
+  const viewer = requireReviewUser(db, body, res);
+  if (!viewer) return;
   const listing = (Array.isArray(db.marketListings) ? db.marketListings : [])
     .find(item => item.id === String(body.listingId || ""));
-  if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
-  const viewer = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
-  if (!isAdminUser(viewer)) {
-    listing.viewCount = Math.max(0, Number(listing.viewCount || 0)) + 1;
-    incrementAnalyticsMarketMetric(db, "views");
-    writeDatabase(db);
+  if (!listing || (listing.status || "active") !== "active" || Date.parse(marketAvailabilityMeta(listing).expiresAt) <= Date.now() ||
+      isMarketProhibitedSpecies(listing.speciesCode, listing.speciesName) ||
+      (db.users?.[listing.sellerPhoneRaw] && usersBlockEachOther(viewer, db.users[listing.sellerPhoneRaw]))) {
+    return sendJson(res, 404, { ok: false, message: "商品不存在或不可见" });
   }
-  return sendJson(res, 200, {
-    ok: true,
-    listingId: listing.id,
-    impressionCount: Math.max(0, Number(listing.impressionCount || 0)),
-    viewCount: listing.viewCount,
-    wantCount: marketWantCount(listing)
-  });
-}
-
-async function handleMarketImpression(req, res) {
-  const body = await readJson(req);
-  const db = readDatabase();
-  const listing = (Array.isArray(db.marketListings) ? db.marketListings : [])
-    .find(item => item.id === String(body.listingId || ""));
-  if (!listing) return sendJson(res, 404, { ok: false, message: "商品不存在" });
-  const viewer = authenticate(db, String(body.phone || "").trim(), String(body.token || ""));
-  if (!isAdminUser(viewer)) {
-    listing.impressionCount = Math.max(0, Number(listing.impressionCount || 0)) + 1;
-    incrementAnalyticsMarketMetric(db, "impressions");
-    writeDatabase(db);
+  if (!isAdminUser(viewer) && listing.sellerPhoneRaw !== viewer.phone) {
+    if (!marketReadBudget.take("metrics:" + viewer.phone, 180, 60000)) return rateLimited(res);
+    if (marketMetricBudget.take(JSON.stringify([kind, viewer.phone, listing.id]), 1, 30 * 60000)) {
+      const field = kind === "views" ? "viewCount" : "impressionCount";
+      listing[field] = Math.max(0, Number(listing[field] || 0)) + 1;
+      incrementAnalyticsMarketMetric(db, kind);
+      writeDatabase(db);
+    }
   }
   return sendJson(res, 200, {
     ok: true,
@@ -5268,6 +5415,10 @@ async function handleTeamRequest(req, res, pathname) {
   recent.push(now); teamRequestTimes.set(bucket, recent);
   try {
     if (pathname === '/api/apple/notifications') { await applePurchases.notification(body); return sendJson(res, 200, { ok: true }); }
+    const billing = pathname === '/api/apple/purchases' || pathname === '/api/alipay/team/purchases';
+    if (billing && body.action === 'prepare') return sendJson(res, 200, { ok: true, configured: false, products: [],
+      ...(pathname === '/api/apple/purchases' && actor.appleAppAccountToken ? { appAccountToken: actor.appleAppAccountToken } : {}) });
+    if (billing && body.action === 'create') return sendJson(res, 410, { ok: false, message: '团队空间已免费开放，会员购买已停止' });
     const result = pathname === '/api/alipay/team/purchases' ? await alipayPurchases.action(body) : pathname === '/api/apple/purchases' ? await applePurchases.action(body) : await teamService.action(body);
     return sendJson(res, 200, { ok: true, ...result });
   } catch (error) { return sendJson(res, error.status || 500, { ok: false, message: error.status ? error.message : '服务暂时不可用，请重试' }); }
@@ -5315,6 +5466,10 @@ async function handleMediationRequest(req, res, action) {
   }
 }
 const server = http.createServer(async (req, res) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
   let url;
   try { url = new URL(req.url, `http://${req.headers.host}`); }
   catch { res.writeHead(400); res.end('Bad request'); return; }
@@ -5396,8 +5551,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/market/list") return await handleMarketList(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/seller-phone") return await handleMarketSellerPhone(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/detail") return await handleMarketPublicDetail(req, res);
-    if (req.method === "POST" && url.pathname === "/api/market/impression") return await handleMarketImpression(req, res);
-    if (req.method === "POST" && url.pathname === "/api/market/view") return await handleMarketView(req, res);
+    if (req.method === "POST" && url.pathname === "/api/market/impression") return await handleMarketMetric(req, res, "impressions");
+    if (req.method === "POST" && url.pathname === "/api/market/view") return await handleMarketMetric(req, res, "views");
     if (req.method === "POST" && url.pathname === "/api/market/want") return await handleMarketWant(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/create") return await handleMarketCreate(req, res);
     if (req.method === "POST" && url.pathname === "/api/market/refresh") return await handleMarketRefresh(req, res);
@@ -5411,7 +5566,12 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 405, { ok: false, message: "方法不支持" });
   } catch (error) {
     const status = Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : 500;
-    return sendJson(res, status, { ok: false, message: error.message || "服务异常" });
+    if (status >= 500) console.error("API 请求处理失败：", req.method, url.pathname, error.name);
+    return sendJson(res, status, {
+      ok: false,
+      code: status >= 500 ? "SERVICE_ERROR" : status === 413 ? "PAYLOAD_TOO_LARGE" : "INVALID_REQUEST",
+      message: status >= 500 ? "服务暂时不可用，请稍后重试" : error.message || "请求格式不正确"
+    });
   }
 });
 
@@ -5486,11 +5646,7 @@ void initializeMysqlDatabase().then(() => {
   }
   server.listen(PORT, HOST, () => {
     console.log(`龟管家服务已启动：http://${HOST}:${PORT}`);
-    const mode = process.env.SMS_PROVIDER === "aliyun-pnvs" && aliyunPnvsConfigured()
-      ? "阿里云号码认证"
-      : aliyunConfigured()
-        ? "阿里云短信服务"
-        : "本地模拟";
+    const mode = { "aliyun-pnvs": "阿里云号码认证", aliyun: "阿里云短信服务", mock: "隔离测试模拟" }[smsDeliveryMode()] || "未配置，短信发送已关闭";
     console.log(`短信模式：${mode}`);
   });
 }).catch(error => {

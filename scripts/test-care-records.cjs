@@ -20,7 +20,7 @@ async function main() {
   let logs = '', browser;
   const child = spawn(process.execPath, ['server/server.js'], { cwd: root, windowsHide: true,
     env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', TURTLE_RUNTIME_DIR: runtime,
-      MYSQL_URL: '', MYSQL_HOST: '', MYSQL_STORAGE_MODE: 'legacy', SMS_PROVIDER: 'mock', SMS_MOCK: 'true',
+      MYSQL_URL: '', MYSQL_HOST: '', MYSQL_STORAGE_MODE: 'legacy', SMS_PROVIDER: 'mock', NODE_ENV: "test", SMS_MOCK: 'true',
       APNS_KEY_PATH: '', APNS_KEY_ID: '', APNS_TEAM_ID: '', ALIPAY_ENABLED: 'false' }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.on('data', data => { logs += data; });
   child.stderr.on('data', data => { logs += data; });

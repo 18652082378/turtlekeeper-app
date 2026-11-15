@@ -46,34 +46,11 @@ public class TurtlePurchasesPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func products(_ call: CAPPluginCall) {
-        Task { @MainActor in
-            do {
-                let values = try await Product.products(for: identifiers)
-                call.resolve(["products": values.map { ["id": $0.id, "displayName": $0.displayName, "displayPrice": $0.displayPrice] }])
-            } catch { call.reject("无法加载 Apple 订阅价格，请稍后再试", nil, error) }
-        }
+        call.resolve(["products": []])
     }
 
     @objc func purchase(_ call: CAPPluginCall) {
-        guard let identifier = call.getString("productId"), identifiers.contains(identifier),
-              let tokenString = call.getString("appAccountToken"), let token = UUID(uuidString: tokenString) else {
-            call.reject("购买参数无效"); return
-        }
-        Task { @MainActor in
-            do {
-                guard let product = try await Product.products(for: [identifier]).first else { call.reject("订阅商品暂不可用"); return }
-                let result = try await product.purchase(options: [.appAccountToken(token)])
-                switch result {
-                case .success(let verification):
-                    guard case .verified(let transaction) = verification else { call.reject("Apple 订单验证失败"); return }
-                    pending[transaction.id] = transaction
-                    call.resolve(payload(verification, transaction))
-                case .pending: call.resolve(["pending": true])
-                case .userCancelled: call.resolve(["cancelled": true])
-                @unknown default: call.reject("未知购买状态，请尝试恢复购买")
-                }
-            } catch { call.reject("购买未完成，请稍后重试", nil, error) }
-        }
+        call.reject("团队空间已免费开放，会员购买已停止")
     }
 
     @objc func restore(_ call: CAPPluginCall) {

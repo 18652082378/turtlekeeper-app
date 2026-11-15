@@ -17,7 +17,7 @@ async function runtime({ records = false } = {}) {
   const base = `http://127.0.0.1:${port}`;
   async function start() {
     const args = [...(records ? ['--require', path.join(root, 'scripts/mysql-record-test-preload.js')] : []), path.join(root, 'server/server.js')];
-    child = spawn(process.execPath, args, { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, TURTLE_RUNTIME_DIR: directory, HOST: '127.0.0.1', PORT: String(port), ADMIN_PHONE: accounts.admin, MYSQL_HOST: records ? 'synthetic-driver' : '', MYSQL_URL: '', MYSQL_STORAGE_MODE: 'records', TURTLE_TEST_RECORD_DRIVER: '1', TURTLE_TEST_DURABLE_FILE: databaseFile, TURTLE_TEST_FAIL_FILE: failFile, TURTLE_TEST_COMMIT_DELAY: records ? '120' : '', SMS_MOCK: 'true', APNS_KEY_PATH: '', APNS_KEY_BASE64: '' } });
+    child = spawn(process.execPath, args, { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, TURTLE_RUNTIME_DIR: directory, HOST: '127.0.0.1', PORT: String(port), ADMIN_PHONE: accounts.admin, MYSQL_HOST: records ? 'synthetic-driver' : '', MYSQL_URL: '', MYSQL_STORAGE_MODE: 'records', TURTLE_TEST_RECORD_DRIVER: '1', TURTLE_TEST_DURABLE_FILE: databaseFile, TURTLE_TEST_FAIL_FILE: failFile, TURTLE_TEST_COMMIT_DELAY: records ? '120' : '', NODE_ENV: "test", SMS_MOCK: 'true', APNS_KEY_PATH: '', APNS_KEY_BASE64: '' } });
     child.stdout.on('data', x => output += x); child.stderr.on('data', x => output += x);
     for (let i = 0; i < 100; i++) {
       try { if ((await fetch(base + '/api/app/version', { signal: AbortSignal.timeout(300) })).ok) return; } catch { /* Wait for isolated server. */ }

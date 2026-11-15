@@ -90,7 +90,7 @@ const inputSelector = '#communityChatForm input[name="content"]';
       pendingPageEnterMotion = false; edgeBackSnapshots = []; canUseCommunity = () => true;
       render();
     }, fixture);
-    assert.equal(await page.evaluate(() => TurtleMobileCommunity?.revision), '20261101-chat-keyboard');
+    assert.equal(await page.evaluate(() => TurtleMobileCommunity?.revision), '20261115-reply-keyboard');
     await check('Vertical message-list gestures dismiss in both directions, retain text and caret, and keep native scrolling', async () => {
       for (const dy of [-45, 45]) {
         await draft('尚未发送的私信内容', 2, 5);

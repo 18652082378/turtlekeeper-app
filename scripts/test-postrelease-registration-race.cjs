@@ -14,7 +14,8 @@ async function checkRace(samePhone) {
     hashPassword: () => ({ salt: 'synthetic', hash: 'synthetic' }), makeAuthToken: () => 'synthetic-token',
     accountNameForPhone: () => 'Synthetic', maskPhone: () => 'Synthetic', randomDefaultAccountAvatar: () => '',
     normalizeAccountData: value => value, clientPolicyVersion: () => 'test', LEGACY_POLICY_VERSION: 'test',
-    addAccountSession: () => {}, writeDatabase: value => { saved = structuredClone(value); }, verifiedPhones: new Map(), forgetCode: () => {},
+    addAccountSession: () => {}, writeDatabase: value => { saved = structuredClone(value); }, forgetCode: () => {},
+    authBudget: { take: () => true }, requestAddress: () => '127.0.0.1', TRUST_LOCAL_PROXY: false,
     publicUserForPolicyClient: user => user, sendJson: (_res, status, body) => { response = { status, body }; }
   });
   vm.runInContext(handler, context);

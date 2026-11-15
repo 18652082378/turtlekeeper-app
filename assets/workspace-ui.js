@@ -168,7 +168,7 @@ function archiveTimeline(turtle) {
 }
 
 function accountSaveStatus() {
-  if (localBackupFailed) return '本机保存失败，请重试';
+  if (localBackupFailed) return deviceRecoverySaved ? '本机已有恢复副本，待重试' : '本机保存失败，请重试';
   if (recordPageHasChanges()) return '编辑中，尚未保存';
   if (cloudSyncIsPaused()) return '本机已保存，同步待处理';
   const pending = readPendingCloudData();

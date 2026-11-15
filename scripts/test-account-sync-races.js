@@ -2,7 +2,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
+const root = path.resolve(__dirname, '..');
+const base = fs.readFileSync(path.join(root, 'index.html'), 'utf8').match(/<base href="\.\/([^"]+)"/)?.[1] || '';
+const source = fs.readFileSync(path.join(root, base, 'app.js'), 'utf8');
 const clone = value => JSON.parse(JSON.stringify(value));
 function device() {
   const ctx = {
@@ -17,7 +19,8 @@ function device() {
     normalizeAccountData: data => clone(data), hasCloudSession: () => true, render() {},
     currentCloudToken: () => 'token', accountHasEmbeddedImages: () => false,
     accountDataSnapshot: state => Object.fromEntries(['turtles', 'memos', 'breedingRecords', 'turtlePools', 'ledgerRecords', 'careRecords', 'careCustomItems', 'carePlans'].map(field => [field, clone(state[field] || [])])),
-    saveState() {}, queueCloudSave() {}, updateAccountSaveStatus() {}, toast() {}, console,
+    localBackupFailed: false,
+    saveState(options) { if (options?.keepPending) ctx.persistPendingCloudData(); }, queueCloudSave() {}, updateAccountSaveStatus() {}, toast() {}, console,
   };
   ctx.readPendingCloudData = () => ctx.pending;
   ctx.clearPendingCloudData = () => { ctx.pending = null; };

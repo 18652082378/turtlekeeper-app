@@ -124,7 +124,7 @@ async function main() {
         TURTLE_RUNTIME_DIR: runtime,
         FFMPEG_PATH: path.join(runtime, "disabled-ffmpeg"), // Encoding is covered by test-media-variants.js.
         SMS_PROVIDER: "mock",
-        SMS_MOCK: "true",
+        NODE_ENV: "test", SMS_MOCK: "true",
         ADMIN_PHONE: "13900000001"
       },
       stdio: ["ignore", "pipe", "pipe"]
@@ -257,6 +257,56 @@ async function main() {
     console.log('Admin API sessions passed: three devices, same-device renewal, fourth-device eviction, wrong password, logout isolation and concurrent logins.');
     }
 
+    const feedback = (await request('/api/feedback/create', { ...auth(buyer), content: '仅限客服查看的测试反馈' })).json.feedbacks[0];
+    assert.equal((await request('/api/feedback/list', auth(buyer))).json.feedbacks[0].id, feedback.id);
+    // Use a second ordinary account even when the seller is the test admin.
+    const unrelated = await register("13900000071", "Unrelated Feedback Viewer");
+    assert.deepEqual((await request('/api/feedback/list', auth(unrelated))).json.feedbacks, []);
+    for (const action of ['like', 'comment', 'delete', 'comment/delete']) {
+      await request('/api/feedback/' + action, { ...auth(unrelated), feedbackId: feedback.id, content: '测试', commentId: 'missing' }, { status: 404 });
+    }
+    await request('/api/admin/feedback/action', { ...auth(seller), feedbackId: feedback.id, status: 'resolved', reply: '客服测试回复' });
+    assert.equal((await request('/api/feedback/list', auth(buyer))).json.feedbacks[0].adminReply, '客服测试回复');
+    const operationsRoute = '/api/admin/operations/overview';
+    const freeTeam = (await request('/api/team', { ...auth(buyer), action: 'create' })).json.team;
+    assert.equal(freeTeam.active, true);
+    for (const route of ['/api/apple/purchases', '/api/alipay/team/purchases']) {
+      const { json } = await request(route, { ...auth(buyer), action: 'prepare' });
+      assert.equal(json.configured, false);
+      assert.deepEqual(json.products, []);
+      await request(route, { ...auth(buyer), action: 'create', plan: 'monthly' }, { status: 410 });
+    }
+    await request(operationsRoute, { ...auth(buyer), tab: 'analytics' }, { status: 403 });
+    await request(operationsRoute, { ...auth(seller), tab: 'toString' }, { status: 400 });
+    const oldOperations = (await request(operationsRoute, auth(seller))).json;
+    for (const [tab, fields] of Object.entries({
+      analytics: ['analytics', 'growthMonthly', 'userUsage'], market: ['market'], feedback: ['feedback'],
+      safety: ['safety'], health: ['health'], chats: ['conversations']
+    })) {
+      const { json } = await request(operationsRoute, { ...auth(seller), tab });
+      assert.equal(json.tab, tab);
+      assert.deepEqual(Object.keys(json).sort(), ['ok', 'tab', 'date', ...fields].sort());
+      for (const field of fields.filter(name => !['analytics', 'health'].includes(name))) {
+        assert.deepEqual(json[field], oldOperations[field], tab + ' data matches the legacy overview');
+      }
+    }
+    const restricted = (await request('/api/account/save', { ...auth(unrelated), data: {
+      subscriptionPlan: 'pro', subscriptionCycle: 'annual', subscriptionExpiresAt: '2099-01-01', turtles: [{ id: 'plain', code: '普通档案' }]
+    } })).json.user.data;
+    assert.equal(restricted.subscriptionPlan, 'free');
+    assert.equal(restricted.subscriptionExpiresAt, '');
+    assert.equal(restricted.turtles[0].id, 'plain');
+    const existingSms = await request('/api/sms/send', { phone: unrelated.phone, purpose: 'register' }, { status: 429 });
+    assert.equal(existingSms.json.code, 'RATE_LIMITED');
+    const signedOutA = { phone: '13900000072', purpose: 'reset_password' };
+    const signedOutB = { phone: '13900000073', purpose: 'reset_password' };
+    assert.deepEqual((await request('/api/sms/send', signedOutA)).json, (await request('/api/sms/send', signedOutB)).json);
+    const login = { phone: unrelated.phone, password: 'wrong-test-password', termsAccepted: true };
+    for (let i = 0; i < 8; i++) await request('/api/account/login', login, { status: 401 });
+    const throttled = await request('/api/account/login', login, { status: 429 });
+    assert.equal(throttled.json.code, "RATE_LIMITED");
+    assert.ok(throttled.response.headers.has('retry-after'));
+
     // 1.0.7 removes a lost turtle but retains the original purchase and the
     // user-entered loss amount. A shared server must not migrate that ledger.
     const legacy = await register("13900000003", "Legacy Client");
@@ -317,6 +367,14 @@ async function main() {
     const rejectedOldRevision = await request("/api/account/save", { ...auth(modern), baseDataRevision: baseForNotification.dataRevision, data: baseForNotification.data }, { status: 409 });
     assert.equal(rejectedOldRevision.json.code, "ACCOUNT_DATA_CONFLICT");
     assert.ok((await request("/api/account/load", auth(modern))).json.user.data.memos.some(item => item.id === "sync-revision-memo"));
+    const partialSave = (await request('/api/account/save', { ...auth(modern), baseDataRevision: savedWithRevision.dataRevision,
+      data: { keptSpecies: ['GHG'] } })).json.user;
+    assert.deepEqual(partialSave.data.turtles, savedWithRevision.data.turtles, 'omitted archives survive a partial save');
+    assert.deepEqual(partialSave.data.memos, savedWithRevision.data.memos, 'omitted reminders survive a partial save');
+    await request('/api/account/save', { ...auth(modern), baseDataRevision: partialSave.dataRevision, data: { turtles: null } }, { status: 400 });
+    const staleArchive = await request('/api/account/save', { ...auth(modern), data: { turtles: [{ id: 'replacement', code: '旧端档案' }] } }, { status: 409 });
+    assert.equal(staleArchive.json.code, 'ACCOUNT_DATA_CONFLICT');
+    assert.deepEqual((await request('/api/account/load', auth(modern))).json.user.data, partialSave.data);
 
     const privateCode = "CUS-" + crypto.randomUUID();
     const { createLegacyData, legacyNormalize } = require('./legacy-upgrade-fixture');
@@ -625,6 +683,20 @@ async function main() {
       price: 100
     });
     assert.equal(duplicate.json.duplicate, true, "retrying a publish request must not duplicate a product");
+    await request('/api/market/list', {}, { status: 401 });
+    const shared = await request('/api/market/detail', { listingId });
+    assert.equal(shared.json.listing.id, listingId);
+    assert.equal(shared.json.listing.sellerIsAdmin, false);
+    assert.equal(shared.json.listing.turtleId, '');
+    assert.equal(shared.response.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(shared.response.headers.get('cache-control'), 'no-store');
+    for (const [route, field] of [['impression', 'impressionCount'], ['view', 'viewCount']]) {
+      await request('/api/market/' + route, { listingId }, { status: 401 });
+      const first = (await request('/api/market/' + route, { ...auth(buyer), listingId })).json;
+      const duplicateMetric = (await request('/api/market/' + route, { ...auth(buyer), listingId })).json;
+      assert.equal(first[field], Number(shared.json.listing[field]) + 1);
+      assert.equal(duplicateMetric[field], first[field]);
+    }
     const marketForBuyer = await request("/api/market/list", { ...auth(buyer), thumbnails: true });
     assert.equal(marketForBuyer.json.total, 1);
     assert.equal(marketForBuyer.json.rankingSession, undefined, "legacy clients retain their original list protocol");

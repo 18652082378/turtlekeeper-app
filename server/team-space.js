@@ -195,7 +195,8 @@ function createTeamService({ read, write, authenticate, normalize }) {
   }
   function snapshot(db, user, ctx, month, range) {
     const { owner, own, team, perms, data, visibleFrom } = ctx;
-    const membership = access(owner), active = membership.active;
+    // Keep the active flag for clients that still use it to render a team.
+    const active = true;
     const can = module => active && ['read', 'edit'].includes(perms[module]);
     const breedingRecords = can('breeding') ? (data.breedingRecords || []).map(r => breeding.publicRecord(r, data)) : [];
     const publicApprovals = active && (own || can('ledger')) ? team.approvals.filter(p => {
@@ -217,7 +218,7 @@ function createTeamService({ read, write, authenticate, normalize }) {
       );
       return { id: p.id, actorId: p.actorId, actorName: db.users[p.actorId]?.accountName || '成员', at: p.at, status: p.status, decidedAt: p.decidedAt, reason: p.reason, command };
     }) : [];
-    return { id: team.id, name: team.name, own, selfId: own ? 'owner' : ctx.member.id, ...membership,
+    return { id: team.id, name: team.name, own, selfId: own ? 'owner' : ctx.member.id, active,
       revision: hash([team, owner.data]), permissions: perms, visibleFrom, branding: team.branding, approvalRequired: team.approvalRequired,
       members: team.members.filter(m => own || m.status === 'active').map(m => ({ id: m.id, name: db.users[m.phone]?.accountName || m.name || '待加入成员',
         ...(own ? { phone: m.phone, permissions: permissions(m.permissions), visibleFrom: m.visibleFrom || '', status: m.status } : {}) })),
@@ -268,11 +269,10 @@ function createTeamService({ read, write, authenticate, normalize }) {
     check(user, '登录已过期，请重新登录', 401);
     const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(body.month || '') ? body.month : new Date().toISOString().slice(0, 7);
     const range = reportPeriod(month, body.range);
-    if (body.action === 'list') return { teams: Object.values(db.users).filter(u => u.teamSpace && (u.phone === user.phone || u.teamSpace.members.some(m => m.phone === user.phone && m.status === 'active'))).map(u => ({ id: u.teamSpace.id, name: u.teamSpace.name, own: u.phone === user.phone, active: entitled(u) })),
+    if (body.action === 'list') return { teams: Object.values(db.users).filter(u => u.teamSpace && (u.phone === user.phone || u.teamSpace.members.some(m => m.phone === user.phone && m.status === 'active'))).map(u => ({ id: u.teamSpace.id, name: u.teamSpace.name, own: u.phone === user.phone, active: true })),
       invitations: Object.values(db.users).filter(u => u.teamSpace).flatMap(u => u.teamSpace.members.filter(m => m.phone === user.phone && m.status === 'pending').map(m => ({ id: m.id, teamId: u.teamSpace.id, name: u.teamSpace.name }))),
-      canCreate: entitled(user), hasOwnTeam: Boolean(user.teamSpace), membership: access(user) };
+      canCreate: true, hasOwnTeam: Boolean(user.teamSpace) };
     if (body.action === 'create') {
-      check(entitled(user), '请先开通团队会员', 403);
       check(!user.teamSpace, '你已经创建了团队');
       user.teamSpace = newTeam(user); audit(user.teamSpace, user, 'create', '创建团队空间');
       await write(db); return { team: snapshot(db, user, resolve(db, user, user.teamSpace.id), month, range) };
@@ -280,14 +280,13 @@ function createTeamService({ read, write, authenticate, normalize }) {
     if (['accept', 'decline'].includes(body.action)) {
       const owner = Object.values(db.users).find(u => u.teamSpace?.id === body.teamId);
       const member = owner?.teamSpace.members.find(m => m.id === body.id && m.phone === user.phone && m.status === 'pending');
-      check(member, '邀请已失效', 404); check(entitled(owner), '该团队会员已到期', 403);
+      check(member, '邀请已失效', 404);
       if (body.action === 'accept') { member.status = 'active'; audit(owner.teamSpace, user, 'join', '接受邀请，加入团队'); }
       else owner.teamSpace.members = owner.teamSpace.members.filter(m => m !== member);
       await write(db); return { accepted: body.action === 'accept' };
     }
     const ctx = resolve(db, user, text(body.teamId));
     if (body.action === 'get') return { team: snapshot(db, user, ctx, month, range) };
-    check(entitled(ctx.owner), '团队会员已到期，主账号原有数据仍可在个人空间使用', 403);
     const can = module => check(ctx.perms[module] === 'edit', '你没有此模块的编辑权限', 403);
     const ownerOnly = () => check(ctx.own, '仅主账号可以执行此操作', 403);
     if (body.action === 'report') { check(ctx.perms.ledger !== 'none', '没有账本权限', 403); return { report: report(ctx.data, month, text(body.species), range) }; }

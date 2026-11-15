@@ -187,7 +187,11 @@ const comment = { id: 'root-comment', authorId: 'friend-one', authorName: '慢�
           window[Capacitor.getPlatform() === 'ios' ? 'TURTLE_IOS_KEYBOARD_VISIBLE' : 'TURTLE_ANDROID_KEYBOARD_VISIBLE'] = false;
           syncMobileKeyboardUI();
         });
-        assert.equal(await page.locator('.forum-reply-composer').evaluate(el => getComputedStyle(el).paddingBottom), '42px');
+        const resting = await page.locator('.forum-reply-composer').evaluate(el => ({
+          gap: innerHeight - el.getBoundingClientRect().bottom, height: el.getBoundingClientRect().height,
+          reserved: parseFloat(getComputedStyle(document.querySelector('main')).paddingBottom)
+        }));
+        assert.equal(resting.gap, 34);
         await page.evaluate(() => {
           window[Capacitor.getPlatform() === 'ios' ? 'TURTLE_IOS_KEYBOARD_VISIBLE' : 'TURTLE_ANDROID_KEYBOARD_VISIBLE'] = true;
           syncMobileKeyboardUI();
@@ -197,7 +201,9 @@ const comment = { id: 'root-comment', authorId: 'friend-one', authorName: '慢�
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         const dock = await page.locator('.forum-reply-composer').evaluate(el => ({ padding: getComputedStyle(el).paddingBottom, height: el.getBoundingClientRect().height, bottom: el.getBoundingClientRect().bottom, viewport: innerHeight, outline: getComputedStyle(el.querySelector('input')).outlineStyle, reserved: parseFloat(getComputedStyle(document.querySelector('main')).paddingBottom) }));
         assert.equal(dock.padding, '8px'); assert.ok(Math.abs(dock.bottom - dock.viewport) <= 1, JSON.stringify(dock));
-        assert.ok(dock.reserved >= dock.height + 11, JSON.stringify(dock)); assert.equal(dock.outline, 'none');
+        assert.equal(dock.height, resting.height);
+        assert.equal(dock.reserved, resting.reserved);
+        assert.ok(dock.reserved >= dock.height + 34, JSON.stringify(dock)); assert.equal(dock.outline, 'none');
         await page.locator('.forum-reply-composer input').fill('这是还未发送的回复');
         await page.screenshot({ path: path.join(artifactOutput, 'comment-keyboard-compact.png') });
         await page.evaluate(() => {
@@ -206,6 +212,45 @@ const comment = { id: 'root-comment', authorId: 'friend-one', authorName: '慢�
           document.documentElement.style.removeProperty('--forum-safe-area-bottom');
         });
         await page.setViewportSize({ width: 390, height: 844 }); await page.evaluate(() => syncMobileKeyboardUI());
+      });
+      if (mobilePlatform === 'ios') await check('Comment dock follows iOS keyboard opening and closing before the late WebView resize', async () => {
+        await seed({ ...base, comments: [comment] });
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
+        try {
+          await page.locator('button[data-reply-community-comment="root-comment"]').click();
+          await page.locator('.forum-reply-composer input').fill('收起键盘后保留');
+          await page.evaluate(() => {
+            document.documentElement.style.setProperty('--forum-safe-area-bottom', '34px');
+            window.replyDock = document.querySelector('#app > .forum-reply-composer');
+            window.replyFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
+            window.replyKeyboardEvent = (name, height) => window.dispatchEvent(new CustomEvent(name, { detail: { keyboardHeight: height } }));
+          });
+          const measure = () => page.evaluate(() => {
+            const r = replyDock.getBoundingClientRect();
+            return { bottom: Math.round(r.bottom), height: r.height, reserve: getComputedStyle(document.querySelector('main')).paddingBottom };
+          });
+          const closed = await measure();
+          assert.equal(closed.bottom, 810);
+          await page.evaluate(() => replyKeyboardEvent('keyboardWillShow', 334));
+          await page.waitForFunction(() => { const bottom = replyDock.getBoundingClientRect().bottom; return bottom < 770 && bottom > 520; });
+          await page.waitForFunction(() => Number.parseFloat(replyDock.style.getPropertyValue('--reply-keyboard-height')) === 334);
+          const shown = await measure();
+          await page.setViewportSize({ width: 390, height: 510 });
+          assert.deepEqual(await measure(), shown, 'late resize must not move the toolbar a second time');
+          await page.evaluate(() => replyKeyboardEvent('keyboardWillHide'));
+          await page.setViewportSize({ width: 390, height: 844 });
+          await page.waitForFunction(() => { const bottom = replyDock.getBoundingClientRect().bottom; return bottom > 530 && bottom < 790; });
+          await page.waitForFunction(() => Number.parseFloat(replyDock.style.getPropertyValue('--reply-keyboard-height')) === 0);
+          assert.deepEqual(await measure(), closed, 'the safe area must already be correct before didHide');
+          await page.evaluate(async () => { replyKeyboardEvent('keyboardDidHide'); await replyFrame(); });
+          await page.waitForFunction(() => !replyDock.classList.contains('reply-keyboard-positioned'));
+          assert.deepEqual(await measure(), closed, 'closing must return to the same dock height, gap and reserved space');
+          assert.equal(await page.locator('.forum-reply-composer input').inputValue(), '收起键盘后保留');
+        } finally {
+          await page.evaluate(() => document.documentElement.style.removeProperty('--forum-safe-area-bottom'));
+          await page.setViewportSize({ width: 390, height: 844 });
+          await page.emulateMedia({ reducedMotion: 'reduce' });
+        }
       });
       if (mobilePlatform === 'ios') await check('iOS keyboard events track visibility and accessory toolbar follows route changes', async () => {
         await seed(base);
@@ -379,13 +424,13 @@ const comment = { id: 'root-comment', authorId: 'friend-one', authorName: '慢�
       await page.setViewportSize({ width, height: mobilePlatform ? 844 : 1000 }); await seed(post, { themeColor: theme, isCommunityAdmin: scenario === 'portrait' });
       if (scenario === 'photo') await page.locator('.community-detail-media-button img').evaluate(img => img.decode());
       const problems = await page.evaluate(() => {
-        const out = [], main = document.querySelector('.web-community-detail');
+        const out = [], app = document.getElementById('app');
         if (document.documentElement.scrollWidth > innerWidth + 1) out.push('document overflows');
         for (const selector of ['.community-detail-card', '.web-community-detail-discussion', '.forum-reply-composer', '.community-detail-media-gallery', '.forum-detail-title']) {
-          const element = main.querySelector(selector); if (!element) continue;
+          const element = app.querySelector(selector); if (!element) continue;
           const box = element.getBoundingClientRect(); if (box.left < -1 || box.right > innerWidth + 1) out.push(selector + ' overflows');
         }
-        const form = main.querySelector('.forum-reply-composer').getBoundingClientRect(); if (form.bottom > innerHeight + 1) out.push('composer below viewport');
+        const form = app.querySelector('.forum-reply-composer').getBoundingClientRect(); if (form.bottom > innerHeight + 1) out.push('composer below viewport');
         return out;
       });
       assert.deepEqual(problems, [], `${width}/${theme}/${scenario}`); layouts.push({ width, theme, scenario, problems });

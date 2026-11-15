@@ -54,7 +54,7 @@ async function main() {
     const port = await freePort(), base = `http://127.0.0.1:${port}`;
     const env = Object.fromEntries(['PATH', 'Path', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'COMSPEC'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
     Object.assign(env, { HOST: '127.0.0.1', PORT: String(port), TURTLE_RUNTIME_DIR: runtime,
-      MYSQL_URL: '', MYSQL_HOST: '', MYSQL_STORAGE_MODE: 'legacy', SMS_PROVIDER: 'mock', SMS_MOCK: 'true', ADMIN_PHONE: phones[1] });
+      MYSQL_URL: '', MYSQL_HOST: '', MYSQL_STORAGE_MODE: 'legacy', SMS_PROVIDER: 'mock', NODE_ENV: "test", SMS_MOCK: 'true', ADMIN_PHONE: phones[1] });
     child = spawn(process.execPath, [path.join(app, 'server/server.js')], { cwd: app, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', data => { logs += data; }); child.stderr.on('data', data => { logs += data; });
     for (let i = 0; i < 100; i++) {

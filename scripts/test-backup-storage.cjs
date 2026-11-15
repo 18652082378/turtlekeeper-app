@@ -36,6 +36,10 @@ function seed(f, name, size = 20, valid = true) {
   assert.equal(f.manager.hasDate('2026-09-19'), true);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(saved, 'app-data.json'))), { users: { synthetic: {} } });
   assert.equal(fs.readFileSync(path.join(saved, 'uploads/photo.jpg'), 'utf8'), 'original media');
+  assert.equal(f.manager.hasDate('2026-09-19'), true);
+  const dataFile = path.join(saved, 'app-data.json');
+  fs.writeFileSync(dataFile, fs.readFileSync(dataFile, 'utf8').replace('synthetic', 'different'));
+  assert.equal(f.manager.hasDate('2026-09-19'), false, 'same-size damage must fail hash verification');
   assert(!fs.existsSync(saved + '.partial'));
 }
 {

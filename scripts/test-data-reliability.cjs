@@ -57,7 +57,7 @@ async function main() {
       cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
       env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP,
         HOST: '127.0.0.1', PORT: String(port), TURTLE_RUNTIME_DIR: runtime,
-        MYSQL_HOST: '', MYSQL_URL: '', MYSQL_STORAGE_MODE: 'legacy', SMS_PROVIDER: 'mock', SMS_MOCK: 'true',
+        MYSQL_HOST: '', MYSQL_URL: '', MYSQL_STORAGE_MODE: 'legacy', SMS_PROVIDER: 'mock', NODE_ENV: "test", SMS_MOCK: 'true',
         MIN_SUPPORTED_APP_BUILD: '117', LATEST_APP_BUILD: '119', ADMIN_PHONE: '13900000889' }
     });
     child.stdout.on('data', x => { output += x; }); child.stderr.on('data', x => { output += x; });

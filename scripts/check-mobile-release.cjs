@@ -33,8 +33,9 @@ if (!args.includes('--prepare-only')) {
     'scripts/test-publish-navigation-boundaries.cjs', 'scripts/test-module-loading.cjs', 'scripts/test-account-sync-races.js',
     'scripts/test-feed-loading-recovery.js', 'scripts/test-notification-summary.js',
     'scripts/test-api-workflows.js', 'scripts/test-mysql-records.js', 'scripts/test-mysql-record-api.js',
+    'scripts/test-production-sms-policy.cjs',
     'scripts/test-team-space.js', 'scripts/test-team-breeding.cjs', 'scripts/test-team-visibility.cjs',
-    'scripts/test-reliability-guards.cjs', 'scripts/test-postrelease-server-audit.cjs',
+    'scripts/test-reliability-guards.cjs', 'scripts/test-backup-storage.cjs', 'scripts/test-backup-restore.js', 'scripts/test-postrelease-server-audit.cjs',
     'scripts/test-ios-signing.cjs', 'scripts/test-ios-release-readiness.cjs'
   ];
   for (const script of serviceChecks) {
@@ -59,7 +60,7 @@ if (!args.includes('--prepare-only')) {
       run('scripts/test-navigation-lifecycle.cjs', [], {
         MOBILE_UI_PLATFORM: platform,
         BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium',
-        NAVIGATION_TEST_FILTER: 'keeps contact bar aligned,market detail native return,native continuous drag'
+        NAVIGATION_TEST_FILTER: 'keeps contact bar aligned,market detail native return,native continuous drag,global native,gesture return is available,registered pages restore'
       });
     } catch (e) { failures.push(e.message); }
     try { run('scripts/test-market-alerts-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
@@ -73,6 +74,12 @@ if (!args.includes('--prepare-only')) {
     try { run('scripts/test-community-page-polish.cjs', ['--bundle'], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-community-release-138.cjs', [], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
+    try { run('scripts/test-archive-save-recovery.cjs', [], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
+    try { run('scripts/test-operations-tabs.cjs', [], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+    catch (e) { failures.push(e.message); }
+    try { run('scripts/test-input-keyboard-scroll.cjs', [], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-community-single-photo.cjs', [], { BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }

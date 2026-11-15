@@ -48,7 +48,7 @@
         const result = await apiPost('/api/sms/send', { phone, purpose: 'reset_password' });
         if (!current(request)) return;
         state.accountCodeCooldownUntil = String(Date.now() + 60000); saveState(); update();
-        toast('验证码已发送，请查看手机短信');
+        toast('已提交短信申请，请留意短信');
       } catch (error) { if (current(request)) toast(error.message || '验证码发送失败，请稍后重试'); }
       finally { if (request === serial) { sending = false; update(); } }
     });

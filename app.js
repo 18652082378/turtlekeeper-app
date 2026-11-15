@@ -12,7 +12,6 @@ const chinaTimeFormatter = new Intl.DateTimeFormat("zh-CN", { timeZone: CHINA_TI
 const chinaDateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   timeZone: CHINA_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
 });
-const REVIEW_ADMIN_PHONE = "18652082378";
 const RESERVED_PLATFORM_NICKNAME = "龟友手账";
 // Retain the previous official name to prevent impersonation after the rename.
 const RESERVED_PLATFORM_NICKNAMES = [RESERVED_PLATFORM_NICKNAME, "壳友手账"];
@@ -148,7 +147,6 @@ const initialState = {
   contentReports: [],
   systemAnnouncements: [],
   adminSystemAnnouncements: [],
-  operationsOverview: { analytics: null, conversations: [] },
   operationsTab: "analytics",
   blockedUsers: [],
   isCommunityAdmin: false,
@@ -397,7 +395,13 @@ function syncRegisteredUsers(source = state) {
 }
 
 let state = loadState();
+let localAccountWrite = Number(state.localWrite) || 0;
 let lastLocalAccountSignature = accountSyncSignature(state);
+let localAccountPending = false;
+let pendingCloudCache;
+let pendingCloudCachePhone;
+let deviceRecoveryWrite = Promise.resolve(false);
+let deviceRecoverySaved = false;
 let accountCooldownTimer = null;
 let cloudSyncTimer = null;
 let cloudSyncInFlight = false;
@@ -610,7 +614,11 @@ function forgetCloudToken(phone) {
 function clearExpiredCloudSession(reason = {}) {
   const phone = state.loggedInPhone;
   if (!phone || !currentCloudToken()) return;
-  if (accountHasContent(state)) persistPendingCloudData();
+  if (!protectPendingBeforeSignOut()) {
+    state.accountSessionNotice = "登录已失效，本机待同步记录尚未备份，请重试保存后再登录";
+    toast(state.accountSessionNotice);
+    return;
+  }
   forgetCloudToken(phone);
   cloudHydrationComplete = false;
   if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
@@ -634,39 +642,75 @@ function clearExpiredCloudSession(reason = {}) {
 
 function loadState() {
   try {
-    const saved = TurtleLocalData.parse(localStorage.getItem(STORAGE));
+    const raw = localStorage.getItem(STORAGE);
+    if (!raw) return { ...initialState };
+    const saved = TurtleLocalData.parse(raw);
+    if (!saved || typeof saved !== "object" || Array.isArray(saved) ||
+        (saved.loggedInPhone && typeof saved.pendingCloudChange === "boolean" && !Array.isArray(saved.turtles))) {
+      throw new Error("本机数据格式损坏");
+    }
     // The app always cold-starts on the dashboard. Older releases stored the
     // last route in localStorage, which could reopen the "空间" tab instead.
-    return saved ? normalizeState({ ...initialState, ...saved, page: "home" }) : { ...initialState };
+    return normalizeState({ ...initialState, ...saved, page: "home" });
   } catch {
+    // A corrupted mirror has lost its account marker. Recover only with a
+    // single remaining authenticated session. With multiple candidates the
+    // next successful login selects the correct per-account backup.
+    const phones = Object.keys(loadCloudAuthTokens()).filter(phone => readSavedCloudToken(phone));
+    if (phones.length === 1) return { ...initialState, loggedInPhone: phones[0], cloudToken: readSavedCloudToken(phones[0]),
+      accountMode: "login", accountName: maskPhone(phones[0]) };
     return { ...initialState };
   }
 }
 
-function readPendingCloudData() {
+function readPendingCloudData(phone = state.loggedInPhone) {
+  if (!phone) return null;
+  if (phone === pendingCloudCachePhone) return pendingCloudCache;
+  return readPendingCloudDataFromStorage(phone);
+}
+
+function readLocalAccountBackup(key) {
   try {
-    const pending = TurtleLocalData.parse(localStorage.getItem(PENDING_CLOUD_DATA_STORAGE));
-    return pending && typeof pending === "object" && !Array.isArray(pending) ? pending : null;
+    return TurtleLocalData.parse(localStorage.getItem(key));
   } catch {
     return null;
   }
 }
 
+function readPendingCloudDataFromStorage(phone) {
+  const saved = readLocalAccountBackup(STORAGE);
+  const detached = readLocalAccountBackup(`${PENDING_CLOUD_DATA_STORAGE}:${phone}`);
+  if (detached?.phone === phone && (saved?.loggedInPhone !== phone || Number(detached.localWrite) > (Number(saved.localWrite) || 0))) return detached;
+  if (saved?.loggedInPhone === phone && saved.pendingCloudChange === true) return pendingCloudSnapshot(saved, saved.localWrite);
+  const pending = readLocalAccountBackup(PENDING_CLOUD_DATA_STORAGE);
+  return pending?.phone === phone && (saved?.loggedInPhone !== phone || saved?.pendingCloudChange !== false) ? pending : null;
+}
+
+function pendingCloudSnapshot(source, localWrite, data = accountDataSnapshot(source)) {
+  return {
+    phone: source.loggedInPhone,
+    accountName: source.accountName,
+    accountAvatar: source.accountAvatar || "",
+    data,
+    baseUpdatedAt: source.cloudAccountUpdatedAt || "",
+    baseDataRevision: source.cloudAccountDataRevision || "",
+    baseSnapshot: source.cloudMergeBase?.phone === source.loggedInPhone
+      && source.cloudMergeBase.revision === source.cloudAccountDataRevision ? source.cloudMergeBase : null,
+    conflict: source.cloudSyncConflict?.phone === source.loggedInPhone ? source.cloudSyncConflict : null,
+    localWrite
+  };
+}
+
 function persistPendingCloudData(source = state) {
-  if (!source.loggedInPhone || !currentCloudToken()) return false;
+  if (!source.loggedInPhone) return false;
   try {
-    writeLocalBackup(PENDING_CLOUD_DATA_STORAGE, {
-      phone: source.loggedInPhone,
-      accountName: source.accountName,
-      accountAvatar: source.accountAvatar || "",
-      data: accountDataSnapshot(source),
-      baseUpdatedAt: source.cloudAccountUpdatedAt || "",
-      baseDataRevision: source.cloudAccountDataRevision || "",
-      baseSnapshot: source.cloudMergeBase?.phone === source.loggedInPhone
-        && source.cloudMergeBase.revision === source.cloudAccountDataRevision ? source.cloudMergeBase : null,
-      conflict: source.cloudSyncConflict?.phone === source.loggedInPhone ? source.cloudSyncConflict : null,
-      updatedAt: new Date().toISOString()
-    });
+    const localWrite = nextLocalAccountWrite(readPendingCloudData(source.loggedInPhone));
+    const snapshot = pendingCloudSnapshot(source, localWrite);
+    writeLocalBackup(`${PENDING_CLOUD_DATA_STORAGE}:${source.loggedInPhone}`, snapshot);
+    if (source.loggedInPhone === state.loggedInPhone) {
+      pendingCloudCachePhone = source.loggedInPhone;
+      pendingCloudCache = snapshot;
+    }
     return true;
   } catch (error) {
     console.warn("保存待同步数据失败", error);
@@ -675,37 +719,111 @@ function persistPendingCloudData(source = state) {
 }
 
 function clearPendingCloudData(phone = state.loggedInPhone) {
-  const pending = readPendingCloudData();
-  if (!pending || !phone || pending.phone !== phone) return;
+  if (!phone) return;
+  void window.TurtleAccountRecoveryStore?.clear(phone, localAccountWrite).catch(() => {});
+  if (phone === pendingCloudCachePhone) pendingCloudCache = null;
   try {
-    localStorage.removeItem(PENDING_CLOUD_DATA_STORAGE);
+    const pending = readLocalAccountBackup(PENDING_CLOUD_DATA_STORAGE);
+    if (pending?.phone === phone) localStorage.removeItem(PENDING_CLOUD_DATA_STORAGE);
+    localStorage.removeItem(`${PENDING_CLOUD_DATA_STORAGE}:${phone}`);
   } catch (error) {
     console.warn("清理待同步数据失败", error);
   }
 }
 
+function protectPendingBeforeSignOut() {
+  if (!localAccountPending && !readPendingCloudData() && !localBackupFailed && accountSyncSignature(state) === lastLocalAccountSignature) return true;
+  if (persistPendingCloudData()) return true;
+  toast("待同步记录无法备份，请先导出完整备份并重试保存");
+  return false;
+}
+
 function restorePendingCloudData() {
   const pending = readPendingCloudData();
   if (!pending || pending.phone !== state.loggedInPhone || !currentCloudToken()) return false;
+  const baseline = pending.baseSnapshot;
+  let restored = pending;
+  // Older clients wrote the full mirror and pending record independently.
+  // If both derive from the same cloud revision, recover independent edits
+  // from either copy without bringing back records intentionally deleted.
+  if (!pending.localWrite && baseline?.phone === pending.phone &&
+      baseline.revision && baseline.revision === state.cloudAccountDataRevision &&
+      baseline.revision === pending.baseDataRevision) {
+    try {
+      const result = TurtleAccountMerge.merge(baseline, pendingCloudSnapshot(state), pending);
+      if (result.ready) restored = { ...pending, ...result.snapshot };
+    } catch (error) { console.warn("核对旧版待同步记录失败", error); }
+  }
   state = {
     ...state,
-    ...normalizeAccountData(pending.data || {}),
-    cloudAccountUpdatedAt: pending.baseUpdatedAt || "",
-    cloudAccountDataRevision: pending.baseDataRevision || "",
-    cloudSyncConflict: pending.conflict || null,
-    cloudMergeBase: pending.baseSnapshot || null,
-    accountName: pending.accountName || state.accountName,
-    accountAvatar: pending.accountAvatar || state.accountAvatar
+    ...normalizeAccountData(restored.data || {}),
+    cloudAccountUpdatedAt: restored.baseUpdatedAt || "",
+    cloudAccountDataRevision: restored.baseDataRevision || "",
+    cloudSyncConflict: restored.conflict || null,
+    cloudMergeBase: restored.baseSnapshot || null,
+    accountName: restored.accountName || state.accountName,
+    accountAvatar: restored.accountAvatar ?? state.accountAvatar
   };
+  localAccountWrite = Math.max(localAccountWrite, Number(pending.localWrite) || 0);
+  pendingCloudCachePhone = state.loggedInPhone;
+  pendingCloudCache = restored;
+  localAccountPending = true;
   return true;
 }
 
-function pendingCloudDataIsNewerThan(serverUpdatedAt, pending = readPendingCloudData()) {
-  if (!pending || pending.phone !== state.loggedInPhone) return false;
-  const pendingTime = Date.parse(pending.updatedAt || "");
-  const serverTime = Date.parse(serverUpdatedAt || "");
-  if (!Number.isFinite(pendingTime)) return false;
-  return !Number.isFinite(serverTime) || pendingTime > serverTime;
+function nextLocalAccountWrite(pending) {
+  localAccountWrite = Math.max(Date.now(), localAccountWrite + 1, (Number(pending?.localWrite) || 0) + 1);
+  return localAccountWrite;
+}
+
+function saveDeviceRecovery(accountData) {
+  const store = window.TurtleAccountRecoveryStore;
+  if (!store || !state.loggedInPhone || !currentCloudToken()) return;
+  deviceRecoverySaved = false;
+  try {
+    const snapshot = pendingCloudSnapshot(state, nextLocalAccountWrite(readPendingCloudData()), accountData);
+    const entry = { phone: snapshot.phone, localWrite: snapshot.localWrite, text: TurtleLocalData.stringify(snapshot) };
+    deviceRecoveryWrite = store.save(entry).then(saved => {
+      if (saved && state.loggedInPhone === snapshot.phone && localAccountWrite === snapshot.localWrite) {
+        deviceRecoverySaved = true;
+        if (localBackupFailed) {
+          updateLocalBackupWarning();
+          updateAccountSaveStatus();
+        }
+      }
+      return saved;
+    }, () => false);
+  } catch { deviceRecoveryWrite = Promise.resolve(false); }
+}
+
+async function readDeviceRecovery(phone) {
+  if (!window.TurtleAccountRecoveryStore) return null;
+  try {
+    const entry = await window.TurtleAccountRecoveryStore.read(phone);
+    const snapshot = entry && TurtleLocalData.parse(entry.text);
+    return snapshot?.phone === phone && snapshot.localWrite === entry.localWrite && snapshot.data ? snapshot : null;
+  } catch { return null; }
+}
+
+async function loadAccountRecovery(user) {
+  const phone = String(user?.phone || "");
+  if (!phone) return null;
+  const snapshot = await readDeviceRecovery(phone);
+  const pending = readPendingCloudData(phone);
+  const mirror = readLocalAccountBackup(STORAGE);
+  const mirrorWrite = mirror?.loggedInPhone === phone ? Number(mirror.localWrite) || 0 : 0;
+  return snapshot && snapshot.localWrite > Math.max(mirrorWrite, Number(pending?.localWrite) || 0) ? snapshot : null;
+}
+
+function restoreDeviceRecovery(snapshot) {
+  if (!snapshot || snapshot.phone !== state.loggedInPhone ||
+      snapshot.localWrite <= Math.max(localAccountWrite, Number(readPendingCloudData()?.localWrite) || 0)) return false;
+  pendingCloudCachePhone = snapshot.phone;
+  pendingCloudCache = snapshot;
+  if (!restorePendingCloudData()) return false;
+  saveState({ skipCloud: true, keepPending: true });
+  render();
+  return true;
 }
 
 function cleanText(value) {
@@ -735,17 +853,13 @@ function normalizeState(next) {
     : "";
   const activeUser = registeredUsers.find(user => user.phone === loggedInPhone);
   const serverAccountData = normalizeAccountData(activeUser?.data || {});
-  // When a cloud token is missing or has expired, saveState stores the active
-  // account data at the root as a local recovery copy.  Do not throw that copy
-  // away on the next launch just because the lightweight account record has no
-  // embedded data.  Cloud-backed sessions still prefer the authoritative user
-  // record, while an offline recovery copy is used only when it actually has
-  // account content that the lightweight record does not.
+  // Current saves store the active account and its pending flag together.
+  // Older saves may have stored the active data under registeredUsers.
   const recoveryAccountData = normalizeAccountData(next || {});
+  const useDeviceCopy = typeof next.pendingCloudChange === "boolean" ||
+    (!accountHasContent(serverAccountData) && accountHasContent(recoveryAccountData));
   const accountData = loggedInPhone
-    ? (accountHasContent(serverAccountData) || !accountHasContent(recoveryAccountData)
-      ? serverAccountData
-      : recoveryAccountData)
+    ? (useDeviceCopy ? recoveryAccountData : serverAccountData)
     : emptyAccountData();
   const base = {
     ...next,
@@ -759,7 +873,8 @@ function normalizeState(next) {
   return {
     ...base,
     publicReviews: Array.isArray(base.publicReviews) ? base.publicReviews : [],
-    publicFeedbackItems: Array.isArray(base.publicFeedbackItems) ? base.publicFeedbackItems : [],
+    publicFeedbackItems: [],
+    publicFeedbackInitialized: false,
     communityPosts: Array.isArray(base.communityPosts) ? base.communityPosts : [],
     communityFeedInitialized: Boolean(base.communityFeedInitialized),
     communityFeedNextOffset: Math.max(0, Number(base.communityFeedNextOffset || 0)),
@@ -938,12 +1053,18 @@ function updateLocalBackupWarning() {
   const existing = main?.querySelector(":scope > .local-backup-warning");
   if (!localBackupFailed) {
     existing?.remove();
-  } else if (main && !existing) {
-    const warning = document.createElement("section");
-    warning.className = "local-backup-warning";
-    warning.setAttribute("role", "alert");
-    warning.innerHTML = `<strong>本地备份未完成</strong><p>请保持页面打开，重试保存或先导出备份。不要清理缓存。</p><button class="secondary" type="button" data-retry-local-backup>重试保存</button><button class="secondary" type="button" data-export-local-backup>导出完整备份</button>`;
-    main.prepend(warning);
+  } else if (main) {
+    const warning = existing || document.createElement("section");
+    if (!existing) {
+      warning.className = "local-backup-warning";
+      warning.setAttribute("role", "alert");
+      warning.innerHTML = `<strong></strong><p></p><button class="secondary" type="button" data-retry-local-backup>重试保存</button><button class="secondary" type="button" data-export-local-backup>导出完整备份</button>`;
+      main.prepend(warning);
+    }
+    warning.querySelector("strong").textContent = deviceRecoverySaved ? "已写入本机恢复副本" : "本地备份未完成";
+    warning.querySelector("p").textContent = deviceRecoverySaved
+      ? "主存储尚未写入。重启可从恢复副本读取，也可现在重试保存。"
+      : "请保持页面打开，重试保存或先导出备份。不要清理缓存。";
   }
 }
 
@@ -951,12 +1072,10 @@ function saveState(options = {}) {
   const backupPreviouslyFailed = localBackupFailed;
   const accountSignature = accountSyncSignature(state);
   const accountChanged = accountSignature !== lastLocalAccountSignature;
+  if (accountChanged) deviceRecoverySaved = false;
   const registeredUsers = syncRegisteredUsers(state);
   const cloudSession = hasCloudSession();
-  // The device copy is a recovery mirror, not merely an offline fallback.
-  // Keeping it for every signed-in account means a temporary network loss,
-  // expired token, or interrupted background sync can never erase a user's
-  // turtles, ledger records, photos, or reminders before the next launch.
+  // Commit the active account data and its pending flag in the same write.
   const accountData = state.loggedInPhone ? accountDataSnapshot(state) : emptyAccountData();
   const storageUsers = cloudSession || CONFIGURED_SMS_BACKEND
     ? registeredUsers.map(lightAccountUser)
@@ -964,7 +1083,12 @@ function saveState(options = {}) {
   const activeCloudToken = state.cloudToken || registeredUsers.find(user => user.phone === state.loggedInPhone)?.cloudToken || readSavedCloudToken(state.loggedInPhone);
   if (state.loggedInPhone && activeCloudToken) rememberCloudToken(state.loggedInPhone, activeCloudToken);
   state.registeredUsers = registeredUsers;
+  const previousPending = readPendingCloudData();
+  const pending = state.loggedInPhone && !options.cloudConfirmed &&
+    Boolean(options.keepPending || previousPending || (pendingCloudCachePhone === state.loggedInPhone && localAccountPending) ||
+      (cloudSession && !options.skipCloud && accountChanged));
   try {
+    const localWrite = nextLocalAccountWrite(previousPending);
     writeLocalBackup(STORAGE, {
       ...accountData,
       accountName: state.accountName,
@@ -977,6 +1101,8 @@ function saveState(options = {}) {
       cloudAccountDataRevision: state.cloudAccountDataRevision || "",
       cloudSyncConflict: state.cloudSyncConflict || null,
       cloudMergeBase: state.cloudMergeBase || null,
+      pendingCloudChange: Boolean(pending),
+      localWrite,
       registeredUsers: storageUsers,
       pendingAuthCode: state.pendingAuthCode,
       pendingAuthPhone: state.pendingAuthPhone,
@@ -996,24 +1122,29 @@ function saveState(options = {}) {
       followingInitialized: Boolean(state.followingInitialized),
       publicReviews: state.publicReviews || [],
       publicReviewsInitialized: Boolean(state.publicReviewsInitialized),
-      publicFeedbackItems: state.publicFeedbackItems || [],
-      publicFeedbackInitialized: Boolean(state.publicFeedbackInitialized),
       messageUnreadCount: Number(state.messageUnreadCount || 0),
       marketListings: state.marketListings || [],
       themeColor: state.themeColor || accountData.themeColor
     });
     localBackupFailed = false;
+    pendingCloudCachePhone = state.loggedInPhone;
+    pendingCloudCache = pending ? pendingCloudSnapshot(state, localWrite, accountData) : null;
+    localAccountPending = Boolean(pending);
   } catch (error) {
     console.warn("保存本地数据失败", error);
     if (!localBackupFailed) toast("本地备份未完成，请保持页面打开，重试保存或先导出备份。不要清理缓存。");
     localBackupFailed = true;
+    pendingCloudCachePhone = state.loggedInPhone;
+    pendingCloudCache = previousPending;
+    localAccountPending = Boolean(pending || (options.cloudConfirmed && localAccountPending));
   }
-  // Write-ahead journal: the cloud sync may be delayed or interrupted after
-  // this local save. It is cleared only after /api/account/save succeeds.
+  if (!localBackupFailed) lastLocalAccountSignature = accountSignature;
   if (cloudSession && !options.skipCloud && accountChanged) {
-    if (persistPendingCloudData()) lastLocalAccountSignature = accountSignature;
+    if (localBackupFailed) persistPendingCloudData();
     queueCloudSave();
-  } else if (!localBackupFailed && (options.skipCloud || !cloudSession)) lastLocalAccountSignature = accountSignature;
+  }
+  // Keep a second copy of account edits even when the main storage is full.
+  if (pending && (accountChanged || localBackupFailed || options.keepPending)) saveDeviceRecovery(accountData);
   if (localBackupFailed !== backupPreviouslyFailed) updateLocalBackupWarning();
   updateAccountSaveStatus();
   return !localBackupFailed;
@@ -1065,6 +1196,7 @@ function setState(patch, options = {}) {
   if ((Object.hasOwn(patch, "loggedInPhone") && patch.loggedInPhone !== state.loggedInPhone) ||
       (Object.hasOwn(patch, "cloudToken") && patch.cloudToken !== state.cloudToken)) {
     window.TurtleSearch?.reset();
+    resetOperationsSession();
     communityConversationRevision++;
     communityChatActiveRequest = ++communityChatRequestSerial;
     communityChatLoading = communityChatOpening = communityChatRefreshPending = false;
@@ -1073,6 +1205,8 @@ function setState(patch, options = {}) {
     communityConversationDeleting.clear();
   }
   if (Object.hasOwn(patch, "loggedInPhone") && patch.loggedInPhone !== state.loggedInPhone) {
+    patch = { ...patch, publicFeedbackItems: [], publicFeedbackInitialized: false, selectedFeedbackId: "" };
+    publicFeedbackLastLoadedAt = 0;
     patch = { ...patch, careDraft: null, carePickerOpen: false, careTab: "care" };
     careHistoryFilter = {}; careHistoryLimit = 40; growthHistoryLimit = 40;
     patch = { ...patch, ...accountModuleCache(patch.loggedInPhone), ...messageCacheForAccount(patch.loggedInPhone) };
@@ -1136,9 +1270,9 @@ function setState(patch, options = {}) {
         fixedLayers,
         scrollY: sourceScrollY
       });
-      // A user only needs the most recent navigation levels. Keeping a long
-      // chain of media-heavy pages is wasteful on an iPhone WebView.
-      edgeBackSnapshots = edgeBackSnapshots.slice(-3);
+      // Keep the deeper route history without holding on to its media-heavy DOM.
+      edgeBackSnapshots = edgeBackSnapshots.slice(-20).map((snapshot, index, history) => index < history.length - 3 && snapshot.html
+        ? { page: snapshot.page, editorState: snapshot.editorState, scrollY: snapshot.scrollY } : snapshot);
       scheduleEdgeBackPreviewWarmup(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
     } else if (BOTTOM_NAV_ROOT_PAGES.has(patch.page)) {
       edgeBackSnapshots = [];
@@ -2107,9 +2241,9 @@ function scheduleCloudImageMigration(delay = 500) {
 
 function saveWithDeferredImages(patch, images = [], options = {}) {
   const shouldDeferCloud = hasCloudSession() && images.some(isMigratableImage);
-  const locallySaved = setState(patch, { ...options, skipCloud: shouldDeferCloud || options.skipCloud });
+  const locallySaved = setState(patch, { ...options, keepPending: shouldDeferCloud || options.keepPending, skipCloud: shouldDeferCloud || options.skipCloud });
   if (shouldDeferCloud) {
-    persistPendingCloudData();
+    if (!locallySaved) persistPendingCloudData();
     scheduleCloudImageMigration();
   }
   return locallySaved;
@@ -2147,6 +2281,8 @@ async function migrateEmbeddedImagesToCloud(options = {}) {
   }
   if (!hasCloudSession()) return false;
   const migrationPhone = state.loggedInPhone;
+  const migrationToken = currentCloudToken();
+  const sameSession = () => state.loggedInPhone === migrationPhone && currentCloudToken() === migrationToken;
   cloudImageMigrationInFlight = true;
   let changed = false;
   const uploadCache = new Map();
@@ -2209,11 +2345,11 @@ async function migrateEmbeddedImagesToCloud(options = {}) {
     }
 
     if (changed) {
-      if (state.loggedInPhone !== migrationPhone) return false;
+      if (!sameSession()) return false;
       // Uploads can take seconds. Only replace uploaded URLs in the CURRENT
       // data, never restore the record snapshots taken before those awaits.
       const uploadedUrls = new Map(await Promise.all([...uploadCache].map(async ([image, upload]) => [image, await upload])));
-      if (state.loggedInPhone !== migrationPhone) return false;
+      if (!sameSession()) return false;
       const replaceUploadedImages = value => {
         if (typeof value === "string") return uploadedUrls.get(value) || value;
         if (Array.isArray(value)) return value.map(replaceUploadedImages);
@@ -2223,7 +2359,7 @@ async function migrateEmbeddedImagesToCloud(options = {}) {
       state = { ...state, accountAvatar: replaceUploadedImages(state.accountAvatar),
         turtles: replaceUploadedImages(state.turtles), ledgerRecords: replaceUploadedImages(state.ledgerRecords),
         breedingRecords: replaceUploadedImages(state.breedingRecords) };
-      saveState({ skipCloud: true });
+      if (saveState({ skipCloud: true, keepPending: true }) === false) persistPendingCloudData();
       render();
       refreshCareReminderTimers();
       await pushCloudDataNow(true);
@@ -3028,7 +3164,7 @@ function accountModuleCache(phone) {
     "selectedFollowingUserId", "selectedCommunityUserId", "selectedCommunityUser", "communityUserPosts", "communityUserListings",
     "publicReviews", "publicFeedbackItems", "marketListings", "myMarketListings", "selectedMarketListingId", "selectedMarketSellerId",
     "marketFeedInitialized", "marketFeedSessionId", "marketFeedOrderIds", "marketFeedNextOffset", "marketFeedHasMore", "marketFeedLoadingMore",
-    "contentReports", "adminSystemAnnouncements", "operationsOverview"];
+    "contentReports", "adminSystemAnnouncements"];
   const patch = Object.fromEntries(keys.map(key => {
     const value = initialState[key];
     return [key, value && typeof value === "object" ? JSON.parse(JSON.stringify(value)) : value];
@@ -4000,7 +4136,7 @@ function navigationDataKeys(page) {
     market: marketFeed, marketMy: market, marketFavorites: market, marketHistory: market, marketDetail: market, marketSeller: market,
     satisfaction: ["publicReviews", "publicReviewsInitialized", "publicReviewsError"],
     feedback: ["publicFeedbackItems", "publicFeedbackInitialized", "publicFeedbackError"],
-    feedbackDetail: ["publicFeedbackItems"], moderation: ["contentReports"], announcements: ["adminSystemAnnouncements", "systemAnnouncements"], operations: ["operationsOverview"]
+    feedbackDetail: ["publicFeedbackItems"], moderation: ["contentReports"], announcements: ["adminSystemAnnouncements", "systemAnnouncements"]
   };
   return ["loggedInPhone", "accountName", "accountAvatar", "themeColor", ...(groups[page] || business)];
 }
@@ -5101,7 +5237,7 @@ function pageMyMarketListings() {
 
 function canManuallyEditMarketCity() {
   return Boolean(state.loggedInPhone && (state.loggedInPhone === "17302554044" ||
-    state.loggedInPhone === REVIEW_ADMIN_PHONE || state.isCommunityAdmin));
+    state.isCommunityAdmin));
 }
 
 function pageMarketAdd() {
@@ -5682,9 +5818,9 @@ function pageTurtleReward() {
   const growthMemo = (state.memos || []).find(memo => memo.turtleId === turtle.id && memo.growthReminder);
   const reminderEnabled = Boolean(growthMemo && growthMemo.remindTime && growthMemo.reminderEnabled !== false);
   return `
-    ${topbar(hasGrowth ? "成长报告" : "建档成功", true)}
+    ${topbar(localBackupFailed ? "保存待重试" : hasGrowth ? "成长报告" : "建档成功", true)}
     <main class="content page-fresh reward-page">
-      <section class="reward-celebration"><span>✓</span><div><p>${hasGrowth ? `第 ${history.length + 1} 次记录完成` : "建档完成 · 成长旅程已开启"}</p><h2>${hasGrowth ? "这次变化，值得被看见" : `欢迎你，${escapeHtml(turtle.code || "新朋友")}`}</h2><small>${hasGrowth ? "新的成长数据已加入报告" : "第一份成长档案已经保存好了"}</small></div></section>
+      ${localBackupFailed ? "" : `<section class="reward-celebration"><span>✓</span><div><p>${hasGrowth ? `第 ${history.length + 1} 次记录完成` : "建档完成 · 成长旅程已开启"}</p><h2>${hasGrowth ? "这次变化，值得被看见" : `欢迎你，${escapeHtml(turtle.code || "新朋友")}`}</h2><small>${hasGrowth ? "新的成长数据已加入报告" : "第一份成长档案已经保存好了"}</small></div></section>`}
       <article class="turtle-profile-card" data-reward-card>
         <header><div><small>龟友手账 · 龟档案</small><h1>${escapeHtml(turtle.code || "未命名龟龟")}</h1><p>${escapeHtml(turtle.speciesName || "品种未填写")}</p></div><b>${turtleKeepingDaysNumber(turtle.acquiredDate)}<small>陪伴天数</small></b></header>
         <img src="${escapeHtml(turtle.photo || defaultPhoto)}" alt="${escapeHtml(turtle.code || turtle.speciesName || "乌龟")}的照片" data-reward-photo>
@@ -5830,7 +5966,7 @@ function submitTurtleBatchDetail(event, turtle) {
   nextGrowth.setDate(nextGrowth.getDate() + 30);
   const nextGrowthAt = formatDate(nextGrowth);
   event.currentTarget.__turtleDetailSaved = true;
-  saveWithDeferredImages({
+  const locallySaved = saveWithDeferredImages({
     ...(growthMemo ? { memos: state.memos.map(memo => memo.id === growthMemo.id ? { ...memo, dueDate: nextGrowthAt, completedAt: "", lastCompletedDate: formatDate(new Date()), updatedAt: now } : memo) } : {}),
     turtles: state.turtles.map(item => item.batchId !== turtle.batchId ? item : {
       ...item, batchName: name,
@@ -5842,7 +5978,7 @@ function submitTurtleBatchDetail(event, turtle) {
     updatingTurtleId: "", turtleDetailDraftId: "", turtleDetailDraft: null, updateDraftPhoto: "", growthTaskMemoId: "",
     activityLogs: [log, ...(state.activityLogs || [])]
   }, [state.updateDraftPhoto === "__CLEAR__" ? "" : state.updateDraftPhoto]);
-  toast(`批次已更新，在养 ${summary.count} 只，龟池数量已同步`);
+  if (locallySaved) toast(`批次已保存到本机，在养 ${summary.count} 只`);
 }
 
 function submitTurtleBatchMovement(event) {
@@ -7976,7 +8112,7 @@ function pageFeedback() {
     ${topbar("意见反馈", true)}
     <main class="content page-fresh feedback-page">
       <section class="page-intro compact-intro feedback-intro">
-        <div><p class="eyebrow dark">公开反馈</p><h2>把想法发出来</h2><p>反馈会保存到云端，所有登录用户都能查看、点赞和评论。</p></div>
+        <div><p class="eyebrow dark">意见反馈</p><h2>我的反馈</h2><p>反馈仅你和平台客服可见。</p></div>
         <button class="intro-action feedback-suggest-link" type="button" data-page="feedbackAdd">提建议✏️</button>
       </section>
       <section class="section-title"><span>反馈记录</span><small>${items.length} 条</small></section>
@@ -7993,12 +8129,12 @@ function pageFeedbackAdd() {
     ${topbar("提建议", true)}
     <main class="content page-fresh feedback-page">
       <section class="page-intro compact-intro">
-        <div><p class="eyebrow dark">公开反馈</p><h2>写下你的想法</h2><p>发布后会进入反馈记录，大家可以点赞和评论。</p></div>
+        <div><p class="eyebrow dark">意见反馈</p><h2>写下你的想法</h2><p>提交后可在反馈记录中查看处理进度和回复。</p></div>
       </section>
       <form class="fresh-card survey-form" id="feedbackForm">
         <label class="survey-field"><span>反馈类型</span><select class="select" name="type"><option>功能建议</option><option>界面问题</option><option>使用问题</option><option>其他</option></select></label>
         <label class="survey-field"><span>反馈内容</span><textarea name="content" required placeholder="写下你遇到的问题，或希望新增的功能"></textarea></label>
-        <button class="primary" type="submit">发布反馈</button>
+        <button class="primary" type="submit">提交反馈</button>
       </form>
     </main>
   `;
@@ -8414,14 +8550,17 @@ function operationsDatePicker(selectedDate) {
 }
 
 function pageOperations() {
-  const overview = state.operationsOverview || {};
+  const tab = operationsTab();
+  const cached = state.isCommunityAdmin && operationsCacheSession === operationsSessionKey()
+    ? operationsOverviewCache.get(operationsRequestKey()) : null;
+  const overview = cached?.data || {};
   const analytics = overview.analytics || { visitCount: 0, uniqueVisitorCount: 0, totalDwellSeconds: 0, averageDwellSeconds: 0 };
   const userUsage = Array.isArray(overview.userUsage) ? overview.userUsage : [];
   const conversations = Array.isArray(overview.conversations) ? overview.conversations : [];
   const market = overview.market || {};
   const growthMonthly = Array.isArray(overview.growthMonthly) ? overview.growthMonthly : [];
   const marketMonthly = Array.isArray(market.monthly) ? market.monthly : [];
-  const currentMonth = String(analytics.date || "").slice(0, 7) || new Date().toISOString().slice(0, 7);
+  const currentMonth = String(overview.date || analytics.date || "").slice(0, 7) || formatDate(new Date()).slice(0, 7);
   const growthMonth = growthMonthly.some(row => row.month === state.operationsGrowthMonth) ? state.operationsGrowthMonth : currentMonth;
   const marketMonth = marketMonthly.some(row => row.month === state.operationsMarketMonth) ? state.operationsMarketMonth : currentMonth;
   const growthIndex = Math.max(0, growthMonthly.findIndex(row => row.month === growthMonth));
@@ -8429,11 +8568,10 @@ function pageOperations() {
   const growthSelected = growthMonthly[growthIndex] || {};
   const marketSelected = marketMonthly[marketIndex] || {};
   const marketToday = market.today || {};
-  const operationsDate = String(state.operationsDate || analytics.date || "").slice(0, 10);
+  const operationsDate = String(state.operationsDate || overview.date || analytics.date || "").slice(0, 10);
   const feedback = overview.feedback || {};
   const safety = overview.safety || {};
   const health = overview.health || {};
-  const tab = ["analytics", "market", "feedback", "safety", "health", "chats"].includes(state.operationsTab) ? state.operationsTab : "analytics";
   const tabs = [["analytics", "增长"], ["market", "集市"], ["feedback", "反馈"], ["safety", "安全"], ["health", "服务"], ["chats", "聊天"]];
   return `
     ${topbar("运营中心", true)}
@@ -8442,7 +8580,10 @@ function pageOperations() {
       <section class="page-intro compact-intro"><div><p class="eyebrow dark">仅管理员可见</p><h2>运营中心</h2><p>查看今日使用情况，以及用户围绕商品的聊天记录。</p></div></section>
       <section class="memo-tabs operations-tabs">${tabs.map(([key, label]) => `<button class="tab ${tab === key ? "active" : ""}" type="button" data-operations-tab="${key}">${label}</button>`).join("")}</section>
       ${["analytics", "market"].includes(tab) ? operationsDatePicker(operationsDate) : ""}
-      ${tab === "analytics" ? `
+      ${cached?.failed && cached.data ? '<div class="fresh-card operations-note" role="status">刷新失败，正在显示上次读取的数据。<button type="button" class="secondary" data-operations-retry>重试</button></div>' : ""}
+      ${!cached?.data ? `<div class="fresh-card operations-note" role="status">${cached?.failed
+        ? '<p>数据暂时读取失败。</p><button type="button" class="secondary" data-operations-retry>重试</button>'
+        : '<p>正在读取当前页签…</p>'}</div>` : tab === "analytics" ? `
         <section class="section-title"><span>单日增长</span><small>${escapeHtml(analytics.date || "所选日期")} 数据</small></section>
         <section class="operations-metric-grid">
           <article class="fresh-card operations-metric"><span>进入次数</span><strong>${Math.max(0, Number(analytics.visitCount) || 0)}</strong><small>今日启动会话</small></article>
@@ -10294,18 +10435,16 @@ function bindEvents() {
   document.querySelectorAll("[data-system-announcement-action]").forEach(button => button.addEventListener("click", () => manageSystemAnnouncement(button.dataset.systemAnnouncementId, button.dataset.systemAnnouncementAction)));
   document.querySelectorAll("[data-operations-tab]").forEach(button => button.addEventListener("click", () => {
     if (!state.isCommunityAdmin) return;
-    setState({ operationsTab: button.dataset.operationsTab || "analytics" }, { skipCloud: true, pageScroll: "preserve" });
-    void refreshOperationsOverview(true);
+    setState({ operationsTab: button.dataset.operationsTab || "analytics" }, { skipSave: true, pageScroll: "preserve" });
   }));
+  document.querySelector("[data-operations-retry]")?.addEventListener("click", () => void refreshOperationsOverview(true));
   document.querySelectorAll("[data-operations-month]").forEach(select => select.addEventListener("change", () => {
     const key = select.dataset.operationsMonth === "market" ? "operationsMarketMonth" : "operationsGrowthMonth";
-    setState({ [key]: select.value }, { skipCloud: true, pageScroll: "preserve" });
+    setState({ [key]: select.value }, { skipSave: true, pageScroll: "preserve" });
   }));
   document.querySelector("[data-operations-date]")?.addEventListener("change", event => {
     if (!event.target.value || event.target.value === state.operationsDate) return;
-    setState({ operationsDate: event.target.value }, { skipCloud: true, pageScroll: "preserve" });
-    operationsOverviewLastLoadedAt = 0;
-    void refreshOperationsOverview(true);
+    setState({ operationsDate: event.target.value }, { skipSave: true, pageScroll: "preserve" });
   });
   document.querySelectorAll("[data-admin-feedback-form]").forEach(form => form.addEventListener("submit", submitAdminFeedbackAction));
   document.querySelectorAll("[data-dismiss-system-announcement]").forEach(button => button.addEventListener("click", () => dismissSystemAnnouncement(button.dataset.dismissSystemAnnouncement)));
@@ -10551,7 +10690,7 @@ function feedbackAuthPayload(extra = {}) {
 
 function canUsePublicFeedback() {
   if (!CONFIGURED_SMS_BACKEND) {
-    toast("公开反馈需要连接云端服务");
+    toast("意见反馈需要连接云端服务");
     return false;
   }
   if (!requireLogin()) return false;
@@ -10656,6 +10795,13 @@ function marketFeedRequestKey() {
   return JSON.stringify([state.loggedInPhone, state.marketFeedGeneration || 0, marketFeedRequestOptions()]);
 }
 
+function refreshAccountAfterMarketChange() {
+  // Market responses can contain an older, entire account snapshot. Let the
+  // account sync path verify ownership/revision and protect unsent local edits.
+  if (!cloudHydrationComplete || cloudSyncIsPaused() || localBackupFailed) return Promise.resolve(false);
+  return refreshCloudAccountFromServer({ background: true, protectLocalChanges: true });
+}
+
 async function refreshMarket(force = false) {
   if (force && typeof window !== "undefined") window.TurtleFeedUpdates?.clear("market", marketLoading);
   const isMarketFeed = state.page === "market";
@@ -10727,14 +10873,12 @@ async function refreshMarket(force = false) {
       }
       mergedListings.set(item.id, item);
     });
-    const accountPatch = result.accountData ? normalizeAccountData(result.accountData) : {};
     marketLastLoadedAt = Date.now();
     if (isMarketFeed) { entry.at = marketLastLoadedAt; entry.key = entryKey; }
     if (incomingMarketShareListingId && incomingMarketShareListingId === String(state.selectedMarketListingId || "")) {
       incomingMarketShareLoading = false;
     }
     const nextMarketState = {
-      ...accountPatch,
       marketFeedError: "",
       marketListings: [...mergedListings.values()],
       myMarketListings: normalizeMarketListings(result.myListings || []),
@@ -10762,13 +10906,13 @@ async function refreshMarket(force = false) {
       // The detail request may complete long after back navigation. Preserve
       // the restored list for its entire lifetime, not just a timed grace period.
       state = { ...state, ...patch };
-      if (result.accountData) saveState({ skipCloud: true });
       patchMarketSnapshotDetails();
       syncPersistentBottomNav($app.querySelector(":scope > .bottom-nav"));
     } else {
-      setState(patch, { skipSave: !result.accountData, skipCloud: true, preserveInputValues: true, renderPages: ["market","marketDetail","marketSeller","marketMy","marketFavorites","marketHistory","following","followingProfile","mine"] });
+      setState(patch, { skipSave: true, skipCloud: true, preserveInputValues: true, renderPages: ["market","marketDetail","marketSeller","marketMy","marketFavorites","marketHistory","following","followingProfile","mine"] });
     }
-    if (!result.accountData) deferFeedCacheSave();
+    deferFeedCacheSave();
+    if (result.accountData) void refreshAccountAfterMarketChange();
     return true;
     };
     if (!force && isMarketFeed && !result.accountData && state.marketFeedInitialized && typeof window !== "undefined"
@@ -12081,17 +12225,18 @@ async function toggleMarketSold(listingId) {
       saleMethod: saleDetails?.saleMethod || "",
       salePrice: saleDetails?.salePrice ?? ""
     }));
-    const accountPatch = result.accountData
-      ? normalizeAccountData(result.accountData)
-      : marketLedgerFallbackPatch(ledgerListing, status);
+    const accountPatch = result.accountData ? {} : marketLedgerFallbackPatch(ledgerListing, status);
     setState({
+      ...invalidateOlderMarketReads(),
       ...accountPatch,
-      page: status === "sold" ? "market" : state.page,
-      selectedMarketListingId: status === "sold" ? "" : state.selectedMarketListingId,
+      ...(returnToMarket ? { page: "market", selectedMarketListingId: "" } : {}),
       marketListings: normalizeMarketListings(result.listings || []).filter(item => item.status !== "sold"),
       myMarketListings: normalizeMarketListings(result.myListings || [])
-    });
-    toast(status === "sold" ? "已售出并自动记入账本" : "已恢复在售并撤销自动账本记录");
+    }, { ...(result.accountData ? { skipCloud: true } : {}), renderPages: ["market", "marketDetail", "marketMy", "marketFavorites", "marketHistory", "home", "ledger", "mine"] });
+    const reconciled = !result.accountData || await refreshAccountAfterMarketChange();
+    if (!isCurrent()) return;
+    toast(reconciled ? (status === "sold" ? "已售出并自动记入账本" : "已恢复在售并撤销自动账本记录")
+      : (status === "sold" ? "已售出，账本将在同步后更新" : "已恢复在售，账本将在同步后更新"));
   } catch (error) {
     if (error.status === 405 || error.message === "方法不支持") {
       setState({
@@ -12763,6 +12908,8 @@ function openAccountDeleteDialog() {
       }
       void unregisterNativePushNotifications(phone, token);
       forgetCloudToken(phone);
+      clearPendingCloudData(phone);
+      void window.TurtleAccountRecoveryStore?.remove(phone).catch(() => {});
       close();
       cloudHydrationComplete = false;
       setState({
@@ -13094,24 +13241,58 @@ async function refreshContentReports(force = false) {
   }
 }
 
-let operationsOverviewLoading = false;
-let operationsOverviewLastLoadedAt = 0;
+const operationsOverviewCache = new Map();
+const operationsOverviewRequests = new Map();
+let operationsCacheSession = "";
+
+function operationsTab() {
+  return ["analytics", "market", "feedback", "safety", "health", "chats"].includes(state.operationsTab) ? state.operationsTab : "analytics";
+}
+function operationsDate() {
+  return ["analytics", "market"].includes(operationsTab()) ? state.operationsDate || "" : "";
+}
+function operationsRequestKey() {
+  return `${operationsTab()}:${operationsDate()}`;
+}
+function operationsSessionKey() {
+  return JSON.stringify([state.loggedInPhone, currentCloudToken()]);
+}
+function resetOperationsSession() {
+  operationsCacheSession = "";
+  operationsOverviewCache.clear();
+  operationsOverviewRequests.clear();
+}
 async function refreshOperationsOverview(force = false) {
-  if (!CONFIGURED_SMS_BACKEND || operationsOverviewLoading || !state.isCommunityAdmin || !state.loggedInPhone || !currentCloudToken()) return;
-  if (!force && Date.now() - operationsOverviewLastLoadedAt < 15000) return;
-  operationsOverviewLoading = true;
-  const requestPhone = state.loggedInPhone, requestToken = currentCloudToken();
-  const isCurrent = () => requestPhone === state.loggedInPhone && requestToken === currentCloudToken();
+  if (!CONFIGURED_SMS_BACKEND || state.page !== "operations" || !state.isCommunityAdmin || !state.loggedInPhone || !currentCloudToken()) return;
+  const session = operationsSessionKey();
+  if (operationsCacheSession !== session) {
+    resetOperationsSession();
+    operationsCacheSession = session;
+  }
+  const tab = operationsTab(), date = operationsDate(), key = operationsRequestKey();
+  const cached = operationsOverviewCache.get(key);
+  if (operationsOverviewRequests.has(key) || (!force && cached && Date.now() - cached.at < 15000)) return;
+  const request = {};
+  operationsOverviewRequests.set(key, request);
+  const isCurrent = () => operationsCacheSession === session && session === operationsSessionKey() &&
+    state.isCommunityAdmin && operationsOverviewRequests.get(key) === request;
   try {
-    const result = await apiPost("/api/admin/operations/overview", communityAuthPayload({ date: state.operationsDate || "" }));
+    const result = await apiPost("/api/admin/operations/overview", communityAuthPayload({ tab, ...(date ? { date } : {}) }));
     if (!isCurrent()) return;
-    operationsOverviewLastLoadedAt = Date.now();
-    setState({ operationsOverview: { analytics: result.analytics || null, growthMonthly: Array.isArray(result.growthMonthly) ? result.growthMonthly : [], userUsage: Array.isArray(result.userUsage) ? result.userUsage : [], market: result.market || {}, feedback: result.feedback || {}, safety: result.safety || {}, health: result.health || {}, conversations: Array.isArray(result.conversations) ? result.conversations : [] } }, { skipCloud: true, pageScroll: "preserve" });
+    const fields = tab === "analytics" ? ["analytics", "growthMonthly", "userUsage"] : [tab === "chats" ? "conversations" : tab];
+    const data = Object.fromEntries(["date", ...fields].map(field => [field, result[field]]));
+    if (tab === "market") data.date ||= result.analytics?.date || date;
+    operationsOverviewCache.delete(key);
+    operationsOverviewCache.set(key, { data, at: Date.now() });
+    if (operationsOverviewCache.size > 24) operationsOverviewCache.delete(operationsOverviewCache.keys().next().value);
+    if (state.page === "operations" && operationsRequestKey() === key) setState({}, { forceRender: true, skipSave: true, preserveInputValues: true, pageScroll: "preserve" });
   } catch (error) {
     if (!isCurrent()) return;
     if (error.status !== 403) console.warn(error.message || "运营数据读取失败");
+    operationsOverviewCache.set(key, { ...cached, failed: true, at: Date.now() });
+    if (state.page === "operations" && operationsRequestKey() === key) setState({}, { forceRender: true, skipSave: true, preserveInputValues: true, pageScroll: "preserve" });
   } finally {
-    operationsOverviewLoading = false;
+    if (operationsOverviewRequests.get(key) === request) operationsOverviewRequests.delete(key);
   }
 }
 
@@ -13122,12 +13303,16 @@ async function submitAdminFeedbackAction(event) {
   const feedbackId = form.dataset.adminFeedbackForm || "";
   const data = new FormData(form);
   const button = form.querySelector("button[type='submit']");
+  const session = operationsSessionKey();
   if (button) { button.disabled = true; button.textContent = "保存中…"; }
   try {
     const result = await apiPost("/api/admin/feedback/action", communityAuthPayload({ feedbackId, status: String(data.get("status") || "pending"), reply: String(data.get("reply") || "") }));
-    const overview = state.operationsOverview || {};
-    operationsOverviewLastLoadedAt = Date.now();
-    setState({ operationsOverview: { ...overview, feedback: result.feedback || overview.feedback } }, { skipCloud: true, pageScroll: "preserve", preserveInputValues: true, renderPages: ["operations"] });
+    if (session !== operationsSessionKey() || !state.isCommunityAdmin) return;
+    if (result.feedback) {
+      operationsOverviewRequests.delete("feedback:");
+      operationsOverviewCache.set("feedback:", { data: { feedback: result.feedback }, at: Date.now() });
+      if (state.page === "operations" && operationsTab() === "feedback") render();
+    }
     toast("反馈处理结果已保存");
   } catch (error) {
     toast(error.message || "保存失败");
@@ -15171,7 +15356,8 @@ async function submitAccountInner(event) {
       try {
         const result = await apiPost("/api/account/login", { phone, password, termsAccepted: true, termsVersion: POLICY_VERSION, ...accountDeviceIdentity() });
         if (!result.user) throw new Error("登录失败，请稍后重试");
-        applyCloudUser(result.user, `手机号登录：${maskPhone(phone)}`, { skipCloud: true, skipMigration: true });
+        const recovery = await loadAccountRecovery(result.user);
+        applyCloudUser(result.user, `手机号登录：${maskPhone(phone)}`, { skipCloud: true, skipMigration: true, recovery });
         void requestLocationPermissionOnLogin();
         toast("登录成功");
         return;
@@ -15289,12 +15475,12 @@ async function sendAccountCode() {
         accountDraftPhone: phone,
         accountDraftPassword: password,
         accountDraftConfirmPassword: confirmPassword,
-        pendingAuthCode: result.code || SERVER_SMS_CODE,
+        pendingAuthCode: SERVER_SMS_CODE,
         pendingAuthPhone: phone,
         authCodeExpiresAt: String(Date.now() + Number(result.expiresIn || 300) * 1000),
         accountCodeCooldownUntil: String(Date.now() + 60 * 1000)
       });
-      toast(result.code ? `验证码已发送：${result.code}` : "验证码已发送");
+      toast("已提交短信申请，请留意短信");
       return;
     } catch (error) {
       if (CONFIGURED_SMS_BACKEND) {
@@ -15361,7 +15547,7 @@ function submitProfile(event) {
   if (!requireLogin()) return;
   const form = new FormData(event.currentTarget);
   const nickname = String(form.get("nickname") || "").trim() || maskPhone(state.loggedInPhone);
-  if (RESERVED_PLATFORM_NICKNAMES.includes(nickname.normalize("NFKC")) && state.loggedInPhone !== REVIEW_ADMIN_PHONE) {
+  if (RESERVED_PLATFORM_NICKNAMES.includes(nickname.normalize("NFKC")) && !state.isCommunityAdmin) {
     toast(`“${RESERVED_PLATFORM_NICKNAME}”仅供龟友手账官方账号使用`);
     return;
   }
@@ -15424,6 +15610,7 @@ function logoutAccount() {
   const pushAccount = state.loggedInPhone;
   const pushToken = currentCloudToken();
   if (!confirm("确定要退出当前账号吗？")) return;
+  if (!protectPendingBeforeSignOut()) return;
   ensureCommunityChatCache();
   try { if (communityChatCachePhone) localStorage.removeItem(CHAT_CACHE_STORAGE + communityChatCachePhone); } catch {}
   communityChatCache.clear();
@@ -15440,6 +15627,11 @@ function logoutAccount() {
     ...emptyAccountData(),
     registeredUsers,
     loggedInPhone: "",
+    cloudToken: "",
+    cloudAccountUpdatedAt: "",
+    cloudAccountDataRevision: "",
+    cloudMergeBase: null,
+    cloudSyncConflict: null,
     accountName: "未登录用户",
     accountAvatar: "",
     communityPosts: [],
@@ -16012,7 +16204,15 @@ function cloudUserToLocal(user, fallbackToken = "") {
 }
 
 function applyCloudUser(user, activityText = "", options = {}) {
-  const localUser = cloudUserToLocal(user, currentCloudToken());
+  const localUser = cloudUserToLocal(user, user.phone === state.loggedInPhone ? currentCloudToken() : "");
+  if (state.loggedInPhone && localUser.phone !== state.loggedInPhone && !protectPendingBeforeSignOut()) {
+    throw new Error("本机待同步记录尚未备份，请重试保存后切换账号");
+  }
+  const sameAccount = localUser.phone === state.loggedInPhone;
+  const pending = options.cloudConfirmed ? null : options.recovery || readPendingCloudData(localUser.phone) ||
+    (sameAccount && (localBackupFailed || localAccountPending) ? pendingCloudSnapshot(state, localAccountWrite) : null);
+  const keepCurrent = pending && sameAccount && !options.recovery;
+  if (pending?.localWrite) localAccountWrite = Math.max(localAccountWrite, pending.localWrite);
   // From this point the account data came from an authenticated server
   // response, so subsequent edits may safely use the normal save pipeline.
   cloudHydrationComplete = true;
@@ -16021,11 +16221,11 @@ function applyCloudUser(user, activityText = "", options = {}) {
   // when the asynchronous account request comes back.
   const destinationPage = Object.prototype.hasOwnProperty.call(options, "page") ? options.page : "mine";
   if (localUser.phone && localUser.cloudToken) rememberCloudToken(localUser.phone, localUser.cloudToken);
-  const accountData = normalizeAccountData(localUser.data || {});
-  const activityLogs = activityText
+  const accountData = normalizeAccountData(keepCurrent ? accountDataSnapshot(state) : pending?.data || localUser.data || {});
+  const activityLogs = activityText && !pending
     ? [makeActivity(activityText, "空间"), ...(accountData.activityLogs || [])]
     : accountData.activityLogs;
-  setState({
+  const locallySaved = setState({
     ...accountData,
     ...accountModuleCache(localUser.phone),
     ...messageCacheForAccount(localUser.phone),
@@ -16035,13 +16235,13 @@ function applyCloudUser(user, activityText = "", options = {}) {
     loggedInPhone: localUser.phone,
     cloudToken: localUser.cloudToken,
     accountSessionNotice: "",
-    cloudAccountUpdatedAt: user.updatedAt || "",
-    cloudAccountDataRevision: user.dataRevision || "",
-    cloudSyncConflict: null,
-    cloudMergeBase: user.dataRevision ? { phone: user.phone, revision: user.dataRevision,
+    cloudAccountUpdatedAt: pending ? pending.baseUpdatedAt || "" : user.updatedAt || "",
+    cloudAccountDataRevision: pending ? pending.baseDataRevision || "" : user.dataRevision || "",
+    cloudSyncConflict: pending?.conflict || null,
+    cloudMergeBase: pending ? pending.baseSnapshot || null : user.dataRevision ? { phone: user.phone, revision: user.dataRevision,
       accountName: localUser.accountName, accountAvatar: localUser.accountAvatar, data: TurtleLocalData.parse(TurtleLocalData.stringify(accountData)) } : null,
-    accountName: localUser.accountName,
-    accountAvatar: localUser.accountAvatar,
+    accountName: pending ? (keepCurrent ? state.accountName : pending.accountName || localUser.accountName) : localUser.accountName,
+    accountAvatar: pending ? (keepCurrent ? state.accountAvatar : pending.accountAvatar || "") : localUser.accountAvatar,
     isCommunityAdmin: localUser.isCommunityAdmin,
     policyConsentRequired: localUser.termsVersion !== POLICY_VERSION,
     accountDraftPhone: "",
@@ -16052,7 +16252,13 @@ function applyCloudUser(user, activityText = "", options = {}) {
     authCodeExpiresAt: "",
     accountCodeCooldownUntil: "",
     page: destinationPage
-  }, { preserveInputValues: localUser.phone === state.loggedInPhone, ...options });
+  }, { preserveInputValues: localUser.phone === state.loggedInPhone, ...options, keepPending: Boolean(pending) });
+  if (options.cloudConfirmed && locallySaved) clearPendingCloudData(localUser.phone);
+  if (pending) {
+    resumePendingCloudData(user, pending);
+    window.setTimeout(setupNativePushNotifications, 0);
+    return;
+  }
   if (!options.skipMigration && CONFIGURED_SMS_BACKEND && localUser.cloudToken) {
     scheduleCloudImageMigration(600);
   }
@@ -16070,6 +16276,14 @@ function accountSyncSignature(source) {
 function cloudOmitsLocalAccountData(user) {
   return ["turtles", "memos", "breedingRecords", "turtlePools", "ledgerRecords", "careRecords", "careCustomItems", "carePlans"].some(field =>
     (state[field] || []).length && !Array.isArray(user?.data?.[field]));
+}
+
+function cloudLostRecordsAtSameRevision(local, incoming) {
+  if (!local.cloudAccountDataRevision || local.cloudAccountDataRevision !== incoming?.dataRevision) return false;
+  return ["turtles", "memos", "breedingRecords", "turtlePools", "ledgerRecords", "careRecords", "careCustomItems", "carePlans"].some(field => {
+    const cloudIds = new Set((Array.isArray(incoming.data?.[field]) ? incoming.data[field] : []).map(record => record?.id));
+    return (local[field] || []).some(record => record?.id && !cloudIds.has(record.id));
+  });
 }
 
 function verifyCloudSaveReceipt(user, submitted, phone) {
@@ -16111,8 +16325,7 @@ function pauseCloudSync(code = "ACCOUNT_DATA_CONFLICT") {
   if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
   cloudSyncTimer = null;
   cloudSyncQueued = false;
-  persistPendingCloudData();
-  saveState({ skipCloud: true });
+  if (saveState({ skipCloud: true, keepPending: true }) === false) persistPendingCloudData();
   updateCloudSyncNotice();
   if (!alreadyPaused) toast(code === "CLOUD_SAVE_INCOMPLETE"
     ? "云端未完整确认保存，本机记录已保留，请勿卸载或清理数据，请重新核对同步"
@@ -16130,15 +16343,14 @@ function setCloudAccountRevision(user) {
 }
 
 function acknowledgeIdenticalCloudUser(user) {
-  if (!user || user.phone !== state.loggedInPhone) return false;
+  if (!user?.dataRevision || user.phone !== state.loggedInPhone) return false;
   const cloud = { ...normalizeAccountData(user.data || {}), loggedInPhone: user.phone,
     accountName: user.accountName || "", accountAvatar: user.accountAvatar || "" };
   // Compare the complete sync payload, not CSV totals or just record counts.
   // This safely repairs old empty revisions and lost save acknowledgments.
   if (accountSyncSignature(cloud) !== accountSyncSignature(state)) return false;
   setCloudAccountRevision(user);
-  clearPendingCloudData(user.phone);
-  saveState({ skipCloud: true });
+  if (saveState({ skipCloud: true, cloudConfirmed: true }) !== false) clearPendingCloudData(user.phone);
   updateCloudSyncNotice();
   return true;
 }
@@ -16147,6 +16359,17 @@ function pendingMatchesCloudBase(pending, user) {
   return pending?.baseDataRevision && user.dataRevision
     ? pending.baseDataRevision === user.dataRevision
     : Boolean(pending?.baseUpdatedAt && user.updatedAt && pending.baseUpdatedAt === user.updatedAt);
+}
+
+function resumePendingCloudData(user, pending) {
+  cloudHydrationComplete = true;
+  if (cloudOmitsLocalAccountData(user)) return pauseCloudSync("CLOUD_SAVE_INCOMPLETE");
+  if (acknowledgeIdenticalCloudUser(user)) return;
+  if (pendingMatchesCloudBase(pending, user)) {
+    setCloudAccountRevision(user);
+    if (saveState({ skipCloud: true, keepPending: true }) === false) persistPendingCloudData();
+    queueCloudSave();
+  } else if (!tryAutomaticCloudMerge(user)) pauseCloudSync();
 }
 
 function cloudMergePlan(user, choices = {}) {
@@ -16253,16 +16476,17 @@ function queueCloudSave() {
   if (!cloudHydrationComplete) {
     // Preserve genuine offline edits, but never turn the empty startup shell
     // into an account/save request before the authoritative cloud data lands.
-    if (accountHasContent(state)) persistPendingCloudData();
     return;
   }
   if (accountHasEmbeddedImages(state)) {
-    persistPendingCloudData();
     scheduleCloudImageMigration();
     return;
   }
   if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
-  cloudSyncTimer = setTimeout(pushCloudDataNow, CLOUD_SYNC_DEBOUNCE_MS);
+  cloudSyncTimer = setTimeout(() => {
+    cloudSyncTimer = null;
+    void pushCloudDataNow();
+  }, CLOUD_SYNC_DEBOUNCE_MS);
 }
 
 async function pushCloudDataNow(throwOnError = false) {
@@ -16272,7 +16496,6 @@ async function pushCloudDataNow(throwOnError = false) {
     return;
   }
   if (!cloudHydrationComplete) {
-    if (accountHasContent(state)) persistPendingCloudData();
     return;
   }
   if (cloudSyncInFlight) {
@@ -16285,6 +16508,7 @@ async function pushCloudDataNow(throwOnError = false) {
   const savingToken = currentCloudToken();
   const pendingAtStart = readPendingCloudData();
   const submittedData = accountDataSnapshot(state);
+  const submittedSignature = accountSyncSignature(state);
   try {
     const result = await apiPost("/api/account/save", {
       phone: state.loggedInPhone,
@@ -16305,9 +16529,14 @@ async function pushCloudDataNow(throwOnError = false) {
       }
       setCloudAccountRevision(result.user || {});
       cloudAutoMergeAttempts = 0;
-      if (!accountHasEmbeddedImages(state) && JSON.stringify(pendingNow) === JSON.stringify(pendingAtStart)) clearPendingCloudData(savingPhone);
-      else if (pendingNow?.phone === savingPhone) persistPendingCloudData();
-      saveState({ skipCloud: true });
+      const unchanged = accountSyncSignature(state) === submittedSignature &&
+        !accountHasEmbeddedImages(state) && samePendingCloudData(pendingNow, pendingAtStart);
+      if (unchanged) {
+        if (saveState({ skipCloud: true, cloudConfirmed: true }) !== false) clearPendingCloudData(savingPhone);
+      } else {
+        if (saveState({ skipCloud: true, keepPending: true }) === false) persistPendingCloudData();
+        cloudSyncQueued = true;
+      }
     }
   } catch (error) {
     console.warn(error.message || "云端同步失败");
@@ -16338,12 +16567,23 @@ async function pushCloudDataNow(throwOnError = false) {
   }
 }
 
+function samePendingCloudData(a, b) {
+  // Navigation or cache writes can advance the local counter without changing
+  // the account data being acknowledged.
+  const comparable = pending => pending && [pending.phone, pending.baseUpdatedAt, pending.baseDataRevision,
+    pending.accountName, pending.accountAvatar, pending.data, pending.conflict];
+  return JSON.stringify(comparable(a)) === JSON.stringify(comparable(b));
+}
+
 async function refreshCloudAccountFromServer(options = {}) {
   if (!CONFIGURED_SMS_BACKEND || !state.loggedInPhone || !currentCloudToken()) return;
   const loadingPhone = state.loggedInPhone;
   const loadingToken = currentCloudToken();
+  if (options.protectLocalChanges && (localBackupFailed || cloudSyncTimer || cloudSyncQueued || cloudSyncIsPaused())) return false;
   const pendingBeforeLoad = readPendingCloudData();
   if (options.background && (cloudSyncInFlight || cloudImageMigrationInFlight || pendingBeforeLoad?.phone === loadingPhone)) return false;
+  const localSignature = accountSyncSignature(state);
+  const localRevision = state.cloudAccountDataRevision;
   try {
     const result = await apiPost("/api/account/load", {
       phone: state.loggedInPhone,
@@ -16354,6 +16594,9 @@ async function refreshCloudAccountFromServer(options = {}) {
     // during a normal refresh it is the page the person is currently using.
     if (result.user) {
       if (state.loggedInPhone !== loadingPhone || currentCloudToken() !== loadingToken || result.user.phone !== loadingPhone) return false;
+      if (localBackupFailed || cloudSyncInFlight || cloudImageMigrationInFlight ||
+          state.cloudAccountDataRevision !== localRevision || accountSyncSignature(state) !== localSignature) return false;
+      if (options.protectLocalChanges && (cloudSyncTimer || cloudSyncQueued || cloudSyncIsPaused())) return false;
       // The request may have been in flight while the person edited their
       // profile. Read the journal after the response arrives; using a snapshot
       // captured before the request would miss that edit and let the older
@@ -16362,7 +16605,8 @@ async function refreshCloudAccountFromServer(options = {}) {
       if (options.background && (cloudSyncInFlight || cloudImageMigrationInFlight || pendingAfterLoad?.phone === loadingPhone)) return false;
       // Also protect the on-device mirror left by released clients which
       // already cleared their journal after an incomplete server response.
-      if (cloudOmitsLocalAccountData(result.user)) {
+      const missingAtSameRevision = !pendingAfterLoad && cloudLostRecordsAtSameRevision(state, result.user);
+      if (cloudOmitsLocalAccountData(result.user) || missingAtSameRevision) {
         cloudHydrationComplete = true;
         pauseCloudSync("CLOUD_SAVE_INCOMPLETE");
         return false;
@@ -16371,17 +16615,8 @@ async function refreshCloudAccountFromServer(options = {}) {
       // Check the journal BEFORE applying the cloud snapshot: rendering the
       // cloud first briefly loses local records and resets the paused state.
       // A repeated load must not redraw forms or reannounce the same conflict.
-      const visibleSignature = accountSyncSignature(state);
-      if (pendingAfterLoad?.phone === result.user.phone && restorePendingCloudData()) {
-        cloudHydrationComplete = true;
-        if (accountSyncSignature(state) !== visibleSignature) setState({}, { skipCloud: true });
-        if (acknowledgeIdenticalCloudUser(result.user)) return true;
-        if (pendingMatchesCloudBase(pendingAfterLoad, result.user)) {
-          setCloudAccountRevision(result.user);
-          persistPendingCloudData();
-          saveState({ skipCloud: true });
-          queueCloudSave();
-        } else if (!tryAutomaticCloudMerge(result.user)) pauseCloudSync();
+      if (pendingAfterLoad?.phone === result.user.phone) {
+        resumePendingCloudData(result.user, pendingAfterLoad);
       } else applyCloudUser(result.user, "", { skipCloud: true, page: state.page });
       return true;
     }
@@ -16471,7 +16706,7 @@ async function importReviewedAccountRecovery(file) {
     cloudHydrationComplete = true;
     // Keep a merged journal until the local mirror has also been persisted.
     if (!persistPendingCloudData()) { state = previous; throw new Error("云端已恢复，本机备份未完成，请保持页面打开后重试导入"); }
-    if (saveState({ skipCloud: true })) clearPendingCloudData(phone);
+    if (saveState({ skipCloud: true, cloudConfirmed: true })) clearPendingCloudData(phone);
     render();
     toast(localBackupFailed ? "云端已恢复，请重试保存本地备份" : "恢复完成，已恢复同步；另一台设备请导入同一恢复文件");
   } catch (error) {
@@ -16548,7 +16783,8 @@ function startCloudAccountRefresh() {
         }
         if (!sameSession() || !cloudHydrationComplete || cloudSyncIsPaused()) return;
       }
-      if (readPendingCloudData()?.phone === state.loggedInPhone) {
+      if (localBackupFailed && !saveState()) return;
+      if (localAccountPending || readPendingCloudData()?.phone === state.loggedInPhone) {
         if (accountHasEmbeddedImages(state)) await migrateEmbeddedImagesToCloud({ silent: true });
         if (!sameSession() || accountHasEmbeddedImages(state) || cloudSyncIsPaused()) return;
         if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
@@ -16582,6 +16818,10 @@ async function startCloudSessionHydration() {
   cloudHydrationStarted = true;
   task.promise = (async () => {
     try {
+      const beforeRecovery = accountSyncSignature(state);
+      const recovered = await readDeviceRecovery(phone);
+      if (!sameSession()) return false;
+      if (accountSyncSignature(state) === beforeRecovery) restoreDeviceRecovery(recovered);
       // Loading always happens before saving. In particular, never upload the
       // empty account shell created during a cold start over real cloud data.
       const loaded = await refreshCloudAccountFromServer();
@@ -17238,8 +17478,7 @@ async function deleteGrowthUpdate(turtleId, historyId) {
         return;
       }
       if (accountSyncSignature(state) === beforeSignature) {
-        clearPendingCloudData(phone);
-        applyCloudUser(result.user, "", { skipCloud: true, skipMigration: true, page: state.page });
+        applyCloudUser(result.user, "", { skipCloud: true, cloudConfirmed: true, skipMigration: true, page: state.page });
       } else {
         const plan = TurtleAccountMerge.merge(before,
           { accountName: state.accountName || "", accountAvatar: state.accountAvatar || "", data: accountDataSnapshot(state) },
@@ -17433,7 +17672,7 @@ function submitTurtleDetail(event) {
     updatedAt: new Date().toISOString()
   };
   event.currentTarget.__turtleDetailSaved = true;
-  saveWithDeferredImages({
+  const locallySaved = saveWithDeferredImages({
     ledgerRecords: priceUpdate.ledgerRecords,
     turtles: priceUpdate.turtles.map(t => t.id === turtle.id ? {
       ...updated,
@@ -17451,7 +17690,7 @@ function submitTurtleDetail(event) {
     activityLogs: logActivity(`更新档案：${turtleLabel(updated)}，背甲 ${historyItem.oldLength}cm → ${carapaceLength}cm${sameHealth ? "" : `，健康 ${turtle.health || "健康"} → ${health}`}${state.updateDraftPhoto ? "，并更换照片" : ""}${medicalLog}`, "档案")
   }, [updated.photo, historyItem.newPhoto]);
   activateCareReminder(growthMemo);
-  toast("档案已更新，旧记录已经留存");
+  if (locallySaved) toast("档案更新已保存到本机，旧记录已保留");
 }
 
 function submitTurtle(event) {
@@ -17536,7 +17775,7 @@ function submitTurtle(event) {
     logs.unshift(makeActivity(`购买入账：${turtleLabel(turtle)}，金额 ${money(turtle.price)} 元`, "账本"));
   }
   event.currentTarget.__turtleSaved = true;
-  saveWithDeferredImages({
+  const locallySaved = saveWithDeferredImages({
     turtles: [turtle, ...state.turtles],
     keptSpecies,
     ledgerRecords,
@@ -17550,7 +17789,7 @@ function submitTurtle(event) {
     activityLogs: [...logs, ...(state.activityLogs || [])]
   }, [turtle.photo]);
   activateCareReminder(growthMemo);
-  toast(turtle.source === "购买" ? "档案已保存，并已同步到收购账本" : "档案已保存");
+  if (locallySaved) toast(turtle.source === "购买" ? "档案和收购记录已保存到本机" : "档案已保存到本机");
   if (shouldInviteAppReview) window.setTimeout(() => showAppReviewInvite(state.turtles.length), 900);
 }
 
@@ -17651,7 +17890,7 @@ function submitBatchTurtles(form, species, sourceForm = null) {
   const keptSpecies = state.keptSpecies.includes(species.code) ? state.keptSpecies : [...state.keptSpecies, species.code];
   const shouldInviteAppReview = state.turtles.length + totalCount >= 5;
   if (sourceForm) sourceForm.__turtleSaved = true;
-  saveWithDeferredImages({
+  const locallySaved = saveWithDeferredImages({
     turtles: [...turtles, ...state.turtles],
     keptSpecies,
     ledgerRecords: [ledgerRecord, ...(state.ledgerRecords || [])],
@@ -17671,7 +17910,7 @@ function submitBatchTurtles(form, species, sourceForm = null) {
     ]
   }, [photo]);
   growthMemos.forEach(activateCareReminder);
-  toast(`已建立 1 个批次，共 ${totalCount} 只，并记入一笔收购总额`);
+  if (locallySaved) toast(`已保存 1 个批次，共 ${totalCount} 只，收购记录已记入本机账本`);
   if (shouldInviteAppReview) window.setTimeout(() => showAppReviewInvite(state.turtles.length), 900);
 }
 
@@ -19253,6 +19492,81 @@ function setupUniversalMediaPreview() {
 
 let mobileKeyboardBaseHeight = 0;
 let mobileKeyboardBaseWidth = 0;
+let mobileInputFocus = null;
+let mobileInputLayer = null;
+
+function mobileEditableField(element) {
+  if (!(element instanceof HTMLElement) || element.closest("[inert], [aria-hidden='true']") || element.matches(":disabled, [readonly], [inputmode='none']")) return null;
+  if (element instanceof HTMLInputElement) {
+    const type = (element.getAttribute("type") || "text").toLowerCase();
+    return ["text", "search", "tel", "url", "email", "password", "number"].includes(type) ? element : null;
+  }
+  return element instanceof HTMLTextAreaElement || element.isContentEditable ? element : null;
+}
+
+function mobileScrollableField(element) {
+  const field = mobileEditableField(element);
+  // These composers already own their keyboard position and scroll anchors.
+  return field && !field.closest(".community-chat-form, .forum-reply-composer") ? field : null;
+}
+
+function trackMobileInput(element) {
+  const field = mobileScrollableField(element);
+  mobileInputFocus = field ? { field, until: performance.now() + 950 } : null;
+}
+
+function syncFocusedInputVisibility(keyboardOpen, viewport, layoutHeight) {
+  const active = mobileScrollableField(document.activeElement);
+  const dialog = active?.closest('[role="dialog"], [role="alertdialog"], dialog');
+  const frame = dialog && (getComputedStyle(dialog).position === "fixed" ? dialog : dialog.parentElement);
+  const nextDialog = keyboardOpen && frame && getComputedStyle(frame).position === "fixed" ? frame : null;
+  const dock = !dialog && keyboardOpen && active?.closest(".feedback-detail-comment");
+  const layer = nextDialog || dock || null;
+  document.documentElement.classList.toggle("keyboard-input-page",
+    Boolean(keyboardOpen && !layer && active?.closest("#app > main")));
+  if (layer !== mobileInputLayer) {
+    mobileInputLayer?.removeAttribute("data-keyboard-input-layer");
+    layer?.setAttribute("data-keyboard-input-layer", dock ? "dock" : "dialog");
+    mobileInputLayer = layer;
+  }
+  if (!mobileInputFocus || active !== mobileInputFocus.field || performance.now() > mobileInputFocus.until ||
+      Math.abs((viewport?.scale || 1) - 1) > .05) return;
+  const top = Math.max(0, viewport?.offsetTop || 0);
+  const bottom = Math.min(layoutHeight, top + (viewport?.height || layoutHeight));
+  const bounds = { top: top + 12, bottom: bottom - 12 };
+  if (!dialog && $app.contains(active)) {
+    for (const bar of $app.querySelectorAll(":scope > .topbar, :scope > .bottom-nav, :scope > .feed-search-dock, :scope > .forum-publish-nav")) {
+      if (bar.contains(active) || !bar.getClientRects().length || !["fixed", "absolute", "sticky"].includes(getComputedStyle(bar).position)) continue;
+      const rect = bar.getBoundingClientRect();
+      if (rect.bottom <= top || rect.top >= bottom) continue;
+      if (bar.matches(".bottom-nav")) bounds.bottom = Math.min(bounds.bottom, rect.top - 12);
+      else bounds.top = Math.max(bounds.top, rect.bottom + 12);
+    }
+  }
+  let parent = active.parentElement;
+  while (parent && parent !== document.body && parent !== document.documentElement) {
+    const style = getComputedStyle(parent);
+    if (/^(auto|scroll|overlay)$/.test(style.overflowY) && parent.scrollHeight > parent.clientHeight + 1) {
+      const rect = parent.getBoundingClientRect();
+      scrollFocusedInput(active, parent, Math.max(bounds.top, rect.top + parent.clientTop + 8),
+        Math.min(bounds.bottom, rect.top + parent.clientTop + parent.clientHeight - 8));
+    }
+    if (parent === nextDialog || style.position === "fixed" || (parent === dialog && parent.parentElement !== nextDialog)) return;
+    parent = parent.parentElement;
+  }
+  scrollFocusedInput(active, document.scrollingElement, bounds.top, bounds.bottom);
+}
+
+function scrollFocusedInput(field, scroller, top, bottom) {
+  if (!scroller || bottom <= top) return;
+  const rect = field.getBoundingClientRect();
+  // A tall editor can be larger than the space above the keyboard. Keep
+  // its visible start in view and let the browser scroll the caret inside it.
+  const delta = rect.height > bottom - top
+    ? rect.top - top
+    : rect.top < top ? rect.top - top : rect.bottom > bottom ? rect.bottom - bottom : 0;
+  if (Math.abs(delta) > 2) scroller.scrollBy({ top: delta, behavior: "instant" });
+}
 
 function forumComposerViewportState(layoutHeight, viewport, focused, baseHeight = layoutHeight) {
   // Pinch zoom also shrinks visualViewport; it must not lift the composer.
@@ -19265,8 +19579,7 @@ function forumComposerViewportState(layoutHeight, viewport, focused, baseHeight 
 
 function syncMobileKeyboardUI() {
   const active = document.activeElement;
-  const editable = active instanceof HTMLElement && !active.readOnly && !active.disabled &&
-    active.matches("textarea, [contenteditable='true'], input:not([type='checkbox']):not([type='radio']):not([type='button']):not([type='submit']):not([type='file']):not([type='range']):not([type='color']):not([type='date'])");
+  const editable = Boolean(mobileEditableField(active));
   const viewport = window.visualViewport;
   // Native keyboard resize can precede documentElement.clientHeight updating.
   // Using the larger stale height would lift an already resized footer twice.
@@ -19277,7 +19590,8 @@ function syncMobileKeyboardUI() {
   const composerViewport = forumComposerViewportState(layoutHeight, viewport, editable, mobileKeyboardBaseHeight);
   const nativeKeyboard = typeof window.TURTLE_ANDROID_KEYBOARD_VISIBLE === "boolean"
     ? window.TURTLE_ANDROID_KEYBOARD_VISIBLE : window.TURTLE_IOS_KEYBOARD_VISIBLE;
-  if (typeof nativeKeyboard === "boolean") {
+  if (typeof nativeKeyboard === "boolean" && Math.abs((viewport?.scale || 1) - 1) <= .05) {
+    if (!nativeKeyboard && document.documentElement.classList.contains("keyboard-open")) mobileInputFocus = null;
     composerViewport.keyboardOpen = nativeKeyboard;
     if (!nativeKeyboard) composerViewport.bottom = 0;
   }
@@ -19288,6 +19602,7 @@ function syncMobileKeyboardUI() {
   // Focus can remain after dismissing the software keyboard or using a physical
   // keyboard. Hide tabs only while geometry/native state says it is visible.
   document.documentElement.classList.toggle("keyboard-open", composerViewport.keyboardOpen);
+  syncFocusedInputVisibility(composerViewport.keyboardOpen, viewport, layoutHeight);
   window.TurtleMobileCommunity?.syncKeyboard?.();
   window.TurtleEmotePicker?.sync?.();
 }
@@ -19297,6 +19612,7 @@ function setupMobileKeyboardGuard() {
   document.body.dataset.keyboardGuardBound = "true";
   let viewportFrame = 0;
   let focusOutTimer = 0;
+  let keyboardSettle = 0;
   const scheduleViewport = () => {
     // Safari sends focus, resize and visualViewport scroll in the same frame
     // while the keyboard animates. Measure once, then update the fixed layers.
@@ -19308,9 +19624,22 @@ function setupMobileKeyboardGuard() {
   const suspendViewport = () => {
     window.cancelAnimationFrame(viewportFrame);
     window.clearTimeout(focusOutTimer);
-    viewportFrame = focusOutTimer = 0;
+    window.clearTimeout(keyboardSettle);
+    viewportFrame = focusOutTimer = keyboardSettle = 0;
+    mobileInputFocus = null;
   };
-  document.addEventListener("focusin", scheduleViewport);
+  const focusField = () => {
+    trackMobileInput(document.activeElement);
+    scheduleViewport();
+    window.clearTimeout(keyboardSettle);
+    keyboardSettle = window.setTimeout(scheduleViewport, 400);
+  };
+  document.addEventListener("focusin", focusField, true);
+  document.addEventListener("click", event => {
+    const field = mobileEditableField(document.activeElement);
+    if (field && field.contains(event.target)) focusField();
+  }, true);
+  for (const event of ["touchmove", "wheel"]) document.addEventListener(event, () => { mobileInputFocus = null; }, { passive: true, capture: true });
   document.addEventListener("focusout", () => {
     window.clearTimeout(focusOutTimer);
     focusOutTimer = window.setTimeout(scheduleViewport, 80);
@@ -19323,6 +19652,7 @@ function setupMobileKeyboardGuard() {
         // An attached hardware keyboard can emit a show event with zero height.
         const height = Number(event.keyboardHeight ?? event.detail?.keyboardHeight);
         window.TURTLE_IOS_KEYBOARD_VISIBLE = name !== "keyboardDidHide" && (!Number.isFinite(height) || height > 80);
+        if (name === "keyboardDidHide") mobileInputFocus = null;
         scheduleViewport();
       });
     }
@@ -19637,7 +19967,6 @@ function setupEdgeBackAndConversationSwipe() {
   let settlingGesture = null;
   let edgeRenderDeferred = false;
   let deferredEdgePage = "";
-  let nativeEdgeReady = false;
   let nativeEdgeGeneration = 0;
   let nativeEdgeConfiguration = "";
   const nativeEdgePlugin = () => {
@@ -19646,25 +19975,30 @@ function setupEdgeBackAndConversationSwipe() {
     const plugin = capacitor.Plugins?.TurtleEdgeBack || capacitor.registerPlugin?.("TurtleEdgeBack");
     return typeof plugin?.configure === "function" ? plugin : null;
   };
+  const edgeWidth = 28;
+  const edgeDialogSelector = "[role='dialog'], [role='alertdialog'], [aria-modal='true'], dialog[open], .image-preview-overlay, .modal-overlay";
   const edgeBackBlocked = () => Boolean(forceUpdateState.required || state.policyConsentRequired ||
-    [...document.querySelectorAll("[role='dialog'], [aria-modal='true'], [class*='-overlay']")]
-      .some(node => !node.closest('.edge-back-preview') && node.getClientRects().length && getComputedStyle(node).visibility !== "hidden"));
-  const nativeEdgeEligible = () => !BOTTOM_NAV_ROOT_PAGES.has(state.page) && edgeBackSnapshots.length > 0 &&
-    !edgeBackBlocked() && Math.abs((window.visualViewport?.scale || 1) - 1) < .05;
+    [...document.querySelectorAll(edgeDialogSelector)].some(node => !node.closest('.edge-back-preview') &&
+      node.getClientRects().length && !['hidden', 'collapse'].includes(getComputedStyle(node).visibility)));
+  const canSwipeBack = () => Boolean(ledgerDashboardPicker || (!BOTTOM_NAV_ROOT_PAGES.has(state.page) &&
+    (edgeBackSnapshots.length || $app.querySelector('[data-back]'))));
+  const edgeBackEligible = () => canSwipeBack() && !edgeBackBlocked() && Math.abs((window.visualViewport?.scale || 1) - 1) < .05;
   const snapshotIds = new WeakMap();
   let nextSnapshotId = 0;
   let edgeRegionCandidates = null;
+  let nativeEdgeRoute = "";
+  let nativeEdgeRequest = 0;
   const edgeControls = "input, textarea, select, [contenteditable='true'], [role='slider'], [data-no-edge-back], [data-growth-history-flow], .message-friend-swipe";
   $app.syncNativeEdgeBack = (layoutChanged = false) => {
     if (layoutChanged) edgeRegionCandidates = null;
     const plugin = nativeEdgePlugin();
     if (!plugin) return;
     const width = Math.max(1, window.innerWidth), height = Math.max(1, window.innerHeight);
-    const enabled = nativeEdgeEligible();
+    const enabled = edgeBackEligible();
     // Pinning/translating the composer changes its screen rectangle while the
     // finger owns back. Do not turn those animation frames into reconfiguration.
     if (enabled && (gesture?.mode === "edge" || settlingGesture)) return;
-    if (!enabled && (gesture?.nativeEdge || settlingGesture?.nativeEdge)) cancelActiveGesture();
+    if (!enabled && (gesture?.mode === "edge" || settlingGesture)) cancelActiveGesture();
     // Scroll moves these controls but does not change which nodes can consume
     // a horizontal gesture. Re-discover them only when page layout changes.
     if (enabled && !edgeRegionCandidates) edgeRegionCandidates = [...$app.querySelectorAll("*")].filter(node =>
@@ -19672,20 +20006,22 @@ function setupEdgeBackAndConversationSwipe() {
         node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)));
     const excludedRegions = enabled ? edgeRegionCandidates.flatMap(node => {
       const rect = node.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0 || rect.left > 24 || rect.right <= 0 || rect.bottom <= 0 || rect.top >= height) return [];
+      if (rect.width <= 0 || rect.height <= 0 || rect.left > edgeWidth || rect.right <= 0 || rect.bottom <= 0 || rect.top >= height) return [];
       return [{ x: rect.left / width, y: rect.top / height, width: rect.width / width, height: rect.height / height }];
     }) : [];
     const snapshot = edgeBackSnapshots[edgeBackSnapshots.length - 1];
     if (snapshot && !snapshotIds.has(snapshot)) snapshotIds.set(snapshot, ++nextSnapshotId);
-    const configuration = JSON.stringify({ enabled, excludedRegions, page: state.page, account: state.loggedInPhone, snapshot: snapshot ? snapshotIds.get(snapshot) : 0 });
+    const route = JSON.stringify([enabled, state.page, state.loggedInPhone, snapshot ? snapshotIds.get(snapshot) : 0]);
+    const configuration = JSON.stringify([route, excludedRegions]);
     if (configuration === nativeEdgeConfiguration) return;
     nativeEdgeConfiguration = configuration;
-    nativeEdgeReady = false;
-    const generation = ++nativeEdgeGeneration;
-    Promise.resolve(plugin.configure({ enabled, excludedRegions, generation })).then(result => {
-      if (generation === nativeEdgeGeneration) nativeEdgeReady = enabled && result?.enabled === true;
-    }).catch(() => {
-      if (generation === nativeEdgeGeneration) { nativeEdgeConfiguration = ""; nativeEdgeReady = false; }
+    if (route !== nativeEdgeRoute) {
+      nativeEdgeRoute = route;
+      nativeEdgeGeneration++;
+    }
+    const request = ++nativeEdgeRequest, generation = nativeEdgeGeneration;
+    Promise.resolve(plugin.configure({ enabled, excludedRegions, generation })).catch(() => {
+      if (request === nativeEdgeRequest) nativeEdgeConfiguration = "";
     });
   };
   // Dialogs can mount outside render(); keep native ownership in sync with them.
@@ -19722,12 +20058,11 @@ function setupEdgeBackAndConversationSwipe() {
       if (state.page === deferredEdgePage) render();
     });
   };
-  const rootPages = BOTTOM_NAV_ROOT_PAGES;
   const edgePinnedProperties = ["position", "top", "left", "right", "bottom", "width", "transform"];
   const pinEdgeFixedLayers = active => {
     if (active?.edgePinnedLayers?.length) return;
     const appBounds = $app.getBoundingClientRect();
-    const layers = Array.from($app.querySelectorAll(".topbar, .market-detail-actions, .community-chat-product-context, .community-chat-form, .community-chat-tools, .bottom-nav"))
+    const layers = Array.from($app.querySelectorAll(".topbar, .market-detail-actions, .community-chat-product-context, .community-chat-form, .community-chat-tools, .forum-reply-composer, .turtle-emote-panel, .feedback-detail-comment, .bottom-nav"))
       .filter(layer => getComputedStyle(layer).position === "fixed")
       .map(layer => {
         const bounds = layer.getBoundingClientRect();
@@ -19819,39 +20154,30 @@ function setupEdgeBackAndConversationSwipe() {
   const beginEdgeDrag = active => {
     active.mode = "edge";
     pinEdgeFixedLayers(active);
-    active.preview = showEdgeBackPreview(edgeBackSnapshots[edgeBackSnapshots.length - 1]);
+    active.preview = !ledgerDashboardPicker && showEdgeBackPreview(edgeBackSnapshots.at(-1));
     claimPointer(active, $app);
     $app.style.transition = "none";
     $app.classList.add("edge-back-dragging");
   };
   const onEdgePointerDown = event => {
-    if (nativeEdgeReady && nativeEdgeEligible() && event.pointerType === "touch" && !event.nativeEdge) return;
     if (!event.isPrimary) { if (gesture || settlingGesture) cancelActiveGesture(); return; }
+    if (gesture?.nativeEdge && !event.nativeEdge) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    suppressPointerClickUntil = 0;
-    // A new touch must never inherit a previous drag or its delayed rebound.
-    if (gesture || settlingGesture || edgeSettleTimer) cancelActiveGesture();
-    if (!$app.contains(event.target) || event.target.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [aria-modal='true'], [class*='-overlay']")) return;
+    if (!settlingGesture) suppressPointerClickUntil = 0;
+    if (!$app.contains(event.target) || event.target.closest(edgeControls)) return;
+    if (settlingGesture) return;
+    if (gesture) cancelActiveGesture();
+    const bounds = $app.getBoundingClientRect();
+    const edgeStart = event.clientX - bounds.left;
+    if (edgeStart < 0 || edgeStart > edgeWidth || (!event.nativeEdge && !edgeBackEligible())) return;
     // Zoom/pan and horizontal controls retain ownership for their entire
     // gesture, including the left boundary of a scroll strip. A new carousel
     // must not need a page-specific exclusion to avoid accidental navigation.
     if (Math.abs((window.visualViewport?.scale || 1) - 1) > .05) return;
     for (let node = event.target; node && node !== $app; node = node.parentElement) {
       if (node.matches?.("[role='slider'], [data-no-edge-back]")) return;
-      if (node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)) return;
+      if (!node.matches('.market-detail-gallery') && node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)) return;
     }
-    // A native product gallery owns every horizontal gesture except the thin
-    // left-edge shield rendered above it. This prevents the page-back path
-    // from competing with an image page while the finger is already on it.
-    if (event.target.closest(".market-detail-gallery") && event.clientX > 24) return;
-    // Growth history is a native horizontal scroller.  It must not compete
-    // with the app-level swipe/back recognizer on iOS.
-    if (event.target.closest("[data-growth-history-flow]")) return;
-    // Conversation rows are native horizontal scrollers.  Do not let the
-    // document-level edge/drag handler claim their pointer: that would turn a
-    // UIKit-style inertial swipe back into a JavaScript drag.
-    if (event.target.closest(".message-friend-swipe")) return;
-    const bounds = $app.getBoundingClientRect();
     gesture = {
       pointerId: event.pointerId,
       nativeEdge: Boolean(event.nativeEdge),
@@ -19859,7 +20185,6 @@ function setupEdgeBackAndConversationSwipe() {
       page: state.page,
       x: event.clientX,
       y: event.clientY,
-      edgeStart: event.clientX - bounds.left,
       width: Math.max(1, bounds.width),
       reducedMotion: Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches),
       lastX: event.clientX,
@@ -19892,7 +20217,7 @@ function setupEdgeBackAndConversationSwipe() {
         active.mode = "vertical";
         return;
       }
-      if (active.edgeStart >= 0 && active.edgeStart <= 24 && dx > 0 && !rootPages.has(state.page) && edgeBackSnapshots.length) {
+      if (dx > 0 && edgeBackEligible()) {
         beginEdgeDrag(active);
       } else {
         active.mode = "horizontal";
@@ -19900,8 +20225,8 @@ function setupEdgeBackAndConversationSwipe() {
       }
     }
     if (active.mode === "edge") {
-      active.edgeOffset = Math.max(0, Math.min(active.width, dx));
-      active.peakOffset = Math.max(active.peakOffset, active.edgeOffset, event.nativePeakOffset || 0);
+      active.edgeOffset = Math.max(0, Math.min(active.preview ? active.width : 88, dx));
+      active.peakOffset = Math.max(active.peakOffset, dx, event.nativePeakOffset || 0);
       active.edgeProgress = active.edgeOffset / active.width;
       // UIKit positions already crossed an asynchronous WebView bridge. Paint
       // them now instead of adding another display frame of finger-to-page lag.
@@ -19924,8 +20249,8 @@ function setupEdgeBackAndConversationSwipe() {
         active.velocityX = releaseDelta / Math.max(1, performance.now() - active.lastAt);
         active.lastAt = performance.now();
       }
-      active.edgeOffset = Math.max(0, Math.min(active.width, dx));
-      active.peakOffset = Math.max(active.peakOffset, active.edgeOffset, event.nativePeakOffset || 0);
+      active.edgeOffset = Math.max(0, Math.min(active.preview ? active.width : 88, dx));
+      active.peakOffset = Math.max(active.peakOffset, dx, event.nativePeakOffset || 0);
       active.edgeProgress = active.edgeOffset / active.width;
       if (event.nativeEdge && Number.isFinite(event.nativeVelocityX)) { active.velocityX = event.nativeVelocityX; active.lastAt = performance.now(); }
     }
@@ -19934,7 +20259,7 @@ function setupEdgeBackAndConversationSwipe() {
     if (active.mode === "edge") {
       settlingGesture = active;
       suppressPointerClickUntil = performance.now() + 450;
-      const width = active.width;
+      const width = active.preview ? active.width : 88;
       const edgeOffset = Math.max(0, Math.min(width, active.edgeOffset ?? dx));
       // The release direction is the user's final intent. Do not retain a
       // fling from hundreds of milliseconds ago, or commit a reversed swipe
@@ -19944,10 +20269,10 @@ function setupEdgeBackAndConversationSwipe() {
       // Keep a small intent threshold for taps, and remember a pull-back even
       // when the user pauses before releasing and velocity has become zero.
       const hasForwardFling = releaseVelocity > .35 && dx >= 12;
-      const reversed = releaseVelocity < -.25 || active.peakOffset - edgeOffset >= 12;
+      const reversed = releaseVelocity < -.25 || active.peakOffset - Math.max(0, dx) >= 12;
       // Direction was decided when the drag was claimed. A later vertical
       // curve must not turn a committed horizontal drag into a rebound.
-      const shouldComplete = !reversed && (dx >= 24 || hasForwardFling);
+      const shouldComplete = edgeBackEligible() && !reversed && (dx >= 24 || hasForwardFling);
       if (shouldComplete && recordPageHasChanges()) {
         const backSnapshot = edgeBackSnapshots[edgeBackSnapshots.length - 1];
         // Native confirm can emit delayed blur/resize on dismissal. End the
@@ -19989,7 +20314,7 @@ function setupEdgeBackAndConversationSwipe() {
         edgeSettleCleanup = null;
         if (settlingGesture === active) settlingGesture = null;
         scheduleNativeEdgeSync();
-        if (shouldComplete && !rootPages.has(state.page)) {
+        if (shouldComplete && state.page === active.page && edgeBackEligible()) {
           unpinEdgeFixedLayers(active);
           edgeRenderDeferred = false;
           // navigateBack owns the offscreen-to-previous-page hand-off.
@@ -20026,24 +20351,27 @@ function setupEdgeBackAndConversationSwipe() {
     // Eligibility and hit testing belong to acquisition, not every drag sample.
     // Route changes and modal/viewport observers cancel ownership separately.
     if (detail.phase === "begin") {
-      if (!nativeEdgeEligible()) return;
+      if (!edgeBackEligible()) return;
     } else {
       if (!gesture?.nativeEdge || gesture.page !== state.page) return;
-      if (detail.phase === "end" && !nativeEdgeEligible()) { cancelActiveGesture(); return; }
+      if (detail.phase === "end" && !edgeBackEligible()) { cancelActiveGesture(); return; }
     }
     const width = Number(detail.width), height = Number(detail.height);
     if (!(width > 0 && height > 0) || ![detail.startX, detail.startY, detail.x, detail.y, detail.sequence, detail.velocityX].every(Number.isFinite)) return;
     const scaleX = window.innerWidth / width, scaleY = window.innerHeight / height;
-    const startX = Math.max(0, Math.min(24, detail.startX * scaleX));
+    const startX = Math.max(0, Math.min(edgeWidth, detail.startX * scaleX));
     const startY = detail.startY * scaleY, pointerId = -1000 - detail.sequence;
     const nativeEvent = { nativeEdge: true, nativeSequence: detail.sequence, isPrimary: true, pointerType: "touch", pointerId, button: 0,
       target: detail.phase === "begin" ? document.elementFromPoint(startX, startY) || $app : $app, clientX: startX, clientY: startY, cancelable: false };
     if (detail.phase === "begin") {
-      if (edgeBackBlocked()) { nativeEdgePlugin()?.cancel?.({ generation: nativeEdgeGeneration, sequence: detail.sequence }).catch(() => {}); return; }
-      nativeEdgeReady = true;
-      onEdgePointerDown(nativeEvent);
+      if (gesture?.mode === "edge" && !gesture.nativeEdge && gesture.page === state.page) {
+        const active = gesture;
+        gesture = null;
+        releasePointer(active);
+        gesture = Object.assign(active, { nativeEdge: true, nativeSequence: detail.sequence, pointerId, x: startX, y: startY });
+      } else onEdgePointerDown(nativeEvent);
       if (!gesture || gesture.pointerId !== pointerId) { nativeEdgePlugin()?.cancel?.({ generation: nativeEdgeGeneration, sequence: detail.sequence }).catch(() => {}); return; }
-      beginEdgeDrag(gesture);
+      if (gesture.mode !== "edge") beginEdgeDrag(gesture);
     } else if (!gesture?.nativeEdge || gesture.pointerId !== pointerId) return;
     nativeEvent.clientX = startX + (detail.x - detail.startX) * scaleX;
     nativeEvent.clientY = detail.y * scaleY;
@@ -20071,7 +20399,12 @@ function setupEdgeBackAndConversationSwipe() {
   window.addEventListener("pagehide", cancelActiveGesture);
   window.addEventListener("pageshow", cancelActiveGesture);
   window.addEventListener("blur", cancelActiveGesture);
-  window.addEventListener("resize", cancelActiveGesture);
+  let edgeViewportWidth = window.innerWidth;
+  window.addEventListener("resize", () => {
+    // An IME changes height while leaving the left-edge coordinate intact.
+    if (Math.abs(window.innerWidth - edgeViewportWidth) > 2) cancelActiveGesture();
+    edgeViewportWidth = window.innerWidth;
+  });
   document.addEventListener("visibilitychange", cancelActiveGesture);
 }
 

@@ -208,6 +208,7 @@
     if (record && hasContent(record)) applyRecord(item, record);
     else if (unavailable) { item.status = '文字可保存，图片草稿存储暂不可用'; item.error = true; }
     render();
+    if (item.returnScroll > 0) scrollPageTo({ top: item.returnScroll, left: 0, behavior: 'auto' });
     if (item.freshMedia?.length) { item.freshMedia = null; capture(true); }
   }
   function enter() {
@@ -326,7 +327,12 @@
     // Back navigation can restore a retained editor node, or even the loading
     // placeholder captured before its first disk read. Reconnect its draft
     // context instead of leaving a restored form without saving handlers.
-    if (context() && (!current(active) || !document.querySelector(selectors))) render();
+    if (context() && (!current(active) || !document.querySelector(selectors))) {
+      const restoredScroll = pageScrollY();
+      render();
+      if (active?.loading) active.returnScroll = restoredScroll;
+      else scrollPageTo({ top: restoredScroll, left: 0, behavior: 'auto' });
+    }
     return result;
   };
   function published({ kind, phone, listingId = '' }) {

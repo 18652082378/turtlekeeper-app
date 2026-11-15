@@ -44,7 +44,8 @@ function createBackupStorage({ directory, uploads, readData, env = process.env, 
         const file = path.resolve(dir, f.path);
         if (!file.startsWith(dir + path.sep)) return false;
         const s = fs.lstatSync(file);
-        return s.isFile() && s.size === f.bytes && /^[a-f0-9]{64}$/.test(f.sha256 || '');
+        return s.isFile() && s.size === f.bytes && /^[a-f0-9]{64}$/.test(f.sha256 || '')
+          && (f.path !== 'app-data.json' || hash(file) === f.sha256);
       });
     } catch { return false; }
   }

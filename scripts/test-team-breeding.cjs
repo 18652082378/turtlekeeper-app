@@ -88,8 +88,8 @@ async function main() {
   await assert.rejects(edit('breeding', fields, 2), e => e.status === 403);
   await assert.rejects(edit('hatch', hatch, 2), e => e.status === 403);
   owner.teamEntitlement.expiresAt = '2020-01-01T00:00:00Z';
-  assert.deepEqual((await get(2)).breedingRecords, []);
+  assert.ok((await get(2)).breedingRecords.length, 'historical billing expiry does not block the member’s read access');
   await assert.rejects(edit('hatch', hatch, 2), e => e.status === 403);
-  console.log(`PASS: breeding/hatching permissions, counts/rates, weighted totals, invalid/unknown data, repeated/stale requests, batch archives, sold history, historical links, lifecycle, preserved photos, expiry (${writes} writes).`);
+  console.log(`PASS: breeding/hatching permissions, counts/rates, weighted totals, invalid/unknown data, repeated/stale requests, batch archives, sold history, historical links, lifecycle and preserved photos (${writes} writes).`);
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });
