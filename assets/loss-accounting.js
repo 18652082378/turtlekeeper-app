@@ -2,13 +2,34 @@
   const cents = value => Math.max(0, Math.round((Number(value) || 0) * 100));
   const ids = record => [...new Set((record.turtleIds?.length ? record.turtleIds : [record.turtleId]).filter(Boolean))];
   const purchaseFor = (turtle, records) => records.find(record => record.type === 'purchase' && ids(record).includes(turtle.id));
+  function allocatedPurchaseCents(turtle, balance, remaining) {
+    if (remaining <= 1) return balance;
+    const unit = turtle.price === '' || turtle.price == null ? Math.floor(balance / remaining) : cents(turtle.price);
+    return Math.min(unit, balance);
+  }
   function purchaseCost(turtle, records) {
     const purchase = purchaseFor(turtle, records);
-    if (!purchase) return cents(turtle.price) / 100;
-    const members = ids(purchase);
-    if (members.length <= 1) return cents(purchase.amount) / 100;
-    const unit = turtle.price === '' || turtle.price == null ? Math.floor(cents(purchase.amount) / members.length) : cents(turtle.price);
-    return Math.min(unit, cents(purchase.amount)) / 100;
+    return (purchase ? allocatedPurchaseCents(turtle, cents(purchase.amount), ids(purchase).length) : cents(turtle.price)) / 100;
+  }
+  function batchPurchaseCost(turtles, records) {
+    const balances = new Map();
+    for (const record of records) {
+      if (record.type !== 'purchase') continue;
+      const members = ids(record);
+      const balance = { cents: cents(record.amount), remaining: members.length };
+      for (const id of members) if (!balances.has(id)) balances.set(id, balance);
+    }
+    let total = 0;
+    for (const turtle of turtles) {
+      const balance = balances.get(turtle.id);
+      const cost = balance ? allocatedPurchaseCents(turtle, balance.cents, balance.remaining) : cents(turtle.price);
+      total += cost;
+      if (balance) {
+        balance.cents -= cost;
+        balance.remaining--;
+      }
+    }
+    return total / 100;
   }
   function remainingPurchase(record, members, amount, turtles) {
     const representative = turtles.find(turtle => turtle.id === members[0]);
@@ -27,18 +48,19 @@
     }
     return { ...purchase };
   }
-  function transferLoss(data, loss, turtle) {
+  function transferLoss(data, loss, turtle, { preserveAmount = false } = {}) {
     if (loss.lossCostTransferred) return data;
     const purchase = purchaseFor(turtle, data.ledgerRecords);
-    const amount = purchaseCost(turtle, data.ledgerRecords);
+    const members = purchase ? ids(purchase) : [];
+    const cost = (purchase ? allocatedPurchaseCents(turtle, cents(purchase.amount), members.length) : cents(turtle.price)) / 100;
     const records = data.ledgerRecords.flatMap(record => {
       if (record !== purchase) return [record];
-      const members = ids(record).filter(id => id !== turtle.id);
-      return members.length ? [remainingPurchase(record, members, (cents(record.amount) - cents(amount)) / 100, data.turtles)] : [];
+      const remaining = members.filter(id => id !== turtle.id);
+      return remaining.length ? [remainingPurchase(record, remaining, (cents(record.amount) - cents(cost)) / 100, data.turtles)] : [];
     });
-    const updatedLoss = { ...loss, amount, photo: turtle.photo || loss.turtleSnapshot?.photo || loss.photo || "", turtleId: turtle.id, turtleSnapshot: loss.turtleSnapshot || { ...turtle },
+    const updatedLoss = { ...loss, amount: preserveAmount ? loss.amount : cost, photo: turtle.photo || loss.turtleSnapshot?.photo || loss.photo || "", turtleId: turtle.id, turtleSnapshot: loss.turtleSnapshot || { ...turtle },
       lossCostTransferred: true, originalLossAmount: loss.amount,
-      transferredPurchase: lossPurchaseSnapshot(purchase, turtle.id), transferredPurchaseAmount: purchase ? amount : 0 };
+      transferredPurchase: lossPurchaseSnapshot(purchase, turtle.id), transferredPurchaseAmount: purchase ? cost : 0 };
     const lostTurtle = { ...turtle, status: '已死亡', lossRecordId: loss.id, lossDate: loss.recordDate || '', pinned: false };
     return { ...data,
       turtles: data.turtles.some(item => item.id === turtle.id) ? data.turtles.map(item => item.id === turtle.id ? lostTurtle : item) : [...data.turtles, lostTurtle],
@@ -94,7 +116,7 @@
       })
     };
   }
-  const api = { purchaseCost, transferLoss, reconcile, undoLoss };
+  const api = { purchaseCost, batchPurchaseCost, transferLoss, reconcile, undoLoss };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.TurtleLossAccounting = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -9,6 +9,7 @@ let saves = 0;
 let message;
 const ctx = {
   crypto,
+  speciesCodeKey: code => String(code || "").toUpperCase(),
   FormData: class { constructor(data) { this.data = data; } get(key) { return this.data[key] ?? null; } },
   requireLogin: () => true, speciesByCode: () => ({ code: 'GHG', name: '果核蛋龟' }),
   speciesPhoto: () => 'photo', defaultPhoto: 'photo', turtlePoolName: () => '', activateCareReminder() {},

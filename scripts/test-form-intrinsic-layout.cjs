@@ -10,6 +10,7 @@ const fixture = require('./ui-audit-fixture.cjs')();
 const cases = [
   { page: 'add' }, { page: 'add', archivePurchaseMode: 'batch' },
   { page: 'turtleDetail', updatingTurtleId: 'ui-turtle' },
+  { page: 'turtleDetail', selectedTurtleId: 'ui-batch-0', batchMovementType: 'loss' },
   ...['purchase', 'sold', 'loss', 'other'].map(type => ({ page: 'ledger', ledgerDraftType: type, ledgerDraftTurtleId: 'ui-turtle' })),
   ...['sold', 'loss'].map(type => ({ page: 'ledger', ledgerDraftType: type, ledgerDraftTurtleId: 'ui-batch-0' })),
   { page: 'poolAdd' }, { page: 'breedingAdd' }, { page: 'breedingDetail', selectedBreedingId: 'ui-nest' },
@@ -82,6 +83,18 @@ const cases = [
         }
         const cancel = document.querySelector('[data-cancel-memo]');
         if (cancel) { const range = document.createRange(); range.selectNodeContents(cancel); if (new Set([...range.getClientRects()].map(r => Math.round(r.top))).size > 1) problems.push('Reminder cancel text wraps'); }
+        const batchCancel = document.querySelector('.ledger-batch-form [data-cancel-ledger]');
+        if (batchCancel) {
+          const { width, height } = batchCancel.getBoundingClientRect();
+          if (width < 44 || height < 44) problems.push('Batch ledger cancel touch target is smaller than 44px');
+        }
+        const batchGrid = document.querySelector('.batch-movement-form .breeding-form-grid');
+        if (batchGrid && innerWidth <= 340) {
+          const gridWidth = batchGrid.getBoundingClientRect().width;
+          for (const field of batchGrid.querySelectorAll('[name="amount"], [name="recordDate"]')) {
+            if (field.getBoundingClientRect().width < gridWidth - 1) problems.push(`Narrow batch ${field.name} does not use the full row`);
+          }
+        }
         return [...new Set(problems)].slice(0, 12);
       });
       const result = { width, theme, scenario: cases[index], problems }; results.push(result);

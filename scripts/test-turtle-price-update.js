@@ -8,6 +8,8 @@ let message;
 const ctx = {
   FormData: class { constructor(values) { this.values = values; } get(key) { return this.values[key] ?? null; } },
   requireLogin: () => true,
+  formatDate: date => new Date(date).toISOString().slice(0, 10),
+  speciesCodeKey: code => String(code || "").toUpperCase(),
   speciesByCode: () => ({ code: 'GHG', name: '果核蛋龟' }),
   speciesPhoto: () => 'photo', defaultPhoto: 'photo',
   saveWithDeferredImages: patch => { saved = patch; },

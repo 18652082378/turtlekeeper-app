@@ -17,7 +17,9 @@ async function marketCase() {
   const db = { users: {}, marketListings: rows };
   const user = { phone: 'viewer', data: { ledgerRecords: [], marketHistoryIds: [], marketFavoriteIds: [] } };
   const ctx = { console, Promise, Set, Map, Date, Number, String, JSON,
-    readJson: async req => req.body, readDatabase: () => db, optionalReviewUser: () => user,
+    readJson: async req => req.body, readDatabase: () => db, requireReviewUser: () => user,
+    marketReadBudget: require('../server/request-budget').createRequestBudget(),
+    requestAddress: () => 'test-address', TRUST_LOCAL_PROXY: false,
     autoOfflineStaleMarketListings: () => false, autoOfflineRestrictedMarketListings: () => false,
     normalizeAccountData: value => value, syncMarketListingToLedger() { throw Error('Unexpected sold mutation'); },
     writeDatabase: () => { writes++; }, marketInquiry: { parse: () => null }, trimPublicText: (value, limit) => String(value || '').slice(0, limit),

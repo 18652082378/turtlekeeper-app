@@ -222,31 +222,51 @@ const comment = { id: 'root-comment', authorId: 'friend-one', authorName: '慢�
           await page.evaluate(() => {
             document.documentElement.style.setProperty('--forum-safe-area-bottom', '34px');
             window.replyDock = document.querySelector('#app > .forum-reply-composer');
-            window.replyFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
             window.replyKeyboardEvent = (name, height) => window.dispatchEvent(new CustomEvent(name, { detail: { keyboardHeight: height } }));
           });
           const measure = () => page.evaluate(() => {
             const r = replyDock.getBoundingClientRect();
-            return { bottom: Math.round(r.bottom), height: r.height, reserve: getComputedStyle(document.querySelector('main')).paddingBottom };
+            return { bottom: Math.round(r.bottom), height: r.height, reserve: parseFloat(getComputedStyle(document.querySelector('main')).paddingBottom) };
+          });
+          // The reply target grows the dock before ResizeObserver publishes
+          // its height. Capture the baseline after that layout notification.
+          await page.waitForFunction(() => {
+            const height = document.documentElement.style.getPropertyValue('--forum-composer-height');
+            return parseFloat(height) === Math.ceil(replyDock.getBoundingClientRect().height);
           });
           const closed = await measure();
           assert.equal(closed.bottom, 810);
+          assert.equal(closed.reserve, Math.ceil(closed.height) + 34 + 12, 'reserve must include the measured dock, safe area and content gap');
+          // Step the browser clock through the animation. Sampling wall-clock
+          // frames can miss the middle of a 250 ms transition on a busy CI runner.
+          const clockStart = new Date();
+          await page.clock.install({ time: clockStart });
+          await page.clock.pauseAt(new Date(clockStart.getTime() + 1000));
           await page.evaluate(() => replyKeyboardEvent('keyboardWillShow', 334));
-          await page.waitForFunction(() => { const bottom = replyDock.getBoundingClientRect().bottom; return bottom < 770 && bottom > 520; });
-          await page.waitForFunction(() => Number.parseFloat(replyDock.style.getPropertyValue('--reply-keyboard-height')) === 334);
+          await page.clock.runFor(125);
+          const rising = await measure();
+          assert.ok(rising.bottom < 770 && rising.bottom > 520, JSON.stringify(rising));
+          await page.clock.runFor(150);
+          assert.equal(await page.evaluate(() => Number.parseFloat(replyDock.style.getPropertyValue('--reply-keyboard-height'))), 334);
           const shown = await measure();
           await page.setViewportSize({ width: 390, height: 510 });
+          await page.clock.runFor(32);
           assert.deepEqual(await measure(), shown, 'late resize must not move the toolbar a second time');
           await page.evaluate(() => replyKeyboardEvent('keyboardWillHide'));
           await page.setViewportSize({ width: 390, height: 844 });
-          await page.waitForFunction(() => { const bottom = replyDock.getBoundingClientRect().bottom; return bottom > 530 && bottom < 790; });
-          await page.waitForFunction(() => Number.parseFloat(replyDock.style.getPropertyValue('--reply-keyboard-height')) === 0);
+          await page.clock.runFor(125);
+          const lowering = await measure();
+          assert.ok(lowering.bottom > 530 && lowering.bottom < 790, JSON.stringify(lowering));
+          await page.clock.runFor(150);
+          assert.equal(await page.evaluate(() => Number.parseFloat(replyDock.style.getPropertyValue('--reply-keyboard-height'))), 0);
           assert.deepEqual(await measure(), closed, 'the safe area must already be correct before didHide');
-          await page.evaluate(async () => { replyKeyboardEvent('keyboardDidHide'); await replyFrame(); });
-          await page.waitForFunction(() => !replyDock.classList.contains('reply-keyboard-positioned'));
+          await page.evaluate(() => replyKeyboardEvent('keyboardDidHide'));
+          await page.clock.runFor(32);
+          assert.equal(await page.evaluate(() => replyDock.classList.contains('reply-keyboard-positioned')), false);
           assert.deepEqual(await measure(), closed, 'closing must return to the same dock height, gap and reserved space');
           assert.equal(await page.locator('.forum-reply-composer input').inputValue(), '收起键盘后保留');
         } finally {
+          await page.clock.resume();
           await page.evaluate(() => document.documentElement.style.removeProperty('--forum-safe-area-bottom'));
           await page.setViewportSize({ width: 390, height: 844 });
           await page.emulateMedia({ reducedMotion: 'reduce' });

@@ -2,7 +2,7 @@ const fs = require('node:fs'), path = require('node:path'), assert = require('no
 const { launchBrowser } = require('./browser-test-engine.cjs');
 const root = path.resolve(__dirname, '..');
 async function main() {
-  const browser = await launchBrowser({ channel: 'msedge' });
+  const browser = await launchBrowser();
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const errors = []; page.on('pageerror', e => errors.push(e.message));

@@ -1162,6 +1162,7 @@ function captureVisibleFormInputs() {
     inputs: [...form.querySelectorAll("input, textarea, select")].map((input, index) => ({
       index, name: input.name, type: input.type, value: input.type === "file" ? "" : input.value,
       checked: input.checked, selected: input.tagName === "SELECT" && input.multiple ? [...input.selectedOptions].map(option => option.value) : null,
+      manualBatchAmount: input.hasAttribute("data-manual-amount"),
       focused: input === document.activeElement, start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection
     })).filter(input => input.type !== "file")
   }));
@@ -1182,11 +1183,13 @@ function restoreVisibleFormInputs(forms) {
       if (field.selected) [...input.options].forEach(option => { option.selected = field.selected.includes(option.value); });
       else if (!["radio", "checkbox"].includes(field.type) && (input.tagName !== "SELECT" || [...input.options].some(option => option.value === field.value))) input.value = field.value;
       if (field.checked !== undefined) input.checked = field.checked;
+      if (form.id === "turtleBatchMovementForm" && input.name === "amount") input.toggleAttribute("data-manual-amount", field.manualBatchAmount === true);
       if (field.focused) {
         input.focus({ preventScroll: true });
       }
       if (typeof field.start === "number") { try { input.setSelectionRange(field.start, field.end, field.direction || "none"); } catch {} }
     }
+    if (form.id === "turtleBatchMovementForm") refreshBatchMovementFields(form);
   }
 }
 
@@ -1957,10 +1960,12 @@ function ledgerFormSelected(key, option, fallback = "") {
 function captureLedgerFormDraft(form = document.querySelector("#ledgerForm, #turtleBatchMovementForm[data-ledger-batch]")) {
   if (!form) return { ...ledgerFormDraft() };
   const data = new FormData(form);
-  return LEDGER_FORM_DRAFT_FIELDS.reduce((draft, key) => {
+  const draft = LEDGER_FORM_DRAFT_FIELDS.reduce((draft, key) => {
     draft[key] = String(data.get(key) || "");
     return draft;
   }, {});
+  if (form.hasAttribute("data-ledger-batch") && data.get("type") === "loss" && !form.elements.namedItem("amount").hasAttribute("data-manual-amount")) draft.amount = "";
+  return draft;
 }
 
 function preserveLedgerForm(extra = {}) {
@@ -2399,6 +2404,7 @@ function captureTurtleDetailDraft() {
     carapaceWidth: String(data.get("carapaceWidth") || ""),
     shellHeight: String(data.get("shellHeight") || ""),
     plastronLength: String(data.get("plastronLength") || ""),
+    recordDate: String(data.get("recordDate") || formatDate(new Date())),
     status: String(data.get("status") || turtle?.status || "正常饲养"),
     health: String(data.get("health") || turtle?.health || "健康"),
     acquiredDate: String(data.get("acquiredDate") ?? turtle?.acquiredDate ?? ""),
@@ -3320,7 +3326,7 @@ function communityGrowthTemplate(turtle) {
   const newWeight = Number(latest?.newSnapshot?.weight || turtle.weight || 0);
   const oldLength = Number(latest?.oldLength || latest?.oldSnapshot?.carapaceLength || 0);
   const newLength = Number(latest?.newLength || latest?.newSnapshot?.carapaceLength || turtle.carapaceLength || 0);
-  const lines = [`${turtle.code || turtle.speciesName || "我的龟"}完成第 ${history.length + 1} 次成长记录`];
+  const lines = [`${turtle.code || turtle.speciesName || "我的龟"}完成第 ${history.length + (turtle.historyIncludesInitial ? 0 : 1)} 次成长记录`];
   if (newWeight > 0) lines.push(oldWeight > 0 ? `体重 ${oldWeight}g → ${newWeight}g（${newWeight - oldWeight >= 0 ? "+" : ""}${Number((newWeight - oldWeight).toFixed(2))}g）` : `当前体重 ${newWeight}g`);
   if (newLength > 0) lines.push(oldLength > 0 ? `背甲 ${oldLength}cm → ${newLength}cm（${newLength - oldLength >= 0 ? "+" : ""}${Number((newLength - oldLength).toFixed(2))}cm）` : `当前背甲 ${newLength}cm`);
   return lines.join("\n");
@@ -5736,7 +5742,7 @@ function nextGrowthRecordDate(turtle) {
 function growthPoints(turtle, field) {
   const history = [...(turtle?.measureHistory || [])].reverse();
   const baseline = history[0]?.oldSnapshot?.[field] ?? turtle?.[field];
-  return [Number(baseline || 0), ...history.map(item => Number(item.newSnapshot?.[field] || 0))].filter(Number.isFinite);
+  return [...(turtle.historyIncludesInitial && history.length ? [] : [Number(baseline || 0)]), ...history.map(item => Number(item.newSnapshot?.[field] || 0))].filter(Number.isFinite);
 }
 
 function growthSparkline(values = []) {
@@ -5754,14 +5760,14 @@ function turtleDetailGrowthChart(turtle) {
   if (turtle.sharedView && (publicTurtleNumber(turtle.weight) === "" || publicTurtleNumber(turtle.carapaceLength) === "")) return "";
   const history = [...(turtle?.measureHistory || [])].reverse();
   const baseline = history[0]?.oldSnapshot || turtle || {};
-  const records = [{
+  const records = [...(turtle.historyIncludesInitial && history.length ? [] : [{
     weight: Number(baseline.weight || turtle.weight || 0),
     length: Number(baseline.carapaceLength || turtle.carapaceLength || 0),
     date: turtle.acquiredDate || String(turtle.createdAt || "").slice(0, 10)
-  }, ...history.map(item => ({
+  }]), ...history.map(item => ({
     weight: Number(item.newSnapshot?.weight || 0),
     length: Number(item.newSnapshot?.carapaceLength || item.newLength || 0),
-    date: String(item.updatedAt || "").slice(0, 10)
+    date: item.recordDate || formatDate(item.updatedAt)
   }))];
   const width = 640;
   const height = 210;
@@ -5769,7 +5775,12 @@ function turtleDetailGrowthChart(turtle) {
   const right = 620;
   const top = 22;
   const bottom = 160;
-  const x = index => records.length === 1 ? (left + right) / 2 : left + index * ((right - left) / (records.length - 1));
+  const timestamps = records.map(item => growthTimestamp(item.date));
+  const firstTime = Math.min(...timestamps);
+  const timeSpan = Math.max(...timestamps) - firstTime;
+  const x = index => records.length === 1 ? (left + right) / 2 : timeSpan && timestamps.every(Boolean)
+    ? left + (timestamps[index] - firstTime) / timeSpan * (right - left)
+    : left + index * ((right - left) / (records.length - 1));
   const scaledY = (value, values) => {
     const min = Math.min(...values);
     const max = Math.max(...values);
@@ -5820,7 +5831,7 @@ function pageTurtleReward() {
   return `
     ${topbar(localBackupFailed ? "保存待重试" : hasGrowth ? "成长报告" : "建档成功", true)}
     <main class="content page-fresh reward-page">
-      ${localBackupFailed ? "" : `<section class="reward-celebration"><span>✓</span><div><p>${hasGrowth ? `第 ${history.length + 1} 次记录完成` : "建档完成 · 成长旅程已开启"}</p><h2>${hasGrowth ? "这次变化，值得被看见" : `欢迎你，${escapeHtml(turtle.code || "新朋友")}`}</h2><small>${hasGrowth ? "新的成长数据已加入报告" : "第一份成长档案已经保存好了"}</small></div></section>`}
+      ${localBackupFailed ? "" : `<section class="reward-celebration"><span>✓</span><div><p>${hasGrowth ? `第 ${history.length + (turtle.historyIncludesInitial ? 0 : 1)} 次记录完成` : "建档完成 · 成长旅程已开启"}</p><h2>${hasGrowth ? "这次变化，值得被看见" : `欢迎你，${escapeHtml(turtle.code || "新朋友")}`}</h2><small>${hasGrowth ? "新的成长数据已加入报告" : "第一份成长档案已经保存好了"}</small></div></section>`}
       <article class="turtle-profile-card" data-reward-card>
         <header><div><small>龟友手账 · 龟档案</small><h1>${escapeHtml(turtle.code || "未命名龟龟")}</h1><p>${escapeHtml(turtle.speciesName || "品种未填写")}</p></div><b>${turtleKeepingDaysNumber(turtle.acquiredDate)}<small>陪伴天数</small></b></header>
         <img src="${escapeHtml(turtle.photo || defaultPhoto)}" alt="${escapeHtml(turtle.code || turtle.speciesName || "乌龟")}的照片" data-reward-photo>
@@ -5830,7 +5841,7 @@ function pageTurtleReward() {
       <div class="reward-actions"><button class="primary" type="button" data-share-growth-card><span aria-hidden="true">↗</span>${hasGrowth ? "分享成长报告" : "分享档案卡"}</button><button class="secondary" type="button" data-save-growth-card><span aria-hidden="true">↓</span>保存图片</button></div>
       <section class="discovery-growth-share"><div><strong>和同品种龟友聊聊成长</strong><p>带入本次测量，编辑确认后再发布。</p></div><button type="button" data-community-growth-source="${escapeHtml(turtle.id)}">分享到龟友圈</button></section>
       <section class="next-growth-card fresh-card"><div class="next-growth-date"><strong>${nextDate.slice(5, 7)}<small>月</small>${nextDate.slice(8)}<small>日</small></strong><span>${reminderEnabled ? "上午 09:00" : "成长计划"}</span></div><div class="next-growth-copy"><div><small>下一次记录</small><button class="reminder-on ${reminderEnabled ? "is-on" : "is-off"}" type="button" data-toggle-growth-reminder="${escapeHtml(turtle.id)}" aria-pressed="${reminderEnabled ? "true" : "false"}" aria-label="${reminderEnabled ? "关闭成长记录提醒" : "开启成长记录提醒"}"><i></i>${reminderEnabled ? "提醒已开启" : "提醒已关闭"}</button></div><h3>30 天后，再看看它长大多少</h3><p>拍一张新照片，记录体重和背甲，即可生成第一次成长对比。</p></div></section>
-      ${hasGrowth ? `<section class="growth-report-card fresh-card"><div class="growth-report-heading"><div><small>累计成长报告</small><h3>${history.length + 1} 次记录 · ${escapeHtml(turtle.code || turtle.speciesName)}</h3></div><strong class="${weightGain >= 0 ? "positive" : ""}">${weightGain >= 0 ? "+" : ""}${weightGain.toFixed(1)}g</strong></div>${growthSparkline(weightPoints)}<div class="growth-report-legend"><span>初始 ${firstWeight}g</span><span>现在 ${turtle.weight}g</span></div><div class="photo-compare"><figure><img src="${escapeHtml(latest?.oldPhoto || turtle.photo || defaultPhoto)}" alt="上次照片"><figcaption>上次</figcaption></figure><b>→</b><figure><img src="${escapeHtml(latest?.newPhoto || turtle.photo || defaultPhoto)}" alt="本次照片"><figcaption>本次</figcaption></figure></div></section>` : `<section class="reward-preview-lock fresh-card"><div class="reward-lock-head"><span>成长奖励</span><small>再记录 1 次解锁</small></div><h3>下次回来，会自动生成</h3><div class="reward-unlock-list"><span><i>↗</i>成长曲线</span><span><i>＋</i>增重变化</span><span><i>◫</i>照片对比</span></div><p>无需整理数据，每次记录都会自动累积。</p></section>`}
+      ${hasGrowth ? `<section class="growth-report-card fresh-card"><div class="growth-report-heading"><div><small>累计成长报告</small><h3>${history.length + (turtle.historyIncludesInitial ? 0 : 1)} 次记录 · ${escapeHtml(turtle.code || turtle.speciesName)}</h3></div><strong class="${weightGain >= 0 ? "positive" : ""}">${weightGain >= 0 ? "+" : ""}${weightGain.toFixed(1)}g</strong></div>${growthSparkline(weightPoints)}<div class="growth-report-legend"><span>初始 ${firstWeight}g</span><span>现在 ${turtle.weight}g</span></div><div class="photo-compare"><figure><img src="${escapeHtml(latest?.oldPhoto || turtle.photo || defaultPhoto)}" alt="上次照片"><figcaption>上次</figcaption></figure><b>→</b><figure><img src="${escapeHtml(latest?.newPhoto || turtle.photo || defaultPhoto)}" alt="本次照片"><figcaption>本次</figcaption></figure></div></section>` : `<section class="reward-preview-lock fresh-card"><div class="reward-lock-head"><span>成长奖励</span><small>再记录 1 次解锁</small></div><h3>下次回来，会自动生成</h3><div class="reward-unlock-list"><span><i>↗</i>成长曲线</span><span><i>＋</i>增重变化</span><span><i>◫</i>照片对比</span></div><p>无需整理数据，每次记录都会自动累积。</p></section>`}
       <button class="text-green reward-finish" type="button" data-page="home">完成，返回看板</button>
     </main>${bottomNav()}`;
 }
@@ -5919,15 +5930,15 @@ function pageTurtleBatchDetail(t) {
       <label class="breeding-note"><span>批次备注</span><textarea name="note">${value("note")}</textarea></label>
       <button class="primary" type="submit">保存批次更新</button>
     </form>` : `<button class="secondary batch-edit-button" type="button" data-update-turtle="${t.id}">更新批次<span aria-hidden="true">↗</span></button>`}
-    ${summary.count && !editing ? `<form id="turtleBatchMovementForm" class="breeding-form fresh-card batch-movement-form">
+    ${summary.count && !editing ? `<form id="turtleBatchMovementForm" class="breeding-form fresh-card batch-movement-form" data-entity-id="${escapeHtml(t.batchId)}">
       <div class="batch-section-heading"><h3>数量变动</h3><p>记录本次数量，自动更新在养与龟池</p></div><div class="breeding-form-grid">
         <label><span>类型</span><select class="select" name="type"><option value="sold" ${state.batchMovementType !== "loss" ? "selected" : ""}>售出</option><option value="loss" ${state.batchMovementType === "loss" ? "selected" : ""}>损耗</option></select></label>
         <label><span>龟池范围</span><select class="select" name="poolId"><option value="__ALL__">全部在养龟池</option>${summary.pools.map(id => `<option value="${escapeHtml(id)}">${escapeHtml(turtlePoolName(id))}</option>`).join("")}</select></label>
         <label><span>性别范围</span><select class="select" name="gender"><option value="all">不限性别</option><option>公</option><option>母</option><option>未知</option></select></label>
-        <label><span>本次数量</span><input class="field" name="count" type="number" min="1" max="${summary.count}" step="1" required></label>
-        <label><span data-batch-amount-label>${state.batchMovementType === "loss" ? "损耗金额（元）" : "售出总金额（元）"}</span><input class="field" name="amount" type="number" min="0" step="0.01" placeholder="${state.batchMovementType === "loss" ? "按购入成本自动计算" : "售出时必填"}"></label>
+        <label><span data-batch-count-label>本次数量</span><input class="field" name="count" type="number" min="1" max="${summary.count}" step="1" required></label>
+        <label><span data-batch-amount-label>${state.batchMovementType === "loss" ? "损耗金额（元）" : "售出总金额（元）"}</span><input class="field" name="amount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="${state.batchMovementType === "loss" ? "按购入成本自动计算" : "售出时必填"}"></label>
         <label><span>日期</span><input class="field" name="recordDate" type="date" value="${formatDate(new Date())}" required></label>
-      </div><p class="batch-form-hint">损耗金额按所选数量的购入成本自动计算，无需手动填写。</p>
+      </div><p class="batch-form-hint">损耗金额可手动填写，留空按购入成本记录。</p>
       <label class="breeding-note"><span>备注</span><textarea name="note"></textarea></label><button class="primary" type="submit">记录数量变动</button>
     </form>` : ""}
     ${!editing ? archiveTimeline(t) : ""}
@@ -5981,6 +5992,12 @@ function submitTurtleBatchDetail(event, turtle) {
   if (locallySaved) toast(`批次已保存到本机，在养 ${summary.count} 只`);
 }
 
+function eligibleBatchMovementMembers(turtle, poolId, gender) {
+  return TurtleBatches.members(turtle, state.turtles).filter(item => TurtleBatches.isActive(item)
+    && (poolId === "__ALL__" || (item.poolId || "") === poolId)
+    && (gender === "all" || (["公", "母"].includes(item.gender) ? item.gender : "未知") === gender));
+}
+
 function submitTurtleBatchMovement(event) {
   event.preventDefault();
   if (event.currentTarget.__batchSaved || !requireLogin()) return;
@@ -5993,28 +6010,31 @@ function submitTurtleBatchMovement(event) {
   const count = Number(form.get("count"));
   const poolId = String(form.get("poolId"));
   const gender = String(form.get("gender"));
-  const eligible = TurtleBatches.members(turtle, state.turtles).filter(item => TurtleBatches.isActive(item)
-    && (poolId === "__ALL__" || (item.poolId || "") === poolId) && (gender === "all" || (item.gender || "未知") === gender));
+  const eligible = eligibleBatchMovementMembers(turtle, poolId, gender);
   if (!["sold", "loss"].includes(type) || !Number.isSafeInteger(count) || count < 1 || count > eligible.length) return toast(`所选范围当前有 ${eligible.length} 只在养龟，请填写有效数量`);
   const amountText = String(form.get("amount") || "").trim();
-  if (type === "sold" && (!/^\d+(?:\.\d{1,2})?$/.test(amountText) || !Number.isSafeInteger(Math.round(Number(amountText) * 100)))) return toast("请填写售出总金额，最多保留两位小数");
+  const preserveLossAmount = type === "loss" && amountText !== "" && event.currentTarget.elements.namedItem("amount").hasAttribute("data-manual-amount");
+  const hasEnteredAmount = type === "sold" || preserveLossAmount;
+  if (hasEnteredAmount && (!/^(?:\d+(?:\.\d{1,2})?|\.\d{1,2})$/.test(amountText) || !Number.isSafeInteger(Math.round(Number(amountText) * 100)))) {
+    return toast(type === "sold" ? "请填写售出总金额，最多保留两位小数" : "请填写有效的损耗金额，最多保留两位小数");
+  }
   const recordDate = String(form.get("recordDate") || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate)) return toast("请选择记录日期");
   const chosen = eligible.slice(0, count);
   const chosenIds = new Set(chosen.map(item => item.id));
-  const amounts = type === "sold" ? TurtleBatches.splitCents(Number(amountText), count) : [];
+  const amounts = hasEnteredAmount ? TurtleBatches.splitCents(Number(amountText), count) : [];
   const movementId = crypto.randomUUID();
   let data = { turtles: state.turtles, ledgerRecords: state.ledgerRecords || [], memos: state.memos || [] };
   let totalCents = 0;
   for (const [index, member] of chosen.entries()) {
-    const amount = type === "loss" ? TurtleLossAccounting.purchaseCost(member, data.ledgerRecords) : amounts[index];
+    const amount = hasEnteredAmount ? amounts[index] : TurtleLossAccounting.purchaseCost(member, data.ledgerRecords);
     totalCents += Math.round(amount * 100);
     const record = { id: crypto.randomUUID(), type, turtleId: member.id, batchId: turtle.batchId, batchMovementId: movementId,
       title: `${turtleBatchLabel(turtle)} · ${member.code} · ${type === "sold" ? "售出" : "损耗"}`,
       amount, recordDate, poolId: member.poolId || "", poolName: turtlePoolName(member.poolId),
       photo: member.photo, turtleSnapshot: { ...member }, note: String(form.get("note") || ""), createdAt: new Date().toISOString() };
     data = { ...data, ledgerRecords: [record, ...data.ledgerRecords] };
-    if (type === "loss") data = TurtleLossAccounting.transferLoss(data, record, member);
+    if (type === "loss") data = TurtleLossAccounting.transferLoss(data, record, member, { preserveAmount: preserveLossAmount });
   }
   if (type === "sold") data = { ...data, turtles: data.turtles.filter(item => !chosenIds.has(item.id)), memos: data.memos.filter(memo => !chosenIds.has(memo.turtleId)) };
   const remaining = data.turtles.find(item => item.batchId === turtle.batchId && TurtleBatches.isActive(item)) || data.turtles.find(item => item.batchId === turtle.batchId);
@@ -6142,11 +6162,12 @@ function pageTurtleDetail() {
             </div>
           </div>
           <div class="detail-measure-pair">
-          <label><span>当前体重(g)</span><input class="field" name="weight" type="number" min="0" step="0.01" inputmode="decimal" required value="${escapeHtml(turtleDraftValue(t, "weight"))}"></label>
+          <label><span>体重(g)</span><input class="field" name="weight" type="number" min="0" step="0.01" inputmode="decimal" required value="${escapeHtml(turtleDraftValue(t, "weight"))}"></label>
           <label><span>背甲长度(cm)</span><input class="field" name="carapaceLength" type="number" min="0" step="0.01" inputmode="decimal" required value="${escapeHtml(turtleDraftValue(t, "carapaceLength"))}"></label>
           </div>
           <label><span>购入价格(元)</span><input class="field" name="price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="填写购入价格" value="${escapeHtml(String(turtleDraftValue(t, "price")))}"></label>
           <label><span>治疗花费(元)</span><input class="field" name="medicalExpense" type="number" min="0" step="0.01" inputmode="decimal" placeholder="未填写则不记账" value="${escapeHtml(String(state.turtleDetailDraftId === t.id ? state.turtleDetailDraft?.medicalExpense || "" : ""))}"></label>
+          <label class="breeding-date-field"><span>记录日期</span><input class="field" name="recordDate" type="date" max="${formatDate(new Date())}" required value="${escapeHtml(state.turtleDetailDraftId === t.id ? state.turtleDetailDraft?.recordDate || formatDate(new Date()) : formatDate(new Date()))}"></label>
           <label class="breeding-date-field"><span>购入时间</span><input class="field" name="acquiredDate" type="date" value="${escapeHtml(String(turtleDraftValue(t, "acquiredDate")))}"></label>
           <label class="breeding-date-field"><span>出生日期<br>（选填）</span><input class="field" name="birthDate" type="date" value="${escapeHtml(String(turtleDraftValue(t, "birthDate")))}"></label>
           <details class="measure-extra">
@@ -6166,11 +6187,11 @@ function pageTurtleDetail() {
         <div class="growth-history-entry">
           <article class="history-card growth-history-card fresh-card">
             <div class="growth-history-head">
-              <strong>第 ${index + 1} 次成长</strong>
-              <small>${formatTime(h.updatedAt)}</small>
+              <strong>${h.initialMeasurement ? "初始记录" : `第 ${index + 1} 次成长`}</strong>
+              <small>${h.recordDate ? escapeHtml(h.recordDate) : formatTime(h.updatedAt)}</small>
             </div>
             <div class="growth-comparison">
-              ${renderTurtleGrowthSnapshot(h.oldSnapshot || { carapaceLength: h.oldLength }, h.oldPhoto, "更新前", false, t.sharedView)}
+              ${renderTurtleGrowthSnapshot((h.initialMeasurement ? h.newSnapshot : h.oldSnapshot) || { carapaceLength: h.oldLength }, h.initialMeasurement ? h.newPhoto : h.oldPhoto, "更新前", false, t.sharedView)}
               <span class="growth-inline-arrow" aria-hidden="true">→</span>
               ${renderTurtleGrowthSnapshot(h.newSnapshot || { carapaceLength: h.newLength }, h.newPhoto, "更新后", true, t.sharedView)}
             </div>
@@ -7245,7 +7266,8 @@ function turtleGrowthUpdates() {
     const current = measurement.newSnapshot || turtle;
     // 最早一次更新的旧快照就是完整成长对比的基准。旧记录不再单列，
     // 但它的体重、背甲等会持续显示在最新卡片的左侧。
-    const baseline = measurements[measurements.length - 1]?.oldSnapshot || previous;
+    const firstMeasurement = measurements[measurements.length - 1];
+    const baseline = (turtle.historyIncludesInitial ? firstMeasurement?.newSnapshot : firstMeasurement?.oldSnapshot) || previous;
     const poolChanged = String(baseline.poolId || "") !== String(current.poolId || "");
     return {
       type: poolChanged ? "pool" : "measure",
@@ -7265,13 +7287,13 @@ function turtleGrowthUpdates() {
 
 function growthTrendMarkup(label, timeline = [], turtle = {}, field, unit = "") {
   const firstSnapshot = timeline[0]?.oldSnapshot || turtle;
-  const milestones = [{ value: firstSnapshot?.[field], timestamp: growthTimestamp(turtle.createdAt || turtle.acquiredDate) }];
+  const milestones = turtle.historyIncludesInitial && timeline.length ? [] : [{ value: firstSnapshot?.[field], timestamp: growthTimestamp(turtle.createdAt || turtle.acquiredDate) }];
   timeline.forEach(record => {
     const snapshot = record.newSnapshot || {};
     const nextValue = snapshot[field];
     const last = milestones[milestones.length - 1];
     // 连续更新但该项未变化时合并，保留真正发生变化的节点。
-    if (String(nextValue ?? "") === String(last.value ?? "")) {
+    if (last && String(nextValue ?? "") === String(last.value ?? "")) {
       // 数值没变也代表一次真实更新；用它刷新节点时间，下一次变化的
       // 间隔就会准确显示为“距上次更新多少天”。
       last.timestamp = growthTimestamp(record.updatedAt) || last.timestamp;
@@ -7296,14 +7318,14 @@ function growthSnapshotMetric(snapshot = {}, field, unit) {
 }
 
 function growthHistoryStepMarkup(record, index, turtleId = "", total = 1, previousTimestamp = 0) {
-  const before = record.oldSnapshot || {};
+  const before = (record.initialMeasurement ? record.newSnapshot : record.oldSnapshot) || {};
   const after = record.newSnapshot || {};
   const date = growthDateLabel(record.updatedAt);
   const timestamp = growthTimestamp(record.updatedAt);
   const days = timestamp && previousTimestamp ? Math.max(0, Math.round((timestamp - previousTimestamp) / 86400000)) : null;
   const interval = days === null ? (timestamp && index === 0 ? "首次记录" : "间隔未知") : `相隔 ${days} 天`;
   const intervalDescription = days === null ? interval : `${index === 0 ? "与建档记录" : "与上次测量"}${interval}`;
-  const removeButton = record.id && turtleId
+  const removeButton = record.id && turtleId && !record.initialMeasurement
     ? `<button class="growth-history-delete" type="button" data-delete-growth-update="${escapeHtml(record.id)}" data-growth-turtle-id="${escapeHtml(turtleId)}" aria-label="删除第 ${index + 1} 次更新" title="删除本次更新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"></path></svg></button>`
     : "";
   return `
@@ -7313,7 +7335,7 @@ function growthHistoryStepMarkup(record, index, turtleId = "", total = 1, previo
         <div class="growth-history-interval" aria-label="${intervalDescription}"><small>${interval}</small><b aria-hidden="true">→</b></div>
         <div><span>背甲</span><div class="growth-metric-values"><span aria-label="更新前背甲">${escapeHtml(growthSnapshotMetric(before, "carapaceLength", "cm"))}</span><i aria-hidden="true">→</i><b aria-label="更新后背甲">${escapeHtml(growthSnapshotMetric(after, "carapaceLength", "cm"))}</b></div></div>
       </div>
-      <div class="growth-history-step-head"><small>${date}</small><strong>第 ${index + 1} 次${total > 1 ? ` / ${total}` : ""}</strong>${total > 1 ? `<span class="growth-history-swipe-hint">左右滑动</span>` : ""}${removeButton}</div>
+      <div class="growth-history-step-head"><small>${date}</small><strong>${record.initialMeasurement ? "初始记录" : `第 ${index + 1} 次${total > 1 ? ` / ${total}` : ""}`}</strong>${total > 1 ? `<span class="growth-history-swipe-hint">左右滑动</span>` : ""}${removeButton}</div>
     </section>
   `;
 }
@@ -7395,7 +7417,7 @@ function ledgerBatchForm(turtle, type) {
   const draft = ledgerFormDraft();
   const label = type === "loss" ? "损耗" : "售出";
   const health = [...new Set(summary.active.map(item => item.health || "未填写"))].join("、");
-  return `<form id="turtleBatchMovementForm" class="breeding-form fresh-card ledger-batch-form" data-ledger-batch>
+  return `<form id="turtleBatchMovementForm" class="breeding-form fresh-card ledger-batch-form" data-ledger-batch data-entity-id="${escapeHtml(type + ":" + turtle.batchId)}">
     <div class="form-head"><div><p class="eyebrow dark">账本</p><h3>记录${label}</h3></div><button type="button" class="danger-link" data-cancel-ledger>取消</button></div>
     <input type="hidden" name="type" value="${type}">
     <label class="ledger-batch-selection"><span>关联批次 / 档案</span><select class="select" name="turtleId" data-archive-directory data-archive-batches>
@@ -7410,29 +7432,35 @@ function ledgerBatchForm(turtle, type) {
     <div class="breeding-form-grid">
       <label><span>龟池范围</span><select class="select" name="poolId"><option value="__ALL__">全部在养龟池</option>${summary.pools.map(id => `<option value="${escapeHtml(id)}" ${draft.poolId === id ? "selected" : ""}>${escapeHtml(turtlePoolName(id))}</option>`).join("")}</select></label>
       <label><span>性别范围</span><select class="select" name="gender"><option value="all">不限性别</option>${["公", "母", "未知"].map(gender => `<option ${draft.gender === gender ? "selected" : ""}>${gender}</option>`).join("")}</select></label>
-      <label><span>本次数量</span><input class="field" name="count" type="number" min="1" max="${summary.count}" step="1" value="${escapeHtml(draft.count || "")}" required></label>
+      <label><span data-batch-count-label>本次数量</span><input class="field" name="count" type="number" min="1" max="${summary.count}" step="1" value="${escapeHtml(draft.count || "")}" required></label>
       <label><span>日期</span><input class="field" name="recordDate" type="date" value="${escapeHtml(draft.recordDate || formatDate(new Date()))}" required></label>
-      <label><span data-batch-amount-label>${label}${type === "sold" ? "总" : ""}金额（元）</span><input class="field" name="amount" type="number" min="0" step="0.01" ${type === "loss" ? "readonly" : "required"} value="${type === "sold" ? escapeHtml(draft.amount || "") : ""}" placeholder="${type === "loss" ? "填写数量后自动计算" : "填写本次售出总金额"}"></label>
+      <label><span data-batch-amount-label>${label}${type === "sold" ? "总" : ""}金额（元）</span><input class="field" name="amount" type="number" inputmode="decimal" min="0" step="0.01" ${type === "sold" ? "required" : draft.amount ? "data-manual-amount" : ""} value="${escapeHtml(draft.amount || "")}" placeholder="${type === "loss" ? "填写数量后自动计算" : "填写本次售出总金额"}"></label>
     </div>
-    ${type === "loss" ? `<p class="batch-form-hint">损耗金额按本次数量对应的购入成本自动计算。</p>` : ""}
+    ${type === "loss" ? `<p class="batch-form-hint">损耗金额可手动填写，留空按购入成本记录。</p>` : ""}
     <label class="breeding-note"><span>备注</span><textarea name="note">${escapeHtml(draft.note || "")}</textarea></label>
     <button class="primary" type="submit">保存${label}记录</button>
   </form>`;
 }
 
-function refreshBatchLedgerAmount() {
-  const form = document.querySelector("#turtleBatchMovementForm[data-ledger-batch]");
-  if (!form || state.ledgerDraftType !== "loss") return;
+function refreshBatchMovementFields(form) {
   const data = new FormData(form);
-  const turtle = state.turtles.find(item => item.id === data.get("turtleId"));
+  const turtleId = form.hasAttribute("data-ledger-batch") ? data.get("turtleId") : state.selectedTurtleId;
+  const turtle = state.turtles.find(item => item.id === turtleId);
   if (!turtle?.batchId) return;
-  const eligible = TurtleBatches.members(turtle, state.turtles).filter(item => TurtleBatches.isActive(item)
-    && (data.get("poolId") === "__ALL__" || (item.poolId || "") === data.get("poolId"))
-    && (data.get("gender") === "all" || (item.gender || "未知") === data.get("gender")));
+  const eligible = eligibleBatchMovementMembers(turtle, data.get("poolId"), data.get("gender"));
   const count = Number(data.get("count"));
   form.elements.namedItem("count").max = String(eligible.length);
-  form.elements.namedItem("amount").value = Number.isSafeInteger(count) && count > 0 && count <= eligible.length
-    ? (eligible.slice(0, count).reduce((sum, item) => sum + Math.round(TurtleLossAccounting.purchaseCost(item, state.ledgerRecords) * 100), 0) / 100).toFixed(2) : "";
+  form.querySelector("[data-batch-count-label]").textContent = `本次数量（可记录 ${eligible.length} 只）`;
+  const amount = form.elements.namedItem("amount");
+  const isLoss = data.get("type") === "loss";
+  if (!form.hasAttribute("data-ledger-batch")) {
+    form.querySelector("[data-batch-amount-label]").textContent = isLoss ? "损耗金额（元）" : "售出总金额（元）";
+    amount.placeholder = isLoss ? "按购入成本自动计算" : "售出时必填";
+    amount.required = !isLoss;
+  }
+  if (!isLoss || amount.hasAttribute("data-manual-amount")) return;
+  amount.value = Number.isSafeInteger(count) && count > 0 && count <= eligible.length
+    ? TurtleLossAccounting.batchPurchaseCost(eligible.slice(0, count), state.ledgerRecords).toFixed(2) : "";
 }
 
 function ledgerForm() {
@@ -9504,19 +9532,31 @@ function bindEvents() {
   });
   document.querySelector("[data-update-photo-input]")?.addEventListener("change", readUpdatePhoto);
   document.querySelector("#turtleDetailForm")?.addEventListener("submit", submitTurtleDetail);
-  document.querySelector("#turtleBatchMovementForm")?.addEventListener("submit", submitTurtleBatchMovement);
-  const batchLedgerForm = document.querySelector("#turtleBatchMovementForm[data-ledger-batch]");
-  if (batchLedgerForm) {
-    refreshBatchLedgerAmount();
-    batchLedgerForm.addEventListener("input", () => { refreshBatchLedgerAmount(); state.ledgerDraftForm = captureLedgerFormDraft(batchLedgerForm); });
-    batchLedgerForm.addEventListener("change", () => { if (batchLedgerForm.isConnected) { refreshBatchLedgerAmount(); state.ledgerDraftForm = captureLedgerFormDraft(batchLedgerForm); } });
+  const batchMovementForm = document.querySelector("#turtleBatchMovementForm");
+  if (batchMovementForm) {
+    const amount = batchMovementForm.elements.namedItem("amount");
+    const type = batchMovementForm.elements.namedItem("type");
+    const saveDraft = () => {
+      if (batchMovementForm.isConnected && batchMovementForm.hasAttribute("data-ledger-batch")) state.ledgerDraftForm = captureLedgerFormDraft(batchMovementForm);
+    };
+    batchMovementForm.addEventListener("submit", submitTurtleBatchMovement);
+    batchMovementForm.addEventListener("input", event => {
+      if (event.target === amount && type.value === "loss") {
+        amount.toggleAttribute("data-manual-amount", amount.value !== "" || amount.validity.badInput);
+      }
+      if (event.target.name === "count") refreshBatchMovementFields(batchMovementForm);
+      saveDraft();
+    });
+    batchMovementForm.addEventListener("change", event => {
+      if (event.target === type) {
+        amount.value = "";
+        amount.removeAttribute("data-manual-amount");
+      }
+      if (["type", "poolId", "gender"].includes(event.target.name)) refreshBatchMovementFields(batchMovementForm);
+      saveDraft();
+    });
+    refreshBatchMovementFields(batchMovementForm);
   }
-  document.querySelector("#turtleBatchMovementForm [name='type']")?.addEventListener("change", event => {
-    const form = event.currentTarget.form;
-    const isLoss = event.currentTarget.value === "loss";
-    form.querySelector("[data-batch-amount-label]").textContent = isLoss ? "损耗金额（元）" : "售出总金额（元）";
-    form.elements.namedItem("amount").placeholder = isLoss ? "按购入成本自动计算" : "售出时必填";
-  });
   document.querySelector("[data-share-growth-card]")?.addEventListener("click", shareGrowthCard);
   document.querySelector("[data-save-growth-card]")?.addEventListener("click", saveGrowthCard);
   document.querySelector("[data-toggle-growth-reminder]")?.addEventListener("click", event => toggleGrowthReminder(event.currentTarget.dataset.toggleGrowthReminder));
@@ -9654,6 +9694,7 @@ function bindEvents() {
     const draft = captureLedgerFormDraft();
     if (draft.turtleId !== state.ledgerDraftTurtleId) {
       draft.count = ""; draft.gender = "all";
+      draft.poolId = "";
       if (state.ledgerDraftType === "loss") draft.amount = "";
     }
     if (turtle?.batchId && ["sold", "loss"].includes(state.ledgerDraftType)) return openLedgerForm(state.ledgerDraftType, turtle.id, draft);
@@ -13311,7 +13352,9 @@ async function submitAdminFeedbackAction(event) {
     if (result.feedback) {
       operationsOverviewRequests.delete("feedback:");
       operationsOverviewCache.set("feedback:", { data: { feedback: result.feedback }, at: Date.now() });
-      if (state.page === "operations" && operationsTab() === "feedback") render();
+      if (state.page === "operations" && operationsTab() === "feedback") {
+        setState({}, { forceRender: true, skipSave: true, preserveInputValues: true, pageScroll: "preserve" });
+      }
     }
     toast("反馈处理结果已保存");
   } catch (error) {
@@ -16997,9 +17040,12 @@ function publicTurtleSnapshot(turtle) {
     health: "",
     photo: publicPhoto,
     createdAt: turtle.createdAt || "",
+    historyIncludesInitial: Boolean(turtle.historyIncludesInitial),
     measureHistory: [...(turtle.measureHistory || [])].slice(0, 8).map(item => ({
       id: item.id,
       updatedAt: item.updatedAt,
+      recordDate: item.recordDate,
+      initialMeasurement: item.initialMeasurement,
       oldLength: item.oldLength,
       newLength: item.newLength,
       oldPhoto: publicTurtlePhotoUrl(item.oldPhoto),
@@ -17107,7 +17153,7 @@ async function renderGrowthCardBlob() {
   const history = turtle.measureHistory || [];
   context.fillStyle = "#f2c86b";
   context.font = "600 31px sans-serif";
-  context.fillText(history.length ? `已完成 ${history.length + 1} 次记录 · 成长报告持续更新` : `入手于 ${turtle.acquiredDate || "今天"} · 下一次记录 ${nextGrowthRecordDate(turtle)}`, 76, 1240);
+  context.fillText(history.length ? `已完成 ${history.length + (turtle.historyIncludesInitial ? 0 : 1)} 次记录 · 成长报告持续更新` : `入手于 ${turtle.acquiredDate || "今天"} · 下一次记录 ${nextGrowthRecordDate(turtle)}`, 76, 1240);
   context.fillStyle = "#d8e9e4"; context.font = "400 30px sans-serif";
   context.fillText("每一次记录，都在见证生命成长", 76, 1340);
   context.textAlign = "right"; context.font = "700 32px sans-serif"; context.fillText("龟友手账", 1004, 1340);
@@ -17550,6 +17596,48 @@ function buildTurtlePriceUpdate(turtle, updated, turtles, records) {
   };
 }
 
+function growthRecordSnapshot(turtle) {
+  return Object.fromEntries(["code", "weight", "carapaceLength", "status", "health", "poolId"].map(field => [field, turtle[field] ?? ""]));
+}
+
+function insertDatedGrowthRecord(turtle, historyItem) {
+  const chronological = [...(turtle.measureHistory || [])].reverse().map(item => ({
+    ...item,
+    updatedAt: [item.updatedAt, item.recordDate, item.date].find(value => Number.isFinite(Date.parse(value))) || historyItem.savedAt,
+    newSnapshot: item.newSnapshot || {
+      ...growthRecordSnapshot(turtle),
+      weight: item.newWeight ?? item.weight ?? turtle.weight,
+      carapaceLength: item.newLength ?? item.carapaceLength ?? turtle.carapaceLength
+    }
+  }));
+  const baseline = chronological[0]?.oldSnapshot || growthRecordSnapshot(turtle);
+  const baselinePhoto = chronological[0]?.oldPhoto || turtle.photo || defaultPhoto;
+  const baselineDate = [turtle.createdAt, turtle.acquiredDate, historyItem.savedAt].find(value => Number.isFinite(Date.parse(value)));
+  const baselineTime = Math.min(Date.parse(baselineDate), ...chronological.map(item => Date.parse(item.updatedAt)));
+  let historyIncludesInitial = Boolean(turtle.historyIncludesInitial);
+  if (!historyIncludesInitial && Date.parse(historyItem.updatedAt) < baselineTime) {
+    chronological.unshift({
+      id: crypto.randomUUID(), initialMeasurement: true, updatedAt: new Date(baselineTime).toISOString(),
+      oldSnapshot: { ...baseline }, newSnapshot: { ...baseline },
+      oldLength: Number(baseline.carapaceLength || 0), newLength: Number(baseline.carapaceLength || 0),
+      oldPhoto: baselinePhoto, newPhoto: baselinePhoto
+    });
+    historyIncludesInitial = true;
+  }
+  chronological.push(historyItem);
+  chronological.sort((a, b) => (Date.parse(a.updatedAt) || 0) - (Date.parse(b.updatedAt) || 0));
+  let previous = historyIncludesInitial ? chronological[0].newSnapshot : baseline;
+  let previousPhoto = historyIncludesInitial ? chronological[0].newPhoto : baselinePhoto;
+  const rebuilt = chronological.map(item => {
+    const next = { ...item, oldSnapshot: { ...previous }, oldLength: Number(previous.carapaceLength || 0), oldPhoto: previousPhoto };
+    previous = item.newSnapshot || previous;
+    previousPhoto = item.newPhoto || previousPhoto;
+    return next;
+  });
+  const latest = rebuilt[rebuilt.length - 1];
+  return { historyIncludesInitial, measureHistory: rebuilt.reverse(), latest };
+}
+
 function submitTurtleDetail(event) {
   event.preventDefault();
   if (event.currentTarget.__turtleDetailSaved) return;
@@ -17558,6 +17646,14 @@ function submitTurtleDetail(event) {
   if (!turtle) return;
   if (turtle.batchId) return submitTurtleBatchDetail(event, turtle);
   const form = new FormData(event.currentTarget);
+  const savedAt = new Date().toISOString();
+  const today = formatDate(new Date(savedAt));
+  const recordDate = String(form.get("recordDate") || today).trim();
+  const measuredAt = new Date(recordDate + "T12:00:00+08:00");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate) || !Number.isFinite(measuredAt.getTime()) || formatDate(measuredAt) !== recordDate || recordDate > today) {
+    return toast("请选择有效的记录日期，日期不能晚于今天");
+  }
+  const historicalDate = recordDate < today;
   const selectedCode = String(form.get("speciesCode") || "");
   const species = speciesByCode(selectedCode) || (selectedCode && selectedCode === turtle.speciesCode ? { code: selectedCode, name: turtle.speciesName } : null);
   if (!species) return toast("请先选择品种");
@@ -17608,13 +17704,13 @@ function submitTurtleDetail(event) {
     priceUpdate.ledgerRecords = [{
       id: crypto.randomUUID(), type: "other", category: "看病", turtleId: turtle.id,
       title: `${turtleLabel(updated)} · 看病`, amount: medicalExpense,
-      recordDate: formatDate(new Date()), createdAt: new Date().toISOString(),
+      recordDate, createdAt: savedAt,
       photo: updated.photo, turtleSnapshot: { ...updated },
       note: `治疗花费 ${money(medicalExpense)} 元`
     }, ...priceUpdate.ledgerRecords];
   }
   const medicalLog = medicalExpense > 0 ? `，看病支出 ${money(medicalExpense)} 元（已记账）` : "";
-  if (sameWeight && sameCarapaceLength && sameHealth && !recordingGrowthTask) {
+  if (sameWeight && sameCarapaceLength && sameHealth && !recordingGrowthTask && !historicalDate) {
     if (!priceChanged && !medicalExpense && Object.keys(updated).every(key => updated[key] === turtle[key])) return toast("档案信息未变化");
     event.currentTarget.__turtleDetailSaved = true;
     saveWithDeferredImages({
@@ -17627,7 +17723,7 @@ function submitTurtleDetail(event) {
   }
   const nextGrowth = new Date();
   nextGrowth.setDate(nextGrowth.getDate() + 30);
-  updated.nextGrowthAt = formatDate(nextGrowth);
+  updated.nextGrowthAt = historicalDate ? turtle.nextGrowthAt : formatDate(nextGrowth);
   const historyItem = {
     id: crypto.randomUUID(),
     oldLength: Number(turtle.carapaceLength || 0),
@@ -17652,7 +17748,17 @@ function submitTurtleDetail(event) {
       poolId: updated.poolId || "",
       poolName: turtlePoolName(updated.poolId)
     },
-    updatedAt: new Date().toISOString()
+    updatedAt: historicalDate ? measuredAt.toISOString() : savedAt,
+    recordDate,
+    savedAt
+  };
+  const dated = insertDatedGrowthRecord(turtle, historyItem);
+  const latestRecord = dated.latest;
+  const isLatest = latestRecord.id === historyItem.id;
+  const current = isLatest ? updated : {
+    ...updated, ...growthRecordSnapshot(turtle), photo: turtle.photo,
+    carapaceWidth: turtle.carapaceWidth, shellHeight: turtle.shellHeight, plastronLength: turtle.plastronLength,
+    nextGrowthAt: turtle.nextGrowthAt
   };
   const keptSpecies = state.keptSpecies.includes(species.code) ? state.keptSpecies : [...state.keptSpecies, species.code];
   const existingGrowthMemo = (state.memos || []).find(memo => memo.turtleId === turtle.id && memo.growthReminder);
@@ -17675,12 +17781,13 @@ function submitTurtleDetail(event) {
   const locallySaved = saveWithDeferredImages({
     ledgerRecords: priceUpdate.ledgerRecords,
     turtles: priceUpdate.turtles.map(t => t.id === turtle.id ? {
-      ...updated,
+      ...current,
       ...(t.batchTotalPrice != null ? { batchTotalPrice: t.batchTotalPrice } : {}),
-      measureHistory: [historyItem, ...(t.measureHistory || [])]
+      historyIncludesInitial: dated.historyIncludesInitial,
+      measureHistory: dated.measureHistory
     } : t),
     keptSpecies,
-    memos: existingGrowthMemo ? state.memos.map(memo => memo.id === existingGrowthMemo.id ? growthMemo : memo) : [growthMemo, ...(state.memos || [])],
+    memos: !isLatest || historicalDate ? state.memos : existingGrowthMemo ? state.memos.map(memo => memo.id === existingGrowthMemo.id ? growthMemo : memo) : [growthMemo, ...(state.memos || [])],
     updatingTurtleId: "",
     turtleDetailDraftId: "",
     turtleDetailDraft: null,
@@ -17689,7 +17796,7 @@ function submitTurtleDetail(event) {
     growthTaskMemoId: "",
     activityLogs: logActivity(`更新档案：${turtleLabel(updated)}，背甲 ${historyItem.oldLength}cm → ${carapaceLength}cm${sameHealth ? "" : `，健康 ${turtle.health || "健康"} → ${health}`}${state.updateDraftPhoto ? "，并更换照片" : ""}${medicalLog}`, "档案")
   }, [updated.photo, historyItem.newPhoto]);
-  activateCareReminder(growthMemo);
+  if (isLatest && !historicalDate) activateCareReminder(growthMemo);
   if (locallySaved) toast("档案更新已保存到本机，旧记录已保留");
 }
 

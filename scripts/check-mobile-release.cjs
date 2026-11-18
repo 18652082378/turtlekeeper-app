@@ -36,6 +36,8 @@ if (!args.includes('--prepare-only')) {
     'scripts/test-production-sms-policy.cjs',
     'scripts/test-team-space.js', 'scripts/test-team-breeding.cjs', 'scripts/test-team-visibility.cjs',
     'scripts/test-reliability-guards.cjs', 'scripts/test-backup-storage.cjs', 'scripts/test-backup-restore.js', 'scripts/test-postrelease-server-audit.cjs',
+    'scripts/test-turtle-batches.js', 'scripts/test-loss-accounting.js', 'scripts/test-batch-loss-storage.js',
+    'scripts/test-turtle-price-update.js', 'scripts/test-turtle-medical-expense.js',
     'scripts/test-ios-signing.cjs', 'scripts/test-ios-release-readiness.cjs'
   ];
   for (const script of serviceChecks) {
@@ -52,6 +54,10 @@ if (!args.includes('--prepare-only')) {
     try { run(script, [], { BROWSER_ENGINE: 'webkit' }); } catch (e) { failures.push(e.message); }
   }
   for (const platform of ['ios', 'android']) {
+    for (const script of ['scripts/test-ledger-batch-picker-ui.js', 'scripts/test-turtle-batches-ui.js', 'scripts/test-growth-record-dates.cjs']) {
+      try { run(script, [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
+      catch (e) { failures.push(e.message); }
+    }
     try { run('scripts/test-adaptive-page-ui.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }
     catch (e) { failures.push(e.message); }
     try { run('scripts/test-species-modules.cjs', [], { MOBILE_UI_PLATFORM: platform, BROWSER_ENGINE: platform === 'ios' ? 'webkit' : 'chromium' }); }

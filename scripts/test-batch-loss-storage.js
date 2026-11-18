@@ -46,8 +46,10 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../app.js'), 'utf8');
 let uploads = 0;
-const ctx = { state: data, cloudImageMigrationInFlight: false, cloudImageMigrationQueued: false,
-  hasCloudSession: () => true, isEmbeddedImage: value => String(value || '').startsWith('data:image/'), defaultPhoto: 'default',
+const session = { loggedInPhone: 'same-account', cloudToken: 'fixture-token' };
+const ctx = { state: { ...data, ...session }, cloudImageMigrationInFlight: false, cloudImageMigrationQueued: false,
+  hasCloudSession: () => Boolean(ctx.state.loggedInPhone && ctx.state.cloudToken), currentCloudToken: () => ctx.state.cloudToken,
+  isEmbeddedImage: value => String(value || '').startsWith('data:image/'), defaultPhoto: 'default',
   uploadDataUrlToCloud: async () => { uploads++; return 'https://example.test/shared-batch.jpg'; },
   saveState() {}, render() {}, refreshCareReminderTimers() {}, pushCloudDataNow: async () => {},
   scheduleCloudImageMigration() {}, toast() {}, console };
@@ -63,19 +65,21 @@ vm.runInContext(source.slice(source.indexOf('function isMigratableImage('), sour
   console.log('Shared batch image: one upload, reused by every member and loss snapshot.');
   // A loss entered while a slow photo upload is pending must survive when
   // the upload completes; only image URLs may be changed by that completion.
-  ctx.state = { loggedInPhone: 'same-account', ...data };
+  ctx.state = { ...data, ...session };
   let finishUpload;
   ctx.uploadDataUrlToCloud = () => new Promise(resolve => { finishUpload = resolve; });
   const uploading = ctx.migrateEmbeddedImagesToCloud();
   const currentTurtle = ctx.state.turtles.find(t => t.status !== '已死亡');
-  const concurrentLoss = { id: 'loss-during-upload', type: 'loss', turtleId: currentTurtle.id, photo };
-  ctx.state = accounting.transferLoss({ ...ctx.state, ledgerRecords: [concurrentLoss, ...ctx.state.ledgerRecords] }, concurrentLoss, currentTurtle);
+  const concurrentLoss = { id: 'loss-during-upload', type: 'loss', turtleId: currentTurtle.id, amount: 23.45, photo };
+  ctx.state = accounting.transferLoss({ ...ctx.state, ledgerRecords: [concurrentLoss, ...ctx.state.ledgerRecords] }, concurrentLoss, currentTurtle, { preserveAmount: true });
   ctx.state.turtles = ctx.state.turtles.map(t => t.id === currentTurtle.id ? { ...t, note: 'edited during upload' } : t);
   finishUpload('https://example.test/concurrent.jpg');
   await uploading;
   assert.equal(ctx.state.turtles.filter(t => t.status !== '已死亡').length, 99);
-  assert.ok(ctx.state.ledgerRecords.some(r => r.id === concurrentLoss.id));
+  const savedLoss = ctx.state.ledgerRecords.find(r => r.id === concurrentLoss.id);
+  assert.equal(savedLoss.amount, 23.45, 'Cloud image migration preserves the entered amount');
+  assert.equal(savedLoss.transferredPurchaseAmount, 360, 'Cloud image migration preserves the original cost for undo');
   assert.equal(ctx.state.turtles.find(t => t.id === currentTurtle.id).note, 'edited during upload');
-  assert.equal(ctx.state.ledgerRecords.find(r => r.id === concurrentLoss.id).photo, 'https://example.test/concurrent.jpg');
+  assert.equal(savedLoss.photo, 'https://example.test/concurrent.jpg');
   console.log('Concurrent loss and edits survive delayed photo uploads.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -19556,6 +19556,11 @@ html .forum-publish-nav.community-compose-nav { background: var(--topbar-bg) !im
 html[data-theme-color="dark"] .turtle-row-bottom > .turtle-loss-badge { color: #ff9ca7 !important; background: #462b30 !important; }
 select[data-archive-directory][hidden] { display: none !important; }
 .ledger-batch-form { margin: 18px 0; }
+.ledger-batch-form [data-cancel-ledger] {
+  min-width: 44px;
+  min-height: 44px;
+  flex-shrink: 0;
+}
 .ledger-batch-form .ledger-batch-selection { display: grid; gap: 10px; margin-bottom: 18px; }
 .ledger-batch-selection > span { font-size: 13px; color: var(--muted); }
 .ledger-batch-summary { border: 1px solid var(--line); background: var(--surface-2); border-radius: 14px; padding: 16px; margin-bottom: 22px; }
@@ -19784,6 +19789,11 @@ html[data-theme-color="dark"] .turtle-batch-detail .breeding-form { color-scheme
   .turtle-batch-detail .breeding-form, .turtle-batch-detail .batch-profile { padding: 16px; }
   .turtle-batch-detail .breeding-form-grid { gap: 16px 10px !important; }
   .turtle-batch-detail .breeding-form .field, .turtle-batch-detail .breeding-form .select { padding: 10px 8px !important; }
+}
+@media (max-width: 340px) {
+  .turtle-batch-detail .batch-movement-form .breeding-form-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
 }
 @media (max-width: 480px) {
   .turtle-batch-row .turtle-row-species p { display: flex; flex-wrap: wrap; gap: 4px; }

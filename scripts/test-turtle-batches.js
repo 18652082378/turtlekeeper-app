@@ -23,11 +23,12 @@ ctx.turtlePoolName = id => ctx.state.turtlePools.find(pool => pool.id === id)?.n
 vm.createContext(ctx);
 for (const [start, end] of [
   ['function matchesArchiveFilters(', 'function stats('],
+  ['function archivePriceAmount(', 'function turtleBatchListRow('],
   ['function turtleBatchLabel(', 'function turtleListRow('],
   ['function sortedTurtles()', 'function archiveDashboardSection()'],
   ['function submitBatchTurtles(', 'function appReviewStorageKey()']
 ]) vm.runInContext(source.slice(source.indexOf(start), source.indexOf(end)), ctx);
-const event = fields => ({ preventDefault() {}, currentTarget: fields });
+const event = fields => ({ preventDefault() {}, currentTarget: { ...fields, elements: { namedItem: () => ({ hasAttribute: () => false }) } } });
 ctx.submitBatchTurtles(new ctx.FormData({ batchStage: 'hatchling', batchCount: '500', batchTotalPrice: '1000.01', poolId: 'p1', acquiredDate: '2026-09-10' }), { code: 'GHG', name: '果核蛋龟' });
 assert.equal(ctx.state.turtles.length, 500, `Preserve individually linked inventory and accounting IDs: ${message}`);
 assert.equal(ctx.sortedTurtles().length, 1, '500 turtles render as one batch');

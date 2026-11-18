@@ -6,6 +6,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 function setup(page = 'market') {
   let now = 50000;
   const frames = [], tasks = [], calls = [], writes = [], changes = [];
+  const accountRefreshes = [];
   const feed = { innerHTML: '', classList: { remove() {} } };
   const c = { console: { warn() {} }, Map, Set, Number, String, Boolean, JSON, Date: { now: () => now },
     BOTTOM_NAV_ROOT_PAGES: new Set(['home', 'market', 'community', 'messages', 'ledger']),
@@ -15,6 +16,8 @@ function setup(page = 'market') {
     marketLoading: false, marketLastLoadedAt: 0, incomingMarketShareLoading: false, incomingMarketShareListingId: '', marketLoadRetryKey: '',
     communityLoading: false, communityLastLoadedAt: 0, communityConversationRevision: 0, communityPublicationRevision: 0, communityConversationDeleting: new Set(),
     hasCloudSession: () => Boolean(c.state.cloudToken), currentCloudToken: () => c.state.cloudToken,
+    cloudHydrationComplete: true, cloudSyncIsPaused: () => false, localBackupFailed: false,
+    refreshCloudAccountFromServer: async options => { accountRefreshes.push(options); return true; },
     savedMarketListingIds: () => [], marketRegionCities: () => [], marketAuthPayload: value => value, communityAuthPayload: value => value,
     normalizeMarketListings: value => value, normalizeAccountData: value => value, normalizeCommunityPosts: value => value,
     setupMarketInfiniteScroll() {}, patchMarketSnapshotDetails() {}, syncPersistentBottomNav() {}, reconcileCommunityConversationState() {},
@@ -32,7 +35,7 @@ function setup(page = 'market') {
     + extract('function marketFeedRequestOptions(', 'function resetMarketFeed(')
     + extract('async function refreshCommunity(', 'async function loadMoreCommunityPosts(')
     + extract('function navigateBottomTab(', 'function restoreBottomNavAfterForeground('), c);
-  return { c, calls, writes, changes, frames, tasks, advance: ms => { now += ms; }, paint: () => { while (frames.length) frames.shift()(); while (tasks.length) tasks.shift()(); } };
+  return { c, calls, writes, changes, frames, tasks, accountRefreshes, advance: ms => { now += ms; }, paint: () => { while (frames.length) frames.shift()(); while (tasks.length) tasks.shift()(); } };
 }
 (async () => {
   {
@@ -67,8 +70,12 @@ function setup(page = 'market') {
   }
   {
     const x = setup();
+    const archives = [{ id: 'local-edit' }]; x.c.state.turtles = archives;
     x.c.apiPost = async () => ({ listings: [], accountData: { turtles: [{ id: 'sold-sync' }] } });
-    await x.c.refreshMarket(true); assert.equal(x.writes.length, 1, 'A server account-data/sold update still saves immediately');
+    await x.c.refreshMarket(true);
+    assert.equal(x.c.state.turtles, archives, 'An embedded feed snapshot cannot replace local archives');
+    assert.equal(x.writes.length, 0, 'Feed cache still saves after paint');
+    assert.deepEqual(JSON.parse(JSON.stringify(x.accountRefreshes)), [{ background: true, protectLocalChanges: true }]);
   }
   {
     const x = setup('community'); const friends = x.c.state.communityFriends, stats = x.c.state.communityProfileStats;

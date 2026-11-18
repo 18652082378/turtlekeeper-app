@@ -104,7 +104,11 @@ const localIndex = 'C:/Users/Administrator/Documents/Codex/2026-06-02/apple-stor
       assert.equal(await page.locator('[data-rating].active').count(), 3);
     });
     await check('Admin reply inputs follow feedback identities after a server reorder', async page => {
-      await page.evaluate(() => setState({ page: 'operations', isCommunityAdmin: true, operationsTab: 'feedback', operationsOverview: { feedback: { pendingCount: 2, items: [{ id: 'a', content: '甲', reply: '' }, { id: 'b', content: '乙', reply: '' }] } } }, { skipSave: true }));
+      await page.evaluate(() => {
+        operationsCacheSession = operationsSessionKey();
+        operationsOverviewCache.set('feedback:', { data: { feedback: { pendingCount: 2, items: [{ id: 'a', content: '甲', reply: '' }, { id: 'b', content: '乙', reply: '' }] } }, at: Date.now() });
+        setState({ page: 'operations', isCommunityAdmin: true, operationsTab: 'feedback' }, { skipSave: true });
+      });
       await page.locator('[data-admin-feedback-form="a"] [name="reply"]').fill('给甲的回复');
       await page.locator('[data-admin-feedback-form="b"] [name="reply"]').fill('还没提交的乙回复');
       await page.evaluate(() => { window.editingSubmission = submitAdminFeedbackAction({ preventDefault() {}, currentTarget: document.querySelector('[data-admin-feedback-form="a"]') }); });

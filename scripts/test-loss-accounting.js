@@ -36,6 +36,9 @@ assert.equal(accounting.undoLoss(duplicates,duplicates.ledgerRecords.find(r=>r.i
 // Batch cost conservation, including the final rounding cent, and reverse order undo.
 const batchTurtles=['a','b','c'].map(id=>({...turtle,id,price:33.33,pinned:false}));
 data={turtles:batchTurtles,ledgerRecords:[{...purchase,amount:100,batchPurchase:true,turtleIds:['a','b','c']}],memos:[]};
+assert.equal(accounting.batchPurchaseCost(batchTurtles, data.ledgerRecords), 100, 'Preview includes the last cent of a legacy batch');
+assert.equal(accounting.batchPurchaseCost(batchTurtles.slice(0, 2), data.ledgerRecords), 66.66, 'Preview respects the selected quantity');
+assert.equal(data.ledgerRecords[0].amount, 100, 'Preview cannot reduce the live purchase balance');
 for(const [index,t] of batchTurtles.entries()) {
  const record={...loss,id:`loss-${t.id}`,turtleId:t.id,turtleSnapshot:{...t}};
  data=accounting.transferLoss({...data,ledgerRecords:[record,...data.ledgerRecords]},record,t);
@@ -78,11 +81,10 @@ vm.runInContext(source.slice(source.indexOf('function sortedTurtles()'),source.i
 for(const sort of ['default','latest','weight','shellLength','valueAsc','valueDesc']) {ctx.state.turtleSort=sort;assert.equal(ctx.sortedTurtles().at(-1).id,'lost');}
 ctx.defaultPhoto='default.jpg';
 vm.runInContext(source.slice(source.indexOf('function ledgerRecordPhoto('),source.indexOf('function ledgerRow(')),ctx);
-ctx.state.turtles=[{id:'a',photo:'current.jpg'}];
-assert.equal(ctx.ledgerRecordPhoto({...loss,photo:'old.jpg'}),'current.jpg');
-ctx.state.turtles=[];
+const linkedTurtle = { id:'a', photo:'current.jpg' };
+assert.equal(ctx.ledgerRecordPhoto({...loss,photo:'old.jpg'}, linkedTurtle),'current.jpg');
 assert.equal(ctx.ledgerRecordPhoto({...loss,photo:''}),'archive-photo.jpg');
 assert.equal(ctx.ledgerRecordPhoto({type:'loss',turtleId:'a'}),'default.jpg');
 assert.equal(ctx.ledgerRecordPhoto({type:'loss',photo:'unlinked.jpg'}),'unlinked.jpg');
-assert.equal(ctx.ledgerRecordPhoto({type:'other',turtleId:'a',photo:'receipt.jpg'}),'receipt.jpg');
+assert.equal(ctx.ledgerRecordPhoto({type:'other',turtleId:'a',photo:'receipt.jpg'}, linkedTurtle),'receipt.jpg');
 console.log('Loss accounting and archive photo checks passed.');

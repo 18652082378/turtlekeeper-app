@@ -3,6 +3,8 @@
 // approximate the rendering engines; they are not a native-device certification.
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const fixture = require('./ui-audit-fixture.cjs');
+const { fixture: teamFixture } = require('./team-test-fixture');
+const { createTeamService } = require('../server/team-space');
 const root = path.resolve(__dirname, '..');
 const platform = process.env.MOBILE_UI_PLATFORM || 'ios';
 assert.ok(['ios', 'android'].includes(platform));
@@ -24,7 +26,8 @@ for (const type of ['purchase', 'sold', 'loss', 'other']) cases.push({ name: 'le
 cases.push({ name: 'archive-measures-expanded', page: 'add', openDetails: true });
 for (const type of ['purchase', 'sold', 'loss']) cases.push({ name: 'ledger-measures-' + type, page: 'ledger', ledgerDraftType: type, openDetails: true });
 for (const tab of ['analytics', 'market', 'feedback', 'safety', 'health', 'chats']) cases.push({ name: 'operations-' + tab, page: 'operations', operationsTab: tab });
-for (const tab of ['overview', 'ledger', 'reports', 'hatching', 'care', 'tasks', 'members', 'logs', 'approvals', 'settings']) cases.push({ name: 'team-preview-' + tab, page: 'team', teamTab: tab });
+for (const tab of ['overview', 'ledger', 'reports', 'hatching', 'care', 'tasks', 'members', 'logs', 'approvals', 'settings']) cases.push({ name: 'team-' + tab, page: 'team', teamTab: tab });
+cases.push({ name: 'team-create', page: 'team', loggedInPhone: '13900000008' });
 const strictAndroid = platform === 'android' && process.env.ANDROID_STRICT === '1';
 const sizes = strictAndroid
   ? [[280, 653], [320, 568], [360, 800], [390, 844], [430, 932], [600, 800], [720, 960], [840, 720], [1024, 768], [1280, 900], [1600, 1000], [800, 360], [600, 280]]
@@ -37,18 +40,29 @@ const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
   const checks = [], failures = [], errors = [], interactions = [];
   try {
     browser = await launchBrowser();
+    const teamDb = teamFixture();
+    const teamService = createTeamService({ read: () => teamDb, write: async () => {},
+      authenticate: (db, phone) => db.users[phone], normalize: data => data });
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, reducedMotion: 'reduce', timezoneId: 'Asia/Shanghai' });
     await context.addInitScript('window.auditMobileControls = (' + require('./mobile-control-layout.cjs').toString() + ');');
-    await context.route('**/*', route => {
+    await context.route('**/*', async route => {
       const u = new URL(route.request().url());
+      if (u.hostname !== 'mobile.test') return route.abort();
+      if (u.pathname === '/api/team') {
+        const { action, phone, teamId, month, range } = route.request().postDataJSON();
+        try { return route.fulfill({ json: { ok: true, ...await teamService.action({ action, phone, teamId, month, range }) } }); }
+        catch (error) { return route.fulfill({ status: error.status || 500, json: { ok: false, message: error.message } }); }
+      }
       if (u.pathname.startsWith('/api/')) {
         const weather = u.pathname.startsWith('/api/weather/');
         return route.fulfill({ json: weather ? { ok: true, settings: { enabled: false, targetTemperature: 20, difference: 3, remindTime: '18:00', advanceDays: 0, location: null }, notices: [], providerConfigured: true, pushConfigured: true, hasPushDevice: true } : { ok: true, minimumBuild: 0, friends: [], messages: [], items: [], posts: [], listings: [] } });
       }
-      if (u.hostname !== 'mobile.test') return route.abort();
       const file = path.resolve(assetRoot, '.' + (u.pathname === '/' ? '/index.html' : decodeURIComponent(u.pathname)));
       if (!file.startsWith(assetRoot + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
-      return route.fulfill({ body: fs.readFileSync(file), contentType: mime[path.extname(file)] || 'application/octet-stream' });
+      const body = u.pathname === '/config.js'
+        ? fs.readFileSync(file, 'utf8') + '\nwindow.TURTLE_API_BASE_URL = location.origin;'
+        : fs.readFileSync(file);
+      return route.fulfill({ body, contentType: mime[path.extname(file)] || 'application/octet-stream' });
     });
     await context.addInitScript(({ platform }) => {
       window.mobileUi = { listeners: {}, pushListeners: {}, minimizeCount: 0 };
@@ -71,16 +85,21 @@ const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
       for (const test of cases) {
         const errorStart = errors.length;
         await page.evaluate(({ seed, theme, test }) => {
-          state = { ...initialState, ...emptyAccountData(), ...seed, themeColor: theme, cloudToken: 'synthetic-mobile-ui-only', ...test };
+          state = { ...initialState, ...emptyAccountData(), ...seed, themeColor: theme, cloudToken: 'synthetic-mobile-ui-only',
+            ...(test.page === 'team' ? { loggedInPhone: '13900000001' } : {}), ...test };
           forceUpdateState = { required: false }; pendingPageEnterMotion = false;
           render(); scrollTo(0, 0);
           if (test.openDetails) document.querySelectorAll('#app main details').forEach(el => { el.open = true; });
           if (test.teamTab) {
-            const button = document.querySelector('[data-ts="preview.tab"][data-tab="' + test.teamTab + '"]');
-            if (!button) throw Error('Missing team preview tab ' + test.teamTab);
-            button.click();
+            document.querySelector('[data-ts="tab"][data-tab="' + test.teamTab + '"]')?.click();
           }
         }, { seed: dataset.seed, theme, test });
+        if (test.teamTab) {
+          const button = page.locator(`[data-ts="tab"][data-tab="${test.teamTab}"]`);
+          if (await button.getAttribute('aria-current') !== 'page') {
+            await button.evaluate(node => node.click());
+          }
+        } else if (test.name === 'team-create') await page.locator('[data-ts="create"]:enabled').waitFor();
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         const problems = await page.evaluate(() => {
           const problems = [], width = innerWidth;

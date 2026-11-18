@@ -21,6 +21,20 @@ const root = path.resolve(__dirname, '..');
     finally { await ctx.close(); }
   }
   try {
+    await check('1.2.4 explains entering the actual batch loss amount once after upgrade', async (page, setup) => {
+      await setup({ seen: '1.2.3' });
+      await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.4' }));
+      const dialog = page.locator('.release-notes-dialog');
+      const content = await dialog.innerText();
+      assert.match(content, /龟友手账 1\.2\.4/);
+      assert.match(content, /批次损耗金额可以修改/);
+      assert.match(content, /补录以前的成长记录/);
+      assert.match(content, /团队空间向普通用户开放/);
+      await page.getByRole('button', { name: '我知道了' }).click();
+      await setup();
+      await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.4' }));
+      assert.equal(await dialog.count(), 0);
+    });
     await check('1.2.3 explains stationary navigation and narrow screens once after upgrade', async (page, setup) => {
       await setup({ seen: '1.2.2' });
       await page.evaluate(() => TurtleReleaseNotes.start({ version: '1.2.3' }));

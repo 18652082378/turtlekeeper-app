@@ -7,11 +7,11 @@ function setup(){
   CONFIGURED_SMS_BACKEND:true,canUseCommunity:()=>true,state:{loggedInPhone:'A',cloudToken:'tokenA',page:'following',communityFriends:[],communityFollowingUsers:[]},
   followingLoading:false,followingLastLoadedAt:0,publicReviewsLoading:false,publicReviewsLastLoadedAt:0,publicFeedbackLoading:false,publicFeedbackLastLoadedAt:0,
   communityUserProfileLoading:false,communityUserProfileLoadedKey:'',communityLoading:false,communityPublicationRevision:0,
-  contentReportsLoading:false,contentReportsLastLoadedAt:0,operationsOverviewLoading:false,operationsOverviewLastLoadedAt:0,systemAnnouncementsLoading:false,systemAnnouncementsLastLoadedAt:0,
+  contentReportsLoading:false,contentReportsLastLoadedAt:0,operationsCacheSession:'',operationsOverviewCache:new Map(),operationsOverviewRequests:new Map(),systemAnnouncementsLoading:false,systemAnnouncementsLastLoadedAt:0,
   normalizeCommunityPosts:x=>x,normalizeMarketListings:x=>x,communityUserSnapshot:id=>({id}),communityAuthPayload:x=>x,reviewAuthPayload:()=>({}),feedbackAuthPayload:()=>({}),
   saveState(){},setupCommunityInfiniteScroll(){},patchVisibleCommunityFeed(){},$app:{querySelector:()=>null},render(){},toast(){},patchAnnouncementSlot(){}};
  ctx.currentCloudToken=()=>ctx.state.cloudToken;ctx.hasCloudSession=()=>!!ctx.state.cloudToken;ctx.setState=p=>Object.assign(ctx.state,p);
- vm.createContext(ctx);vm.runInContext(['refreshFollowing','refreshPublicReviews','refreshPublicFeedback','refreshCommunityUserProfile','loadMoreCommunityPosts','refreshContentReports','refreshOperationsOverview','refreshBlockedUsers','uiLoadingMarkup','remoteListEmptyMarkup','accountModuleCache'].map(extract).join('\n'),ctx);return ctx;
+ vm.createContext(ctx);vm.runInContext(['refreshFollowing','refreshPublicReviews','refreshPublicFeedback','refreshCommunityUserProfile','loadMoreCommunityPosts','refreshContentReports','operationsTab','operationsDate','operationsRequestKey','operationsSessionKey','resetOperationsSession','refreshOperationsOverview','refreshBlockedUsers','uiLoadingMarkup','remoteListEmptyMarkup','accountModuleCache'].map(extract).join('\n'),ctx);return ctx;
 }
 (async()=>{
  {
@@ -19,9 +19,17 @@ function setup(){
   assert.match(loading,/aria-busy="true"/);assert.match(loading,/aria-hidden="true"/);assert.doesNotMatch(loading,/EMPTY/);
   assert.match(c.uiLoadingMarkup('<unsafe>'),/&lt;unsafe&gt;/);
  }
- for(const [fn,key,result] of [['refreshFollowing','communityFollowingUsers',{following:[{id:'private-A'}]}],['refreshPublicReviews','publicReviews',{reviews:[{id:'private-A'}]}],['refreshPublicFeedback','publicFeedbackItems',{feedbacks:[{id:'private-A'}]}],['refreshContentReports','contentReports',{reports:[{id:'private-A'}]}],['refreshOperationsOverview','operationsOverview',{conversations:[{id:'private-A'}]}],['refreshBlockedUsers','blockedUsers',{users:[{id:'private-A'}]}]]){
+ for(const [fn,key,result] of [['refreshFollowing','communityFollowingUsers',{following:[{id:'private-A'}]}],['refreshPublicReviews','publicReviews',{reviews:[{id:'private-A'}]}],['refreshPublicFeedback','publicFeedbackItems',{feedbacks:[{id:'private-A'}]}],['refreshContentReports','contentReports',{reports:[{id:'private-A'}]}],['refreshBlockedUsers','blockedUsers',{users:[{id:'private-A'}]}]]){
   const c=setup();c.state.isCommunityAdmin=true;let resolve;c.apiPost=()=>new Promise(r=>resolve=r);const pending=c[fn](true);assert(resolve,fn);
   c.state={loggedInPhone:'B',cloudToken:'tokenB',page:'mine',[key]:[]};resolve(result);await pending;assert.equal(JSON.stringify(c.state[key]),'[]',fn+' discards old account');
+ }
+ {
+  const c=setup();Object.assign(c.state,{page:'operations',operationsTab:'chats',isCommunityAdmin:true});
+  let resolve;c.apiPost=(_route,body)=>{assert.equal(body.tab,'chats');return new Promise(r=>resolve=r)};
+  const pending=c.refreshOperationsOverview(true);assert(resolve);
+  c.state={page:'operations',operationsTab:'chats',isCommunityAdmin:true,loggedInPhone:'B',cloudToken:'tokenB'};
+  resolve({conversations:[{id:'private-A'}]});await pending;
+  assert.equal(c.operationsOverviewCache.size,0,'a stale admin response must not populate another account’s cache');
  }
  for(const [fn,key,flag,result] of [['refreshFollowing','communityFollowingUsers','following',{following:[]}],['refreshPublicReviews','publicReviews','publicReviews',{reviews:[]}],['refreshPublicFeedback','publicFeedbackItems','publicFeedback',{feedbacks:[]}]]){
   const c=setup();c.state[key]=[{id:'cached'}];c.apiPost=async()=>{throw Error('offline')};await c[fn](true);assert.equal(c.state[key][0].id,'cached');

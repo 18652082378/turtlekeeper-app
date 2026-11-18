@@ -101,8 +101,13 @@ const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
       const stillPending = readPendingCloudData()?.baseDataRevision;
       apiPost = async () => { throw new Error('offline'); };
       // Recreate old independent writes: the mirror is newer than the v1
-      // pending record, with a shared, known cloud baseline.
+      // pending record, with a shared, known cloud baseline. Older clients did
+      // not have an IndexedDB backup. Drain and remove the backup from the
+      // modern save so hydration cannot race with the legacy-only fixture.
+      await deviceRecoveryWrite;
+      await TurtleAccountRecoveryStore.remove(account);
       const modern = TurtleLocalData.parse(localStorage.getItem(STORAGE));
+      const modernMirror = modern.turtles.map(turtle => turtle.id);
       const { pendingCloudChange, localWrite, ...legacy } = modern;
       const baseline = { phone: account, revision: 'saved-base', accountName: modern.accountName, accountAvatar: modern.accountAvatar, data: localData };
       localStorage.setItem(STORAGE, TurtleLocalData.stringify(legacy));
@@ -111,12 +116,13 @@ const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
         phone: account, data: localData, accountName: modern.accountName, accountAvatar: modern.accountAvatar,
         baseDataRevision: 'saved-base', baseSnapshot: baseline
       }));
-      return { initial, blockedLogout, signedOut, otherIds, otherPending, afterLogin, afterAck, stillPending };
+      return { initial, blockedLogout, signedOut, otherIds, otherPending, afterLogin, afterAck, stillPending, modernMirror };
     }, { account, other });
     assert.deepEqual(result, {
       initial: { archives: ['new', 'previous'], ledger: 'new', reminder: 'new' },
       blockedLogout: account, signedOut: true, otherIds: [], otherPending: ['other-only'],
-      afterLogin: ['new', 'previous'], afterAck: ['during-save', 'new', 'previous'], stillPending: 'saved-base'
+      afterLogin: ['new', 'previous'], afterAck: ['during-save', 'new', 'previous'], stillPending: 'saved-base',
+      modernMirror: ['during-save', 'new', 'previous']
     });
     await page.reload();
     assert.deepEqual(await page.evaluate(() => state.turtles.map(turtle => turtle.id)), ['during-save', 'new', 'previous']);
