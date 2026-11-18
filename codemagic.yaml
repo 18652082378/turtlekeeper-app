@@ -13,6 +13,9 @@ workflows:
         bundle_identifier: com.turtlekeeper.app
       vars:
         BUNDLE_ID: "com.turtlekeeper.app"
+        # Resolve this existing app explicitly with Xcode 26 altool.
+        # https://help.codemagic.io/articles/6636894916-fixing-ios-build-errors-with-xcode-26-2-and-altool-verification-issues
+        APP_STORE_CONNECT_ALTOOL_ADDITIONAL_ARGUMENTS: "--apple-id 6783481335"
     scripts:
       - name: Install dependencies
         script: |
